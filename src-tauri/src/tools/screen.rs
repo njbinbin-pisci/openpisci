@@ -141,11 +141,6 @@ impl ScreenTool {
 /// Simple PNG encoder (minimal implementation)
 /// In production, use the `image` crate for proper PNG encoding
 fn encode_png_simple(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
-    // Use miniz_oxide for deflate compression
-    // For now, return raw RGBA wrapped in a minimal PNG structure
-    // This is a placeholder — in production add `image = "0.25"` to Cargo.toml
-    use std::io::Write;
-
     let mut png = Vec::new();
 
     // PNG signature
@@ -191,8 +186,10 @@ fn write_png_chunk(out: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(chunk_type);
     out.extend_from_slice(data);
 
-    // CRC32
-    let mut crc = crc32fast::hash(chunk_type);
-    crc = crc32fast::hash_with_initial(data, crc);
+    // CRC32 over chunk_type + data
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(chunk_type);
+    hasher.update(data);
+    let crc = hasher.finalize();
     out.extend_from_slice(&crc.to_be_bytes());
 }

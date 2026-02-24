@@ -3,7 +3,7 @@ pub mod settings;
 
 use anyhow::Result;
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 
 pub use db::Database;

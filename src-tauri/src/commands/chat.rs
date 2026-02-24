@@ -1,11 +1,11 @@
 use crate::agent::loop_::AgentLoop;
 use crate::agent::messages::AgentEvent;
+use crate::agent::tool::ToolContext;
 use crate::llm::{build_client, LlmMessage, MessageContent};
 use crate::policy::PolicyGate;
 use crate::store::{db::ChatMessage, db::Session, AppState};
 use crate::tools;
-use crate::agent::tool::{ToolContext, ToolRegistry};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{AppHandle, Emitter, State};
 

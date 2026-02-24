@@ -1,7 +1,7 @@
 /// Agent Loop — the core recursive query-tool-result cycle.
-use super::messages::{AgentEvent, ToolCallRecord, ToolResultRecord};
+use super::messages::AgentEvent;
 use super::tool::{ToolContext, ToolRegistry};
-use crate::llm::{ContentBlock, LlmChunk, LlmClient, LlmMessage, LlmRequest, MessageContent};
+use crate::llm::{ContentBlock, LlmClient, LlmMessage, LlmRequest, MessageContent};
 use crate::policy::{PolicyDecision, PolicyGate};
 use anyhow::Result;
 use std::sync::{
@@ -12,7 +12,6 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 const MAX_ITERATIONS: usize = 20;
-const MAX_TOOL_CONCURRENCY: usize = 4;
 
 pub struct AgentLoop {
     pub client: Box<dyn LlmClient>,
@@ -54,39 +53,17 @@ impl AgentLoop {
                 stream: true,
             };
 
-            // Stream from LLM
-            let (chunk_tx, mut chunk_rx) = mpsc::channel::<LlmChunk>(256);
-            let client_ref = &self.client;
-
-            // Spawn streaming task
-            let req_clone = req.clone();
-            let chunk_tx_clone = chunk_tx.clone();
-            let stream_handle = tokio::spawn({
-                // We can't move self.client (Box<dyn LlmClient>) into a task easily,
-                // so we call stream in a blocking fashion via a oneshot
-                let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Result<()>>();
-                async move {
-                    // This won't compile as-is because we can't move client_ref.
-                    // We'll use a channel-based approach instead.
-                    let _ = done_tx.send(Ok(()));
-                    done_rx
-                }
-            });
-            drop(stream_handle);
-
-            // Actually stream (synchronous call in async context)
-            let mut text_buf = String::new();
-            let mut tool_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
-
-            // Use complete() for simplicity in the loop (streaming handled separately in commands)
-            let response = client_ref.complete(req).await?;
+            // Call LLM (non-streaming in the loop; streaming is handled by chat_send command)
+            let response = self.client.complete(req).await?;
             total_input += response.input_tokens;
             total_output += response.output_tokens;
 
-            text_buf = response.content.clone();
-            for tc in &response.tool_calls {
-                tool_calls.push((tc.id.clone(), tc.name.clone(), tc.input.clone()));
-            }
+            let text_buf = response.content.clone();
+            let tool_calls: Vec<(String, String, serde_json::Value)> = response
+                .tool_calls
+                .iter()
+                .map(|tc| (tc.id.clone(), tc.name.clone(), tc.input.clone()))
+                .collect();
 
             // Emit text delta as a single event
             if !text_buf.is_empty() {

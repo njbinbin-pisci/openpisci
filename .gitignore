@@ -1,6 +1,6 @@
 # Rust / Cargo
 target/
-Cargo.lock
+# Note: Cargo.lock is intentionally committed for applications (not libraries)
 
 # Node / npm
 node_modules/
