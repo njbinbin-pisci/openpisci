@@ -1,0 +1,79 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageRole {
+    User,
+    Assistant,
+    System,
+    Tool,
+}
+
+impl MessageRole {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Assistant => "assistant",
+            Self::System => "system",
+            Self::Tool => "tool",
+        }
+    }
+}
+
+/// An agent conversation message (stored in DB and sent to frontend)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentMessage {
+    pub id: String,
+    pub session_id: String,
+    pub role: MessageRole,
+    /// Main text content
+    pub content: String,
+    /// Tool calls made by the assistant (JSON array)
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCallRecord>,
+    /// Tool results (for tool messages)
+    #[serde(default)]
+    pub tool_results: Vec<ToolResultRecord>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallRecord {
+    pub id: String,
+    pub name: String,
+    pub input: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResultRecord {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub content: String,
+    pub is_error: bool,
+}
+
+/// Events streamed to the frontend during agent execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentEvent {
+    /// Streaming text delta
+    TextDelta { delta: String },
+    /// Tool execution started
+    ToolStart { id: String, name: String, input: serde_json::Value },
+    /// Tool execution finished
+    ToolEnd { id: String, name: String, result: String, is_error: bool },
+    /// Full message committed to DB
+    MessageCommit { message: serde_json::Value },
+    /// Permission required from user
+    PermissionRequest {
+        request_id: String,
+        tool_name: String,
+        tool_input: serde_json::Value,
+        description: String,
+    },
+    /// Agent loop complete
+    Done { total_input_tokens: u32, total_output_tokens: u32 },
+    /// Error occurred
+    Error { message: String },
+}

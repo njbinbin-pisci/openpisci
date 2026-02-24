@@ -1,0 +1,31 @@
+# Rust / Cargo
+target/
+Cargo.lock
+
+# Node / npm
+node_modules/
+dist/
+.vite/
+
+# Tauri build outputs
+src-tauri/target/
+src-tauri/WixTools/
+src-tauri/gen/
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
+.pisci/
+config.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Logs
+*.log
