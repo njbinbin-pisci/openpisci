@@ -63,6 +63,18 @@ pub struct Skill {
     pub config: String, // JSON string
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEntry {
+    pub id: String,
+    pub session_id: String,
+    pub timestamp: DateTime<Utc>,
+    pub tool_name: String,
+    pub action: String,
+    pub input_summary: Option<String>,
+    pub result_summary: Option<String>,
+    pub is_error: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
@@ -137,6 +149,20 @@ impl Database {
                 icon TEXT NOT NULL DEFAULT '',
                 config TEXT NOT NULL DEFAULT '{}'
             );
+
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                action TEXT NOT NULL,
+                input_summary TEXT,
+                result_summary TEXT,
+                is_error INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log(session_id, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_audit_tool ON audit_log(tool_name, timestamp);
         ")?;
 
         // Seed default skills if empty
@@ -442,6 +468,80 @@ impl Database {
             "UPDATE scheduled_tasks SET run_count = run_count + 1, last_run_at = ?1 WHERE id = ?2",
             params![now, id],
         )?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // Audit Log
+    // ------------------------------------------------------------------
+
+    pub fn append_audit(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+        action: &str,
+        input_summary: Option<&str>,
+        result_summary: Option<&str>,
+        is_error: bool,
+    ) -> Result<()> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO audit_log (id, session_id, timestamp, tool_name, action, input_summary, result_summary, is_error) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, session_id, now, tool_name, action, input_summary, result_summary, is_error as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_audit_log(
+        &self,
+        session_id: Option<&str>,
+        tool_name: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<AuditEntry>> {
+        let mut query = String::from(
+            "SELECT id, session_id, timestamp, tool_name, action, input_summary, result_summary, is_error \
+             FROM audit_log WHERE 1=1"
+        );
+        let mut bind_values: Vec<String> = Vec::new();
+
+        if let Some(sid) = session_id {
+            query.push_str(&format!(" AND session_id = ?{}", bind_values.len() + 1));
+            bind_values.push(sid.to_string());
+        }
+        if let Some(tool) = tool_name {
+            query.push_str(&format!(" AND tool_name = ?{}", bind_values.len() + 1));
+            bind_values.push(tool.to_string());
+        }
+        query.push_str(&format!(
+            " ORDER BY timestamp DESC LIMIT {} OFFSET {}",
+            limit, offset
+        ));
+
+        let mut stmt = self.conn.prepare(&query)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(bind_values.iter()), |r| {
+            Ok(AuditEntry {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                timestamp: r.get::<_, String>(2)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                tool_name: r.get(3)?,
+                action: r.get(4)?,
+                input_summary: r.get(5)?,
+                result_summary: r.get(6)?,
+                is_error: r.get::<_, i64>(7)? != 0,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    pub fn clear_audit_log(&self, session_id: Option<&str>) -> Result<()> {
+        if let Some(sid) = session_id {
+            self.conn.execute("DELETE FROM audit_log WHERE session_id = ?1", params![sid])?;
+        } else {
+            self.conn.execute("DELETE FROM audit_log", [])?;
+        }
         Ok(())
     }
 }

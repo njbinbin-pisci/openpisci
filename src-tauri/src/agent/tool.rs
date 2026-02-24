@@ -12,6 +12,22 @@ pub struct ToolContext {
     pub bypass_permissions: bool,
 }
 
+/// Image data attached to a tool result (for Vision AI)
+#[derive(Debug, Clone)]
+pub struct ImageData {
+    pub base64: String,
+    pub media_type: String,
+}
+
+impl ImageData {
+    pub fn png(base64: impl Into<String>) -> Self {
+        Self { base64: base64.into(), media_type: "image/png".into() }
+    }
+    pub fn jpeg(base64: impl Into<String>) -> Self {
+        Self { base64: base64.into(), media_type: "image/jpeg".into() }
+    }
+}
+
 /// Result from a tool execution
 #[derive(Debug, Clone)]
 pub struct ToolResult {
@@ -19,14 +35,20 @@ pub struct ToolResult {
     pub content: String,
     /// Whether this is an error
     pub is_error: bool,
+    /// Optional image data (screenshot etc.) passed to Vision AI
+    pub image: Option<ImageData>,
 }
 
 impl ToolResult {
     pub fn ok(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_error: false }
+        Self { content: content.into(), is_error: false, image: None }
     }
     pub fn err(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_error: true }
+        Self { content: content.into(), is_error: true, image: None }
+    }
+    pub fn with_image(mut self, image: ImageData) -> Self {
+        self.image = Some(image);
+        self
     }
 }
 

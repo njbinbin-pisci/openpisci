@@ -2,6 +2,7 @@
 // main.rs calls run() from here; this allows Tauri mobile targets to work.
 
 mod agent;
+mod browser;
 mod commands;
 mod llm;
 mod policy;
@@ -66,6 +67,9 @@ pub fn run() {
             commands::scheduler::run_task_now,
             // System
             commands::system::get_vm_status,
+            // Audit log
+            commands::audit::get_audit_log,
+            commands::audit::clear_audit_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pisci Desktop");

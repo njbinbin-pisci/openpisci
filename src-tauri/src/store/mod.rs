@@ -15,6 +15,8 @@ pub struct AppState {
     pub settings: Arc<Mutex<Settings>>,
     /// Active agent cancellation tokens: session_id -> cancel flag
     pub cancel_flags: Arc<Mutex<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
+    /// Shared browser manager (Chrome for Testing)
+    pub browser: crate::browser::SharedBrowserManager,
 }
 
 impl AppState {
@@ -31,10 +33,16 @@ impl AppState {
         let config_path = app_dir.join("config.json");
         let settings = Settings::load(&config_path)?;
 
+        let browser_options = crate::browser::BrowserOptions {
+            chrome_dir: app_dir.join("chrome"),
+            ..Default::default()
+        };
+
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
             settings: Arc::new(Mutex::new(settings)),
             cancel_flags: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            browser: crate::browser::create_browser_manager(browser_options),
         })
     }
 }

@@ -53,14 +53,20 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 dirs = "5"
 urlencoding = "2"
-miniz_oxide = "0.8"
-crc32fast = "1"
+# image encoding (replaces hand-written PNG encoder, supports JPEG for Vision API)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# Browser automation via Chrome DevTools Protocol (cross-platform)
+chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-features = false }
+
+# ZIP extraction for Chrome for Testing downloads
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Windows-specific (conditional)
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows UIA via COM
 uiautomation = { version = "0.24", features = ["all"] }
-# Win32 API for screenshots (DXGI)
+# Win32 API for screenshots, clipboard, shell, window management
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D11",
@@ -68,6 +74,11 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

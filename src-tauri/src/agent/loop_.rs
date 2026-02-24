@@ -1,14 +1,15 @@
 /// Agent Loop — the core recursive query-tool-result cycle.
 use super::messages::AgentEvent;
 use super::tool::{ToolContext, ToolRegistry};
-use crate::llm::{ContentBlock, LlmClient, LlmMessage, LlmRequest, MessageContent};
+use crate::llm::{ContentBlock, ImageSource, LlmClient, LlmMessage, LlmRequest, MessageContent};
 use crate::policy::{PolicyDecision, PolicyGate};
+use crate::store::Database;
 use anyhow::Result;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, warn};
 
 const MAX_ITERATIONS: usize = 20;
@@ -20,6 +21,8 @@ pub struct AgentLoop {
     pub system_prompt: String,
     pub model: String,
     pub max_tokens: u32,
+    /// Optional database for audit logging
+    pub db: Option<Arc<Mutex<Database>>>,
 }
 
 impl AgentLoop {
@@ -167,11 +170,45 @@ impl AgentLoop {
                     is_error: result.is_error,
                 }).await;
 
+                // Write audit log entry
+                if let Some(ref db_arc) = self.db {
+                    let action = input["action"].as_str().unwrap_or("unknown").to_string();
+                    let input_summary = Some(truncate_str(&summarize_tool_input(name, input), 300));
+                    let result_summary = Some(truncate_str(&result.content, 200));
+                    let is_err = result.is_error;
+                    let tool_name_clone = name.clone();
+                    let session_id_clone = ctx.session_id.clone();
+                    let db_clone = db_arc.clone();
+                    tokio::spawn(async move {
+                        let db = db_clone.lock().await;
+                        let _ = db.append_audit(
+                            &session_id_clone,
+                            &tool_name_clone,
+                            &action,
+                            input_summary.as_deref(),
+                            result_summary.as_deref(),
+                            is_err,
+                        );
+                    });
+                }
+
                 tool_result_blocks.push(ContentBlock::ToolResult {
                     tool_use_id: id.clone(),
                     content: result.content,
                     is_error: result.is_error,
                 });
+
+                // If the tool returned an image, append it as a separate Image block
+                // so Vision AI can analyze the screenshot
+                if let Some(img) = result.image {
+                    tool_result_blocks.push(ContentBlock::Image {
+                        source: ImageSource {
+                            source_type: "base64".into(),
+                            media_type: img.media_type,
+                            data: img.base64,
+                        },
+                    });
+                }
             }
 
             // Add tool results as user message
@@ -189,4 +226,33 @@ impl AgentLoop {
 
         Ok(messages)
     }
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max])
+    }
+}
+
+fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
+    if tool_name == "browser" {
+        let action = input["action"].as_str().unwrap_or("unknown");
+        let mut parts = vec![format!("action={}", action)];
+        if let Some(v) = input["url"].as_str() {
+            parts.push(format!("url={}", v));
+        }
+        if let Some(v) = input["selector"].as_str() {
+            parts.push(format!("selector={}", v));
+        }
+        if let Some(v) = input["tab_id"].as_str() {
+            parts.push(format!("tab_id={}", v));
+        }
+        if let Some(v) = input["wait_condition"].as_str() {
+            parts.push(format!("wait_condition={}", v));
+        }
+        return parts.join(", ");
+    }
+    input.to_string()
 }
