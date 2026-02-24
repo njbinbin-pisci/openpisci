@@ -33,7 +33,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "msi"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -41,12 +41,27 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [],
+    "externalBin": [],
+    "copyright": "© 2025 Pisci Team",
+    "category": "Productivity",
     "windows": {
       "nsis": {
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"],
-        "shortcutName": "Pisci AI"
-      }
+        "shortcutName": "Pisci AI",
+        "displayLanguageSelector": true,
+        "headerImage": null,
+        "sidebarImage": null,
+        "license": null,
+        "compression": "lzma"
+      },
+      "wix": {
+        "language": "zh-CN"
+      },
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
     }
   },
   "plugins": {
