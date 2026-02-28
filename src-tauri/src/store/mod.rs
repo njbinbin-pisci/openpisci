@@ -17,10 +17,22 @@ pub struct AppState {
     pub cancel_flags: Arc<Mutex<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
     /// Shared browser manager (Chrome for Testing)
     pub browser: crate::browser::SharedBrowserManager,
+    /// Cron scheduler for recurring tasks
+    pub scheduler: Arc<crate::scheduler::cron::CronScheduler>,
+    /// App handle for emitting events from scheduler tasks
+    pub app_handle: AppHandle,
+    /// Pending permission confirmation channels: request_id -> oneshot sender
+    pub confirmation_responses: Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+    /// IM gateway manager
+    pub gateway: Arc<crate::gateway::GatewayManager>,
 }
 
 impl AppState {
-    pub fn new(app: &AppHandle) -> Result<Self> {
+    /// Synchronous construction — scheduler must be provided after async init.
+    pub fn new_sync(
+        app: &AppHandle,
+        scheduler: crate::scheduler::cron::CronScheduler,
+    ) -> Result<Self> {
         let app_dir = app
             .path()
             .app_data_dir()
@@ -35,6 +47,7 @@ impl AppState {
 
         let browser_options = crate::browser::BrowserOptions {
             chrome_dir: app_dir.join("chrome"),
+            headless: settings.browser_headless,
             ..Default::default()
         };
 
@@ -43,6 +56,10 @@ impl AppState {
             settings: Arc::new(Mutex::new(settings)),
             cancel_flags: Arc::new(Mutex::new(std::collections::HashMap::new())),
             browser: crate::browser::create_browser_manager(browser_options),
+            scheduler: Arc::new(scheduler),
+            app_handle: app.clone(),
+            confirmation_responses: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            gateway: Arc::new(crate::gateway::GatewayManager::new()),
         })
     }
 }

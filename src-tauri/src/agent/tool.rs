@@ -1,7 +1,43 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Snapshot of Settings fields that tools may need at runtime.
+/// This avoids taking the full Settings lock inside async tool code.
+#[derive(Debug, Clone, Default)]
+pub struct ToolSettings {
+    // Email
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_username: String,
+    pub smtp_password: String,
+    pub smtp_from_name: String,
+    pub imap_host: String,
+    pub imap_port: u16,
+    pub email_enabled: bool,
+    /// Per-tool config map: tool_name → { field: value }
+    /// Populated from Settings.user_tool_configs at agent launch.
+    pub user_tool_configs: HashMap<String, Value>,
+}
+
+impl ToolSettings {
+    pub fn from_settings(s: &crate::store::settings::Settings) -> Self {
+        Self {
+            smtp_host: s.smtp_host.clone(),
+            smtp_port: s.smtp_port,
+            smtp_username: s.smtp_username.clone(),
+            smtp_password: s.smtp_password.clone(),
+            smtp_from_name: s.smtp_from_name.clone(),
+            imap_host: s.imap_host.clone(),
+            imap_port: s.imap_port,
+            email_enabled: s.email_enabled,
+            user_tool_configs: s.user_tool_configs.clone(),
+        }
+    }
+}
 
 /// Context passed to every tool call
 #[derive(Debug, Clone)]
@@ -10,6 +46,10 @@ pub struct ToolContext {
     pub workspace_root: PathBuf,
     /// If true, skip permission checks (for scheduled tasks)
     pub bypass_permissions: bool,
+    /// Runtime-accessible settings snapshot (credentials etc.)
+    pub settings: Arc<ToolSettings>,
+    /// Maximum agent loop iterations (from Settings, default 50)
+    pub max_iterations: Option<u32>,
 }
 
 /// Image data attached to a tool result (for Vision AI)

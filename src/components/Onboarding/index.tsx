@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useDispatch } from "react-redux";
+import { useTranslation } from "react-i18next";
 import { settingsActions } from "../../store";
 import { settingsApi } from "../../services/tauri";
 
@@ -7,38 +8,35 @@ interface Props {
   onComplete: () => void;
 }
 
-type Step = "welcome" | "provider" | "workspace" | "done";
+type Step = "welcome" | "provider" | "policy" | "done";
 
 export default function Onboarding({ onComplete }: Props) {
+  const { t } = useTranslation();
   const dispatch = useDispatch();
   const [step, setStep] = useState<Step>("welcome");
   const [provider, setProvider] = useState("anthropic");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("claude-sonnet-4-5");
   const [workspace, setWorkspace] = useState("");
+  const [policyMode, setPolicyMode] = useState("balanced");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   const handleSave = async () => {
     if (!apiKey.trim()) {
-      setError("API key is required");
+      setError(t("onboarding.apiKeyRequired"));
       return;
     }
     setSaving(true);
     setError("");
     try {
-      const updates: Record<string, unknown> = {
-        provider,
-        model,
-      };
-      if (provider === "anthropic") {
-        updates.anthropic_api_key = apiKey;
-      } else {
-        updates.openai_api_key = apiKey;
-      }
-      if (workspace.trim()) {
-        updates.workspace_root = workspace;
-      }
+      const updates: Record<string, unknown> = { provider, model, policy_mode: policyMode };
+      if (provider === "anthropic") updates.anthropic_api_key = apiKey;
+      else if (provider === "openai") updates.openai_api_key = apiKey;
+      else if (provider === "deepseek") updates.deepseek_api_key = apiKey;
+      else if (provider === "qwen") updates.qwen_api_key = apiKey;
+      else updates.openai_api_key = apiKey;
+      if (workspace.trim()) updates.workspace_root = workspace;
 
       const settings = await settingsApi.save(updates);
       dispatch(settingsActions.setSettings(settings));
@@ -51,29 +49,36 @@ export default function Onboarding({ onComplete }: Props) {
     }
   };
 
+  const getKeyHelp = () => {
+    if (provider === "anthropic") return t("onboarding.anthropicKeyHelp");
+    if (provider === "openai") return t("onboarding.openaiKeyHelp");
+    if (provider === "deepseek") return "platform.deepseek.com";
+    if (provider === "qwen") return "dashscope.aliyuncs.com";
+    return "";
+  };
+
+  const getDefaultModel = (p: string) => {
+    if (p === "anthropic") return "claude-sonnet-4-5";
+    if (p === "openai") return "gpt-4o";
+    if (p === "deepseek") return "deepseek-chat";
+    if (p === "qwen") return "qwen-max";
+    return "";
+  };
+
   return (
-    <div style={{
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      height: "100vh",
-      background: "var(--bg-primary)",
-      padding: 24,
-    }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg-primary)", padding: 24 }}>
       <div style={{ maxWidth: 480, width: "100%" }}>
         {step === "welcome" && (
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 64, marginBottom: 16 }}>🐟</div>
             <h1 style={{ fontSize: 28, fontWeight: 700, color: "var(--text-primary)", marginBottom: 12 }}>
-              Welcome to Pisci
+              {t("onboarding.welcomeTitle")}
             </h1>
             <p style={{ color: "var(--text-secondary)", marginBottom: 32, lineHeight: 1.7 }}>
-              Your AI-powered desktop assistant for Windows.
-              Pisci can help you with files, shell commands, web search,
-              and Windows UI automation — all from a single chat interface.
+              {t("onboarding.welcomeDesc")}
             </p>
             <button className="btn btn-primary" style={{ padding: "12px 32px", fontSize: 16 }} onClick={() => setStep("provider")}>
-              Get Started →
+              {t("onboarding.getStarted")}
             </button>
           </div>
         )}
@@ -81,10 +86,10 @@ export default function Onboarding({ onComplete }: Props) {
         {step === "provider" && (
           <div>
             <h2 style={{ fontSize: 22, fontWeight: 600, color: "var(--text-primary)", marginBottom: 8 }}>
-              Configure AI Provider
+              {t("onboarding.configureTitle")}
             </h2>
             <p style={{ color: "var(--text-secondary)", marginBottom: 24, fontSize: 14 }}>
-              Pisci needs an AI API key to work. Your key is stored locally and never sent anywhere except the AI provider.
+              {t("onboarding.configureDesc")}
             </p>
 
             {error && (
@@ -94,18 +99,20 @@ export default function Onboarding({ onComplete }: Props) {
             )}
 
             <div className="form-group">
-              <label className="label">AI Provider</label>
+              <label className="label">{t("onboarding.aiProvider")}</label>
               <select className="input" value={provider} onChange={(e) => {
                 setProvider(e.target.value);
-                setModel(e.target.value === "anthropic" ? "claude-sonnet-4-5" : "gpt-4o");
+                setModel(getDefaultModel(e.target.value));
               }}>
-                <option value="anthropic">Anthropic (Claude) — Recommended</option>
+                <option value="anthropic">{t("onboarding.anthropicRecommended")}</option>
                 <option value="openai">OpenAI (GPT)</option>
+                <option value="deepseek">DeepSeek（深度求索）</option>
+                <option value="qwen">通义千问 (Qwen)</option>
               </select>
             </div>
 
             <div className="form-group">
-              <label className="label">API Key *</label>
+              <label className="label">{t("onboarding.apiKey")}</label>
               <input
                 className="input"
                 type="password"
@@ -114,35 +121,78 @@ export default function Onboarding({ onComplete }: Props) {
                 placeholder={provider === "anthropic" ? "sk-ant-..." : "sk-..."}
                 autoFocus
               />
-              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-                {provider === "anthropic"
-                  ? "Get your key at console.anthropic.com"
-                  : "Get your key at platform.openai.com"}
-              </p>
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{getKeyHelp()}</p>
             </div>
 
             <div className="form-group">
-              <label className="label">Model</label>
+              <label className="label">{t("onboarding.model")}</label>
               <input className="input" value={model} onChange={(e) => setModel(e.target.value)} />
             </div>
 
             <div className="form-group">
-              <label className="label">Workspace Directory (optional)</label>
+              <label className="label">{t("onboarding.workspace")}</label>
               <input
                 className="input"
                 value={workspace}
                 onChange={(e) => setWorkspace(e.target.value)}
-                placeholder="C:\Users\YourName\Documents\Pisci"
+                placeholder={t("onboarding.workspacePlaceholder")}
               />
               <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-                Files created by Pisci will be saved here. Leave blank to use default.
+                {t("onboarding.workspaceHelp")}
               </p>
             </div>
 
             <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginTop: 24 }}>
-              <button className="btn btn-secondary" onClick={() => setStep("welcome")}>← Back</button>
+              <button className="btn btn-secondary" onClick={() => setStep("welcome")}>{t("onboarding.backBtn")}</button>
+              <button className="btn btn-primary" onClick={() => setStep("policy")} disabled={!apiKey.trim()}>
+                {t("onboarding.nextBtn")}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === "policy" && (
+          <div>
+            <h2 style={{ fontSize: 22, fontWeight: 600, color: "var(--text-primary)", marginBottom: 8 }}>
+              {t("onboarding.policyTitle")}
+            </h2>
+            <p style={{ color: "var(--text-secondary)", marginBottom: 24, fontSize: 14 }}>
+              {t("onboarding.policyDesc")}
+            </p>
+
+            {[
+              { value: "strict", label: t("onboarding.policyStrict"), desc: t("onboarding.policyStrictDesc") },
+              { value: "balanced", label: t("onboarding.policyBalanced"), desc: t("onboarding.policyBalancedDesc") },
+              { value: "dev", label: t("onboarding.policyDev"), desc: t("onboarding.policyDevDesc") },
+            ].map((opt) => (
+              <div
+                key={opt.value}
+                onClick={() => setPolicyMode(opt.value)}
+                style={{
+                  padding: "14px 16px",
+                  borderRadius: "var(--radius)",
+                  border: `2px solid ${policyMode === opt.value ? "var(--accent)" : "var(--border)"}`,
+                  marginBottom: 10,
+                  cursor: "pointer",
+                  background: policyMode === opt.value ? "rgba(var(--accent-rgb),0.06)" : "transparent",
+                  transition: "border-color 0.15s",
+                }}
+              >
+                <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: 2 }}>{opt.label}</div>
+                <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{opt.desc}</div>
+              </div>
+            ))}
+
+            {error && (
+              <div style={{ padding: "10px 14px", background: "rgba(248,113,113,0.1)", border: "1px solid var(--error)", borderRadius: "var(--radius)", color: "var(--error)", marginBottom: 16, fontSize: 13 }}>
+                {error}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginTop: 24 }}>
+              <button className="btn btn-secondary" onClick={() => setStep("provider")}>{t("onboarding.backBtn")}</button>
               <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-                {saving ? "Saving..." : "Save & Continue →"}
+                {saving ? t("common.saving") : t("onboarding.saveAndContinue")}
               </button>
             </div>
           </div>
@@ -152,13 +202,13 @@ export default function Onboarding({ onComplete }: Props) {
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 64, marginBottom: 16 }}>✅</div>
             <h2 style={{ fontSize: 22, fontWeight: 600, color: "var(--text-primary)", marginBottom: 12 }}>
-              You're all set!
+              {t("onboarding.doneTitle")}
             </h2>
             <p style={{ color: "var(--text-secondary)", marginBottom: 32 }}>
-              Pisci is ready to help. Start a new chat to begin.
+              {t("onboarding.doneDesc")}
             </p>
             <button className="btn btn-primary" style={{ padding: "12px 32px", fontSize: 16 }} onClick={onComplete}>
-              Start Chatting 🐟
+              {t("onboarding.startChatting")}
             </button>
           </div>
         )}

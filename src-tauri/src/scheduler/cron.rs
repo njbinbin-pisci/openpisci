@@ -19,7 +19,7 @@ impl CronScheduler {
         Ok(())
     }
 
-    pub async fn shutdown(&self) -> Result<()> {
+    pub async fn shutdown(&mut self) -> Result<()> {
         self.scheduler.shutdown().await?;
         Ok(())
     }
@@ -41,11 +41,15 @@ impl CronScheduler {
             cron_expr.to_string()
         };
 
+        use std::sync::Arc;
+        let f = Arc::new(tokio::sync::Mutex::new(f));
         let job = Job::new_async(full_cron.as_str(), move |uuid, sched| {
             let task_id = task_id.clone();
+            let f = f.clone();
             Box::pin(async move {
                 info!("Running scheduled task: {}", task_id);
-                f(uuid, sched).await;
+                let mut guard = f.lock().await;
+                guard(uuid, sched).await;
             })
         })?;
 

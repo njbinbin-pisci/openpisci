@@ -69,11 +69,21 @@ impl Tool for ShellTool {
 
         let timeout_secs = input["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
 
+        // Force UTF-8 output so Chinese/CJK filenames and content are not garbled.
+        #[cfg(target_os = "windows")]
+        let utf8_command = format!(
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
+             $OutputEncoding = [System.Text.Encoding]::UTF8; \
+             chcp 65001 | Out-Null; \
+             {}",
+            command
+        );
+
         // Build command
         #[cfg(target_os = "windows")]
         let mut cmd = {
             let mut c = Command::new("powershell");
-            c.args(["-NoProfile", "-NonInteractive", "-Command", command]);
+            c.args(["-NoProfile", "-NonInteractive", "-Command", &utf8_command]);
             c
         };
 

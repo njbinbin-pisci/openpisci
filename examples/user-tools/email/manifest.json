@@ -1,0 +1,79 @@
+{
+  "name": "email",
+  "description": "Send emails via SMTP and fetch emails via IMAP. A TypeScript reference implementation for user tools.",
+  "version": "1.0.0",
+  "author": "Pisci Desktop",
+  "runtime": "deno",
+  "entrypoint": "index.ts",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["send", "fetch", "search"],
+        "description": "Action to perform: send an email, fetch recent emails, or search by subject/keyword"
+      },
+      "to": {
+        "type": "string",
+        "description": "Recipient email address (required for 'send')"
+      },
+      "subject": {
+        "type": "string",
+        "description": "Email subject (required for 'send')"
+      },
+      "body": {
+        "type": "string",
+        "description": "Email body in plain text (required for 'send')"
+      },
+      "limit": {
+        "type": "number",
+        "description": "Max number of emails to fetch (default 10, for 'fetch' / 'search')"
+      },
+      "query": {
+        "type": "string",
+        "description": "Search keyword applied to Subject header (for 'search')"
+      }
+    },
+    "required": ["action"]
+  },
+  "config_schema": {
+    "smtp_host": {
+      "type": "string",
+      "label": "SMTP Server",
+      "placeholder": "smtp.gmail.com",
+      "description": "Hostname of your SMTP server"
+    },
+    "smtp_port": {
+      "type": "number",
+      "label": "SMTP Port",
+      "default": 587,
+      "description": "587 for STARTTLS, 465 for SSL"
+    },
+    "smtp_username": {
+      "type": "string",
+      "label": "SMTP Username",
+      "placeholder": "you@example.com"
+    },
+    "smtp_password": {
+      "type": "password",
+      "label": "SMTP Password / App Password",
+      "description": "Stored encrypted. For Gmail use an App Password."
+    },
+    "imap_host": {
+      "type": "string",
+      "label": "IMAP Server",
+      "placeholder": "imap.gmail.com"
+    },
+    "imap_port": {
+      "type": "number",
+      "label": "IMAP Port",
+      "default": 993
+    },
+    "from_name": {
+      "type": "string",
+      "label": "From Display Name",
+      "placeholder": "My AI Agent"
+    }
+  },
+  "timeout_secs": 30
+}

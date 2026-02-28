@@ -1,28 +1,7 @@
 /* ============================================================
    Pisci Desktop — Global Styles
+   变量定义在 theme.css / themes/*.css 中
    ============================================================ */
-
-:root {
-  --bg-primary: #0f0f13;
-  --bg-secondary: #1a1a22;
-  --bg-tertiary: #242430;
-  --bg-hover: #2e2e3e;
-  --border: #333345;
-  --accent: #7c6af7;
-  --accent-hover: #9585ff;
-  --accent-dim: rgba(124, 106, 247, 0.15);
-  --text-primary: #e8e8f0;
-  --text-secondary: #9090a8;
-  --text-muted: #606078;
-  --success: #4ade80;
-  --warning: #fbbf24;
-  --error: #f87171;
-  --radius: 8px;
-  --radius-lg: 12px;
-  --shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-mono: "Cascadia Code", "Fira Code", "Consolas", monospace;
-}
 
 * {
   box-sizing: border-box;
@@ -57,8 +36,8 @@ body {
 .sidebar {
   width: 200px;
   min-width: 200px;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg, var(--bg-secondary));
+  border-right: 1px solid var(--sidebar-border, var(--border));
   display: flex;
   flex-direction: column;
   padding: 12px 0;
@@ -85,10 +64,29 @@ body {
 }
 
 .sidebar-nav {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 0 8px;
+}
+
+.sidebar-footer {
+  padding: 8px 8px 4px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.minimal-mode-btn,
+.theme-toggle {
+  opacity: 0.8;
+}
+
+.minimal-mode-btn:hover,
+.theme-toggle:hover {
+  opacity: 1;
 }
 
 .nav-item {
@@ -329,5 +327,67 @@ textarea.input {
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb, var(--border)); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ============================================================
+   Themed Checkbox
+   统一所有 input[type=checkbox] 外观，跟随主题 accent 色
+   Skills 的 toggle 通过 opacity:0/width:0 隐藏，不受影响
+   ============================================================ */
+input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  border: 1.5px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  position: relative;
+  vertical-align: middle;
+  flex-shrink: 0;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+input[type="checkbox"]:hover {
+  border-color: var(--accent);
+}
+
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-muted, rgba(124, 106, 247, 0.25));
+}
+
+input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* 勾选标记 — 白色对号 */
+input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 9px;
+  border: 2px solid #fff;
+  border-top: none;
+  border-left: none;
+  transform: rotate(42deg);
+}
+
+input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 黑金主题：勾选标记用深色，与金色背景形成对比 */
+:root[data-theme="gold"] input[type="checkbox"]:checked::after {
+  border-color: #0a0a08;
+}

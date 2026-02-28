@@ -89,8 +89,8 @@ impl ComTool {
     fn clipboard_read(&self) -> Result<ToolResult> {
         use windows::Win32::System::DataExchange::{
             OpenClipboard, CloseClipboard, GetClipboardData, IsClipboardFormatAvailable,
-            CF_UNICODETEXT, CF_HDROP,
         };
+        use windows::Win32::System::Ole::{CF_UNICODETEXT, CF_HDROP};
         use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 
         unsafe {
@@ -98,8 +98,8 @@ impl ComTool {
 
             let result = (|| -> Result<ToolResult> {
                 // Try text first
-                if IsClipboardFormatAvailable(CF_UNICODETEXT.0).is_ok() {
-                    let handle = GetClipboardData(CF_UNICODETEXT.0)
+                if IsClipboardFormatAvailable(CF_UNICODETEXT.0.into()).is_ok() {
+                    let handle = GetClipboardData(CF_UNICODETEXT.0.into())
                         .map_err(|e| anyhow::anyhow!("GetClipboardData: {}", e))?;
                     let hglobal = windows::Win32::Foundation::HGLOBAL(handle.0 as *mut _);
                     let ptr = GlobalLock(hglobal) as *const u16;
@@ -113,10 +113,10 @@ impl ComTool {
                 }
 
                 // Try file drop list
-                if IsClipboardFormatAvailable(CF_HDROP.0).is_ok() {
+                if IsClipboardFormatAvailable(CF_HDROP.0.into()).is_ok() {
                     use windows::Win32::UI::Shell::DragQueryFileW;
                     use windows::Win32::UI::Shell::HDROP;
-                    let handle = GetClipboardData(CF_HDROP.0)
+                    let handle = GetClipboardData(CF_HDROP.0.into())
                         .map_err(|e| anyhow::anyhow!("GetClipboardData HDROP: {}", e))?;
                     let hdrop = HDROP(handle.0 as *mut _);
                     let count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
@@ -142,8 +142,9 @@ impl ComTool {
 
     fn clipboard_write(&self, input: &Value) -> Result<ToolResult> {
         use windows::Win32::System::DataExchange::{
-            OpenClipboard, CloseClipboard, EmptyClipboard, SetClipboardData, CF_UNICODETEXT,
+            OpenClipboard, CloseClipboard, EmptyClipboard, SetClipboardData,
         };
+        use windows::Win32::System::Ole::CF_UNICODETEXT;
         use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 
         let text = match input["text"].as_str() {
@@ -163,7 +164,7 @@ impl ComTool {
             std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
             let _ = GlobalUnlock(hmem);
 
-            SetClipboardData(CF_UNICODETEXT.0, windows::Win32::Foundation::HANDLE(hmem.0 as isize))
+            SetClipboardData(CF_UNICODETEXT.0.into(), windows::Win32::Foundation::HANDLE(hmem.0 as *mut _))
                 .map_err(|e| anyhow::anyhow!("SetClipboardData: {}", e))?;
             CloseClipboard().ok();
         }
@@ -233,7 +234,7 @@ impl ComTool {
         if result.0 as usize > 32 {
             Ok(ToolResult::ok(format!("Shell {} '{}' launched", verb, file)))
         } else {
-            Ok(ToolResult::err(format!("ShellExecute failed with code: {}", result.0)))
+            Ok(ToolResult::err(format!("ShellExecute failed with code: {:?}", result.0)))
         }
     }
 

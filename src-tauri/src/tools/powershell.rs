@@ -194,8 +194,16 @@ impl Tool for PowerShellTool {
 
 impl PowerShellTool {
     async fn run_ps(&self, command: &str, cwd: &std::path::Path) -> Result<ToolResult> {
+        // Force UTF-8 so Chinese/CJK output is not garbled
+        let utf8_command = format!(
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
+             $OutputEncoding = [System.Text.Encoding]::UTF8; \
+             chcp 65001 | Out-Null; \
+             {}",
+            command
+        );
         let mut cmd = Command::new("powershell");
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", command])
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &utf8_command])
             .current_dir(cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

@@ -1,7 +1,7 @@
 [package]
 name = "pisci-desktop"
 version = "0.1.0"
-description = "Pisci Desktop — Windows AI Agent"
+description = "OpenPisci — Open-source Windows AI Agent Desktop"
 authors = ["Pisci Team"]
 license = "Apache-2.0"
 edition = "2021"
@@ -21,6 +21,8 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -33,6 +35,8 @@ reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], defau
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
 
 # SQLite (bundled — no external dll needed)
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -48,8 +52,12 @@ thiserror = "1"
 base64 = "0.22"
 regex = "1"
 once_cell = "1"
+getrandom = "0.2"
+chacha20poly1305 = "0.10"
+hex = "0.4"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
 async-trait = "0.1"
 dirs = "5"
 urlencoding = "2"
@@ -61,6 +69,11 @@ chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-feature
 
 # ZIP extraction for Chrome for Testing downloads
 zip = { version = "2", default-features = false, features = ["deflate"] }
+scraper = "0.25.0"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "hostname", "pool", "tokio1-rustls-tls"] }
+imap = "2.4.1"
+native-tls = "0.2"
+mailparse = "0.15"
 
 # Windows-specific (conditional)
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -70,6 +83,7 @@ uiautomation = { version = "0.24", features = ["all"] }
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
@@ -78,6 +92,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_HiDpi",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

@@ -9,6 +9,7 @@ dist/
 
 # Tauri build outputs
 src-tauri/target/
+fish-emoji-512.png
 src-tauri/WixTools/
 src-tauri/gen/
 
@@ -29,3 +30,8 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Windows installer artifacts
+*.msi
+
+references/

@@ -10,6 +10,7 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 // ---------------------------------------------------------------------------
 
 export interface Session {
+  source: string;         // "chat" | "im_telegram" | "im_feishu" | ...
   id: string;
   title?: string;
   status: string;
@@ -52,6 +53,7 @@ export interface ScheduledTask {
   cron_expression: string;
   task_prompt: string;
   status: string;
+  last_run_status?: string;
   run_count: number;
   last_run_at?: string;
   next_run_at?: string;
@@ -61,6 +63,8 @@ export interface ScheduledTask {
 export interface Settings {
   anthropic_api_key: string;
   openai_api_key: string;
+  deepseek_api_key: string;
+  qwen_api_key: string;
   provider: string;
   model: string;
   custom_base_url: string;
@@ -69,6 +73,90 @@ export interface Settings {
   max_tokens: number;
   confirm_shell_commands: boolean;
   confirm_file_writes: boolean;
+  browser_headless: boolean;
+  is_configured?: boolean;
+  // IM Gateway
+  feishu_app_id: string;
+  feishu_app_secret: string;
+  feishu_domain: string;
+  feishu_enabled: boolean;
+  wecom_corp_id: string;
+  wecom_agent_secret: string;
+  wecom_agent_id: string;
+  wecom_enabled: boolean;
+  dingtalk_app_key: string;
+  dingtalk_app_secret: string;
+  dingtalk_enabled: boolean;
+  telegram_bot_token: string;
+  telegram_enabled: boolean;
+  // Slack
+  slack_webhook_url: string;
+  slack_enabled: boolean;
+  // Discord
+  discord_webhook_url: string;
+  discord_enabled: boolean;
+  // Microsoft Teams
+  teams_webhook_url: string;
+  teams_enabled: boolean;
+  // Matrix
+  matrix_homeserver: string;
+  matrix_access_token: string;
+  matrix_room_id: string;
+  matrix_enabled: boolean;
+  // Generic Webhook
+  webhook_outbound_url: string;
+  webhook_auth_token: string;
+  webhook_enabled: boolean;
+  // WeCom relay inbox file
+  wecom_inbox_file: string;
+  // Email (SMTP / IMAP)
+  smtp_host: string;
+  smtp_port: number;
+  smtp_username: string;
+  smtp_password: string;
+  imap_host: string;
+  imap_port: number;
+  smtp_from_name: string;
+  email_enabled: boolean;
+  // User tool configs (tool_name → { field: value })
+  user_tool_configs: Record<string, Record<string, unknown>>;
+  // Agent config
+  max_iterations: number;
+  heartbeat_enabled: boolean;
+  heartbeat_interval_mins: number;
+  heartbeat_prompt: string;
+}
+
+export interface ConfigFieldSchema {
+  type: "string" | "number" | "boolean" | "password";
+  label?: string;
+  default?: unknown;
+  description?: string;
+  placeholder?: string;
+}
+
+export interface UserToolInfo {
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  runtime: string;
+  entrypoint: string;
+  input_schema: unknown;
+  config_schema: Record<string, ConfigFieldSchema>;
+  has_config: boolean;
+}
+
+export type ChannelStatus =
+  | "Disconnected"
+  | "Connecting"
+  | "Connected"
+  | { Error: string };
+
+export interface ChannelInfo {
+  name: string;
+  status: ChannelStatus;
+  connected_at?: number;
 }
 
 export type AgentEventType =
@@ -99,6 +187,7 @@ export const sessionsApi = {
   list: (limit = 20, offset = 0) =>
     invoke<{ sessions: Session[]; total: number }>("list_sessions", { limit, offset }),
   delete: (sessionId: string) => invoke<void>("delete_session", { sessionId }),
+  rename: (sessionId: string, title: string) => invoke<void>("rename_session", { sessionId, title }),
   getMessages: (sessionId: string, limit = 100, offset = 0) =>
     invoke<ChatMessage[]>("get_messages", { sessionId, limit, offset }),
 };
@@ -132,10 +221,23 @@ export const memoryApi = {
 // Skills
 // ---------------------------------------------------------------------------
 
+export interface SkillCatalogItem {
+  name: string;
+  description: string;
+  version: string;
+  source: string;
+  tools: string[];
+  dependencies: string[];
+  permissions: string[];
+}
+
 export const skillsApi = {
   list: () => invoke<{ skills: Skill[]; total: number }>("list_skills"),
   toggle: (skillId: string, enabled: boolean) =>
     invoke<void>("toggle_skill", { skillId, enabled }),
+  catalog: () => invoke<SkillCatalogItem[]>("scan_skill_catalog"),
+  install: (source: string) => invoke<SkillCatalogItem>("install_skill", { source }),
+  uninstall: (skillName: string) => invoke<void>("uninstall_skill", { skillName }),
 };
 
 // ---------------------------------------------------------------------------
@@ -168,4 +270,155 @@ export const schedulerApi = {
 export const systemApi = {
   getVmStatus: () =>
     invoke<{ backend: string; available: boolean; description: string }>("get_vm_status"),
+};
+
+// ---------------------------------------------------------------------------
+// Gateway / IM
+// ---------------------------------------------------------------------------
+
+export const gatewayApi = {
+  list: () => invoke<{ channels: ChannelInfo[] }>('list_gateway_channels'),
+  connect: () => invoke<{ channels: ChannelInfo[] }>('connect_gateway_channels'),
+  disconnect: () => invoke<void>('disconnect_gateway_channels'),
+};
+
+// ---------------------------------------------------------------------------
+// Audit Log
+// ---------------------------------------------------------------------------
+
+export interface AuditEntry {
+  id: string;
+  session_id: string;
+  timestamp: string;
+  tool_name: string;
+  action: string;
+  input_summary?: string;
+  result_summary?: string;
+  is_error: boolean;
+}
+
+export const auditApi = {
+  list: (params?: { session_id?: string; tool_name?: string; limit?: number; offset?: number }) =>
+    invoke<AuditEntry[]>('get_audit_log', {
+      sessionId: params?.session_id,
+      toolName: params?.tool_name,
+      limit: params?.limit ?? 50,
+      offset: params?.offset ?? 0,
+    }),
+  clear: (sessionId?: string) => invoke<void>('clear_audit_log', { sessionId }),
+};
+
+// ---------------------------------------------------------------------------
+// Permission
+// ---------------------------------------------------------------------------
+
+export const permissionApi = {
+  respond: (requestId: string, approved: boolean) =>
+    invoke<void>('respond_permission', { requestId, approved }),
+};
+
+// ---------------------------------------------------------------------------
+// User Tools
+// ---------------------------------------------------------------------------
+
+export const userToolsApi = {
+  list: () => invoke<UserToolInfo[]>('list_user_tools'),
+  install: (source: string) => invoke<UserToolInfo>('install_user_tool', { source }),
+  uninstall: (toolName: string) => invoke<void>('uninstall_user_tool', { toolName }),
+  saveConfig: (toolName: string, config: Record<string, unknown>) =>
+    invoke<void>('save_user_tool_config', { toolName, config }),
+  getConfig: (toolName: string) =>
+    invoke<Record<string, unknown>>('get_user_tool_config', { toolName }),
+};
+
+// ---------------------------------------------------------------------------
+// Built-in Tools
+// ---------------------------------------------------------------------------
+
+export interface BuiltinToolInfo {
+  name: string;
+  description: string;
+  icon: string;
+  windows_only: boolean;
+}
+
+export const builtinToolsApi = {
+  list: () => invoke<BuiltinToolInfo[]>('list_builtin_tools'),
+  triggerHeartbeat: () => invoke<void>('trigger_heartbeat'),
+};
+
+// ---------------------------------------------------------------------------
+// Fish (小鱼) sub-Agents
+// ---------------------------------------------------------------------------
+
+export interface FishSettingOption {
+  value: string;
+  label: string;
+}
+
+export interface FishSettingDef {
+  key: string;
+  label: string;
+  setting_type: string;
+  default: string;
+  placeholder: string;
+  options: FishSettingOption[];
+}
+
+export interface FishAgentConfig {
+  system_prompt: string;
+  max_iterations: number;
+  model: string;
+}
+
+export interface FishDefinition {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  tools: string[];
+  agent: FishAgentConfig;
+  settings: FishSettingDef[];
+  builtin: boolean;
+}
+
+export interface FishInstance {
+  fish_id: string;
+  session_id: string;
+  status: string;
+  user_config: Record<string, string>;
+  created_at: string;
+}
+
+export interface FishWithStatus {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  tools: string[];
+  agent: FishAgentConfig;
+  settings: FishSettingDef[];
+  builtin: boolean;
+  instance?: FishInstance;
+}
+
+export const fishApi = {
+  list: () => invoke<FishWithStatus[]>('list_fish'),
+  activate: (fishId: string, userConfig: Record<string, string>) =>
+    invoke<string>('activate_fish', { fishId, userConfig }),
+  deactivate: (fishId: string) => invoke<void>('deactivate_fish', { fishId }),
+  getStatus: (fishId: string) => invoke<FishInstance | null>('get_fish_status', { fishId }),
+  chatSend: (fishId: string, content: string) =>
+    invoke<void>('fish_chat_send', { fishId, content }),
+};
+
+// ---------------------------------------------------------------------------
+// Window (minimal mode)
+// ---------------------------------------------------------------------------
+
+export const windowApi = {
+  enterMinimalMode: () => invoke<void>("enter_minimal_mode"),
+  exitMinimalMode: () => invoke<void>("exit_minimal_mode"),
+  setThemeBorder: (theme: "violet" | "gold") =>
+    invoke<void>("set_window_theme_border", { theme }),
 };

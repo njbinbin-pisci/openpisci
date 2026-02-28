@@ -1,0 +1,133 @@
+/* ============================================================
+   Pisci — Black Gold Theme (黑金)
+   极致克制的奢华感：深黑底色 + 哑光金点缀
+   灵感来自高端腕表、私人银行、顶奢品牌的视觉语言
+   ============================================================ */
+
+:root[data-theme="gold"] {
+  /* 背景层次 — 近黑，带极细微的暖调 */
+  --bg-primary:    #0a0a08;
+  --bg-secondary:  #111110;
+  --bg-tertiary:   #1a1916;
+  --bg-hover:      #222118;
+
+  /* 边框 — 极细的金色描边，若隐若现 */
+  --border:        #2a2820;
+
+  /* 主色调 — 哑光金，非刺眼的亮金，而是沉稳的古金 */
+  --accent:        #c9a84c;
+  --accent-hover:  #dfc070;
+  --accent-dim:    rgba(201, 168, 76, 0.10);
+  --accent-muted:  rgba(201, 168, 76, 0.12);
+  --accent-glow:   0 0 24px rgba(201, 168, 76, 0.18);
+
+  /* 文字 — 暖白，避免冷白刺眼 */
+  --text-primary:   #e8e4d8;
+  --text-secondary: #8a8070;
+  --text-muted:     #504840;
+
+  /* 状态色 — 调暗以融入整体氛围 */
+  --success: #7ab87a;
+  --warning: #c9a84c;
+  --error:   #c06060;
+
+  /* 消息气泡 — 极微妙的金色晕染 */
+  --msg-user-bg:      rgba(201, 168, 76, 0.08);
+  --msg-user-border:  rgba(201, 168, 76, 0.20);
+  --msg-ai-bg:        #111110;
+  --msg-ai-border:    #2a2820;
+
+  /* 侧边栏 — 比主背景略深，强调层次 */
+  --sidebar-bg:     #080807;
+  --sidebar-border: #201e18;
+
+  /* 滚动条 — 细金线 */
+  --scrollbar-thumb: #3a3420;
+
+  /* 阴影 — 带金色暖调 */
+  --shadow:    0 2px 16px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.8);
+
+  /* 圆角 — 略小，更精致硬朗 */
+  --radius:    6px;
+  --radius-lg: 10px;
+
+  /* 字体 */
+  --font:      -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Emoji", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Fira Code", "Consolas", monospace;
+}
+
+/* 黑金主题专属细节增强 */
+:root[data-theme="gold"] .app-name {
+  background: linear-gradient(135deg, #c9a84c 0%, #f0d080 50%, #c9a84c 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+:root[data-theme="gold"] .nav-item.active {
+  background: rgba(201, 168, 76, 0.08);
+  border-left: 2px solid var(--accent);
+  color: var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin-left: -8px;
+  padding-left: 18px;
+}
+
+:root[data-theme="gold"] .btn-primary {
+  background: linear-gradient(135deg, #b8922a 0%, #c9a84c 40%, #dfc070 100%);
+  color: #0a0a08;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  box-shadow: 0 2px 12px rgba(201, 168, 76, 0.25);
+}
+
+:root[data-theme="gold"] .btn-primary:hover {
+  background: linear-gradient(135deg, #c9a84c 0%, #dfc070 50%, #c9a84c 100%);
+  box-shadow: 0 4px 20px rgba(201, 168, 76, 0.35);
+}
+
+:root[data-theme="gold"] .card {
+  border-color: #2a2820;
+  background: #111110;
+  box-shadow: inset 0 1px 0 rgba(201, 168, 76, 0.06);
+}
+
+:root[data-theme="gold"] .input:focus {
+  border-color: #c9a84c;
+  box-shadow: 0 0 0 2px rgba(201, 168, 76, 0.12);
+}
+
+:root[data-theme="gold"] .page-header {
+  border-bottom-color: #2a2820;
+  background: linear-gradient(180deg, #0e0d0b 0%, transparent 100%);
+}
+
+:root[data-theme="gold"] .sidebar {
+  background: var(--sidebar-bg);
+  border-right-color: var(--sidebar-border);
+}
+
+:root[data-theme="gold"] .sidebar-header {
+  border-bottom: 1px solid #201e18;
+}
+
+:root[data-theme="gold"] ::-webkit-scrollbar-thumb {
+  background: #3a3420;
+}
+
+:root[data-theme="gold"] ::-webkit-scrollbar-thumb:hover {
+  background: #c9a84c44;
+}
+
+:root[data-theme="gold"] .badge-info {
+  background: rgba(201, 168, 76, 0.10);
+  color: var(--accent);
+  border: 1px solid rgba(201, 168, 76, 0.20);
+}
+
+:root[data-theme="gold"] .loading-spinner {
+  border-top-color: var(--accent);
+  border-color: #2a2820;
+  border-top-color: #c9a84c;
+}

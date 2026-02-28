@@ -1,0 +1,381 @@
+.fish-page {
+  padding: 24px;
+  max-width: 900px;
+  margin: 0 auto;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.fish-page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 28px;
+  position: relative;
+}
+
+.fish-page-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.fish-page-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.fish-refresh-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+.fish-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  color: #ef4444;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.fish-error button {
+  background: none;
+  border: none;
+  color: #ef4444;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+}
+
+.fish-loading,
+.fish-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: var(--text-secondary);
+  gap: 12px;
+}
+
+.fish-empty-icon {
+  font-size: 48px;
+}
+
+/* Sections */
+.fish-section {
+  margin-bottom: 32px;
+}
+
+.fish-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 4px 0;
+}
+
+.fish-section-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 16px 0;
+}
+
+.fish-section-desc code {
+  background: var(--bg-tertiary);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+/* Grid */
+.fish-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+/* Card */
+.fish-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 16px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.fish-card:hover {
+  border-color: var(--accent-color);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+.fish-card-active {
+  border-color: var(--accent-color);
+  background: var(--bg-secondary);
+}
+
+.fish-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.fish-card-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.fish-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fish-card-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.fish-card-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.badge-active {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+}
+
+.badge-inactive {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.badge-builtin {
+  background: rgba(139, 92, 246, 0.15);
+  color: #8b5cf6;
+  margin-left: 4px;
+}
+
+.fish-card-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0 0 10px 0;
+}
+
+.fish-card-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.fish-tool-tag {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: monospace;
+}
+
+.fish-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Buttons */
+.fish-btn {
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.fish-btn:active {
+  transform: scale(0.97);
+}
+
+.fish-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fish-btn-primary {
+  background: var(--accent-color);
+  color: white;
+}
+
+.fish-btn-primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.fish-btn-secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+.fish-btn-secondary:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.fish-btn-danger {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.fish-btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+/* Modal */
+.fish-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.fish-modal {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 24px;
+  width: 380px;
+  max-width: 90vw;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+/* Config Form */
+.fish-config-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 16px 0;
+}
+
+.fish-config-empty {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: 0 0 16px 0;
+}
+
+.fish-config-field {
+  margin-bottom: 14px;
+}
+
+.fish-config-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 5px;
+}
+
+.fish-input,
+.fish-select {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.fish-input:focus,
+.fish-select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.fish-toggle {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+}
+
+.fish-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.fish-toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--bg-tertiary);
+  border-radius: 22px;
+  transition: 0.2s;
+}
+
+.fish-toggle input:checked + .fish-toggle-slider {
+  background: var(--accent-color);
+}
+
+.fish-toggle-slider::before {
+  content: "";
+  position: absolute;
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background: white;
+  border-radius: 50%;
+  transition: 0.2s;
+}
+
+.fish-toggle input:checked + .fish-toggle-slider::before {
+  transform: translateX(18px);
+}
+
+.fish-config-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+/* Guide section */
+.fish-guide-section {
+  border-top: 1px solid var(--border-color);
+  padding-top: 24px;
+}
+
+.fish-code-example {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 14px;
+  font-size: 12px;
+  font-family: monospace;
+  line-height: 1.6;
+  color: var(--text-primary);
+  overflow-x: auto;
+  white-space: pre;
+}

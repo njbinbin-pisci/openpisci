@@ -1,7 +1,13 @@
 pub mod audit;
 pub mod chat;
+pub mod fish;
+pub mod gateway;
 pub mod memory;
+pub mod permission;
 pub mod scheduler;
 pub mod settings;
 pub mod skills;
 pub mod system;
+pub mod tools;
+pub mod user_tools;
+pub mod window;

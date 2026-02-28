@@ -143,7 +143,7 @@ impl ScreenTool {
 
     // ─── Full screen capture ─────────────────────────────────────────────────
 
-    fn capture_full(&self, input: &Value) -> Result<ToolResult> {
+    pub(crate) fn capture_full(&self, input: &Value) -> Result<ToolResult> {
         use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
         use windows::Win32::UI::WindowsAndMessaging::{GetDesktopWindow, GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
@@ -166,7 +166,7 @@ impl ScreenTool {
         use windows::Win32::UI::WindowsAndMessaging::{
             FindWindowW, EnumWindows, GetWindowTextW, IsWindowVisible, GetWindowRect,
         };
-        use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+        use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
         use windows::core::PCWSTR;
 
         let title = match input["window_title"].as_str() {
@@ -176,10 +176,12 @@ impl ScreenTool {
 
         // Try exact match first
         let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut hwnd = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) };
+        let exact_hwnd = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) }.ok();
 
-        // If not found, try partial match via EnumWindows
-        if hwnd.0 == 0 {
+        let hwnd = if let Some(h) = exact_hwnd {
+            h
+        } else {
+            // Partial match via EnumWindows
             struct SearchData { title: String, hwnd: HWND }
             unsafe extern "system" fn enum_proc(h: HWND, lparam: LPARAM) -> BOOL {
                 let data = &mut *(lparam.0 as *mut SearchData);
@@ -190,25 +192,23 @@ impl ScreenTool {
                     let name = String::from_utf16_lossy(&buf[..len as usize]);
                     if name.to_lowercase().contains(&data.title.to_lowercase()) {
                         data.hwnd = h;
-                        return BOOL(0); // stop enumeration
+                        return BOOL(0);
                     }
                 }
                 BOOL(1)
             }
-            let mut search = SearchData { title: title.to_string(), hwnd: HWND(0) };
+            let mut search = SearchData { title: title.to_string(), hwnd: HWND(std::ptr::null_mut()) };
             unsafe {
                 let _ = EnumWindows(Some(enum_proc), LPARAM(&mut search as *mut SearchData as isize));
             }
-            hwnd = search.hwnd;
-        }
-
-        if hwnd.0 == 0 {
-            return Ok(ToolResult::err(format!("Window '{}' not found", title)));
-        }
+            if search.hwnd.0.is_null() {
+                return Ok(ToolResult::err(format!("Window '{}' not found", title)));
+            }
+            search.hwnd
+        };
 
         // Get window rect and capture
-        use windows::Win32::Foundation::RECT;
-        let mut rect = unsafe { std::mem::zeroed::<RECT>() };
+        let mut rect = unsafe { std::mem::zeroed::<windows::Win32::Foundation::RECT>() };
         unsafe { GetWindowRect(hwnd, &mut rect).map_err(|e| anyhow::anyhow!("{}", e))?; }
 
         let w = rect.right - rect.left;
@@ -217,28 +217,25 @@ impl ScreenTool {
             return Ok(ToolResult::err("Window has zero size"));
         }
 
-        // Use PrintWindow for off-screen windows
         use windows::Win32::Graphics::Gdi::{
             CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-            SelectObject, GetDC, ReleaseDC,
+            SelectObject, GetDC, ReleaseDC, BitBlt, SRCCOPY,
         };
-        use windows::Win32::UI::WindowsAndMessaging::PrintWindow;
 
         unsafe {
-            let hdc_screen = GetDC(None);
-            let mem_dc = CreateCompatibleDC(hdc_screen);
-            let bitmap = CreateCompatibleBitmap(hdc_screen, w, h);
+            let hdc_win = GetDC(hwnd);
+            let mem_dc = CreateCompatibleDC(hdc_win);
+            let bitmap = CreateCompatibleBitmap(hdc_win, w, h);
             let old_bmp = SelectObject(mem_dc, bitmap);
 
-            // PrintWindow captures even minimized/occluded windows (PW_RENDERFULLCONTENT = 2)
-            let _ = PrintWindow(hwnd, mem_dc, windows::Win32::UI::WindowsAndMessaging::PRINT_WINDOW_FLAGS(2));
+            BitBlt(mem_dc, 0, 0, w, h, hdc_win, 0, 0, SRCCOPY)?;
 
             let pixels = self.read_bitmap_pixels(mem_dc, bitmap, w, h)?;
 
             SelectObject(mem_dc, old_bmp);
             DeleteObject(bitmap);
             DeleteDC(mem_dc);
-            ReleaseDC(None, hdc_screen);
+            ReleaseDC(hwnd, hdc_win);
 
             self.encode_and_return(&pixels, w as u32, h as u32, input)
         }
@@ -355,7 +352,7 @@ impl ScreenTool {
                 use image::ImageEncoder;
                 let mut buf = Vec::new();
                 let encoder = image::codecs::png::PngEncoder::new(&mut buf);
-                encoder.write_image(img.as_raw(), width, height, image::ColorType::Rgba8)?;
+                encoder.write_image(img.as_raw(), width, height, image::ColorType::Rgba8.into())?;
                 (buf, "image/png")
             }
             _ => {
@@ -367,7 +364,7 @@ impl ScreenTool {
                     quality,
                 );
                 use image::ImageEncoder;
-                encoder.write_image(rgb.as_raw(), width, height, image::ColorType::Rgb8)?;
+                encoder.write_image(rgb.as_raw(), width, height, image::ColorType::Rgb8.into())?;
                 (buf, "image/jpeg")
             }
         };

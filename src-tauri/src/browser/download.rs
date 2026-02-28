@@ -2,7 +2,7 @@
 /// Downloads chrome-headless-shell from the official JSON API.
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use tracing::info;
 
 const API_URL: &str =
     "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
@@ -50,14 +50,73 @@ pub fn chrome_exists(chrome_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Try to find Chrome installed on the system
+/// Try to find a Chromium-based browser installed on the system.
+/// Priority on Windows: Edge (always present) → Chrome → Chrome Beta/Dev/Canary
 pub fn find_system_chrome() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        let candidates = [
+        // Edge is built into Windows 10 1803+ and Windows 11 — check first
+        let edge_candidates = [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ];
+        for path in &edge_candidates {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                info!("Found system Edge: {}", p.display());
+                return Some(p);
+            }
+        }
+        // LOCALAPPDATA Edge (per-user install)
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let p = PathBuf::from(&local).join(r"Microsoft\Edge\Application\msedge.exe");
+            if p.exists() {
+                info!("Found user-installed Edge: {}", p.display());
+                return Some(p);
+            }
+        }
+        // Google Chrome
+        let chrome_candidates = [
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files\Google\Chrome Beta\Application\chrome.exe",
+            r"C:\Program Files\Google\Chrome Dev\Application\chrome.exe",
+            r"C:\Program Files\Google\Chrome Canary\Application\chrome.exe",
+        ];
+        for path in &chrome_candidates {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                info!("Found system Chrome: {}", p.display());
+                return Some(p);
+            }
+        }
+        // Per-user Chrome (LOCALAPPDATA)
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let p = PathBuf::from(&local).join(r"Google\Chrome\Application\chrome.exe");
+            if p.exists() {
+                info!("Found user-installed Chrome: {}", p.display());
+                return Some(p);
+            }
+        }
+        // Brave browser (also Chromium-based)
+        let brave_candidates = [
+            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+            r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+        ];
+        for path in &brave_candidates {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                info!("Found Brave browser: {}", p.display());
+                return Some(p);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
         ];
         for path in &candidates {
             let p = PathBuf::from(path);
@@ -65,24 +124,10 @@ pub fn find_system_chrome() -> Option<PathBuf> {
                 return Some(p);
             }
         }
-        // Check LOCALAPPDATA
-        if let Ok(local) = std::env::var("LOCALAPPDATA") {
-            let p = PathBuf::from(local).join("Google\\Chrome\\Application\\chrome.exe");
-            if p.exists() {
-                return Some(p);
-            }
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let p = PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
-        if p.exists() {
-            return Some(p);
-        }
     }
     #[cfg(target_os = "linux")]
     {
-        for name in &["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"] {
+        for name in &["microsoft-edge", "google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser"] {
             if let Ok(output) = std::process::Command::new("which").arg(name).output() {
                 if output.status.success() {
                     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();

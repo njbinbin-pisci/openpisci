@@ -76,9 +76,9 @@ impl BrowserManager {
         self.options.headless = headless;
     }
 
-    /// Ensure Chrome is available; download if necessary.
+    /// Ensure Chrome is available; download only as last resort.
     pub async fn ensure_chrome(&self) -> Result<PathBuf> {
-        // 1. Use explicitly configured path
+        // 1. Use explicitly configured path (highest priority)
         if let Some(ref path) = self.options.chrome_path {
             if path.exists() {
                 return Ok(path.clone());
@@ -86,20 +86,21 @@ impl BrowserManager {
             warn!("Configured chrome_path does not exist: {}", path.display());
         }
 
-        // 2. Check if already downloaded
+        // 2. System browser: Edge (Win built-in) → Chrome → Brave
+        //    This avoids any download for the vast majority of users.
+        if let Some(sys) = download::find_system_chrome() {
+            info!("Using system browser: {}", sys.display());
+            return Ok(sys);
+        }
+
+        // 3. Previously downloaded Chrome for Testing
         if let Some(exe) = download::chrome_exists(&self.options.chrome_dir) {
             info!("Using cached Chrome for Testing: {}", exe.display());
             return Ok(exe);
         }
 
-        // 3. Try system Chrome
-        if let Some(sys) = download::find_system_chrome() {
-            info!("Using system Chrome: {}", sys.display());
-            return Ok(sys);
-        }
-
-        // 4. Download Chrome for Testing
-        info!("No Chrome found, downloading Chrome for Testing...");
+        // 4. Download Chrome for Testing (last resort — requires internet + ~111 MB)
+        info!("No Chromium-based browser found on system, downloading Chrome for Testing...");
         download::download_chrome_for_testing(&self.options.chrome_dir).await
     }
 
@@ -110,7 +111,9 @@ impl BrowserManager {
         }
 
         let chrome_path = self.ensure_chrome().await?;
-        info!("Launching Chrome: {}", chrome_path.display());
+        let is_edge = chrome_path.to_string_lossy().to_lowercase().contains("msedge")
+            || chrome_path.to_string_lossy().to_lowercase().contains("edge");
+        info!("Launching browser (edge={}): {}", is_edge, chrome_path.display());
 
         let mut builder = BrowserConfig::builder()
             .chrome_executable(chrome_path)
@@ -118,7 +121,20 @@ impl BrowserManager {
             .arg("--no-sandbox")
             .arg("--disable-dev-shm-usage")
             .arg("--disable-gpu")
-            .arg("--no-first-run");
+            .arg("--no-first-run")
+            .arg("--disable-background-networking")
+            .arg("--disable-client-side-phishing-detection")
+            .arg("--disable-default-apps")
+            .arg("--disable-extensions")
+            .arg("--disable-sync");
+        
+        // Extra flags for Edge to suppress SmartScreen and first-run UX
+        if is_edge {
+            builder = builder
+                .arg("--disable-features=msSmartScreenNewsAndInterests,SmartScreenEnabled")
+                .arg("--no-default-browser-check")
+                .arg("--disable-notifications");
+        }
 
         // with_head() enables headed (visible) mode; omitting it = headless
         if !self.options.headless {

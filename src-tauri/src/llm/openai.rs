@@ -1,5 +1,5 @@
 /// OpenAI-compatible API client (Chat Completions, streaming SSE)
-use super::{LlmChunk, LlmClient, LlmMessage, LlmRequest, LlmResponse, MessageContent, ToolCall};
+use super::{ContentBlock, LlmChunk, LlmClient, LlmMessage, LlmRequest, LlmResponse, MessageContent, ToolCall};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -13,6 +13,25 @@ pub struct OpenAiClient {
     http: Client,
 }
 
+/// Returns true if the model name indicates vision/multimodal capability.
+/// Conservative: only well-known vision models are listed.
+/// Unknown models → no vision (safe default to avoid 400 errors).
+pub fn model_supports_vision(model: &str) -> bool {
+    let m = model.to_lowercase();
+    // OpenAI vision-capable models
+    m.contains("gpt-4o")
+        || m.contains("gpt-4-vision")
+        || m.contains("gpt-4-turbo")
+        || m.contains("o3")
+        // Qwen-VL variants
+        || m.contains("qwen-vl")
+        // Claude 3+ (all support vision, handled by ClaudeClient but guard here too)
+        || m.contains("claude-3")
+        || m.contains("claude-sonnet")
+        || m.contains("claude-haiku")
+        || m.contains("claude-opus")
+}
+
 impl OpenAiClient {
     pub fn new(api_key: &str, base_url: &str) -> Self {
         Self {
@@ -22,38 +41,209 @@ impl OpenAiClient {
         }
     }
 
-    fn convert_messages(&self, messages: &[LlmMessage]) -> Vec<Value> {
-        messages.iter().map(|m| {
+    /// Convert an Image block to a safe text placeholder.
+    fn image_placeholder(is_latest: bool) -> ContentBlock {
+        let msg = if is_latest {
+            "[图片/截图已捕获 — 如需查看请使用 browser screenshot 工具重新截图]".to_string()
+        } else {
+            "[历史截图已省略 — 仅保留最近一轮截图以节省上下文]".to_string()
+        };
+        ContentBlock::Text { text: msg }
+    }
+
+    /// Preprocess messages: strip or downgrade Image blocks according to vision support.
+    ///
+    /// Rules:
+    /// - Non-vision model: replace ALL Image blocks with text placeholders.
+    /// - Vision model: keep Image blocks only from the LAST assistant/tool turn;
+    ///   replace all older Image blocks with text placeholders.
+    fn strip_images(&self, messages: &[LlmMessage], vision: bool) -> Vec<LlmMessage> {
+        if !vision {
+            // Strip all images
+            return messages.iter().map(|m| {
+                let content = match &m.content {
+                    MessageContent::Blocks(blocks) => {
+                        let new_blocks: Vec<ContentBlock> = blocks.iter().map(|b| {
+                            if matches!(b, ContentBlock::Image { .. }) {
+                                Self::image_placeholder(false)
+                            } else {
+                                b.clone()
+                            }
+                        }).collect();
+                        MessageContent::Blocks(new_blocks)
+                    }
+                    other => other.clone(),
+                };
+                LlmMessage { role: m.role.clone(), content }
+            }).collect();
+        }
+
+        // Vision model: find index of the LAST message containing an Image block
+        let last_image_msg = messages.iter().rposition(|m| {
+            if let MessageContent::Blocks(blocks) = &m.content {
+                blocks.iter().any(|b| matches!(b, ContentBlock::Image { .. }))
+            } else {
+                false
+            }
+        });
+
+        messages.iter().enumerate().map(|(i, m)| {
+            let is_latest_image_msg = last_image_msg == Some(i);
             let content = match &m.content {
-                MessageContent::Text(t) => json!(t),
                 MessageContent::Blocks(blocks) => {
-                    let parts: Vec<Value> = blocks.iter().filter_map(|b| {
-                        use super::ContentBlock;
-                        match b {
-                            ContentBlock::Text { text } => Some(json!({"type": "text", "text": text})),
-                            ContentBlock::Image { source } => Some(json!({
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": format!("data:{};base64,{}", source.media_type, source.data)
-                                }
-                            })),
-                            ContentBlock::ToolResult { tool_use_id, content, .. } => Some(json!({
-                                "role": "tool",
-                                "tool_call_id": tool_use_id,
-                                "content": content
-                            })),
-                            _ => None,
+                    let new_blocks: Vec<ContentBlock> = blocks.iter().map(|b| {
+                        if matches!(b, ContentBlock::Image { .. }) {
+                            Self::image_placeholder(is_latest_image_msg)
+                        } else {
+                            b.clone()
                         }
                     }).collect();
-                    json!(parts)
+                    MessageContent::Blocks(new_blocks)
                 }
+                other => other.clone(),
             };
-            json!({"role": m.role, "content": content})
+            LlmMessage { role: m.role.clone(), content }
         }).collect()
     }
 
+    fn convert_messages(&self, messages: &[LlmMessage], vision: bool) -> Vec<Value> {
+        let mut result: Vec<Value> = Vec::new();
+        // Images from tool results that need to be appended as a separate user message
+        // right after the tool messages (OpenAI format requires this).
+        let mut pending_vision: Vec<Value> = Vec::new();
+
+        for m in messages {
+            // Flush any pending vision images before starting a new non-tool message
+            // (so they appear immediately after the last tool message).
+            if !pending_vision.is_empty() && m.role != "tool" {
+                result.push(json!({
+                    "role": "user",
+                    "content": std::mem::take(&mut pending_vision)
+                }));
+            }
+
+            match &m.content {
+                MessageContent::Text(t) => {
+                    result.push(json!({"role": m.role, "content": t}));
+                }
+                MessageContent::Blocks(blocks) => {
+                    let has_tool_use    = blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+                    let has_tool_result = blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }));
+
+                    if has_tool_result {
+                        // OpenAI: each ToolResult → separate "tool" role message (content must be string).
+                        // Image blocks are collected and will become a "user" message right after.
+                        for block in blocks {
+                            match block {
+                                ContentBlock::ToolResult { tool_use_id, content, .. } => {
+                                    result.push(json!({
+                                        "role": "tool",
+                                        "tool_call_id": tool_use_id,
+                                        "content": content
+                                    }));
+                                }
+                                ContentBlock::Image { source } if vision => {
+                                    pending_vision.push(json!({
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": format!("data:{};base64,{}", source.media_type, source.data)
+                                        }
+                                    }));
+                                }
+                                ContentBlock::Image { .. } => {
+                                    // Non-vision model — image already replaced by strip_images(),
+                                    // this branch is a safety fallback; simply skip.
+                                }
+                                ContentBlock::Text { text } if !text.is_empty() => {
+                                    // Inline text note alongside tool results (rare) → user message
+                                    result.push(json!({"role": "user", "content": text}));
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if has_tool_use {
+                        let mut text_content = String::new();
+                        let mut tool_calls: Vec<Value> = Vec::new();
+
+                        for block in blocks {
+                            match block {
+                                ContentBlock::Text { text } => text_content.push_str(text),
+                                ContentBlock::ToolUse { id, name, input } => {
+                                    tool_calls.push(json!({
+                                        "id": id,
+                                        "type": "function",
+                                        "function": {
+                                            "name": name,
+                                            "arguments": serde_json::to_string(input)
+                                                .unwrap_or_else(|_| "{}".to_string())
+                                        }
+                                    }));
+                                }
+                                // Images inside a ToolUse message are unusual; skip silently.
+                                _ => {}
+                            }
+                        }
+
+                        let mut msg = json!({
+                            "role": "assistant",
+                            "tool_calls": tool_calls,
+                            "content": Value::Null
+                        });
+                        if !text_content.is_empty() {
+                            msg["content"] = json!(text_content);
+                        }
+                        result.push(msg);
+                    } else {
+                        // Regular user/assistant message — may contain text + images.
+                        let mut parts: Vec<Value> = Vec::new();
+                        for b in blocks {
+                            match b {
+                                ContentBlock::Text { text } if !text.is_empty() => {
+                                    parts.push(json!({"type": "text", "text": text}));
+                                }
+                                ContentBlock::Image { source } if vision => {
+                                    parts.push(json!({
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": format!("data:{};base64,{}", source.media_type, source.data)
+                                        }
+                                    }));
+                                }
+                                // Non-vision model: Image already replaced upstream; skip here.
+                                _ => {}
+                            }
+                        }
+
+                        if parts.is_empty() { continue; }
+
+                        // Collapse single-text to plain string (cleaner API payload)
+                        if parts.len() == 1 {
+                            if let Some(text) = parts[0]["text"].as_str() {
+                                result.push(json!({"role": m.role, "content": text}));
+                                continue;
+                            }
+                        }
+                        result.push(json!({"role": m.role, "content": parts}));
+                    }
+                }
+            }
+        }
+
+        // Flush any remaining pending vision images
+        if !pending_vision.is_empty() {
+            result.push(json!({
+                "role": "user",
+                "content": pending_vision
+            }));
+        }
+
+        result
+    }
+
     fn build_body(&self, req: &LlmRequest) -> Value {
-        let messages = self.convert_messages(&req.messages);
+        let vision = model_supports_vision(&req.model);
+        let stripped = self.strip_images(&req.messages, vision);
+        let messages = self.convert_messages(&stripped, vision);
         let mut body = json!({
             "model": req.model,
             "max_tokens": req.max_tokens,
@@ -121,8 +311,14 @@ impl LlmClient for OpenAiClient {
                 let line = buffer[..pos].trim().to_string();
                 buffer = buffer[pos + 1..].to_string();
 
-                if let Some(data) = line.strip_prefix("data: ") {
+                    if let Some(data) = line.strip_prefix("data: ") {
                     if data == "[DONE]" {
+                        // Drain any tool calls that arrived before [DONE]
+                        for (_, (id, name, args_buf)) in tool_bufs.drain() {
+                            let input = serde_json::from_str(&args_buf)
+                                .unwrap_or(Value::Object(serde_json::Map::new()));
+                            let _ = tx.send(LlmChunk::ToolUse { id, name, input }).await;
+                        }
                         let _ = tx.send(LlmChunk::Done { input_tokens, output_tokens }).await;
                         return Ok(());
                     }
@@ -197,7 +393,13 @@ impl LlmClient for OpenAiClient {
         }
 
         let val: Value = response.json().await?;
-        let message = &val["choices"][0]["message"];
+        let choices = val["choices"]
+            .as_array()
+            .ok_or_else(|| anyhow!("OpenAI response missing 'choices' field"))?;
+        if choices.is_empty() {
+            return Err(anyhow!("OpenAI response returned empty choices"));
+        }
+        let message = &choices[0]["message"];
         let text = message["content"].as_str().unwrap_or("").to_string();
 
         let mut tool_calls = Vec::new();

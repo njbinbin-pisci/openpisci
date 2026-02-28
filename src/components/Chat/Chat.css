@@ -64,6 +64,39 @@
   gap: 8px;
 }
 
+.session-item-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.session-delete-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+
+.session-item:hover .session-delete-btn {
+  display: flex;
+}
+
+.session-delete-btn:hover {
+  background: rgba(231, 76, 60, 0.15);
+  color: #e74c3c;
+}
+
 .session-item:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
@@ -149,14 +182,15 @@
 }
 
 .message-user .message-content {
-  background: var(--accent);
-  color: white;
+  background: var(--msg-user-bg, var(--accent));
+  border: 1px solid var(--msg-user-border, transparent);
+  color: var(--text-primary);
   border-bottom-right-radius: 4px;
 }
 
 .message-assistant .message-content {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--msg-ai-bg, var(--bg-secondary));
+  border: 1px solid var(--msg-ai-border, var(--border));
   color: var(--text-primary);
   border-bottom-left-radius: 4px;
 }
@@ -241,4 +275,341 @@
 .input-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+/* Error banner */
+.error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px;
+  background: rgba(220, 53, 69, 0.15);
+  border-left: 3px solid #dc3545;
+  color: #ff6b6b;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.error-dismiss {
+  background: none;
+  border: none;
+  color: #ff6b6b;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0 4px;
+  line-height: 1;
+  opacity: 0.8;
+}
+
+.error-dismiss:hover {
+  opacity: 1;
+}
+
+/* Code blocks */
+.code-block {
+  position: relative;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  margin: 6px 0;
+  overflow-x: auto;
+  font-family: "Cascadia Code", "Consolas", "Fira Code", monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.code-lang {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.code-block code {
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: #e2e8f0;
+}
+
+/* Permission dialog */
+.permission-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.permission-dialog {
+  background: var(--bg-primary, #fff);
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 480px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+}
+
+.permission-dialog h3 {
+  margin: 0 0 12px 0;
+  color: #e67e22;
+}
+
+.permission-dialog .tool-info {
+  background: var(--bg-secondary, #f5f5f5);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+  font-family: monospace;
+  font-size: 13px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.permission-dialog .tool-info pre {
+  margin: 8px 0 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.permission-dialog .actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.permission-dialog .btn-allow {
+  background: #27ae60;
+  color: white;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.15s;
+}
+
+.permission-dialog .btn-allow:hover {
+  background: #219a52;
+}
+
+.permission-dialog .btn-deny {
+  background: #e74c3c;
+  color: white;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.15s;
+}
+
+.permission-dialog .btn-deny:hover {
+  background: #c0392b;
+}
+
+/* ─── Tool Steps ─────────────────────────────────────────────────────────── */
+
+.tool-steps-container {
+  margin: 8px 16px 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;       /* clips child corners to match border-radius */
+  background: var(--bg-secondary);
+  flex-shrink: 0;         /* critical: prevent flex from collapsing the container */
+  min-height: 0;
+}
+
+/* Scrollable body — independent from the flex context */
+.tool-steps-scroll {
+  overflow-y: auto;
+  max-height: 55vh;
+  /* smooth scroll for programmatic scrollTop changes */
+  scroll-behavior: smooth;
+  /* allow scroll even when tool-steps-container clips */
+  overscroll-behavior: contain;
+}
+
+.tool-steps-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-tertiary);
+}
+
+.tool-steps-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-secondary);
+}
+
+.tool-steps-toggle-all {
+  font-size: 11px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+.tool-steps-toggle-all:hover {
+  background: var(--accent-muted, rgba(139,92,246,0.12));
+}
+
+/* Individual step card */
+.tool-step-card {
+  border-bottom: 1px solid var(--border);
+}
+.tool-step-card:last-child {
+  border-bottom: none;
+}
+
+.tool-step-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+  min-height: 36px;
+}
+.tool-step-header:hover {
+  background: var(--bg-tertiary);
+}
+
+.tool-step-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.tool-step-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex-shrink: 0;
+  min-width: 80px;
+}
+
+.tool-step-summary {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'Consolas', 'Monaco', monospace;
+}
+
+.tool-step-status {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  width: 18px;
+  text-align: center;
+}
+.tool-step-status.step-ok   { color: #27ae60; }
+.tool-step-status.step-error { color: #e74c3c; }
+.tool-step-status.step-running { color: var(--accent); }
+
+.tool-step-chevron {
+  font-size: 9px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* Spinner for running steps */
+.step-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--accent-muted, rgba(139,92,246,0.25));
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.step-status-icon {
+  font-size: 11px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Step body (expanded) */
+.tool-step-body {
+  padding: 8px 12px 10px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-step-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tool-step-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+.tool-step-section-label.label-error {
+  color: #e74c3c;
+}
+
+.tool-step-pre {
+  margin: 0;
+  font-size: 11px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+.tool-step-pre.pre-error {
+  border-color: rgba(231,76,60,0.4);
+  color: #e74c3c;
+}
+
+.tool-step-show-more {
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 0;
+  text-decoration: underline;
+}
+.tool-step-show-more:hover {
+  opacity: 0.8;
 }

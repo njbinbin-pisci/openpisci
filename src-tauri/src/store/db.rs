@@ -14,6 +14,8 @@ pub struct Session {
     pub id: String,
     pub title: Option<String>,
     pub status: String,
+    /// Origin of this session: "chat" (UI), "im_telegram", "im_feishu", etc.
+    pub source: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub message_count: i64,
@@ -47,6 +49,7 @@ pub struct ScheduledTask {
     pub cron_expression: String,
     pub task_prompt: String,
     pub status: String,
+    pub last_run_status: Option<String>,
     pub run_count: i64,
     pub last_run_at: Option<DateTime<Utc>>,
     pub next_run_at: Option<DateTime<Utc>>,
@@ -165,6 +168,76 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_audit_tool ON audit_log(tool_name, timestamp);
         ")?;
 
+        // Add last_run_status to scheduled_tasks (ignore if already exists)
+        let _ = self.conn.execute(
+            "ALTER TABLE scheduled_tasks ADD COLUMN last_run_status TEXT",
+            [],
+        );
+
+        // Add source column to sessions for IM origin tracking (ignore if already exists)
+        let _ = self.conn.execute(
+            "ALTER TABLE sessions ADD COLUMN source TEXT NOT NULL DEFAULT 'chat'",
+            [],
+        );
+
+        // Memory enhancement: add embedding and memory_type columns (ignore if already exist)
+        let _ = self.conn.execute("ALTER TABLE memories ADD COLUMN embedding BLOB", []);
+        let _ = self.conn.execute("ALTER TABLE memories ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'personal'", []);
+
+        // Agent checkpoints for crash recovery
+        self.conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS agent_checkpoints (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                iteration INTEGER NOT NULL,
+                messages_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_checkpoint_session ON agent_checkpoints(session_id, updated_at);
+        ")?;
+
+        self.conn.execute_batch("
+            -- FTS5 full-text search for memories
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                content,
+                content=memories,
+                content_rowid=rowid
+            );
+
+            -- Triggers to keep FTS5 in sync
+            CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+                INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+            END;
+            CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+            END;
+            CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+                INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+            END;
+
+            -- Embedding cache to avoid redundant API calls
+            CREATE TABLE IF NOT EXISTS embedding_cache (
+                content_hash TEXT PRIMARY KEY,
+                embedding BLOB NOT NULL,
+                created_at TEXT NOT NULL
+            );
+        ")?;
+
+        // Fish instances table (user-activated sub-Agents)
+        let _ = self.conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS fish_instances (
+                fish_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                user_config TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+        ");
+
         // Seed default skills if empty
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM skills",
@@ -203,35 +276,69 @@ impl Database {
     // ------------------------------------------------------------------
 
     pub fn create_session(&self, title: Option<&str>) -> Result<Session> {
+        self.create_session_with_source(title, "chat")
+    }
+
+    pub fn create_session_with_source(&self, title: Option<&str>, source: &str) -> Result<Session> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO sessions (id, title, status, created_at, updated_at, message_count) VALUES (?1, ?2, 'idle', ?3, ?3, 0)",
-            params![id, title, now_str],
+            "INSERT INTO sessions (id, title, status, source, created_at, updated_at, message_count) VALUES (?1, ?2, 'idle', ?3, ?4, ?4, 0)",
+            params![id, title, source, now_str],
         )?;
         Ok(Session {
             id,
             title: title.map(String::from),
             status: "idle".into(),
+            source: source.to_string(),
             created_at: now,
             updated_at: now,
             message_count: 0,
         })
     }
 
+    /// Idempotent: create a session with a fixed `id` for IM routing.
+    /// If it already exists, return it as-is (updating `updated_at` is skipped
+    /// to preserve chronological ordering in the session list).
+    pub fn ensure_im_session(&self, session_id: &str, title: &str, source: &str) -> Result<Session> {
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+        // INSERT OR IGNORE — no-op if the session already exists
+        self.conn.execute(
+            "INSERT OR IGNORE INTO sessions (id, title, status, source, created_at, updated_at, message_count) VALUES (?1, ?2, 'idle', ?3, ?4, ?4, 0)",
+            params![session_id, title, source, now_str],
+        )?;
+        // Fetch current record (may have been created just now or earlier)
+        let session = self.conn.query_row(
+            "SELECT id, title, status, source, created_at, updated_at, message_count FROM sessions WHERE id = ?1",
+            params![session_id],
+            |r| Ok(Session {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                status: r.get(2)?,
+                source: r.get(3)?,
+                created_at: r.get::<_, String>(4)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                updated_at: r.get::<_, String>(5)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                message_count: r.get(6)?,
+            }),
+        )?;
+        Ok(session)
+    }
+
     pub fn list_sessions(&self, limit: i64, offset: i64) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, status, created_at, updated_at, message_count FROM sessions ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2"
+            "SELECT id, title, status, COALESCE(source, 'chat'), created_at, updated_at, message_count FROM sessions ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2"
         )?;
         let rows = stmt.query_map(params![limit, offset], |r| {
             Ok(Session {
                 id: r.get(0)?,
                 title: r.get(1)?,
                 status: r.get(2)?,
-                created_at: r.get::<_, String>(3)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(4)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                message_count: r.get(5)?,
+                source: r.get(3)?,
+                created_at: r.get::<_, String>(4)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                updated_at: r.get::<_, String>(5)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                message_count: r.get(6)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
@@ -239,6 +346,15 @@ impl Database {
 
     pub fn delete_session(&self, id: &str) -> Result<()> {
         self.conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn rename_session(&self, id: &str, title: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            params![title, now, id],
+        )?;
         Ok(())
     }
 
@@ -345,6 +461,97 @@ impl Database {
     }
 
     // ------------------------------------------------------------------
+    // Vector / Embedding support
+    // ------------------------------------------------------------------
+
+    /// Store a floating-point embedding for an existing memory row.
+    pub fn store_embedding(&self, memory_id: &str, embedding: &[f32]) -> Result<()> {
+        let bytes = crate::memory::vector::embedding_to_bytes(embedding);
+        self.conn.execute(
+            "UPDATE memories SET embedding = ?1 WHERE id = ?2",
+            params![bytes, memory_id],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieve all memories that have an embedding stored.
+    pub fn list_memories_with_embeddings(&self) -> Result<Vec<(Memory, Vec<f32>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, content, category, confidence, source_session_id, created_at, updated_at, embedding \
+             FROM memories WHERE embedding IS NOT NULL"
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let embedding_bytes: Vec<u8> = r.get(7)?;
+            Ok((
+                Memory {
+                    id: r.get(0)?,
+                    content: r.get(1)?,
+                    category: r.get(2)?,
+                    confidence: r.get(3)?,
+                    source_session_id: r.get(4)?,
+                    created_at: r.get::<_, String>(5)?
+                        .parse::<DateTime<Utc>>()
+                        .unwrap_or_else(|_| Utc::now()),
+                    updated_at: r.get::<_, String>(6)?
+                        .parse::<DateTime<Utc>>()
+                        .unwrap_or_else(|_| Utc::now()),
+                },
+                embedding_bytes,
+            ))
+        })?;
+        let pairs: rusqlite::Result<Vec<(Memory, Vec<u8>)>> = rows.collect();
+        let pairs = pairs?;
+        Ok(pairs
+            .into_iter()
+            .map(|(m, bytes)| {
+                let embedding = crate::memory::vector::bytes_to_embedding(&bytes);
+                (m, embedding)
+            })
+            .collect())
+    }
+
+    /// Scan memories with vector similarity against a query embedding.
+    /// Returns (Memory, cosine_score) pairs sorted by descending score.
+    pub fn search_by_embedding(&self, query_vec: &[f32], top_k: usize) -> Result<Vec<(Memory, f32)>> {
+        let all = self.list_memories_with_embeddings()?;
+        let mut scored: Vec<(Memory, f32)> = all
+            .into_iter()
+            .map(|(m, emb)| {
+                let score = crate::memory::vector::cosine_similarity(query_vec, &emb);
+                (m, score)
+            })
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(top_k);
+        Ok(scored)
+    }
+
+    /// Full-text search using FTS5. Returns (memory_id, bm25_score) pairs.
+    pub fn fts_search(&self, query: &str, top_k: usize) -> Result<Vec<(String, f32)>> {
+        // Sanitise query for FTS5: escape special chars
+        let safe_query = query
+            .replace('"', "\"\"")
+            .replace('*', "")
+            .replace('^', "");
+        let fts_query = format!("\"{}\"", safe_query);
+
+        let mut stmt = self.conn.prepare(
+            "SELECT m.id, bm25(memories_fts) AS score \
+             FROM memories_fts \
+             JOIN memories m ON m.rowid = memories_fts.rowid \
+             WHERE memories_fts MATCH ?1 \
+             ORDER BY score \
+             LIMIT ?2"
+        )?;
+        let rows = stmt.query_map(params![fts_query, top_k as i64], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)? as f32))
+        })?;
+        let results: rusqlite::Result<Vec<_>> = rows.collect();
+        // bm25 returns negative scores; negate to make higher = better
+        Ok(results?.into_iter().map(|(id, s)| (id, -s)).collect())
+    }
+
+    // ------------------------------------------------------------------
     // Skills
     // ------------------------------------------------------------------
 
@@ -379,7 +586,7 @@ impl Database {
 
     pub fn list_tasks(&self) -> Result<Vec<ScheduledTask>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, description, cron_expression, task_prompt, status, run_count, last_run_at, next_run_at, created_at FROM scheduled_tasks ORDER BY created_at DESC"
+            "SELECT id, name, description, cron_expression, task_prompt, status, last_run_status, run_count, last_run_at, next_run_at, created_at FROM scheduled_tasks ORDER BY created_at DESC"
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(ScheduledTask {
@@ -389,10 +596,11 @@ impl Database {
                 cron_expression: r.get(3)?,
                 task_prompt: r.get(4)?,
                 status: r.get(5)?,
-                run_count: r.get(6)?,
-                last_run_at: r.get::<_, Option<String>>(7)?.and_then(|s| s.parse().ok()),
-                next_run_at: r.get::<_, Option<String>>(8)?.and_then(|s| s.parse().ok()),
-                created_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                last_run_status: r.get(6)?,
+                run_count: r.get(7)?,
+                last_run_at: r.get::<_, Option<String>>(8)?.and_then(|s| s.parse().ok()),
+                next_run_at: r.get::<_, Option<String>>(9)?.and_then(|s| s.parse().ok()),
+                created_at: r.get::<_, String>(10)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
@@ -400,7 +608,7 @@ impl Database {
 
     pub fn get_task(&self, id: &str) -> Result<Option<ScheduledTask>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, description, cron_expression, task_prompt, status, run_count, last_run_at, next_run_at, created_at FROM scheduled_tasks WHERE id = ?1"
+            "SELECT id, name, description, cron_expression, task_prompt, status, last_run_status, run_count, last_run_at, next_run_at, created_at FROM scheduled_tasks WHERE id = ?1"
         )?;
         let mut rows = stmt.query_map(params![id], |r| {
             Ok(ScheduledTask {
@@ -410,10 +618,11 @@ impl Database {
                 cron_expression: r.get(3)?,
                 task_prompt: r.get(4)?,
                 status: r.get(5)?,
-                run_count: r.get(6)?,
-                last_run_at: r.get::<_, Option<String>>(7)?.and_then(|s| s.parse().ok()),
-                next_run_at: r.get::<_, Option<String>>(8)?.and_then(|s| s.parse().ok()),
-                created_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                last_run_status: r.get(6)?,
+                run_count: r.get(7)?,
+                last_run_at: r.get::<_, Option<String>>(8)?.and_then(|s| s.parse().ok()),
+                next_run_at: r.get::<_, Option<String>>(9)?.and_then(|s| s.parse().ok()),
+                created_at: r.get::<_, String>(10)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
             })
         })?;
         Ok(rows.next().transpose()?)
@@ -434,6 +643,7 @@ impl Database {
             cron_expression: cron_expression.to_string(),
             task_prompt: task_prompt.to_string(),
             status: "active".into(),
+            last_run_status: None,
             run_count: 0,
             last_run_at: None,
             next_run_at: None,
@@ -465,8 +675,17 @@ impl Database {
     pub fn record_task_run(&self, id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE scheduled_tasks SET run_count = run_count + 1, last_run_at = ?1 WHERE id = ?2",
+            "UPDATE scheduled_tasks SET run_count = run_count + 1, last_run_at = ?1, last_run_status = 'running' WHERE id = ?2",
             params![now, id],
+        )?;
+        Ok(())
+    }
+
+    /// Update the last_run_status for a task: "success", "failed", or "running".
+    pub fn update_task_run_status(&self, id: &str, run_status: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE scheduled_tasks SET last_run_status = ?1 WHERE id = ?2",
+            params![run_status, id],
         )?;
         Ok(())
     }
@@ -542,6 +761,175 @@ impl Database {
         } else {
             self.conn.execute("DELETE FROM audit_log", [])?;
         }
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // Memory FTS & Embeddings
+    // ------------------------------------------------------------------
+
+    pub fn search_memories_fts(&self, query: &str, limit: i64) -> Result<Vec<Memory>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT m.id, m.content, m.category, m.confidence, m.source_session_id, m.created_at, m.updated_at \
+             FROM memories m \
+             JOIN memories_fts f ON m.rowid = f.rowid \
+             WHERE memories_fts MATCH ?1 \
+             ORDER BY rank \
+             LIMIT ?2"
+        )?;
+        let rows = stmt.query_map(params![query, limit], |r| {
+            Ok(Memory {
+                id: r.get(0)?,
+                content: r.get(1)?,
+                category: r.get(2)?,
+                confidence: r.get(3)?,
+                source_session_id: r.get(4)?,
+                created_at: r.get::<_, String>(5)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                updated_at: r.get::<_, String>(6)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    pub fn save_embedding_cache(&self, content_hash: &str, embedding: &[u8]) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO embedding_cache (content_hash, embedding, created_at) VALUES (?1, ?2, ?3)",
+            params![content_hash, embedding, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_embedding_cache(&self, content_hash: &str) -> Result<Option<Vec<u8>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT embedding FROM embedding_cache WHERE content_hash = ?1"
+        )?;
+        let mut rows = stmt.query_map(params![content_hash], |r| r.get::<_, Vec<u8>>(0))?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn update_memory_embedding(&self, id: &str, embedding: &[u8]) -> Result<()> {
+        self.conn.execute(
+            "UPDATE memories SET embedding = ?1 WHERE id = ?2",
+            params![embedding, id],
+        )?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // Agent Checkpoints
+    // ------------------------------------------------------------------
+
+    /// Upsert a checkpoint for the given session. Replaces any existing running checkpoint.
+    pub fn upsert_checkpoint(&self, session_id: &str, iteration: usize, messages_json: &str) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        // Delete old running checkpoint for this session first
+        self.conn.execute(
+            "DELETE FROM agent_checkpoints WHERE session_id = ?1 AND status = 'running'",
+            params![session_id],
+        )?;
+        self.conn.execute(
+            "INSERT INTO agent_checkpoints (id, session_id, iteration, messages_json, status, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?5)",
+            params![id, session_id, iteration as i64, messages_json, now],
+        )?;
+        Ok(id)
+    }
+
+    /// Mark a checkpoint as completed (success) or failed.
+    pub fn finish_checkpoint(&self, session_id: &str, status: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE agent_checkpoints SET status = ?1, updated_at = ?2 \
+             WHERE session_id = ?3 AND status = 'running'",
+            params![status, now, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Load a pending (running) checkpoint for a session, if any.
+    pub fn load_checkpoint(&self, session_id: &str) -> Result<Option<(usize, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT iteration, messages_json FROM agent_checkpoints \
+             WHERE session_id = ?1 AND status = 'running' \
+             ORDER BY updated_at DESC LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![session_id], |r| {
+            Ok((r.get::<_, i64>(0)? as usize, r.get::<_, String>(1)?))
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// Prune stale checkpoints older than the given number of hours to keep the table small.
+    pub fn prune_checkpoints(&self, older_than_hours: i64) -> Result<usize> {
+        let cutoff = (Utc::now() - chrono::Duration::hours(older_than_hours)).to_rfc3339();
+        let n = self.conn.execute(
+            "DELETE FROM agent_checkpoints WHERE created_at < ?1",
+            params![cutoff],
+        )?;
+        Ok(n)
+    }
+
+    // ------------------------------------------------------------------
+    // Fish instances
+    // ------------------------------------------------------------------
+
+    pub fn upsert_fish_instance(
+        &self,
+        fish_id: &str,
+        session_id: &str,
+        status: &str,
+        user_config_json: &str,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO fish_instances (fish_id, session_id, status, user_config, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5) \
+             ON CONFLICT(fish_id) DO UPDATE SET \
+               session_id = excluded.session_id, \
+               status = excluded.status, \
+               user_config = excluded.user_config, \
+               updated_at = excluded.updated_at",
+            params![fish_id, session_id, status, user_config_json, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_fish_instance(&self, fish_id: &str) -> Result<Option<crate::fish::FishInstance>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT fish_id, session_id, status, user_config, created_at FROM fish_instances WHERE fish_id = ?1"
+        )?;
+        let mut rows = stmt.query_map(params![fish_id], |r| {
+            Ok(crate::fish::FishInstance {
+                fish_id: r.get(0)?,
+                session_id: r.get(1)?,
+                status: r.get(2)?,
+                user_config: serde_json::from_str(&r.get::<_, String>(3)?).unwrap_or_default(),
+                created_at: r.get(4)?,
+            })
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn list_fish_instances(&self) -> Result<Vec<crate::fish::FishInstance>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT fish_id, session_id, status, user_config, created_at FROM fish_instances ORDER BY updated_at DESC"
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(crate::fish::FishInstance {
+                fish_id: r.get(0)?,
+                session_id: r.get(1)?,
+                status: r.get(2)?,
+                user_config: serde_json::from_str(&r.get::<_, String>(3)?).unwrap_or_default(),
+                created_at: r.get(4)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    pub fn delete_fish_instance(&self, fish_id: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM fish_instances WHERE fish_id = ?1", params![fish_id])?;
         Ok(())
     }
 }

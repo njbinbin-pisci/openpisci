@@ -1,5 +1,7 @@
 pub mod claude;
+pub mod deepseek;
 pub mod openai;
+pub mod qwen;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -136,6 +138,8 @@ pub fn build_client(
             api_key,
             base_url.unwrap_or("https://api.openai.com/v1"),
         )),
+        "deepseek" => Box::new(deepseek::DeepSeekClient::new(api_key)),
+        "qwen" | "tongyi" => Box::new(qwen::QwenClient::new(api_key)),
         _ => Box::new(claude::ClaudeClient::new(api_key)),
     }
 }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Pisci",
+  "productName": "OpenPisci",
   "version": "0.1.0",
   "identifier": "com.pisci.desktop",
   "build": {
@@ -12,7 +12,8 @@
   "app": {
     "windows": [
       {
-        "title": "Pisci",
+        "label": "main",
+        "title": "OpenPisci",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -21,19 +22,40 @@
         "fullscreen": false,
         "decorations": true,
         "transparent": false
+      },
+      {
+        "label": "overlay",
+        "title": "Pisci Overlay",
+        "url": "index.html?overlay=1",
+        "width": 280,
+        "height": 56,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "x": 20,
+        "y": 20
       }
     ],
     "security": {
       "csp": null
     },
+    "withGlobalTauri": true,
     "trayIcon": {
+      "id": "main",
       "iconPath": "icons/icon.ico",
       "iconAsTemplate": false
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -46,32 +68,30 @@
     "copyright": "© 2025 Pisci Team",
     "category": "Productivity",
     "windows": {
+      "digestAlgorithm": "sha256",
       "nsis": {
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"],
-        "shortcutName": "Pisci AI",
         "displayLanguageSelector": true,
-        "headerImage": null,
-        "sidebarImage": null,
-        "license": null,
         "compression": "lzma"
-      },
-      "wix": {
-        "language": "zh-CN"
-      },
-      "certificateThumbprint": null,
-      "digestAlgorithm": "sha256",
-      "timestampUrl": ""
+      }
     }
   },
   "plugins": {
     "shell": {
       "open": true
     },
-    "dialog": {},
     "fs": {
-      "scope": {
-        "allow": ["$HOME/**", "$APPDATA/**", "$DOCUMENT/**"]
+      "requireLiteralLeadingDot": false
+    },
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/your-org/piscidesktop/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

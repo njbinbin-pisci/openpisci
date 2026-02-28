@@ -32,7 +32,8 @@ impl Tool for UiaTool {
                         "expand", "collapse", "select", "check", "uncheck",
                         "wait_for_element",
                         "activate_window", "minimize", "maximize", "restore",
-                        "close_window", "move_window", "resize_window", "get_window_rect"
+                        "close_window", "move_window", "resize_window", "get_window_rect",
+                        "smart_find", "annotate_elements"
                     ],
                     "description": "Action to perform"
                 },
@@ -100,13 +101,21 @@ impl Tool for UiaTool {
                 "depth": {
                     "type": "integer",
                     "description": "Depth for get_children traversal (default 2, max 5)"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Natural language description of the element to find (for smart_find)"
+                },
+                "max_elements": {
+                    "type": "integer",
+                    "description": "Maximum number of elements to annotate (for annotate_elements, default 30)"
                 }
             },
             "required": ["action"]
         })
     }
 
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
+    async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let action = match input["action"].as_str() {
             Some(a) => a,
             None => return Ok(ToolResult::err("Missing required parameter: action")),
@@ -148,6 +157,9 @@ impl Tool for UiaTool {
             "move_window"     => self.move_window(&input),
             "resize_window"   => self.resize_window(&input),
             "get_window_rect" => self.get_window_rect(&input),
+            // Hybrid vision automation
+            "smart_find"        => self.smart_find(&input, ctx).await,
+            "annotate_elements" => self.annotate_elements(&input),
             _ => Ok(ToolResult::err(format!("Unknown action: {}", action))),
         }
     }
@@ -156,14 +168,14 @@ impl Tool for UiaTool {
 // ─── Helper: build a matcher from common search params ───────────────────────
 
 impl UiaTool {
-    fn build_matcher<'a>(
+    fn build_matcher(
         &self,
-        automation: &'a uiautomation::UIAutomation,
+        automation: &uiautomation::UIAutomation,
         root: uiautomation::UIElement,
         input: &Value,
         timeout_ms: u64,
-    ) -> uiautomation::UIMatcher<'a> {
-        let mut matcher = automation.create_matcher().from(root).timeout(timeout_ms as i32);
+    ) -> uiautomation::UIMatcher {
+        let mut matcher = automation.create_matcher().from(root).timeout(timeout_ms);
         if let Some(name) = input["name"].as_str() {
             matcher = matcher.name(name);
         } else if let Some(aid_fallback) = input["automation_id"].as_str() {
@@ -371,11 +383,12 @@ impl UiaTool {
 
     fn click_element(&self, input: &Value) -> Result<ToolResult> {
         use uiautomation::UIAutomation;
-        use uiautomation::inputs::MouseButton;
+        use uiautomation::inputs::Mouse;
+        use uiautomation::types::Point;
         let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
-            automation.send_mouse_input(x as i32, y as i32, MouseButton::Left)
+            Mouse::new().click(&Point::new(x as i32, y as i32))
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             return Ok(ToolResult::ok(format!("Clicked at ({}, {})", x, y)));
         }
@@ -384,8 +397,23 @@ impl UiaTool {
         let matcher = self.build_matcher(&automation, root, input, 5000);
         match matcher.find_first() {
             Ok(element) => {
-                element.click().map_err(|e| anyhow::anyhow!("{}", e))?;
-                Ok(ToolResult::ok(format!("Clicked: '{}'", element.get_name().unwrap_or_default())))
+                // First try native invoke click; if that fails, retry with center-point mouse click.
+                match element.click() {
+                    Ok(_) => Ok(ToolResult::ok(format!("Clicked: '{}'", element.get_name().unwrap_or_default()))),
+                    Err(_) => {
+                        let rect = element.get_bounding_rectangle().map_err(|e| anyhow::anyhow!("{}", e))?;
+                        let cx = (rect.get_left() + rect.get_right()) / 2;
+                        let cy = (rect.get_top() + rect.get_bottom()) / 2;
+                        Mouse::new().click(&Point::new(cx, cy))
+                            .map_err(|e| anyhow::anyhow!("{}", e))?;
+                        Ok(ToolResult::ok(format!(
+                            "Clicked with coordinate fallback: '{}' at ({}, {})",
+                            element.get_name().unwrap_or_default(),
+                            cx,
+                            cy
+                        )))
+                    }
+                }
             }
             Err(e) => Ok(ToolResult::err(format!("Element not found for click: {}", e))),
         }
@@ -393,14 +421,12 @@ impl UiaTool {
 
     fn double_click_element(&self, input: &Value) -> Result<ToolResult> {
         use uiautomation::UIAutomation;
-        use uiautomation::inputs::MouseButton;
+        use uiautomation::inputs::Mouse;
+        use uiautomation::types::Point;
         let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
-            automation.send_mouse_input(x as i32, y as i32, MouseButton::Left)
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            automation.send_mouse_input(x as i32, y as i32, MouseButton::Left)
+            Mouse::new().double_click(&Point::new(x as i32, y as i32))
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             return Ok(ToolResult::ok(format!("Double-clicked at ({}, {})", x, y)));
         }
@@ -412,10 +438,7 @@ impl UiaTool {
                 let rect = element.get_bounding_rectangle().map_err(|e| anyhow::anyhow!("{}", e))?;
                 let cx = (rect.get_left() + rect.get_right()) / 2;
                 let cy = (rect.get_top() + rect.get_bottom()) / 2;
-                automation.send_mouse_input(cx, cy, MouseButton::Left)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                automation.send_mouse_input(cx, cy, MouseButton::Left)
+                Mouse::new().double_click(&Point::new(cx, cy))
                     .map_err(|e| anyhow::anyhow!("{}", e))?;
                 Ok(ToolResult::ok(format!("Double-clicked: '{}'", element.get_name().unwrap_or_default())))
             }
@@ -425,11 +448,12 @@ impl UiaTool {
 
     fn right_click_element(&self, input: &Value) -> Result<ToolResult> {
         use uiautomation::UIAutomation;
-        use uiautomation::inputs::MouseButton;
+        use uiautomation::inputs::Mouse;
+        use uiautomation::types::Point;
         let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
-            automation.send_mouse_input(x as i32, y as i32, MouseButton::Right)
+            Mouse::new().right_click(&Point::new(x as i32, y as i32))
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             return Ok(ToolResult::ok(format!("Right-clicked at ({}, {})", x, y)));
         }
@@ -441,7 +465,7 @@ impl UiaTool {
                 let rect = element.get_bounding_rectangle().map_err(|e| anyhow::anyhow!("{}", e))?;
                 let cx = (rect.get_left() + rect.get_right()) / 2;
                 let cy = (rect.get_top() + rect.get_bottom()) / 2;
-                automation.send_mouse_input(cx, cy, MouseButton::Right)
+                Mouse::new().right_click(&Point::new(cx, cy))
                     .map_err(|e| anyhow::anyhow!("{}", e))?;
                 Ok(ToolResult::ok(format!("Right-clicked: '{}'", element.get_name().unwrap_or_default())))
             }
@@ -452,14 +476,8 @@ impl UiaTool {
 
     fn hover_element(&self, input: &Value) -> Result<ToolResult> {
         use uiautomation::UIAutomation;
-        use uiautomation::inputs::MouseButton;
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
-            // Move mouse without clicking by using a tiny move
-            let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
-            // Use send_mouse_input to move to position (we'll use a workaround)
-            // Move to position by clicking and immediately releasing won't work for hover
-            // Instead, use SetCursorPos
             use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
             unsafe { SetCursorPos(x as i32, y as i32).map_err(|e| anyhow::anyhow!("{}", e))?; }
             return Ok(ToolResult::ok(format!("Hovered at ({}, {})", x, y)));
@@ -482,38 +500,46 @@ impl UiaTool {
     }
 
     fn scroll_element(&self, input: &Value) -> Result<ToolResult> {
-        use windows::Win32::UI::WindowsAndMessaging::{mouse_event, SetCursorPos};
-        // MOUSEEVENTF_WHEEL = 0x0800, MOUSEEVENTF_HWHEEL = 0x1000
-        const MOUSEEVENTF_WHEEL: u32 = 0x0800;
-        const MOUSEEVENTF_HWHEEL: u32 = 0x1000;
+        use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT, MOUSE_EVENT_FLAGS,
+            MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL,
+        };
 
         let direction = input["direction"].as_str().unwrap_or("down");
         let amount = input["amount"].as_i64().unwrap_or(3) as i32;
 
-        // If coordinates provided, move mouse there first
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
             unsafe { let _ = SetCursorPos(x as i32, y as i32); }
         }
 
-        let (flags, delta) = match direction {
-            "up"    => (MOUSEEVENTF_WHEEL, (120 * amount) as u32),
-            "down"  => (MOUSEEVENTF_WHEEL, (-120i32 * amount) as u32),
-            "left"  => (MOUSEEVENTF_HWHEEL, (-120i32 * amount) as u32),
-            "right" => (MOUSEEVENTF_HWHEEL, (120 * amount) as u32),
-            _       => (MOUSEEVENTF_WHEEL, (-120i32 * amount) as u32),
+        let (flags, wheel_data): (MOUSE_EVENT_FLAGS, i32) = match direction {
+            "up"    => (MOUSEEVENTF_WHEEL,  120 * amount),
+            "down"  => (MOUSEEVENTF_WHEEL,  -120 * amount),
+            "left"  => (MOUSEEVENTF_HWHEEL, -120 * amount),
+            "right" => (MOUSEEVENTF_HWHEEL,  120 * amount),
+            _       => (MOUSEEVENTF_WHEEL,  -120 * amount),
         };
 
-        unsafe {
-            mouse_event(flags, 0, 0, delta, 0);
-        }
+        let input_ev = [INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: 0, dy: 0,
+                    mouseData: wheel_data as u32,
+                    dwFlags: flags,
+                    time: 0, dwExtraInfo: 0,
+                },
+            },
+        }];
+        unsafe { SendInput(&input_ev, std::mem::size_of::<INPUT>() as i32); }
         Ok(ToolResult::ok(format!("Scrolled {} by {} ticks", direction, amount)))
     }
 
     fn drag_drop(&self, input: &Value) -> Result<ToolResult> {
-        use windows::Win32::UI::WindowsAndMessaging::{mouse_event, SetCursorPos};
-        // MOUSEEVENTF_LEFTDOWN = 0x0002, MOUSEEVENTF_LEFTUP = 0x0004
-        const MOUSEEVENTF_LEFTDOWN: u32 = 0x0002;
-        const MOUSEEVENTF_LEFTUP: u32 = 0x0004;
+        use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+        use uiautomation::inputs::{Mouse, MouseButton};
+        use uiautomation::types::Point;
 
         let (x1, y1) = match (input["x"].as_i64(), input["y"].as_i64()) {
             (Some(x), Some(y)) => (x as i32, y as i32),
@@ -524,19 +550,15 @@ impl UiaTool {
             _ => return Ok(ToolResult::err("drag_drop requires x2, y2 (end coordinates)")),
         };
 
-        unsafe {
-            // Move to start position
-            let _ = SetCursorPos(x1, y1);
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            // Press left button
-            mouse_event(MOUSEEVENTF_LEFTDOWN, x1 as u32, y1 as u32, 0, 0);
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            // Move to end position
-            let _ = SetCursorPos(x2, y2);
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            // Release left button
-            mouse_event(MOUSEEVENTF_LEFTUP, x2 as u32, y2 as u32, 0, 0);
-        }
+        Mouse::new()
+            .drag_to(MouseButton::LEFT, &Point::new(x2, y2))
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let _ = unsafe { SetCursorPos(x1, y1) };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        Mouse::new()
+            .drag_to(MouseButton::LEFT, &Point::new(x2, y2))
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
         Ok(ToolResult::ok(format!("Dragged from ({},{}) to ({},{})", x1, y1, x2, y2)))
     }
 
@@ -756,11 +778,9 @@ impl UiaTool {
 
         if let Some(title) = input["name"].as_str().or(input["window_title"].as_str()) {
             let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-            let hwnd = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) };
-            if hwnd.0 as usize != 0 {
-                return Ok(hwnd);
-            }
-            return Err(anyhow::anyhow!("Window '{}' not found", title));
+            let hwnd = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) }
+                .map_err(|_| anyhow::anyhow!("Window '{}' not found", title))?;
+            return Ok(hwnd);
         }
         Ok(unsafe { GetForegroundWindow() })
     }
@@ -836,5 +856,150 @@ impl UiaTool {
             rect.left, rect.top, rect.right, rect.bottom,
             rect.right - rect.left, rect.bottom - rect.top
         )))
+    }
+
+    // ─── Hybrid Vision Automation ────────────────────────────────────────────
+
+    async fn smart_find(&self, input: &Value, _ctx: &ToolContext) -> Result<ToolResult> {
+        use uiautomation::UIAutomation;
+
+        let description = input["description"].as_str().unwrap_or("");
+
+        let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
+        let root = self.get_search_root(&automation, input)?;
+
+        let mut matcher = automation.create_matcher().from(root.clone()).timeout(3000);
+        if let Some(name) = input["name"].as_str() {
+            matcher = matcher.name(name);
+        } else if !description.is_empty() {
+            matcher = matcher.name(description);
+        }
+        if let Some(class) = input["class_name"].as_str() {
+            matcher = matcher.classname(class);
+        }
+        if let Some(ct) = input["control_type"].as_str() {
+            matcher = matcher.classname(ct);
+        }
+
+        match matcher.find_first() {
+            Ok(element) => {
+                let name = element.get_name().unwrap_or_default();
+                let class = element.get_classname().unwrap_or_default();
+                let rect = element.get_bounding_rectangle().map_err(|e| anyhow::anyhow!("{}", e))?;
+                let cx = (rect.get_left() + rect.get_right()) / 2;
+                let cy = (rect.get_top() + rect.get_bottom()) / 2;
+                Ok(ToolResult::ok(format!(
+                    "Found via UIA: Name='{}', Class='{}', Center=({}, {}), Rect=[{},{},{},{}]",
+                    name, class, cx, cy,
+                    rect.get_left(), rect.get_top(), rect.get_right(), rect.get_bottom()
+                )))
+            }
+            Err(_) => {
+                let screen_tool = super::screen::ScreenTool;
+                let capture_input = serde_json::json!({
+                    "action": "capture",
+                    "format": "jpeg",
+                    "quality": 75
+                });
+                match screen_tool.capture_full(&capture_input) {
+                    Ok(result) => {
+                        let msg = format!(
+                            "UIA could not find element matching '{}'. Screenshot captured for Vision AI analysis. \
+                             Please analyze the screenshot to locate the element and provide coordinates.",
+                            description
+                        );
+                        if let Some(img) = result.image {
+                            Ok(ToolResult::ok(msg).with_image(img))
+                        } else {
+                            Ok(ToolResult::ok(msg))
+                        }
+                    }
+                    Err(e) => Ok(ToolResult::err(format!(
+                        "UIA search failed and screenshot also failed: {}", e
+                    )))
+                }
+            }
+        }
+    }
+
+    fn annotate_elements(&self, input: &Value) -> Result<ToolResult> {
+        use uiautomation::UIAutomation;
+
+        let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
+        let root = self.get_search_root(&automation, input)?;
+        let max_elements = input["max_elements"].as_u64().unwrap_or(30) as usize;
+
+        let walker = automation.get_control_view_walker().map_err(|e| anyhow::anyhow!("{}", e))?;
+        let mut elements: Vec<(String, String, i32, i32, i32, i32)> = Vec::new();
+        self.collect_interactive_elements(&walker, &root, 0, 4, &mut elements, max_elements);
+
+        if elements.is_empty() {
+            return Ok(ToolResult::err("No interactive elements found in the target window"));
+        }
+
+        let screen_tool = super::screen::ScreenTool;
+        let capture_input = serde_json::json!({ "action": "capture", "format": "png" });
+        let capture_result = screen_tool.capture_full(&capture_input)?;
+
+        let mut map_text = String::from("Annotated elements:\n");
+        for (i, (name, class, left, top, right, bottom)) in elements.iter().enumerate() {
+            let cx = (left + right) / 2;
+            let cy = (top + bottom) / 2;
+            map_text.push_str(&format!(
+                "[{}] Name='{}', Class='{}', Center=({},{}), Rect=[{},{},{},{}]\n",
+                i + 1, name, class, cx, cy, left, top, right, bottom
+            ));
+        }
+
+        if let Some(img) = capture_result.image {
+            Ok(ToolResult::ok(map_text).with_image(img))
+        } else {
+            Ok(ToolResult::ok(map_text))
+        }
+    }
+
+    fn collect_interactive_elements(
+        &self,
+        walker: &uiautomation::UITreeWalker,
+        element: &uiautomation::UIElement,
+        depth: usize,
+        max_depth: usize,
+        results: &mut Vec<(String, String, i32, i32, i32, i32)>,
+        max_elements: usize,
+    ) {
+        if depth >= max_depth || results.len() >= max_elements { return; }
+        if let Ok(child) = walker.get_first_child(element) {
+            let mut current = child;
+            loop {
+                if results.len() >= max_elements { break; }
+                let name = current.get_name().unwrap_or_default();
+                let class = current.get_classname().unwrap_or_default();
+
+                let is_interactive = matches!(
+                    class.as_str(),
+                    "Button" | "Edit" | "ComboBox" | "CheckBox" | "RadioButton" |
+                    "ListItem" | "MenuItem" | "TabItem" | "Hyperlink" | "TreeItem" |
+                    "Slider" | "Spinner" | "ToggleButton" | "SplitButton"
+                ) || class.contains("Button") || class.contains("Edit") || class.contains("TextBox");
+
+                if is_interactive {
+                    if let Ok(rect) = current.get_bounding_rectangle() {
+                        let l = rect.get_left();
+                        let t = rect.get_top();
+                        let r = rect.get_right();
+                        let b = rect.get_bottom();
+                        if r > l && b > t && (r - l) > 2 && (b - t) > 2 {
+                            results.push((name, class, l, t, r, b));
+                        }
+                    }
+                }
+
+                self.collect_interactive_elements(walker, &current, depth + 1, max_depth, results, max_elements);
+                match walker.get_next_sibling(&current) {
+                    Ok(next) => current = next,
+                    Err(_) => break,
+                }
+            }
+        }
     }
 }

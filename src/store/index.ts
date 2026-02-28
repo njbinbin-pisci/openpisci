@@ -28,6 +28,10 @@ const sessionsSlice = createSlice({
         state.activeSessionId = state.sessions[0]?.id ?? null;
       }
     },
+    updateSessionTitle: (state, action: PayloadAction<{ id: string; title: string }>) => {
+      const s = state.sessions.find((s) => s.id === action.payload.id);
+      if (s) s.title = action.payload.title;
+    },
     setActiveSession: (state, action: PayloadAction<string | null>) => {
       state.activeSessionId = action.payload;
     },
@@ -44,10 +48,25 @@ const sessionsSlice = createSlice({
 // Chat slice
 // ---------------------------------------------------------------------------
 
+export interface ToolStep {
+  id: string;
+  name: string;
+  input: unknown;
+  result?: string;
+  isError?: boolean;
+  /** false = still running, true = finished */
+  completed: boolean;
+  /** whether the detail panel is expanded */
+  expanded: boolean;
+}
+
 interface ChatState {
   messagesBySession: Record<string, ChatMessage[]>;
   streamingText: Record<string, string>;
-  activeTools: Record<string, { id: string; name: string; input: unknown }[]>;
+  /** Tool steps for the current (or most recent) agent turn, keyed by sessionId.
+   *  Steps are KEPT after completion so the user can review them.
+   *  Cleared only when a new user message is sent. */
+  toolSteps: Record<string, ToolStep[]>;
   isRunning: Record<string, boolean>;
 }
 
@@ -56,7 +75,7 @@ const chatSlice = createSlice({
   initialState: {
     messagesBySession: {},
     streamingText: {},
-    activeTools: {},
+    toolSteps: {},
     isRunning: {},
   } as ChatState,
   reducers: {
@@ -77,16 +96,33 @@ const chatSlice = createSlice({
     clearStreaming: (state, action: PayloadAction<string>) => {
       delete state.streamingText[action.payload];
     },
-    setToolStart: (state, action: PayloadAction<{ sessionId: string; id: string; name: string; input: unknown }>) => {
+    /** Add a pending tool step when execution starts */
+    addToolStep: (state, action: PayloadAction<{ sessionId: string; id: string; name: string; input: unknown }>) => {
       const { sessionId, id, name, input } = action.payload;
-      if (!state.activeTools[sessionId]) state.activeTools[sessionId] = [];
-      state.activeTools[sessionId].push({ id, name, input });
+      if (!state.toolSteps[sessionId]) state.toolSteps[sessionId] = [];
+      state.toolSteps[sessionId].push({ id, name, input, completed: false, expanded: true });
     },
-    removeActiveTool: (state, action: PayloadAction<{ sessionId: string; id: string }>) => {
-      const { sessionId, id } = action.payload;
-      if (state.activeTools[sessionId]) {
-        state.activeTools[sessionId] = state.activeTools[sessionId].filter((t) => t.id !== id);
+    /** Mark a tool step as completed (with result). Step stays visible. */
+    completeToolStep: (state, action: PayloadAction<{ sessionId: string; id: string; result: string; isError: boolean }>) => {
+      const { sessionId, id, result, isError } = action.payload;
+      const step = state.toolSteps[sessionId]?.find((s) => s.id === id);
+      if (step) {
+        step.result = result;
+        step.isError = isError;
+        step.completed = true;
+        // Collapse finished steps automatically to save space (user can expand)
+        step.expanded = false;
       }
+    },
+    /** Toggle expand/collapse for a step */
+    toggleToolStep: (state, action: PayloadAction<{ sessionId: string; id: string }>) => {
+      const { sessionId, id } = action.payload;
+      const step = state.toolSteps[sessionId]?.find((s) => s.id === id);
+      if (step) step.expanded = !step.expanded;
+    },
+    /** Clear all tool steps when a new user message is sent */
+    clearToolSteps: (state, action: PayloadAction<string>) => {
+      delete state.toolSteps[action.payload];
     },
     setRunning: (state, action: PayloadAction<{ sessionId: string; running: boolean }>) => {
       state.isRunning[action.payload.sessionId] = action.payload.running;
