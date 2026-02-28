@@ -154,7 +154,7 @@ impl Channel for WecomChannel {
                                     timestamp: v["timestamp"].as_u64().unwrap_or(0),
                                     media: None,
                                 };
-                                if !_tx.send(msg).await.is_ok() {
+                                if _tx.send(msg).await.is_err() {
                                     return Ok(());
                                 }
                             }

@@ -242,6 +242,7 @@ impl SkillLoader {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn get_skill(&self, name: &str) -> Option<&SkillDefinition> {
         self.skills.get(name)
     }
@@ -359,10 +360,10 @@ impl SkillLoader {
 
 fn parse_frontmatter(content: &str) -> Result<(serde_yaml::Value, String)> {
     let content = content.trim();
-    if content.starts_with("---") {
-        if let Some(end) = content[3..].find("---") {
-            let yaml_str = &content[3..end + 3];
-            let instructions = content[end + 6..].trim().to_string();
+    if let Some(stripped) = content.strip_prefix("---") {
+        if let Some(end) = stripped.find("---") {
+            let yaml_str = &stripped[..end];
+            let instructions = stripped[end + 3..].trim().to_string();
             let frontmatter: serde_yaml::Value =
                 serde_yaml::from_str(yaml_str).with_context(|| "Failed to parse YAML frontmatter")?;
             return Ok((frontmatter, instructions));

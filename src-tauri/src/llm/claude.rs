@@ -1,10 +1,10 @@
 /// Anthropic Claude API client (Messages API, streaming SSE)
-use super::{ContentBlock, LlmChunk, LlmClient, LlmMessage, LlmRequest, LlmResponse, MessageContent, ToolCall};
+use super::{ContentBlock, LlmChunk, LlmClient, LlmRequest, LlmResponse, MessageContent, ToolCall};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc::Sender;
 
@@ -86,6 +86,7 @@ impl ClaudeClient {
 // SSE event types from Anthropic
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct SseEvent {
     #[serde(rename = "type")]
@@ -102,6 +103,7 @@ struct SseEvent {
     usage: Option<Usage>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct Delta {
     #[serde(rename = "type")]
@@ -112,6 +114,7 @@ struct Delta {
     partial_json: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct ContentBlockStart {
     #[serde(rename = "type")]
@@ -122,12 +125,14 @@ struct ContentBlockStart {
     name: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct MessageStart {
     #[serde(default)]
     usage: Option<Usage>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct Usage {
     #[serde(default)]

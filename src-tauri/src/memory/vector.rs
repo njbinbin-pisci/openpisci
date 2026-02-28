@@ -31,11 +31,13 @@ pub fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub struct ScoredResult {
     pub id: String,
     pub score: f32,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn hybrid_merge(
     vector_results: &[(String, f32)],
     keyword_results: &[(String, f32)],
@@ -66,6 +68,7 @@ pub fn hybrid_merge(
     results
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn content_hash(content: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};

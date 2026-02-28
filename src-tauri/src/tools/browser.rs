@@ -798,7 +798,7 @@ impl BrowserTool {
 
     // ─── Content extraction ───────────────────────────────────────────────────
 
-    async fn get_content(&self, input: &Value) -> Result<ToolResult> {
+    async fn get_content(&self, _input: &Value) -> Result<ToolResult> {
         let mut mgr = self.manager.lock().await;
         let page = mgr.active_page().await?;
         drop(mgr);

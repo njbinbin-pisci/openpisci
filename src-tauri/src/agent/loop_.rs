@@ -30,6 +30,8 @@ pub struct ConfirmFlags {
     pub confirm_file_write: bool,
 }
 
+type ConfirmationResponseMap = Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>;
+
 pub struct AgentLoop {
     pub client: Box<dyn LlmClient>,
     pub registry: Arc<ToolRegistry>,
@@ -42,7 +44,7 @@ pub struct AgentLoop {
     /// App handle for emitting permission request events
     pub app_handle: Option<tauri::AppHandle>,
     /// Shared map of pending permission confirmation channels
-    pub confirmation_responses: Option<Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>>,
+    pub confirmation_responses: Option<ConfirmationResponseMap>,
     /// User confirmation preferences from Settings
     pub confirm_flags: ConfirmFlags,
 }

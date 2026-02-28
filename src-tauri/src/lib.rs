@@ -323,7 +323,7 @@ pub fn run() {
                     }
                 }
                 "tray_quit" => {
-                    let _ = app.exit(0);
+                    app.exit(0);
                 }
                 _ => {}
             }

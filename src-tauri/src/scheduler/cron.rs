@@ -48,7 +48,7 @@ impl CronScheduler {
             let f = f.clone();
             Box::pin(async move {
                 info!("Running scheduled task: {}", task_id);
-                let mut guard = f.lock().await;
+                let guard = f.lock().await;
                 guard(uuid, sched).await;
             })
         })?;

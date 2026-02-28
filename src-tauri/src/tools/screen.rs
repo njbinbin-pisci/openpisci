@@ -96,10 +96,6 @@ impl ScreenTool {
         use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW};
         use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
 
-        struct MonitorInfo {
-            monitors: Vec<String>,
-        }
-
         unsafe extern "system" fn enum_proc(
             hmonitor: windows::Win32::Graphics::Gdi::HMONITOR,
             _hdc: windows::Win32::Graphics::Gdi::HDC,
@@ -126,7 +122,7 @@ impl ScreenTool {
 
         let mut monitors: Vec<String> = Vec::new();
         unsafe {
-            EnumDisplayMonitors(
+            let _ = EnumDisplayMonitors(
                 None,
                 None,
                 Some(enum_proc),
@@ -233,8 +229,8 @@ impl ScreenTool {
             let pixels = self.read_bitmap_pixels(mem_dc, bitmap, w, h)?;
 
             SelectObject(mem_dc, old_bmp);
-            DeleteObject(bitmap);
-            DeleteDC(mem_dc);
+            let _ = DeleteObject(bitmap);
+            let _ = DeleteDC(mem_dc);
             ReleaseDC(hwnd, hdc_win);
 
             self.encode_and_return(&pixels, w as u32, h as u32, input)
@@ -287,8 +283,8 @@ impl ScreenTool {
         let pixels = self.read_bitmap_pixels(mem_dc, bitmap, width, height)?;
 
         SelectObject(mem_dc, old_bmp);
-        DeleteObject(bitmap);
-        DeleteDC(mem_dc);
+        let _ = DeleteObject(bitmap);
+        let _ = DeleteDC(mem_dc);
 
         Ok(pixels)
     }
@@ -359,7 +355,7 @@ impl ScreenTool {
                 // JPEG (smaller, better for Vision API token usage)
                 let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
                 let mut buf = Vec::new();
-                let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+                let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
                     &mut buf,
                     quality,
                 );

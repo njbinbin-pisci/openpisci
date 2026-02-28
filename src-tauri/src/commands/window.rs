@@ -1,8 +1,8 @@
-/// Window management commands for the minimal overlay mode.
-///
-/// Two-window architecture:
-///   main    — 1200×800 main application window
-///   overlay — 280×56 transparent always-on-top HUD strip
+//! Window management commands for the minimal overlay mode.
+//!
+//! Two-window architecture:
+//!   main    - 1200x800 main application window
+//!   overlay - 280x56 transparent always-on-top HUD strip
 
 use tauri::{AppHandle, Manager};
 use tracing::info;
@@ -13,10 +13,10 @@ use tracing::info;
 /// violet → purple (#7c6af7), gold → gold (#c9a84c).
 /// Windows 11+ only; no-op on older Windows or non-Windows.
 #[tauri::command]
-pub async fn set_window_theme_border(app: AppHandle, theme: String) -> Result<(), String> {
+pub async fn set_window_theme_border(_app: AppHandle, theme: String) -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, theme);
+        let _ = theme;
         return Ok(());
     }
 

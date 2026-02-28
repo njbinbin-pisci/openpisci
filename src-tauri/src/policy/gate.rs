@@ -128,6 +128,7 @@ impl PolicyMode {
 }
 
 impl PolicyGate {
+    #[allow(dead_code)]
     pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
         Self {
             workspace_root: workspace_root.into(),

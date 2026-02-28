@@ -1,5 +1,5 @@
 use crate::store::{db::Memory, AppState};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::State;
 
 #[derive(Debug, Serialize)]

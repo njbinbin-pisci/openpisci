@@ -71,6 +71,7 @@ impl Tool for FileWriteTool {
 // File Edit Tool (patch-based)
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub struct FileEditTool;
 
 #[async_trait]

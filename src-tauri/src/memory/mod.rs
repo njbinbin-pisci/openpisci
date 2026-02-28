@@ -6,6 +6,7 @@ use crate::store::db::{Database, Memory};
 /// Hybrid search: combines FTS5 keyword results with vector similarity results.
 /// If `query_embedding` is None, only FTS5 is used.
 /// Returns up to `top_k` Memory entries sorted by hybrid score (descending).
+#[allow(dead_code)]
 pub fn search_hybrid(
     db: &Database,
     query: &str,

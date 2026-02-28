@@ -320,9 +320,9 @@ pub async fn chat_send(
                 let _ = event_tx.send(AgentEvent::TextDelta {
                     delta: format!("▶ Sub-task: {}\n", task.description),
                 }).await;
-                let sub_msgs = vec![LlmMessage {
+                let sub_msgs = [LlmMessage {
                     role: "user".into(),
-                    content: MessageContent::text(&format!(
+                    content: MessageContent::text(format!(
                         "Execute this sub-task: {}\n\nContext from previous steps is available in the conversation.",
                         task.description
                     )),

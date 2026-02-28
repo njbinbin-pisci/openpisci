@@ -67,6 +67,7 @@ pub struct ToolDef {
 }
 
 /// A streaming chunk from the LLM
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum LlmChunk {
     /// Text delta
@@ -117,6 +118,7 @@ pub struct ToolCall {
 #[async_trait]
 pub trait LlmClient: Send + Sync {
     /// Send a request and return a stream of chunks
+    #[allow(dead_code)]
     async fn stream(
         &self,
         req: LlmRequest,

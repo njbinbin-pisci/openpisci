@@ -149,8 +149,8 @@ fn normalise_url(url: &str) -> String {
               .trim_start_matches("http://")
               .trim_start_matches("//");
     // Strip query string and fragment
-    let u = u.splitn(2, '?').next().unwrap_or(u);
-    let u = u.splitn(2, '#').next().unwrap_or(u);
+    let u = u.split('?').next().unwrap_or(u);
+    let u = u.split('#').next().unwrap_or(u);
     // Strip trailing slash
     u.trim_end_matches('/').to_string()
 }
@@ -196,7 +196,7 @@ async fn ddg_search(client: Client, query: &str, num: usize) -> Result<Vec<Searc
 fn extract_ddg_url(href: &str) -> String {
     if href.contains("uddg=") {
         if let Some(pos) = href.find("uddg=") {
-            let encoded = href[pos + 5..].splitn(2, '&').next().unwrap_or("");
+            let encoded = href[pos + 5..].split('&').next().unwrap_or("");
             if let Ok(d) = urlencoding::decode(encoded) {
                 return d.into_owned();
             }

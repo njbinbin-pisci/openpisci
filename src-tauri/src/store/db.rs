@@ -531,8 +531,7 @@ impl Database {
         // Sanitise query for FTS5: escape special chars
         let safe_query = query
             .replace('"', "\"\"")
-            .replace('*', "")
-            .replace('^', "");
+            .replace(['*', '^'], "");
         let fts_query = format!("\"{}\"", safe_query);
 
         let mut stmt = self.conn.prepare(

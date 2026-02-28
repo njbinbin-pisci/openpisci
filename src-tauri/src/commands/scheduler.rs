@@ -36,7 +36,7 @@ pub async fn create_task(
     cron_expression: String,
     task_prompt: String,
 ) -> Result<ScheduledTask, String> {
-    let parts: Vec<&str> = cron_expression.trim().split_whitespace().collect();
+    let parts: Vec<&str> = cron_expression.split_whitespace().collect();
     if parts.len() != 5 {
         return Err(format!(
             "Invalid cron expression '{}': must have 5 parts (minute hour day month weekday)",

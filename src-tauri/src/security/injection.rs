@@ -45,8 +45,10 @@ pub struct InjectionDetection {
     /// Matched pattern names
     pub patterns: Vec<String>,
     /// Raw cumulative risk score (capped at MAX_SCORE)
+    #[allow(dead_code)]
     pub score: u32,
     /// Severity bucket: "low" / "medium" / "high" / "critical"
+    #[allow(dead_code)]
     pub severity: &'static str,
 }
 

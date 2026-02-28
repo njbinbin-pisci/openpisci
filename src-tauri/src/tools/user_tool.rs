@@ -1,16 +1,16 @@
-/// User-defined tool plugin system.
-///
-/// Each user tool lives in  `<app_data>/user-tools/<name>/`  and consists of:
-///   - `manifest.json`  — metadata, input_schema, config_schema, runtime declaration
-///   - an entry-point script (e.g. `index.ts`, `index.js`, `tool.ps1`)
-///
-/// Execution model: Rust spawns a child process and passes two JSON arguments:
-///   argv[1] = tool input  (from LLM)
-///   argv[2] = tool config (from user settings, passwords NOT in audit log)
-///
-/// The child must write a JSON object to stdout:
-///   { "ok": true,  "content": "..." }
-///   { "ok": false, "error":   "..." }
+//! User-defined tool plugin system.
+//!
+//! Each user tool lives in `<app_data>/user-tools/<name>/` and consists of:
+//!   - `manifest.json` - metadata, input_schema, config_schema, runtime declaration
+//!   - an entry-point script (e.g. `index.ts`, `index.js`, `tool.ps1`)
+//!
+//! Execution model: Rust spawns a child process and passes two JSON arguments:
+//!   argv[1] = tool input (from LLM)
+//!   argv[2] = tool config (from user settings, passwords not in audit log)
+//!
+//! The child must write a JSON object to stdout:
+//!   { "ok": true,  "content": "..." }
+//!   { "ok": false, "error":   "..." }
 
 use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use anyhow::Result;
@@ -72,6 +72,7 @@ impl UserToolManifest {
     }
 
     /// Returns `true` if the config_schema contains at least one password field.
+    #[allow(dead_code)]
     pub fn has_secret_fields(&self) -> bool {
         self.config_schema.values().any(|f| f.field_type == "password")
     }

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 #[cfg(target_os = "windows")]
 pub fn get_dpi_scale() -> f64 {
     use windows::Win32::UI::HiDpi::{

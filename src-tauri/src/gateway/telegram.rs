@@ -39,7 +39,7 @@ impl Channel for TelegramChannel {
     async fn connect(&mut self) -> Result<()> {
         self.status = ChannelStatus::Connecting;
         let resp = self.http
-            .get(&self.api_url("getMe"))
+            .get(self.api_url("getMe"))
             .send()
             .await?;
         let body: serde_json::Value = resp.json().await?;
@@ -62,7 +62,7 @@ impl Channel for TelegramChannel {
 
     async fn send(&self, msg: &OutboundMessage) -> Result<()> {
         self.http
-            .post(&self.api_url("sendMessage"))
+            .post(self.api_url("sendMessage"))
             .json(&json!({
                 "chat_id": msg.recipient,
                 "text": msg.content,
@@ -78,7 +78,7 @@ impl Channel for TelegramChannel {
         info!("Telegram long-polling listener started");
         loop {
             let resp = self.http
-                .get(&self.api_url("getUpdates"))
+                .get(self.api_url("getUpdates"))
                 .query(&[
                     ("offset", offset.to_string()),
                     ("timeout", "30".to_string()),

@@ -73,8 +73,11 @@ pub trait Channel: Send + Sync {
     async fn health_check(&self) -> bool { true }
 }
 
+type SharedChannel = Arc<Mutex<Box<dyn Channel>>>;
+type ChannelMap = HashMap<String, SharedChannel>;
+
 pub struct GatewayManager {
-    channels: RwLock<HashMap<String, Arc<Mutex<Box<dyn Channel>>>>>,
+    channels: RwLock<ChannelMap>,
     inbound_tx: mpsc::Sender<InboundMessage>,
     inbound_rx: Mutex<Option<mpsc::Receiver<InboundMessage>>>,
 }

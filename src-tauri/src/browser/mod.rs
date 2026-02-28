@@ -153,7 +153,7 @@ impl BrowserManager {
             .build()
             .map_err(|e| anyhow::anyhow!("BrowserConfig error: {}", e))?;
 
-        let (browser, mut handler) = Browser::launch(config)
+        let (browser, handler) = Browser::launch(config)
             .await
             .context("Failed to launch Chrome")?;
 

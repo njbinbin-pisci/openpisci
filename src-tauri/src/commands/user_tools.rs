@@ -1,11 +1,11 @@
-/// Tauri commands for the User Tool plugin system.
-///
-/// User tools live in `<app_data>/user-tools/<name>/` and are scanned on startup
-/// to be registered dynamically in the tool registry.
+//! Tauri commands for the User Tool plugin system.
+//!
+//! User tools live in `<app_data>/user-tools/<name>/` and are scanned on startup
+//! to be registered dynamically in the tool registry.
 
 use crate::store::AppState;
 use crate::tools::user_tool::{ConfigFieldSchema, UserToolManifest};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use tauri::{Manager, State};
@@ -24,13 +24,6 @@ pub struct UserToolInfo {
     pub input_schema: Value,
     pub config_schema: HashMap<String, ConfigFieldSchema>,
     pub has_config: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SaveConfigRequest {
-    pub tool_name: String,
-    /// Map of field name → value (passwords will be encrypted before persisting)
-    pub config: HashMap<String, Value>,
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

@@ -45,6 +45,7 @@ pub struct ToolContext {
     pub session_id: String,
     pub workspace_root: PathBuf,
     /// If true, skip permission checks (for scheduled tasks)
+    #[allow(dead_code)]
     pub bypass_permissions: bool,
     /// Runtime-accessible settings snapshot (credentials etc.)
     pub settings: Arc<ToolSettings>,
