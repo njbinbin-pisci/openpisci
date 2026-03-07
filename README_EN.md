@@ -239,16 +239,6 @@ OpenPisci
 
 ---
 
-## 🤝 Acknowledgements
-
-OpenPisci draws inspiration from these excellent open-source projects:
-
-- [OpenClaw](https://github.com/mariozechner/openclaw) — Cross-platform AI Agent; pi-agent architecture reference
-- [OpenFang](https://github.com/RightNow-AI/openfang) — Rust + Tauri Agent OS; Loop Guard and Hand system reference
-- [LobsterAI](https://github.com/lobsterai/lobsterai) — Claude Agent SDK integration reference
-
----
-
 ## 📄 License
 
 [MIT License](./LICENSE)

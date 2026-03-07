@@ -33,9 +33,13 @@ pub async fn list_gateway_channels(state: State<'_, AppState>) -> Result<Gateway
     Ok(GatewayStatus { channels })
 }
 
-/// 根据当前 Settings 中的 IM 配置，连接启用的渠道
+/// 根据当前 Settings 中的 IM 配置，连接启用的渠道。
+/// 每次调用前先 shutdown 所有已有渠道，避免重复监听任务。
 #[tauri::command]
 pub async fn connect_gateway_channels(state: State<'_, AppState>) -> Result<GatewayStatus, String> {
+    // Stop any existing listeners before re-registering to prevent duplicate tasks
+    let _ = state.gateway.stop_all().await;
+
     let settings = state.settings.lock().await.clone();
 
     // 飞书

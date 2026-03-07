@@ -10,8 +10,11 @@ impl Tool for FileWriteTool {
     fn name(&self) -> &str { "file_write" }
 
     fn description(&self) -> &str {
-        "Write content to a file. Creates the file and any parent directories if they don't exist. \
-         Overwrites existing content."
+        "Write content to a file. Creates the file and all parent directories if they don't exist. \
+         Completely overwrites existing content — use file_edit if you only want to change part of a file. \
+         Always use absolute paths. \
+         Note: writing to system directories (C:\\Windows\\, C:\\Program Files\\) will fail with permission denied — \
+         write to user directories (C:\\Users\\name\\, Desktop, Documents) or the workspace instead."
     }
 
     fn input_schema(&self) -> Value {
@@ -20,11 +23,11 @@ impl Tool for FileWriteTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Absolute or workspace-relative path to the file"
+                    "description": "Absolute path to the file to write (e.g. C:\\Users\\name\\output.txt). Parent directories are created automatically."
                 },
                 "content": {
                     "type": "string",
-                    "description": "Content to write to the file"
+                    "description": "Full content to write. This REPLACES the entire file. Use file_edit to modify only part of an existing file."
                 }
             },
             "required": ["path", "content"]
@@ -71,7 +74,6 @@ impl Tool for FileWriteTool {
 // File Edit Tool (patch-based)
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 pub struct FileEditTool;
 
 #[async_trait]
@@ -112,7 +114,8 @@ impl Tool for FileEditTool {
             None => return Ok(ToolResult::err("Missing required parameter: path")),
         };
         let old_str = match input["old_string"].as_str() {
-            Some(s) => s,
+            Some(s) if !s.is_empty() => s,
+            Some(_) => return Ok(ToolResult::err("old_string cannot be empty — provide the exact text you want to replace")),
             None => return Ok(ToolResult::err("Missing required parameter: old_string")),
         };
         let new_str = match input["new_string"].as_str() {

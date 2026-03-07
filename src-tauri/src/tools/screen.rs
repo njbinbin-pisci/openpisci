@@ -64,6 +64,14 @@ impl Tool for ScreenTool {
                 "quality": {
                     "type": "integer",
                     "description": "JPEG quality 1-100 (default: 75)"
+                },
+                "grid": {
+                    "type": "boolean",
+                    "description": "Overlay a coordinate grid on the screenshot. Grid lines every 100px with coordinate labels. For capture_window the labels show absolute screen coordinates so they can be used directly with uia click/drag. Useful for Vision AI to precisely locate UI elements."
+                },
+                "grid_spacing": {
+                    "type": "integer",
+                    "description": "Grid line spacing in pixels (default: 100)"
                 }
             },
             "required": ["action"]
@@ -140,19 +148,26 @@ impl ScreenTool {
     // ─── Full screen capture ─────────────────────────────────────────────────
 
     pub(crate) fn capture_full(&self, input: &Value) -> Result<ToolResult> {
-        use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
-        use windows::Win32::UI::WindowsAndMessaging::{GetDesktopWindow, GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+        use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC, GetDeviceCaps, HORZRES, VERTRES};
+        use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
 
         unsafe {
             let hwnd = GetDesktopWindow();
             let hdc = GetDC(hwnd);
-            let width = GetSystemMetrics(SM_CXSCREEN);
-            let height = GetSystemMetrics(SM_CYSCREEN);
+
+            // GetDeviceCaps(HORZRES/VERTRES) returns the logical pixel dimensions of the
+            // primary display — the same coordinate space used by SendInput with
+            // MOUSEEVENTF_ABSOLUTE (without VIRTUALDESK). This ensures grid labels in
+            // screenshots directly correspond to the x/y values passed to uia drag_drop/click.
+            let width  = GetDeviceCaps(hdc, HORZRES);
+            let height = GetDeviceCaps(hdc, VERTRES);
+
+            tracing::info!("capture_full: logical {}x{}", width, height);
 
             let pixels = self.capture_dc_region(hdc, 0, 0, width, height)?;
             ReleaseDC(hwnd, hdc);
 
-            self.encode_and_return(&pixels, width as u32, height as u32, input)
+            self.encode_and_return_with_offset(&pixels, width as u32, height as u32, input, 0, 0)
         }
     }
 
@@ -233,7 +248,10 @@ impl ScreenTool {
             let _ = DeleteDC(mem_dc);
             ReleaseDC(hwnd, hdc_win);
 
-            self.encode_and_return(&pixels, w as u32, h as u32, input)
+            self.encode_and_return_with_offset(
+                &pixels, w as u32, h as u32, input,
+                rect.left, rect.top,
+            )
         }
     }
 
@@ -259,7 +277,7 @@ impl ScreenTool {
             let hdc = GetDC(hwnd);
             let pixels = self.capture_dc_region(hdc, x, y, w, h)?;
             ReleaseDC(hwnd, hdc);
-            self.encode_and_return(&pixels, w as u32, h as u32, input)
+            self.encode_and_return_with_offset(&pixels, w as u32, h as u32, input, x, y)
         }
     }
 
@@ -337,11 +355,44 @@ impl ScreenTool {
     }
 
     fn encode_and_return(&self, rgba: &[u8], width: u32, height: u32, input: &Value) -> Result<ToolResult> {
+        self.encode_and_return_with_offset(rgba, width, height, input, 0, 0)
+    }
+
+    /// Encode pixels to image, optionally overlay a coordinate grid, and return as ToolResult.
+    /// `origin_x/origin_y`: screen coordinates of the image's top-left corner.
+    /// When grid=true, labels show absolute screen coords (origin + image offset).
+    fn encode_and_return_with_offset(
+        &self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        input: &Value,
+        origin_x: i32,
+        origin_y: i32,
+    ) -> Result<ToolResult> {
         let format = input["format"].as_str().unwrap_or("jpeg");
         let quality = input["quality"].as_u64().unwrap_or(75) as u8;
+        let draw_grid = input["grid"].as_bool().unwrap_or(false);
+        let grid_spacing = input["grid_spacing"].as_u64().unwrap_or(200).max(50) as u32;
 
-        let img = image::RgbaImage::from_raw(width, height, rgba.to_vec())
+        tracing::info!(
+            "screen_capture: {}x{} origin=({},{}) grid={} spacing={}",
+            width, height, origin_x, origin_y, draw_grid, grid_spacing
+        );
+
+        let mut img = image::RgbaImage::from_raw(width, height, rgba.to_vec())
             .ok_or_else(|| anyhow::anyhow!("Failed to create image from pixel data"))?;
+
+        if draw_grid {
+            self.draw_coordinate_grid(&mut img, origin_x, origin_y, grid_spacing);
+            // Save a debug copy as PNG so we can inspect the grid visually
+            #[cfg(debug_assertions)]
+            {
+                let debug_path = std::env::temp_dir().join("pisci_grid_debug.png");
+                let _ = img.save(&debug_path);
+                tracing::info!("screen_capture: grid image saved to {}", debug_path.display());
+            }
+        }
 
         let (encoded, media_type) = match format {
             "png" => {
@@ -352,13 +403,9 @@ impl ScreenTool {
                 (buf, "image/png")
             }
             _ => {
-                // JPEG (smaller, better for Vision API token usage)
                 let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
                 let mut buf = Vec::new();
-                let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-                    &mut buf,
-                    quality,
-                );
+                let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
                 use image::ImageEncoder;
                 encoder.write_image(rgb.as_raw(), width, height, image::ColorType::Rgb8.into())?;
                 (buf, "image/jpeg")
@@ -368,6 +415,31 @@ impl ScreenTool {
         let b64 = base64::engine::general_purpose::STANDARD.encode(&encoded);
         let size_kb = encoded.len() / 1024;
 
+        #[cfg(target_os = "windows")]
+        let coord_note = {
+            let scale = crate::tools::dpi::get_dpi_scale();
+            let grid_note = if draw_grid {
+                format!(
+                    " Grid overlay: lines every {}px. Labels show absolute screen coordinates \
+                     (directly usable for uia click/drag_drop x/y parameters).",
+                    grid_spacing
+                )
+            } else {
+                " Tip: use grid=true to overlay coordinate labels for precise element location.".to_string()
+            };
+            format!(
+                "\nScreen coords: image origin at ({},{}) on screen. \
+                 DPI scale: {:.2}x. Image pixels = logical screen coordinates \
+                 (same coordinate system as uia click/drag_drop x/y parameters, \
+                 no conversion needed).{}",
+                origin_x, origin_y,
+                scale,
+                grid_note,
+            )
+        };
+        #[cfg(not(target_os = "windows"))]
+        let coord_note = String::new();
+
         let image_data = if media_type == "image/png" {
             ImageData::png(b64)
         } else {
@@ -375,8 +447,136 @@ impl ScreenTool {
         };
 
         Ok(ToolResult::ok(format!(
-            "Screenshot captured: {}x{} pixels, {} KB ({})",
-            width, height, size_kb, media_type
+            "Screenshot: {}x{} px, {} KB ({}){}",
+            width, height, size_kb, media_type, coord_note
         )).with_image(image_data))
+    }
+
+    /// Draw a coordinate grid on an RGBA image.
+    /// Grid lines are semi-transparent white/black. Labels show absolute screen coords.
+    fn draw_coordinate_grid(
+        &self,
+        img: &mut image::RgbaImage,
+        origin_x: i32,
+        origin_y: i32,
+        spacing: u32,
+    ) {
+        let (w, h) = img.dimensions();
+
+        // Find the first grid line >= 0 in image space
+        let first_x = if origin_x <= 0 {
+            ((-origin_x) as u32 / spacing) * spacing
+        } else {
+            let rem = origin_x as u32 % spacing;
+            if rem == 0 { 0 } else { spacing - rem }
+        };
+        let first_y = if origin_y <= 0 {
+            ((-origin_y) as u32 / spacing) * spacing
+        } else {
+            let rem = origin_y as u32 % spacing;
+            if rem == 0 { 0 } else { spacing - rem }
+        };
+
+        // Draw vertical lines
+        let mut ix = first_x;
+        while ix < w {
+            for iy in 0..h {
+                blend_pixel(img, ix, iy, [255, 255, 255, 60]);
+                if ix > 0 { blend_pixel(img, ix - 1, iy, [0, 0, 0, 30]); }
+            }
+            ix += spacing;
+        }
+
+        // Draw horizontal lines
+        let mut iy = first_y;
+        while iy < h {
+            for ix2 in 0..w {
+                blend_pixel(img, ix2, iy, [255, 255, 255, 60]);
+                if iy > 0 { blend_pixel(img, ix2, iy - 1, [0, 0, 0, 30]); }
+            }
+            iy += spacing;
+        }
+
+        // Draw coordinate labels at grid intersections
+        let mut lx = first_x;
+        while lx < w {
+            let mut ly = first_y;
+            while ly < h {
+                let screen_x = origin_x + lx as i32;
+                let screen_y = origin_y + ly as i32;
+                let label = format!("{},{}", screen_x, screen_y);
+                draw_label(img, lx + 2, ly + 2, &label);
+                ly += spacing;
+            }
+            lx += spacing;
+        }
+    }
+}
+
+/// Alpha-blend a color onto a pixel (src-over).
+fn blend_pixel(img: &mut image::RgbaImage, x: u32, y: u32, src: [u8; 4]) {
+    if x >= img.width() || y >= img.height() { return; }
+    let dst = img.get_pixel(x, y);
+    let a = src[3] as u32;
+    let ia = 255 - a;
+    let r = (src[0] as u32 * a + dst[0] as u32 * ia) / 255;
+    let g = (src[1] as u32 * a + dst[1] as u32 * ia) / 255;
+    let b = (src[2] as u32 * a + dst[2] as u32 * ia) / 255;
+    img.put_pixel(x, y, image::Rgba([r as u8, g as u8, b as u8, 255]));
+}
+
+/// Draw a coordinate label using a scaled-up bitmap font.
+/// Scale=4 means each pixel becomes a 4×4 block → 20×28 px per char, readable after LLM compression.
+fn draw_label(img: &mut image::RgbaImage, x: u32, y: u32, text: &str) {
+    const SCALE: u32 = 4;
+    let char_w = 5 * SCALE + SCALE; // 5 cols + 1 gap
+    let char_h = 7 * SCALE + SCALE; // 7 rows + 1 pad
+    let pad = SCALE;
+    let text_w = text.len() as u32 * char_w + pad * 2;
+    let text_h = char_h + pad * 2;
+    // Dark semi-transparent background
+    for dy in 0..text_h {
+        for dx in 0..text_w {
+            blend_pixel(img, x + dx, y + dy, [0, 0, 0, 200]);
+        }
+    }
+    // Draw each character
+    for (i, ch) in text.chars().enumerate() {
+        let cx = x + pad + i as u32 * char_w;
+        let cy = y + pad;
+        draw_char_scaled(img, cx, cy, ch, [255, 255, 0, 255], SCALE);
+    }
+}
+
+/// Minimal 5×7 bitmap font for digits, comma, minus sign — rendered at SCALE×SCALE blocks.
+fn draw_char_scaled(img: &mut image::RgbaImage, x: u32, y: u32, ch: char, color: [u8; 4], scale: u32) {
+    let bitmap: u64 = match ch {
+        '0' => 0b_01110_10001_10011_10101_11001_10001_01110,
+        '1' => 0b_00100_01100_00100_00100_00100_00100_01110,
+        '2' => 0b_01110_10001_00001_00010_00100_01000_11111,
+        '3' => 0b_11111_00010_00100_00010_00001_10001_01110,
+        '4' => 0b_00010_00110_01010_10010_11111_00010_00010,
+        '5' => 0b_11111_10000_11110_00001_00001_10001_01110,
+        '6' => 0b_00110_01000_10000_11110_10001_10001_01110,
+        '7' => 0b_11111_00001_00010_00100_01000_01000_01000,
+        '8' => 0b_01110_10001_10001_01110_10001_10001_01110,
+        '9' => 0b_01110_10001_10001_01111_00001_00010_01100,
+        ',' => 0b_00000_00000_00000_00000_00110_00110_00100,
+        '-' => 0b_00000_00000_00000_11111_00000_00000_00000,
+        ' ' => 0,
+        _   => 0b_01110_10001_10001_11111_10001_10001_10001,
+    };
+    for row in 0..7u32 {
+        for col in 0..5u32 {
+            let bit_pos = 34 - (row * 5 + col);
+            if (bitmap >> bit_pos) & 1 == 1 {
+                // Fill a scale×scale block for each lit pixel
+                for dy in 0..scale {
+                    for dx in 0..scale {
+                        blend_pixel(img, x + col * scale + dx, y + row * scale + dy, color);
+                    }
+                }
+            }
+        }
     }
 }

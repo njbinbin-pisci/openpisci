@@ -201,7 +201,7 @@ pub async fn execute_task(
         let _ = db.record_task_run(&task_id);
     }
 
-    let (provider, model, api_key, base_url, workspace_root, max_tokens, policy_mode, tool_rate_limit_per_minute, tool_settings, max_iterations) = {
+    let (provider, model, api_key, base_url, workspace_root, max_tokens, policy_mode, tool_rate_limit_per_minute, tool_settings, max_iterations, builtin_tool_enabled, allow_outside_workspace) = {
         let s = settings.lock().await;
         (
             s.provider.clone(),
@@ -214,6 +214,8 @@ pub async fn execute_task(
             s.tool_rate_limit_per_minute,
             std::sync::Arc::new(crate::agent::tool::ToolSettings::from_settings(&s)),
             s.max_iterations,
+            s.builtin_tool_enabled.clone(),
+            s.allow_outside_workspace,
         )
     };
 
@@ -238,8 +240,18 @@ pub async fn execute_task(
         .app_data_dir()
         .map(|d| d.join("user-tools"))
         .ok();
-    let registry = Arc::new(tools::build_registry(browser, user_tools_dir.as_deref(), Some(db.clone())));
-    let policy = Arc::new(PolicyGate::with_profile(&workspace_root, &policy_mode, tool_rate_limit_per_minute));
+    let app_data_dir_s = app.path().app_data_dir().ok();
+    let registry = Arc::new(tools::build_registry(
+        browser,
+        user_tools_dir.as_deref(),
+        Some(db.clone()),
+        Some(&builtin_tool_enabled),
+        Some(app.clone()),
+        Some(settings.clone()),
+        app_data_dir_s,
+        None, // skill_search not used in scheduled task sessions
+    ));
+    let policy = Arc::new(PolicyGate::with_profile_and_flags(&workspace_root, &policy_mode, tool_rate_limit_per_minute, allow_outside_workspace));
 
     let agent = AgentLoop {
         client,
@@ -261,6 +273,7 @@ pub async fn execute_task(
             confirm_shell: false,
             confirm_file_write: false,
         },
+        vision_override: None,
     };
 
     let ctx = ToolContext {

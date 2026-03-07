@@ -4,7 +4,8 @@
 //!   main    - 1200x800 main application window
 //!   overlay - 280x56 transparent always-on-top HUD strip
 
-use tauri::{AppHandle, Manager};
+use crate::store::AppState;
+use tauri::{AppHandle, Manager, State};
 use tracing::info;
 
 // ─── Theme-based window border color (Windows 11+) ──────────────────────────
@@ -51,19 +52,51 @@ pub async fn set_window_theme_border(_app: AppHandle, theme: String) -> Result<(
     }
 }
 
-/// Switch to minimal overlay mode: hide the main window, show the floating ball.
+/// Switch to minimal overlay mode: hide the main window, show the floating HUD.
+///
+/// Position logic:
+///   1. If a saved position exists in settings, restore it.
+///   2. Otherwise, center the overlay relative to the main window's current position.
 #[tauri::command]
-pub async fn enter_minimal_mode(app: AppHandle) -> Result<(), String> {
+pub async fn enter_minimal_mode(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let main = app.get_webview_window("main")
         .ok_or("Main window not found")?;
     let overlay = app.get_webview_window("overlay")
         .ok_or("Overlay window not found")?;
 
+    // Determine overlay position
+    let (ox, oy) = {
+        let settings = state.settings.lock().await;
+        if let (Some(x), Some(y)) = (settings.overlay_x, settings.overlay_y) {
+            (x, y)
+        } else {
+            // First launch: center overlay at the bottom-center of the main window
+            if let Ok(pos) = main.outer_position() {
+                if let Ok(size) = main.outer_size() {
+                    let cx = pos.x + (size.width as i32) / 2 - 140; // 280/2
+                    let cy = pos.y + (size.height as i32) - 80;      // near bottom
+                    (cx.max(0), cy.max(0))
+                } else {
+                    (100, 100)
+                }
+            } else {
+                (100, 100)
+            }
+        }
+    };
+
+    overlay
+        .set_position(tauri::PhysicalPosition::new(ox, oy))
+        .map_err(|e| e.to_string())?;
+
     main.hide().map_err(|e| e.to_string())?;
     overlay.show().map_err(|e| e.to_string())?;
     overlay.set_always_on_top(true).map_err(|e| e.to_string())?;
 
-    info!("Entered minimal mode");
+    info!("Entered minimal mode at ({}, {})", ox, oy);
     Ok(())
 }
 
@@ -99,4 +132,17 @@ pub async fn set_overlay_position(app: AppHandle, x: i32, y: i32) -> Result<(), 
     overlay
         .set_position(tauri::PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())
+}
+
+/// Persist the overlay window position to settings so it survives restarts.
+#[tauri::command]
+pub async fn save_overlay_position(
+    state: State<'_, AppState>,
+    x: i32,
+    y: i32,
+) -> Result<(), String> {
+    let mut settings = state.settings.lock().await;
+    settings.overlay_x = Some(x);
+    settings.overlay_y = Some(y);
+    settings.save().map_err(|e| e.to_string())
 }

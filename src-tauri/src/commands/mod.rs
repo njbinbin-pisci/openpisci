@@ -1,7 +1,9 @@
 pub mod audit;
 pub mod chat;
+pub mod debug;
 pub mod fish;
 pub mod gateway;
+pub mod mcp;
 pub mod memory;
 pub mod permission;
 pub mod scheduler;

@@ -7,8 +7,11 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+#[cfg(target_os = "windows")]
+use super::elevate;
+
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
-const MAX_OUTPUT_BYTES: usize = 100 * 1024; // 100 KB
+const MAX_OUTPUT_BYTES: usize = 200 * 1024; // 200 KB
 
 pub struct ShellTool;
 
@@ -17,9 +20,19 @@ impl Tool for ShellTool {
     fn name(&self) -> &str { "shell" }
 
     fn description(&self) -> &str {
-        "Execute a shell command. On Windows, commands run via PowerShell. \
-         Returns stdout, stderr, and exit code. \
-         Working directory defaults to the workspace root."
+        "Execute a shell command on Windows. By default uses 64-bit PowerShell. \
+         Use `interpreter: \"powershell32\"` for 32-bit PowerShell (required for legacy COM/ActiveX components). \
+         Use `interpreter: \"cmd\"` for cmd.exe (useful for dir, reg, findstr, etc.). \
+         Use `elevated: true` to run with administrator privileges — Windows will show a UAC consent dialog \
+         for the user to approve. Use elevated when you get 'Access Denied' or need to write to system directories. \
+         The working directory defaults to C:\\ (not the workspace root) so absolute paths always work. \
+         Always returns exit code + stdout + stderr so you can judge success yourself. \
+         Tips: \
+         - To find files: `cmd /c dir C:\\SomeDir /s /b` \
+         - To query registry: `reg query HKLM\\SOFTWARE\\Classes /f keyword /s` \
+         - To check 32-bit COM: use powershell32 and New-Object -ComObject ProgID \
+         - To list C:\\ root dirs: `cmd /c dir C:\\ /ad /b` \
+         - Needs admin (e.g. install software, write to Program Files, modify system registry): use elevated=true"
     }
 
     fn input_schema(&self) -> Value {
@@ -30,13 +43,26 @@ impl Tool for ShellTool {
                     "type": "string",
                     "description": "The command to execute"
                 },
+                "interpreter": {
+                    "type": "string",
+                    "enum": ["powershell", "powershell32", "cmd"],
+                    "description": "Interpreter to use. 'powershell' = 64-bit PS (default). 'powershell32' = 32-bit PS (use for legacy COM/ActiveX). 'cmd' = cmd.exe (use for dir/reg/findstr/where)."
+                },
+                "elevated": {
+                    "type": "boolean",
+                    "description": "Run with administrator privileges. Windows will show a UAC consent dialog. Use when you get 'Access Denied' or need to modify system files/registry."
+                },
                 "cwd": {
                     "type": "string",
-                    "description": "Working directory (defaults to workspace root)"
+                    "description": "Working directory. Defaults to C:\\ so absolute paths always resolve correctly."
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds (default 120)"
+                    "description": "Timeout in seconds (default 120). For elevated commands, includes UAC dialog wait time — set higher if user may need time to respond."
+                },
+                "env": {
+                    "type": "object",
+                    "description": "Extra environment variables to set (key-value pairs)"
                 }
             },
             "required": ["command"]
@@ -51,41 +77,62 @@ impl Tool for ShellTool {
             None => return Ok(ToolResult::err("Missing required parameter: command")),
         };
 
+        // Default cwd to C:\ on Windows so absolute paths always work.
+        // Workspace root is often a project subdirectory that has nothing to do with the task.
         let cwd = if let Some(cwd_str) = input["cwd"].as_str() {
-            let p = if std::path::Path::new(cwd_str).is_absolute() {
+            if std::path::Path::new(cwd_str).is_absolute() {
                 std::path::PathBuf::from(cwd_str)
             } else {
                 ctx.workspace_root.join(cwd_str)
-            };
-            p
+            }
         } else {
-            ctx.workspace_root.clone()
+            #[cfg(target_os = "windows")]
+            { std::path::PathBuf::from("C:\\") }
+            #[cfg(not(target_os = "windows"))]
+            { std::path::PathBuf::from("/") }
         };
 
-        // Ensure cwd exists
         if !cwd.exists() {
-            std::fs::create_dir_all(&cwd)?;
+            let _ = std::fs::create_dir_all(&cwd);
         }
 
         let timeout_secs = input["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let interpreter = input["interpreter"].as_str().unwrap_or("powershell");
+        let elevated = input["elevated"].as_bool().unwrap_or(false);
 
-        // Force UTF-8 output so Chinese/CJK filenames and content are not garbled.
+        // Elevated path: use UAC ShellExecute runas + temp file bridge
         #[cfg(target_os = "windows")]
-        let utf8_command = format!(
-            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
-             $OutputEncoding = [System.Text.Encoding]::UTF8; \
-             chcp 65001 | Out-Null; \
-             {}",
-            command
-        );
+        if elevated {
+            let arch = match interpreter {
+                "powershell32" => "x86",
+                _ => "x64",
+            };
+            // For elevated, timeout includes UAC dialog wait — use a longer default
+            let elev_timeout = input["timeout"].as_u64().unwrap_or(180);
+            return match elevate::run_elevated_powershell(command, arch, elev_timeout).await {
+                Ok(r) => {
+                    let mut parts = vec![
+                        format!("Exit code: {} (ran as Administrator)", r.exit_code),
+                    ];
+                    if !r.stdout.is_empty() {
+                        parts.push(format!("STDOUT:\n{}", truncate_output(&r.stdout, MAX_OUTPUT_BYTES * 3 / 4)));
+                    }
+                    if !r.stderr.is_empty() {
+                        parts.push(format!("STDERR:\n{}", truncate_output(&r.stderr, MAX_OUTPUT_BYTES / 4)));
+                    }
+                    if r.stdout.is_empty() && r.stderr.is_empty() {
+                        parts.push("(no output)".to_string());
+                    }
+                    Ok(ToolResult::ok(parts.join("\n\n")))
+                }
+                Err(e) => Ok(ToolResult::err(format!(
+                    "Elevated execution failed: {}", e
+                ))),
+            };
+        }
 
-        // Build command
         #[cfg(target_os = "windows")]
-        let mut cmd = {
-            let mut c = Command::new("powershell");
-            c.args(["-NoProfile", "-NonInteractive", "-Command", &utf8_command]);
-            c
-        };
+        let mut cmd = build_windows_cmd(interpreter, command);
 
         #[cfg(not(target_os = "windows"))]
         let mut cmd = {
@@ -99,48 +146,89 @@ impl Tool for ShellTool {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        let result = timeout(
-            Duration::from_secs(timeout_secs),
-            cmd.output(),
-        ).await;
+        // Apply extra env vars
+        if let Some(env_obj) = input["env"].as_object() {
+            for (k, v) in env_obj {
+                if let Some(val) = v.as_str() {
+                    cmd.env(k, val);
+                }
+            }
+        }
 
-        match result {
+        let run_result = timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
+
+        match run_result {
             Err(_) => Ok(ToolResult::err(format!(
-                "Command timed out after {} seconds: {}",
-                timeout_secs, command
+                "Command timed out after {}s. Consider breaking it into smaller steps or increasing timeout.",
+                timeout_secs
             ))),
-            Ok(Err(e)) => Ok(ToolResult::err(format!("Failed to execute command: {}", e))),
+            Ok(Err(e)) => Ok(ToolResult::err(format!("Failed to spawn process: {}", e))),
             Ok(Ok(output)) => {
-                let stdout = truncate_output(
-                    &String::from_utf8_lossy(&output.stdout),
-                    MAX_OUTPUT_BYTES / 2,
-                );
-                let stderr = truncate_output(
-                    &String::from_utf8_lossy(&output.stderr),
-                    MAX_OUTPUT_BYTES / 2,
-                );
+                let stdout = truncate_output(&String::from_utf8_lossy(&output.stdout), MAX_OUTPUT_BYTES * 3 / 4);
+                let stderr = truncate_output(&String::from_utf8_lossy(&output.stderr), MAX_OUTPUT_BYTES / 4);
                 let exit_code = output.status.code().unwrap_or(-1);
 
-                let mut result_text = format!("Exit code: {}\n", exit_code);
+                // Build a clear, structured result the LLM can parse
+                let mut parts = vec![format!("Exit code: {}", exit_code)];
                 if !stdout.is_empty() {
-                    result_text.push_str(&format!("\nSTDOUT:\n{}", stdout));
+                    parts.push(format!("STDOUT:\n{}", stdout));
                 }
                 if !stderr.is_empty() {
-                    result_text.push_str(&format!("\nSTDERR:\n{}", stderr));
+                    parts.push(format!("STDERR:\n{}", stderr));
+                }
+                if stdout.is_empty() && stderr.is_empty() {
+                    parts.push("(no output)".to_string());
                 }
 
-                let is_error = exit_code != 0;
-                if is_error {
-                    Ok(ToolResult::err(result_text))
-                } else {
-                    Ok(ToolResult::ok(result_text))
-                }
+                // Always ok — let the LLM read exit code and decide
+                Ok(ToolResult::ok(parts.join("\n\n")))
             }
         }
     }
 }
 
+#[cfg(target_os = "windows")]
+fn build_windows_cmd(interpreter: &str, command: &str) -> Command {
+    // UTF-8 preamble for PowerShell to avoid garbled CJK output
+    let utf8_preamble = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\
+                         $OutputEncoding=[System.Text.Encoding]::UTF8;\
+                         chcp 65001 | Out-Null; ";
+
+    // CREATE_NO_WINDOW: prevents a blue console window from flashing on screen
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    match interpreter {
+        "powershell32" => {
+            // 32-bit PowerShell — required for legacy COM/ActiveX (WOW6432Node) components
+            let ps32 = r"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe";
+            let full_cmd = format!("{}{}", utf8_preamble, command);
+            let mut c = Command::new(ps32);
+            c.args(["-NoProfile", "-NonInteractive", "-Command", &full_cmd])
+             .creation_flags(CREATE_NO_WINDOW);
+            c
+        }
+        "cmd" => {
+            // cmd.exe — best for dir, reg, findstr, where, assoc, ftype, etc.
+            // Wrap in chcp 65001 for UTF-8
+            let full_cmd = format!("chcp 65001 >nul 2>&1 & {}", command);
+            let mut c = Command::new("cmd");
+            c.args(["/C", &full_cmd])
+             .creation_flags(CREATE_NO_WINDOW);
+            c
+        }
+        _ => {
+            // Default: 64-bit PowerShell
+            let full_cmd = format!("{}{}", utf8_preamble, command);
+            let mut c = Command::new("powershell");
+            c.args(["-NoProfile", "-NonInteractive", "-Command", &full_cmd])
+             .creation_flags(CREATE_NO_WINDOW);
+            c
+        }
+    }
+}
+
 fn truncate_output(s: &str, max_bytes: usize) -> String {
+    let s = s.trim();
     if s.len() <= max_bytes {
         return s.to_string();
     }

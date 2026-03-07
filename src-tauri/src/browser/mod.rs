@@ -111,23 +111,32 @@ impl BrowserManager {
         }
 
         let chrome_path = self.ensure_chrome().await?;
-        let is_edge = chrome_path.to_string_lossy().to_lowercase().contains("msedge")
-            || chrome_path.to_string_lossy().to_lowercase().contains("edge");
-        info!("Launching browser (edge={}): {}", is_edge, chrome_path.display());
+        let chrome_path_str = chrome_path.display().to_string();
+        let is_edge = chrome_path_str.to_lowercase().contains("msedge")
+            || chrome_path_str.to_lowercase().contains("edge");
+        info!("Launching browser: headless={} edge={} path={}", self.options.headless, is_edge, chrome_path_str);
 
         let mut builder = BrowserConfig::builder()
             .chrome_executable(chrome_path)
             .window_size(self.options.window_width, self.options.window_height)
             .arg("--no-sandbox")
             .arg("--disable-dev-shm-usage")
-            .arg("--disable-gpu")
             .arg("--no-first-run")
             .arg("--disable-background-networking")
             .arg("--disable-client-side-phishing-detection")
             .arg("--disable-default-apps")
             .arg("--disable-extensions")
-            .arg("--disable-sync");
-        
+            .arg("--disable-sync")
+            // Suppress automation banner and improve CDP stability
+            .arg("--disable-blink-features=AutomationControlled")
+            .arg("--disable-infobars");
+
+        // --disable-gpu can cause CDP response decode errors with Edge headless on some versions;
+        // only apply it on non-Edge browsers where it is safe.
+        if !is_edge {
+            builder = builder.arg("--disable-gpu");
+        }
+
         // Extra flags for Edge to suppress SmartScreen and first-run UX
         if is_edge {
             builder = builder
@@ -136,26 +145,49 @@ impl BrowserManager {
                 .arg("--disable-notifications");
         }
 
-        // with_head() enables headed (visible) mode; omitting it = headless
+        // with_head() enables headed (visible) mode; omitting it = headless.
+        // --new-window forces a visible window on Windows; --start-maximized brings it to front.
         if !self.options.headless {
-            builder = builder.with_head();
+            builder = builder
+                .with_head()
+                .arg("--new-window")
+                .arg("--start-maximized");
         }
 
         if let Some(ref proxy) = self.options.proxy {
             builder = builder.arg(format!("--proxy-server={}", proxy));
         }
 
-        if let Some(ref udd) = self.options.user_data_dir {
-            builder = builder.user_data_dir(udd);
-        }
+        // Always use an isolated user-data-dir so Chrome doesn't reuse an existing
+        // running instance (Chrome's single-instance lock would cause the new process
+        // to hand off to the existing one and exit immediately, breaking CDP).
+        // Use a random temp directory to avoid stale lock files from previous crashes.
+        let udd = if let Some(ref udd) = self.options.user_data_dir {
+            udd.clone()
+        } else {
+            // Unique temp profile per launch — avoids SingletonLock conflicts entirely
+            let unique = format!("pisci-chrome-{}", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis());
+            std::env::temp_dir().join(unique)
+        };
+        std::fs::create_dir_all(&udd).ok();
+        builder = builder.user_data_dir(udd.clone());
 
         let config = builder
             .build()
             .map_err(|e| anyhow::anyhow!("BrowserConfig error: {}", e))?;
 
+        let udd_str = udd.display().to_string();
         let (browser, handler) = Browser::launch(config)
             .await
-            .context("Failed to launch Chrome")?;
+            .map_err(|e| anyhow::anyhow!(
+                "Failed to launch Chrome (path={}, udd={}): {}",
+                chrome_path_str,
+                udd_str,
+                e
+            ))?;
 
         // Spawn handler loop (required by chromiumoxide to process CDP events)
         let handle = tokio::spawn(async move {

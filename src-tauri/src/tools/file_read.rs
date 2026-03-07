@@ -13,8 +13,12 @@ impl Tool for FileReadTool {
     fn name(&self) -> &str { "file_read" }
 
     fn description(&self) -> &str {
-        "Read the contents of a file. For text files, returns content with line numbers. \
-         For images (png/jpg/gif/webp), returns base64-encoded data."
+        "Read the contents of a known file. Returns text with line numbers, or base64 for images. \
+         IMPORTANT: This tool reads FILE CONTENT only — do NOT use it to list directory contents. \
+         To list files in a directory, use: shell with interpreter=cmd, command='dir C:\\SomePath /b'. \
+         If you get 'permission denied', use shell with 'Get-Content \"path\"' or 'type \"path\"' instead. \
+         Always use absolute paths (e.g. C:\\Users\\name\\file.txt). \
+         Use offset/limit for large files to avoid reading the whole file at once."
     }
 
     fn input_schema(&self) -> Value {
@@ -23,15 +27,15 @@ impl Tool for FileReadTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Absolute or workspace-relative path to the file"
+                    "description": "Absolute path to the file (e.g. C:\\Users\\name\\file.txt). Relative paths are resolved from workspace root."
                 },
                 "offset": {
                     "type": "integer",
-                    "description": "Line number to start reading from (1-indexed, optional)"
+                    "description": "Line number to start reading from (1-indexed). Use with limit to read large files in chunks."
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum number of lines to read (optional)"
+                    "description": "Maximum number of lines to read. Omit to read the whole file (up to 256KB)."
                 }
             },
             "required": ["path"]
@@ -89,19 +93,32 @@ impl Tool for FileReadTool {
             )));
         }
 
-        // Text file
-        if metadata.len() > MAX_TEXT_BYTES {
+        let offset = input["offset"].as_u64().unwrap_or(1).max(1) as usize;
+        let limit = input["limit"].as_u64().map(|l| l as usize);
+
+        // For large files, only reject if no offset/limit is specified
+        if metadata.len() > MAX_TEXT_BYTES && limit.is_none() && offset <= 1 {
             return Ok(ToolResult::err(format!(
-                "File too large ({} bytes, max {} bytes). Use offset/limit parameters.",
+                "File too large ({} bytes, max {} bytes). Use offset/limit parameters to read in chunks. \
+                 Example: offset=1, limit=200 reads the first 200 lines.",
                 metadata.len(), MAX_TEXT_BYTES
             )));
         }
 
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| anyhow::anyhow!("Failed to read file: {}", e))?;
-
-        let offset = input["offset"].as_u64().unwrap_or(1).max(1) as usize;
-        let limit = input["limit"].as_u64().map(|l| l as usize);
+        let content = std::fs::read_to_string(&path).map_err(|e| {
+            let hint = if e.kind() == std::io::ErrorKind::PermissionDenied {
+                format!(
+                    "Failed to read file: {} (os error 5 - 拒绝访问)\n\
+                     提示：该文件受系统权限保护，无法直接读取。\
+                     请改用 shell 工具（如 `Get-Content` 或 `type`）以当前用户权限读取，\
+                     或确认文件路径是否正确。",
+                    path.display()
+                )
+            } else {
+                format!("Failed to read file: {}", e)
+            };
+            anyhow::anyhow!("{}", hint)
+        })?;
 
         let lines: Vec<&str> = content.lines().collect();
         let total = lines.len();

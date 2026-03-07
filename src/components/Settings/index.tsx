@@ -1,8 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { RootState, settingsActions } from "../../store";
-import { settingsApi, gatewayApi, Settings as SettingsData, ChannelInfo } from "../../services/tauri";
+import { settingsApi, gatewayApi, systemApi, Settings as SettingsData, ChannelInfo, RuntimeCheckItem, SshServerConfig } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
 
 const DEFAULT_SETTINGS: SettingsData = {
@@ -14,8 +16,10 @@ const DEFAULT_SETTINGS: SettingsData = {
   model: "claude-sonnet-4-5",
   custom_base_url: "",
   workspace_root: "",
+  allow_outside_workspace: false,
   language: "zh",
   max_tokens: 4096,
+  context_window: 0,
   confirm_shell_commands: true,
   confirm_file_writes: true,
   browser_headless: true,
@@ -56,12 +60,19 @@ const DEFAULT_SETTINGS: SettingsData = {
   smtp_from_name: "",
   email_enabled: false,
   // User Tool configs
+  minimax_api_key: "",
+  zhipu_api_key: "",
+  kimi_api_key: "",
   user_tool_configs: {},
+  // Builtin tool switches
+  builtin_tool_enabled: {},
   // Agent config
   max_iterations: 50,
   heartbeat_enabled: false,
   heartbeat_interval_mins: 30,
   heartbeat_prompt: "检查是否有待处理任务，如无则回复 HEARTBEAT_OK",
+  vision_enabled: false,
+  ssh_servers: [],
 };
 
 interface SettingsProps {
@@ -80,23 +91,38 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
   const [showKeys, setShowKeys] = useState(false);
   const [gatewayStatus, setGatewayStatus] = useState<ChannelInfo[]>([]);
   const [gatewayConnecting, setGatewayConnecting] = useState(false);
+  const [gatewayDisconnecting, setGatewayDisconnecting] = useState(false);
   const [gatewayMsg, setGatewayMsg] = useState<string | null>(null);
+  const [runtimes, setRuntimes] = useState<RuntimeCheckItem[]>([]);
+  const [runtimesLoading, setRuntimesLoading] = useState(false);
+  const [runtimesSettingKey, setRuntimesSettingKey] = useState<string | null>(null);
+
+  // SSH Servers
+  const [sshServers, setSshServers] = useState<SshServerConfig[]>([]);
+  const [sshEditIdx, setSshEditIdx] = useState<number | null>(null);
+  const [sshEditForm, setSshEditForm] = useState<SshServerConfig>({ id: "", label: "", host: "", port: 22, username: "", password: "", private_key: "" });
+  const [sshShowPassword, setSshShowPassword] = useState(false);
 
   useEffect(() => {
     if (settings) {
       setForm({ ...DEFAULT_SETTINGS, ...settings });
+      setSshServers(settings.ssh_servers ?? []);
     }
   }, [settings]);
 
+  // Refresh gateway status on mount and whenever settings change (catches post-restart state)
   useEffect(() => {
-    gatewayApi.list().then((r) => setGatewayStatus(r.channels)).catch(() => {});
-  }, []);
+    gatewayApi.list().then((r) => setGatewayStatus(r.channels)).catch(() => setGatewayStatus([]));
+  }, [settings]);
 
   const handleGatewayConnect = async () => {
     setGatewayConnecting(true);
     setGatewayMsg(null);
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(t("settings.channelTimeout"))), 20000)
+    );
     try {
-      const r = await gatewayApi.connect();
+      const r = await Promise.race([gatewayApi.connect(), timeout]);
       setGatewayStatus(r.channels);
       setGatewayMsg(t("settings.channelConnected"));
     } catch (e) {
@@ -107,14 +133,59 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
   };
 
   const handleGatewayDisconnect = async () => {
+    setGatewayDisconnecting(true);
+    setGatewayMsg(null);
     try {
       await gatewayApi.disconnect();
       setGatewayStatus([]);
       setGatewayMsg(t("settings.channelDisconnected"));
     } catch (e) {
       setGatewayMsg(t("settings.channelDisconnectFailed", { error: String(e) }));
+    } finally {
+      setGatewayDisconnecting(false);
     }
   };
+
+  const handleCheckRuntimes = useCallback(async () => {
+    setRuntimesLoading(true);
+    try {
+      const items = await systemApi.checkRuntimes();
+      setRuntimes(items);
+    } catch {
+      // ignore
+    } finally {
+      setRuntimesLoading(false);
+    }
+  }, []);
+
+  const handleSelectRuntimePath = useCallback(async (runtimeKey: string, runtimeName: string) => {
+    setRuntimesSettingKey(runtimeKey);
+    try {
+      const exeFilter = runtimeName === "Node.js" || runtimeName === "npm"
+        ? [{ name: "Executable", extensions: ["exe", "cmd", "bat", "*"] }]
+        : [{ name: "Executable", extensions: ["exe", "*"] }];
+      const selected = await openFileDialog({ multiple: false, filters: exeFilter });
+      if (!selected) return;
+      const items = await systemApi.setRuntimePath(runtimeKey, selected as string);
+      setRuntimes(items);
+    } catch {
+      // ignore
+    } finally {
+      setRuntimesSettingKey(null);
+    }
+  }, []);
+
+  const handleClearRuntimePath = useCallback(async (runtimeKey: string) => {
+    setRuntimesSettingKey(runtimeKey);
+    try {
+      const items = await systemApi.setRuntimePath(runtimeKey, "");
+      setRuntimes(items);
+    } catch {
+      // ignore
+    } finally {
+      setRuntimesSettingKey(null);
+    }
+  }, []);
 
   const statusBadge = (s: ChannelInfo["status"]) => {
     if (s === "Connected") return <span style={{ color: "#28a745", fontWeight: 600 }}>● {t("common.connected")}</span>;
@@ -125,10 +196,15 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
   };
 
   const handleSave = async () => {
+    // Validate: workspace_root is required unless allow_outside_workspace is enabled
+    if (!form.allow_outside_workspace && !(form.workspace_root ?? "").trim()) {
+      setSaveError(t("settings.workspaceRootRequired"));
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
-      const updated = await settingsApi.save(form);
+      const updated = await settingsApi.save({ ...form, ssh_servers: sshServers });
       dispatch(settingsActions.setSettings(updated));
       dispatch(settingsActions.setConfigured(updated.is_configured ?? !!(updated.anthropic_api_key || updated.openai_api_key || updated.deepseek_api_key || updated.qwen_api_key)));
       // 立即切换语言
@@ -174,7 +250,10 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
               <option value="anthropic">Anthropic (Claude)</option>
               <option value="openai">OpenAI (GPT)</option>
               <option value="deepseek">DeepSeek（深度求索）</option>
-              <option value="qwen">通义千问 (Qwen)</option>
+              <option value="qwen">阿里百炼（通义千问 Qwen）</option>
+              <option value="minimax">MiniMax（稀宇科技）</option>
+              <option value="zhipu">智谱 AI（GLM / Z.AI）</option>
+              <option value="kimi">Kimi（月之暗面 Moonshot）</option>
               <option value="custom">{t("settings.customApiKey")} (OpenAI {t("common.enable")})</option>
             </select>
           </div>
@@ -186,10 +265,26 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
                 form.provider === "anthropic" ? "claude-sonnet-4-5" :
                 form.provider === "openai" ? "gpt-4o" :
                 form.provider === "deepseek" ? "deepseek-chat" :
-                form.provider === "qwen" ? "qwen-max" :
+                form.provider === "qwen" ? "qwen3-max" :
+                form.provider === "minimax" ? "MiniMax-M2.5" :
+                form.provider === "zhipu" ? "glm-5" :
+                form.provider === "kimi" ? "kimi-k2.5" :
                 t("settings.modelPlaceholder")
               }
             />
+          </div>
+
+          <div className="form-group">
+            <label className="label" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={!!form.vision_enabled}
+                onChange={(e) => update("vision_enabled", e.target.checked)}
+                style={{ width: 16, height: 16, cursor: "pointer" }}
+              />
+              {t("settings.visionEnabled")}
+            </label>
+            <p className="field-hint" style={{ marginTop: 4 }}>{t("settings.visionEnabledHint")}</p>
           </div>
 
           {(form.provider === "anthropic" || !form.provider) && (
@@ -229,7 +324,44 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
               <input className="input" type={showKeys ? "text" : "password"} value={form.qwen_api_key ?? ""}
                 onChange={(e) => update("qwen_api_key", e.target.value)} placeholder="sk-..." />
               <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-                <a href="https://dashscope.aliyuncs.com" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{t("settings.qwenKeyHelp")}</a>
+                Base URL: <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code>
+                {" · "}<a href="https://bailian.console.aliyun.com" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{t("settings.qwenKeyHelp")}</a>
+              </p>
+            </div>
+          )}
+
+          {form.provider === "minimax" && (
+            <div className="form-group">
+              <label className="label">{t("settings.minimaxKey")}</label>
+              <input className="input" type={showKeys ? "text" : "password"} value={form.minimax_api_key ?? ""}
+                onChange={(e) => update("minimax_api_key", e.target.value)} placeholder="eyJ..." />
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                Base URL: <code>https://api.minimax.io/v1</code>
+                {" · "}<a href="https://platform.minimax.io" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{t("settings.minimaxKeyHelp")}</a>
+              </p>
+            </div>
+          )}
+
+          {form.provider === "zhipu" && (
+            <div className="form-group">
+              <label className="label">{t("settings.zhipuKey")}</label>
+              <input className="input" type={showKeys ? "text" : "password"} value={form.zhipu_api_key ?? ""}
+                onChange={(e) => update("zhipu_api_key", e.target.value)} placeholder="API Key..." />
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                Base URL: <code>https://api.z.ai/api/paas/v4</code>
+                {" · "}<a href="https://z.ai" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{t("settings.zhipuKeyHelp")}</a>
+              </p>
+            </div>
+          )}
+
+          {form.provider === "kimi" && (
+            <div className="form-group">
+              <label className="label">{t("settings.kimiKey")}</label>
+              <input className="input" type={showKeys ? "text" : "password"} value={form.kimi_api_key ?? ""}
+                onChange={(e) => update("kimi_api_key", e.target.value)} placeholder="sk-..." />
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                Base URL: <code>https://api.moonshot.cn/v1</code>
+                {" · "}<a href="https://platform.moonshot.cn" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{t("settings.kimiKeyHelp")}</a>
               </p>
             </div>
           )}
@@ -251,7 +383,21 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
 
           <div className="form-group">
             <label className="label">{t("settings.maxTokens")}</label>
-            <input className="input" type="number" value={form.max_tokens ?? 4096} onChange={(e) => update("max_tokens", parseInt(e.target.value))} min={256} max={32768} />
+            <input className="input" type="number" value={form.max_tokens ?? 4096} onChange={(e) => update("max_tokens", parseInt(e.target.value))} min={256} max={65536} />
+            <span className="hint">{t("settings.maxTokensHint")}</span>
+          </div>
+          <div className="form-group">
+            <label className="label">{t("settings.contextWindow")}</label>
+            <input
+              className="input"
+              type="number"
+              value={form.context_window ?? 0}
+              onChange={(e) => update("context_window", parseInt(e.target.value) || 0)}
+              min={0}
+              max={2000000}
+              step={1000}
+            />
+            <span className="hint">{t("settings.contextWindowHint")}</span>
           </div>
         </section>
 
@@ -262,8 +408,43 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
           </h2>
           <div className="form-group">
             <label className="label">{t("settings.workspaceRoot")}</label>
-            <input className="input" value={form.workspace_root ?? ""} onChange={(e) => update("workspace_root", e.target.value)} placeholder={t("settings.workspaceRootPlaceholder")} />
-            <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{t("settings.workspaceRootHelp")}</p>
+            <input
+              className="input"
+              value={form.workspace_root ?? ""}
+              onChange={(e) => update("workspace_root", e.target.value)}
+              placeholder={t("settings.workspaceRootPlaceholder")}
+              style={!form.allow_outside_workspace && !(form.workspace_root ?? "").trim()
+                ? { borderColor: "var(--color-warning, #f59e0b)" }
+                : undefined}
+            />
+            {!form.allow_outside_workspace && !(form.workspace_root ?? "").trim() && (
+              <p style={{ fontSize: 12, color: "var(--color-warning, #f59e0b)", marginTop: 4 }}>
+                {t("settings.workspaceRootRequired")}
+              </p>
+            )}
+            {form.allow_outside_workspace && (form.workspace_root ?? "").trim() && (
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{t("settings.workspaceRootHelp")}</p>
+            )}
+            {!form.allow_outside_workspace && (form.workspace_root ?? "").trim() && (
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{t("settings.workspaceRootHelp")}</p>
+            )}
+          </div>
+          <div className="form-group" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>{t("settings.allowOutsideWorkspace")}</div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>{t("settings.allowOutsideWorkspaceDesc")}</div>
+              {form.allow_outside_workspace && (
+                <div style={{ fontSize: 12, color: "var(--color-warning, #f59e0b)", marginTop: 6, padding: "6px 10px", background: "rgba(245,158,11,0.08)", borderRadius: 6, border: "1px solid rgba(245,158,11,0.3)" }}>
+                  {t("settings.allowOutsideWorkspaceWarning")}
+                </div>
+              )}
+            </div>
+            <input
+              type="checkbox"
+              checked={form.allow_outside_workspace ?? false}
+              onChange={(e) => update("allow_outside_workspace", e.target.checked)}
+              style={{ marginTop: 2, flexShrink: 0 }}
+            />
           </div>
         </section>
 
@@ -678,11 +859,20 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
           </div>
 
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-primary" onClick={handleGatewayConnect} disabled={gatewayConnecting}>
+            <button className="btn btn-primary" onClick={handleGatewayConnect} disabled={gatewayConnecting || gatewayDisconnecting}>
               {gatewayConnecting ? t("common.connecting") : t("settings.connectChannels")}
             </button>
-            <button className="btn" onClick={handleGatewayDisconnect} style={{ background: "var(--bg-secondary)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>
-              {t("settings.disconnectAll")}
+            <button
+              className="btn"
+              onClick={handleGatewayDisconnect}
+              disabled={
+                gatewayDisconnecting ||
+                gatewayConnecting ||
+                !gatewayStatus.some((ch) => ch.status === "Connected" || ch.status === "Connecting")
+              }
+              style={{ border: "1px solid var(--border)" }}
+            >
+              {gatewayDisconnecting ? t("common.disconnecting") : t("settings.disconnectAll")}
             </button>
             <button className="btn" onClick={() => setShowKeys(!showKeys)} style={{ background: "none", border: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 12 }}>
               {showKeys ? t("common.hideKeys") : t("common.showKeys")}
@@ -751,6 +941,210 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
               </>
             )}
           </div>
+        </section>
+
+        {/* ── SSH Servers ───────────────────────────────────────────────── */}
+        <section className="settings-section">
+          <h3 className="settings-section-title">{t("settings.sshSection")}</h3>
+          <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>
+            {t("settings.sshSectionDesc")}
+          </p>
+
+          {/* Server list */}
+          {sshServers.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+              {sshServers.map((srv, idx) => (
+                <div key={srv.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-secondary)" }}>
+                  <span style={{ fontSize: 16 }}>🖥️</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }}>
+                      {srv.label || srv.id}
+                      <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 11, marginLeft: 8 }}>
+                        [{srv.id}]
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                      {srv.username}@{srv.host}:{srv.port}
+                      {" · "}
+                      {srv.password ? t("settings.sshAuthPassword") : srv.private_key ? t("settings.sshAuthKey") : t("settings.sshAuthNone")}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button className="btn" style={{ fontSize: 11, padding: "3px 10px", border: "1px solid var(--border)" }}
+                      onClick={() => { setSshEditIdx(idx); setSshEditForm({ ...srv, password: "", private_key: "" }); setSshShowPassword(false); }}>
+                      {t("common.edit")}
+                    </button>
+                    <button className="btn" style={{ fontSize: 11, padding: "3px 10px", border: "1px solid #dc3545", color: "#dc3545" }}
+                      onClick={() => setSshServers(prev => prev.filter((_, i) => i !== idx))}>
+                      {t("common.delete")}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add / Edit form */}
+          {sshEditIdx !== null ? (
+            <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-secondary)" }}>
+              <div style={{ fontWeight: 600, marginBottom: 12, fontSize: 13 }}>
+                {sshEditIdx === -1 ? t("settings.sshAddServer") : t("settings.sshEditServer")}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="label">{t("settings.sshId")} *</label>
+                  <input className="input" value={sshEditForm.id} onChange={e => setSshEditForm(f => ({ ...f, id: e.target.value }))} placeholder="prod" />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="label">{t("settings.sshLabel")}</label>
+                  <input className="input" value={sshEditForm.label} onChange={e => setSshEditForm(f => ({ ...f, label: e.target.value }))} placeholder={t("settings.sshLabelPlaceholder")} />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="label">{t("settings.sshHost")} *</label>
+                  <input className="input" value={sshEditForm.host} onChange={e => setSshEditForm(f => ({ ...f, host: e.target.value }))} placeholder="192.168.1.100" />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="label">{t("settings.sshPort")}</label>
+                  <input className="input" type="number" value={sshEditForm.port} onChange={e => setSshEditForm(f => ({ ...f, port: parseInt(e.target.value) || 22 }))} />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="label">{t("settings.sshUsername")} *</label>
+                  <input className="input" value={sshEditForm.username} onChange={e => setSshEditForm(f => ({ ...f, username: e.target.value }))} placeholder="root" />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="label">
+                    {t("settings.sshPassword")}
+                    <span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 6 }}>{t("settings.sshPasswordHint")}</span>
+                  </label>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input className="input" style={{ flex: 1 }} type={sshShowPassword ? "text" : "password"} value={sshEditForm.password} onChange={e => setSshEditForm(f => ({ ...f, password: e.target.value }))} placeholder={sshEditIdx !== -1 ? t("settings.sshPasswordKeep") : ""} />
+                    <button className="btn" style={{ padding: "0 10px", border: "1px solid var(--border)" }} onClick={() => setSshShowPassword(v => !v)}>
+                      {sshShowPassword ? "🙈" : "👁️"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="form-group" style={{ marginTop: 10, marginBottom: 0 }}>
+                <label className="label">
+                  {t("settings.sshPrivateKey")}
+                  <span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 6 }}>{t("settings.sshPrivateKeyHint")}</span>
+                </label>
+                <textarea className="input" rows={3} style={{ fontFamily: "monospace", fontSize: 11 }} value={sshEditForm.private_key} onChange={e => setSshEditForm(f => ({ ...f, private_key: e.target.value }))} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----" />
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <button className="btn btn-primary" style={{ fontSize: 12 }}
+                  onClick={() => {
+                    if (!sshEditForm.id.trim() || !sshEditForm.host.trim() || !sshEditForm.username.trim()) return;
+                    if (sshEditIdx === -1) {
+                      setSshServers(prev => [...prev, sshEditForm]);
+                    } else {
+                      setSshServers(prev => prev.map((s, i) => i === sshEditIdx ? sshEditForm : s));
+                    }
+                    setSshEditIdx(null);
+                  }}>
+                  {t("common.save")}
+                </button>
+                <button className="btn" style={{ fontSize: 12, border: "1px solid var(--border)" }} onClick={() => setSshEditIdx(null)}>
+                  {t("common.cancel")}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button className="btn" style={{ fontSize: 12, padding: "6px 14px", border: "1px solid var(--border)" }}
+              onClick={() => { setSshEditIdx(-1); setSshEditForm({ id: "", label: "", host: "", port: 22, username: "", password: "", private_key: "" }); setSshShowPassword(false); }}>
+              + {t("settings.sshAddServer")}
+            </button>
+          )}
+        </section>
+
+        {/* ── Runtime Environment ───────────────────────────────────────── */}
+        <section className="settings-section">
+          <h3 className="settings-section-title">{t("settings.runtimeSection")}</h3>
+          <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>
+            {t("settings.runtimeSectionDesc")}
+          </p>
+
+          <button
+            className="btn"
+            onClick={handleCheckRuntimes}
+            disabled={runtimesLoading}
+            style={{ marginBottom: 16, border: "1px solid var(--border)", fontSize: 13 }}
+          >
+            {runtimesLoading ? t("common.loading") : t("settings.checkRuntimes")}
+          </button>
+
+          {runtimes.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {runtimes.map((item) => {
+                // Keys must match what the backend uses in runtime_paths HashMap
+                const runtimeKey = item.name === "Node.js" ? "node"
+                  : item.name === "npm" ? "npm"
+                  : item.name === "Python" ? "python"
+                  : item.name === "pip" ? "pip"
+                  : item.name === "Git" ? "git"
+                  : item.name.toLowerCase();
+                const isSetting = runtimesSettingKey === runtimeKey;
+                return (
+                  <div
+                    key={item.name}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "10px 14px",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      background: "var(--bg-secondary)",
+                    }}
+                  >
+                    <span style={{ fontSize: 16, flexShrink: 0 }}>
+                      {item.available ? "✅" : "❌"}
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }}>
+                          {item.name}
+                        </span>
+                        {item.available && item.version && (
+                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                            {item.version}
+                          </span>
+                        )}
+                        {!item.available && (
+                          <span style={{ fontSize: 11, color: "#dc3545" }}>
+                            {t("settings.runtimeNotFound")}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                        {item.hint}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      <button
+                        className="btn"
+                        onClick={() => handleSelectRuntimePath(runtimeKey, item.name)}
+                        disabled={isSetting}
+                        title={t("settings.runtimeSelectPath")}
+                        style={{ fontSize: 11, padding: "3px 10px", border: "1px solid var(--border)" }}
+                      >
+                        {isSetting ? "…" : t("settings.runtimeSelectPath")}
+                      </button>
+                      {!item.available && (
+                        <button
+                          className="btn btn-primary"
+                          onClick={() => openUrl(item.download_url).catch(() => window.open(item.download_url, "_blank"))}
+                          style={{ fontSize: 11, padding: "3px 10px" }}
+                        >
+                          {t("settings.runtimeDownload")}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </section>
       </div>
     </div>

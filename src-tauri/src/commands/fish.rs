@@ -13,6 +13,17 @@ pub struct FishWithStatus {
     pub instance: Option<FishInstance>,
 }
 
+/// Return the user fish directory path (where custom FISH.toml files should be placed).
+#[tauri::command]
+pub async fn get_fish_dir(app: AppHandle) -> Result<String, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map(|d| d.join("fish"))
+        .map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
 /// List all available Fish (built-in + user-installed), with their activation status.
 #[tauri::command]
 pub async fn list_fish(
@@ -66,7 +77,7 @@ pub async fn activate_fish(
         .get(&fish_id)
         .ok_or_else(|| format!("Fish '{}' not found", fish_id))?;
 
-    let session_title = format!("🐠 {}", def.name);
+    let session_title = def.name.clone();
     let session_id = format!("fish_{}", fish_id);
 
     let db = state.db.lock().await;
@@ -128,13 +139,19 @@ pub async fn fish_chat_send(
 
     let session_id = format!("fish_{}", fish_id);
 
-    // Get user config for this fish
+    // Get user config for this fish — also enforces that the fish must be activated first
     let user_config = {
         let db = state.db.lock().await;
-        db.get_fish_instance(&fish_id)
-            .unwrap_or(None)
-            .map(|i| i.user_config)
-            .unwrap_or_default()
+        match db.get_fish_instance(&fish_id) {
+            Ok(Some(instance)) => instance.user_config,
+            Ok(None) => {
+                return Err(format!(
+                    "Fish '{}' is not activated. Please activate it in the Fish settings page first.",
+                    fish_id
+                ));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
     };
 
     // Build fish-specific system prompt

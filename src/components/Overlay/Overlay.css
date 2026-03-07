@@ -4,15 +4,19 @@
    OverlayApp's useEffect so only the pill is visible.
    ============================================================ */
 
-/* Root fills the whole 280×56 window, transparent */
+/* Root fills the whole 280×56 window, transparent.
+   overflow: visible is critical — hidden would clip the pill's box-shadow
+   and leave a visible rectangular shadow region outside the pill. */
 .hud-root {
   width: 280px;
   height: 56px;
   position: relative;
-  background: transparent;
-  overflow: visible;  /* toasts float above */
+  background: transparent !important;
+  overflow: visible;
   user-select: none;
   -webkit-user-select: none;
+  /* Prevent any inherited background from leaking */
+  isolation: isolate;
 }
 
 /* ── Pill ──────────────────────────────────────────────── */

@@ -13,6 +13,7 @@ export default function Memory() {
   const [adding, setAdding] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
 
   useEffect(() => {
     memoryApi.list().then(({ memories }) => {
@@ -45,8 +46,8 @@ export default function Memory() {
     }
   };
 
-  const handleClear = async () => {
-    if (!confirm(t("memory.confirmClear"))) return;
+  const handleClearConfirmed = async () => {
+    setConfirmClearOpen(false);
     try {
       await memoryApi.clear();
       dispatch(memoryActions.setMemories([]));
@@ -61,7 +62,7 @@ export default function Memory() {
         <h1 className="page-title">💡 {t("memory.title")}</h1>
         <div style={{ display: "flex", gap: 8 }}>
           {memories.length > 0 && (
-            <button className="btn btn-danger" onClick={handleClear}>
+            <button className="btn btn-danger" onClick={() => setConfirmClearOpen(true)}>
               {t("memory.clearAll")}
             </button>
           )}
@@ -146,6 +147,22 @@ export default function Memory() {
           </div>
         )}
       </div>
+
+      {confirmClearOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div className="card" style={{ minWidth: 300, maxWidth: 400, padding: 24 }}>
+            <p style={{ marginBottom: 20, color: "var(--text-primary)" }}>{t("memory.confirmClear")}</p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button className="btn btn-secondary" onClick={() => setConfirmClearOpen(false)}>
+                {t("common.cancel")}
+              </button>
+              <button className="btn btn-danger" onClick={handleClearConfirmed}>
+                {t("memory.clearAll")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

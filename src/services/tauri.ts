@@ -25,6 +25,12 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system" | "tool";
   content: string;
   created_at: string;
+  /** JSON array of ToolUse ContentBlocks (assistant messages with tool calls) */
+  tool_calls_json?: string | null;
+  /** JSON array of ToolResult ContentBlocks (user messages carrying tool results) */
+  tool_results_json?: string | null;
+  /** 1-based conversation turn index */
+  turn_index?: number | null;
 }
 
 export interface Memory {
@@ -65,12 +71,18 @@ export interface Settings {
   openai_api_key: string;
   deepseek_api_key: string;
   qwen_api_key: string;
+  minimax_api_key: string;
+  zhipu_api_key: string;
+  kimi_api_key: string;
   provider: string;
   model: string;
   custom_base_url: string;
   workspace_root: string;
+  allow_outside_workspace: boolean;
   language: string;
   max_tokens: number;
+  /** Context window size in tokens (input limit). 0 = auto. */
+  context_window: number;
   confirm_shell_commands: boolean;
   confirm_file_writes: boolean;
   browser_headless: boolean;
@@ -120,11 +132,29 @@ export interface Settings {
   email_enabled: boolean;
   // User tool configs (tool_name → { field: value })
   user_tool_configs: Record<string, Record<string, unknown>>;
+  // Builtin tool switches (tool_name -> enabled)
+  builtin_tool_enabled: Record<string, boolean>;
   // Agent config
   max_iterations: number;
   heartbeat_enabled: boolean;
   heartbeat_interval_mins: number;
   heartbeat_prompt: string;
+  // Vision / multimodal
+  vision_enabled: boolean;
+  // SSH Servers
+  ssh_servers?: SshServerConfig[];
+}
+
+export interface SshServerConfig {
+  id: string;
+  label: string;
+  host: string;
+  port: number;
+  username: string;
+  /** Password — empty string means "unchanged" when saving */
+  password: string;
+  /** PEM private key — empty string means "unchanged" when saving */
+  private_key: string;
 }
 
 export interface ConfigFieldSchema {
@@ -160,6 +190,7 @@ export interface ChannelInfo {
 }
 
 export type AgentEventType =
+  | { type: "text_segment_start"; iteration: number }
   | { type: "text_delta"; delta: string }
   | { type: "tool_start"; id: string; name: string; input: unknown }
   | { type: "tool_end"; id: string; name: string; result: string; is_error: boolean }
@@ -196,9 +227,20 @@ export const sessionsApi = {
 // Chat
 // ---------------------------------------------------------------------------
 
+export interface ChatAttachment {
+  /** MIME type, e.g. "image/png", "application/pdf" */
+  media_type: string;
+  /** Local absolute file path (for non-image files or non-vision models) */
+  path?: string;
+  /** Base64-encoded file data (for images with vision models) */
+  data?: string;
+  /** Original filename */
+  filename?: string;
+}
+
 export const chatApi = {
-  send: (sessionId: string, content: string) =>
-    invoke<void>("chat_send", { sessionId, content }),
+  send: (sessionId: string, content: string, attachment?: ChatAttachment) =>
+    invoke<void>("chat_send", { sessionId, content, attachment: attachment ?? null }),
   cancel: (sessionId: string) =>
     invoke<void>("chat_cancel", { sessionId }),
   onEvent: (sessionId: string, handler: (event: AgentEventType) => void): Promise<UnlistenFn> =>
@@ -229,6 +271,13 @@ export interface SkillCatalogItem {
   tools: string[];
   dependencies: string[];
   permissions: string[];
+  platform: string[];
+}
+
+export interface SkillCompatibilityCheck {
+  compatible: boolean;
+  issues: string[];
+  warnings: string[];
 }
 
 export const skillsApi = {
@@ -238,6 +287,46 @@ export const skillsApi = {
   catalog: () => invoke<SkillCatalogItem[]>("scan_skill_catalog"),
   install: (source: string) => invoke<SkillCatalogItem>("install_skill", { source }),
   uninstall: (skillName: string) => invoke<void>("uninstall_skill", { skillName }),
+  checkCompat: (source: string) =>
+    invoke<SkillCompatibilityCheck>("check_skill_compat", { source }),
+};
+
+// ---------------------------------------------------------------------------
+// ClawHub
+// ---------------------------------------------------------------------------
+
+export interface ClawHubSkill {
+  slug: string;
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  downloads: number;
+  stars: number;
+  tags: string[];
+  skill_url: string | null;
+  zip_url: string | null;
+  /** Platform requirements from SKILL.md (empty = all platforms) */
+  platform: string[];
+  /** Runtime dependencies from SKILL.md */
+  dependencies: string[];
+  /** null = not yet checked, true = compatible, false = incompatible */
+  compatible: boolean | null;
+  /** Populated when compatible === false */
+  compat_issues: string[];
+}
+
+export interface ClawHubSearchResult {
+  items: ClawHubSkill[];
+  total: number;
+  query: string;
+}
+
+export const clawHubApi = {
+  search: (query: string, limit?: number) =>
+    invoke<ClawHubSearchResult>("clawhub_search", { query, limit }),
+  install: (slug: string, version?: string) =>
+    invoke<SkillCatalogItem>("clawhub_install", { slug, version }),
 };
 
 // ---------------------------------------------------------------------------
@@ -267,9 +356,20 @@ export const schedulerApi = {
 // System
 // ---------------------------------------------------------------------------
 
+export interface RuntimeCheckItem {
+  name: string;
+  available: boolean;
+  version: string | null;
+  download_url: string;
+  hint: string;
+}
+
 export const systemApi = {
   getVmStatus: () =>
     invoke<{ backend: string; available: boolean; description: string }>("get_vm_status"),
+  checkRuntimes: () => invoke<RuntimeCheckItem[]>("check_runtimes"),
+  setRuntimePath: (runtimeKey: string, exePath: string) =>
+    invoke<RuntimeCheckItem[]>("set_runtime_path", { runtimeKey, exePath }),
 };
 
 // ---------------------------------------------------------------------------
@@ -413,12 +513,53 @@ export const fishApi = {
 };
 
 // ---------------------------------------------------------------------------
+// MCP Servers
+// ---------------------------------------------------------------------------
+
+export interface McpServerConfig {
+  name: string;
+  transport: "stdio" | "sse";
+  command: string;
+  args: string[];
+  url: string;
+  env: Record<string, string>;
+  enabled: boolean;
+}
+
+export interface McpToolInfo {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+}
+
+export interface McpTestResult {
+  success: boolean;
+  tools: McpToolInfo[];
+  error?: string;
+}
+
+export const mcpApi = {
+  list: () => invoke<McpServerConfig[]>("list_mcp_servers"),
+  save: (servers: McpServerConfig[]) => invoke<void>("save_mcp_servers", { servers }),
+  test: (config: McpServerConfig) => invoke<McpTestResult>("test_mcp_server", { config }),
+};
+
+// ---------------------------------------------------------------------------
 // Window (minimal mode)
 // ---------------------------------------------------------------------------
 
 export const windowApi = {
   enterMinimalMode: () => invoke<void>("enter_minimal_mode"),
   exitMinimalMode: () => invoke<void>("exit_minimal_mode"),
+  setOverlayPosition: (x: number, y: number) =>
+    invoke<void>("set_overlay_position", { x, y }),
+  saveOverlayPosition: (x: number, y: number) =>
+    invoke<void>("save_overlay_position", { x, y }),
   setThemeBorder: (theme: "violet" | "gold") =>
     invoke<void>("set_window_theme_border", { theme }),
 };
+
+// ---------------------------------------------------------------------------
+// System / Diagnostics
+// ---------------------------------------------------------------------------
+

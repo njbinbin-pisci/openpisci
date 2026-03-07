@@ -108,6 +108,8 @@ pub struct PolicyGate {
     pub workspace_root: PathBuf,
     pub mode: PolicyMode,
     pub tool_rate_limit_per_minute: u32,
+    /// When true, paths outside workspace_root produce a Warn instead of Deny.
+    pub allow_outside_workspace: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -134,6 +136,7 @@ impl PolicyGate {
             workspace_root: workspace_root.into(),
             mode: PolicyMode::Balanced,
             tool_rate_limit_per_minute: 120,
+            allow_outside_workspace: false,
         }
     }
 
@@ -146,6 +149,21 @@ impl PolicyGate {
             workspace_root: workspace_root.into(),
             mode: PolicyMode::parse(mode),
             tool_rate_limit_per_minute,
+            allow_outside_workspace: false,
+        }
+    }
+
+    pub fn with_profile_and_flags(
+        workspace_root: impl Into<PathBuf>,
+        mode: &str,
+        tool_rate_limit_per_minute: u32,
+        allow_outside_workspace: bool,
+    ) -> Self {
+        Self {
+            workspace_root: workspace_root.into(),
+            mode: PolicyMode::parse(mode),
+            tool_rate_limit_per_minute,
+            allow_outside_workspace,
         }
     }
 
@@ -177,9 +195,16 @@ impl PolicyGate {
 
         if canonical.starts_with(&ws) {
             PolicyDecision::Allow
+        } else if self.allow_outside_workspace {
+            PolicyDecision::Warn(format!(
+                "⚠️ Path '{}' is outside the workspace root '{}' — proceeding because \"Allow outside workspace\" is enabled.",
+                path,
+                ws.display()
+            ))
         } else {
             PolicyDecision::Deny(format!(
-                "Path '{}' is outside the workspace root '{}'",
+                "Path '{}' is outside the workspace root '{}'. \
+                 Enable \"Allow outside workspace\" in Settings to access files outside the workspace.",
                 path,
                 ws.display()
             ))

@@ -71,9 +71,14 @@ pub trait Channel: Send + Sync {
     async fn listen(&self, tx: mpsc::Sender<InboundMessage>) -> Result<()>;
     fn status(&self) -> ChannelStatus;
     async fn health_check(&self) -> bool { true }
+    /// Signal the listen() loop to stop without acquiring a write lock.
+    /// Called by stop_all() to avoid deadlock (listen holds read lock indefinitely).
+    fn request_shutdown(&self) {}
 }
 
-type SharedChannel = Arc<Mutex<Box<dyn Channel>>>;
+// Use RwLock so listen() (read) and send() (read) can run concurrently.
+// connect()/disconnect() take a write lock.
+type SharedChannel = Arc<RwLock<Box<dyn Channel>>>;
 type ChannelMap = HashMap<String, SharedChannel>;
 
 pub struct GatewayManager {
@@ -97,38 +102,60 @@ impl GatewayManager {
         info!("Registering gateway channel: {}", name);
         self.channels.write().await.insert(
             name,
-            Arc::new(Mutex::new(channel)),
+            Arc::new(RwLock::new(channel)),
         );
     }
 
     pub async fn start_all(&self) -> Result<()> {
         let channels = self.channels.read().await;
         for (name, channel) in channels.iter() {
-            let mut ch = channel.lock().await;
-            if let Err(e) = ch.connect().await {
-                warn!("Failed to connect channel '{}': {}", name, e);
-                continue;
-            }
+            {
+                let mut ch = channel.write().await;
+                // Skip channels that are already connected (idempotent)
+                if ch.status() == ChannelStatus::Connected {
+                    info!("Channel '{}' already connected, skipping", name);
+                    continue;
+                }
+                if let Err(e) = ch.connect().await {
+                    warn!("Failed to connect channel '{}': {}", name, e);
+                    continue;
+                }
+            } // write lock released here before spawning listen task
+
             let tx = self.inbound_tx.clone();
             let ch_arc = channel.clone();
             let channel_name = name.clone();
-            // Spawn a supervised listen task with auto-reconnect
+            // Spawn a supervised listen task with auto-reconnect.
+            // listen() and send() both use read locks so they can run concurrently.
+            // connect()/disconnect() use write locks for exclusive access.
             tokio::spawn(async move {
                 let mut backoff_secs = 1u64;
                 const MAX_BACKOFF: u64 = 60;
                 loop {
-                    {
-                        let ch = ch_arc.lock().await;
-                        if let Err(e) = ch.listen(tx.clone()).await {
+                    // listen() holds a read lock — concurrent with send() which also read-locks
+                    let result = {
+                        let ch = ch_arc.read().await;
+                        ch.listen(tx.clone()).await
+                    };
+                    match result {
+                        Ok(()) => {
+                            // Normal exit means disconnect() was called — do NOT reconnect
+                            info!("Channel '{}' listener stopped (disconnect requested)", channel_name);
+                            return;
+                        }
+                        Err(e) => {
                             warn!("Channel '{}' listen error: {} — reconnecting in {}s", channel_name, e, backoff_secs);
-                        } else {
-                            info!("Channel '{}' listen returned normally", channel_name);
                         }
                     }
-                    // Reconnect with exponential backoff
+                    // Only reach here on error — reconnect with exponential backoff
                     tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
                     {
-                        let mut ch = ch_arc.lock().await;
+                        let mut ch = ch_arc.write().await;
+                        // Don't reconnect if disconnect was called during the sleep
+                        if ch.status() == ChannelStatus::Disconnected {
+                            info!("Channel '{}' was disconnected during backoff, not reconnecting", channel_name);
+                            return;
+                        }
                         match ch.connect().await {
                             Ok(_) => {
                                 info!("Channel '{}' reconnected successfully", channel_name);
@@ -151,7 +178,7 @@ impl GatewayManager {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(120)).await;
                 for (name, ch_arc) in &channels_for_health {
-                    let ch = ch_arc.lock().await;
+                    let ch = ch_arc.read().await;
                     let healthy = ch.health_check().await;
                     if !healthy {
                         warn!("Channel '{}' health check failed (status={:?})", name, ch.status());
@@ -166,9 +193,26 @@ impl GatewayManager {
     pub async fn stop_all(&self) -> Result<()> {
         let channels = self.channels.read().await;
         for (name, channel) in channels.iter() {
-            let mut ch = channel.lock().await;
-            if let Err(e) = ch.disconnect().await {
-                warn!("Failed to disconnect channel '{}': {}", name, e);
+            // Step 1: signal shutdown via read lock (non-blocking, won't deadlock with listen)
+            {
+                let ch = channel.read().await;
+                ch.request_shutdown();
+                info!("Requested shutdown for channel '{}'", name);
+            }
+            // Step 2: update status via write lock — listen() will have exited within ~2s
+            // Use a short timeout to avoid blocking forever if listen is stuck
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                channel.write(),
+            ).await {
+                Ok(mut ch) => {
+                    if let Err(e) = ch.disconnect().await {
+                        warn!("Failed to disconnect channel '{}': {}", name, e);
+                    }
+                }
+                Err(_) => {
+                    warn!("Timeout waiting for write lock on channel '{}' during stop_all", name);
+                }
             }
         }
         Ok(())
@@ -177,7 +221,7 @@ impl GatewayManager {
     pub async fn send(&self, msg: &OutboundMessage) -> Result<()> {
         let channels = self.channels.read().await;
         if let Some(channel) = channels.get(&msg.channel) {
-            let ch = channel.lock().await;
+            let ch = channel.read().await;
             ch.send(msg).await
         } else {
             Err(anyhow::anyhow!("Channel '{}' not found", msg.channel))
@@ -192,7 +236,7 @@ impl GatewayManager {
         let channels = self.channels.read().await;
         let mut infos = Vec::new();
         for (_, channel) in channels.iter() {
-            let ch = channel.lock().await;
+            let ch = channel.read().await;
             infos.push(ChannelInfo {
                 name: ch.name().to_string(),
                 status: ch.status(),

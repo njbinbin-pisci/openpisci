@@ -29,6 +29,7 @@ export default function AuditLog() {
   const [showErrors, setShowErrors] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [clearing, setClearing] = useState(false);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
 
@@ -57,8 +58,8 @@ export default function AuditLog() {
 
   useEffect(() => { load(true); }, [filterTool]);
 
-  const handleClear = async () => {
-    if (!confirm(t("audit.confirmClear"))) return;
+  const handleClearConfirmed = async () => {
+    setConfirmClearOpen(false);
     setClearing(true);
     try {
       await auditApi.clear();
@@ -91,7 +92,7 @@ export default function AuditLog() {
             style={{ background: "var(--bg-secondary)", border: "1px solid var(--border)", color: "var(--text-secondary)", fontSize: 13 }}>
             {loading ? t("common.loading") : t("common.refresh")}
           </button>
-          <button className="btn" onClick={handleClear} disabled={clearing}
+          <button className="btn" onClick={() => setConfirmClearOpen(true)} disabled={clearing}
             style={{ background: "rgba(220,53,69,0.12)", border: "1px solid rgba(220,53,69,0.3)", color: "#ff6b6b", fontSize: 13 }}>
             {clearing ? t("audit.clearing") : t("audit.clearLog")}
           </button>
@@ -194,6 +195,37 @@ export default function AuditLog() {
           </div>
         )}
       </div>
+
+      {confirmClearOpen && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 1000,
+          background: "rgba(0,0,0,0.5)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <div style={{
+            background: "var(--bg-primary)", border: "1px solid var(--border)",
+            borderRadius: 12, padding: "24px 28px", maxWidth: 360, width: "90%",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+          }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 10 }}>
+              {t("audit.clearLog")}
+            </div>
+            <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 20 }}>
+              {t("audit.confirmClear")}
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button className="btn" onClick={() => setConfirmClearOpen(false)}
+                style={{ background: "var(--bg-secondary)", border: "1px solid var(--border)", color: "var(--text-secondary)", fontSize: 13 }}>
+                {t("common.cancel")}
+              </button>
+              <button className="btn" onClick={handleClearConfirmed}
+                style={{ background: "rgba(220,53,69,0.15)", border: "1px solid rgba(220,53,69,0.4)", color: "#ff6b6b", fontSize: 13, fontWeight: 600 }}>
+                {t("audit.clearLog")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

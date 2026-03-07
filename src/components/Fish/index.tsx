@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
 import { fishApi, FishWithStatus, FishSettingDef } from "../../services/tauri";
 import "./Fish.css";
 
@@ -104,6 +105,7 @@ interface FishCardProps {
 }
 
 function FishCard({ fish, onActivate, onDeactivate, onGoToChat, deactivating }: FishCardProps) {
+  const { t } = useTranslation();
   const isActive = !!fish.instance && fish.instance.status === "active";
 
   return (
@@ -115,7 +117,7 @@ function FishCard({ fish, onActivate, onDeactivate, onGoToChat, deactivating }: 
           <span className={`fish-card-badge ${isActive ? "badge-active" : "badge-inactive"}`}>
             {isActive ? "游泳中" : "待命"}
           </span>
-          {fish.builtin && <span className="fish-card-badge badge-builtin">内置</span>}
+          {fish.builtin && <span className="fish-card-badge badge-builtin">{t("common.builtin")}</span>}
         </div>
       </div>
       <p className="fish-card-desc">{fish.description}</p>
@@ -166,6 +168,7 @@ export default function FishPage({ onGoToChat }: FishPageProps) {
   const [configuringFish, setConfiguringFish] = useState<FishWithStatus | null>(null);
   const [activating, setActivating] = useState(false);
   const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
+  const [fishDir, setFishDir] = useState<string>("");
 
   const loadFish = useCallback(async () => {
     try {
@@ -182,6 +185,7 @@ export default function FishPage({ onGoToChat }: FishPageProps) {
 
   useEffect(() => {
     loadFish();
+    invoke<string>("get_fish_dir").then(setFishDir).catch(() => {});
   }, [loadFish]);
 
   const handleActivate = (fish: FishWithStatus) => {
@@ -281,7 +285,7 @@ export default function FishPage({ onGoToChat }: FishPageProps) {
             <section className="fish-section">
               <h3 className="fish-section-title">自定义小鱼</h3>
               <p className="fish-section-desc">
-                放置 FISH.toml 文件到 <code>~/.pisci/fish/</code> 目录即可加载
+                放置 FISH.toml 文件到 <code>{fishDir || "..."}</code> 目录即可加载
               </p>
               <div className="fish-grid">
                 {userFish.map((fish) => (
@@ -307,7 +311,7 @@ export default function FishPage({ onGoToChat }: FishPageProps) {
 
           <section className="fish-section fish-guide-section">
             <h3 className="fish-section-title">创建自定义小鱼</h3>
-            <p className="fish-section-desc">在 <code>~/.pisci/fish/my-fish/FISH.toml</code> 创建文件：</p>
+            <p className="fish-section-desc">在 <code>{fishDir ? `${fishDir}\\my-fish\\FISH.toml` : ".../fish/my-fish/FISH.toml"}</code> 创建文件：</p>
             <pre className="fish-code-example">{`id = "my-fish"
 name = "我的小鱼"
 description = "专注于某类任务的助手"

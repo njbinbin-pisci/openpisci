@@ -166,8 +166,9 @@
 }
 
 .badge-builtin {
-  background: rgba(139, 92, 246, 0.15);
-  color: #8b5cf6;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   margin-left: 4px;
 }
 

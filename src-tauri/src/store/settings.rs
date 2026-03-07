@@ -4,6 +4,32 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// A pre-configured SSH server entry.
+/// The password / private_key is stored encrypted on disk (same hex-AES scheme as API keys).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SshServerConfig {
+    /// Unique alias used as `connection_id` (e.g. "prod", "dev-server")
+    pub id: String,
+    /// Display label (optional, falls back to id)
+    #[serde(default)]
+    pub label: String,
+    /// Hostname or IP address
+    pub host: String,
+    /// SSH port (default 22)
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    /// SSH username
+    pub username: String,
+    /// Password (stored encrypted, empty if using key auth)
+    #[serde(default)]
+    pub password: String,
+    /// PEM private key content (stored encrypted, empty if using password auth)
+    #[serde(default)]
+    pub private_key: String,
+}
+
+fn default_ssh_port() -> u16 { 22 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     /// Anthropic API key
@@ -18,6 +44,15 @@ pub struct Settings {
     /// Qwen (通义千问) API key
     #[serde(default)]
     pub qwen_api_key: String,
+    /// MiniMax API key
+    #[serde(default)]
+    pub minimax_api_key: String,
+    /// Zhipu AI (智谱) API key
+    #[serde(default)]
+    pub zhipu_api_key: String,
+    /// Kimi (Moonshot AI) API key
+    #[serde(default)]
+    pub kimi_api_key: String,
     /// Active LLM provider: "anthropic" | "openai" | "custom" | "deepseek" | "qwen"
     #[serde(default = "default_provider")]
     pub provider: String,
@@ -30,12 +65,21 @@ pub struct Settings {
     /// Workspace root directory (files are restricted to this path)
     #[serde(default = "default_workspace")]
     pub workspace_root: String,
+    /// When true, the agent may access files outside workspace_root (shows a warning).
+    /// When false, workspace_root must be non-empty and all file access is restricted to it.
+    #[serde(default)]
+    pub allow_outside_workspace: bool,
     /// UI language: "zh" | "en"
     #[serde(default = "default_language")]
     pub language: String,
-    /// Maximum tokens per LLM response
+    /// Maximum tokens per LLM response (output only)
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
+    /// Context window size in tokens (input limit).
+    /// 0 means "auto" — the backend will use a conservative default based on the model.
+    /// Common values: 8192, 32768, 65536, 131072, 1000000
+    #[serde(default)]
+    pub context_window: u32,
     /// Whether to show permission dialogs for shell commands
     #[serde(default = "default_true")]
     pub confirm_shell_commands: bool,
@@ -187,6 +231,46 @@ pub struct Settings {
     /// Password fields are stored encrypted (same hex-AES scheme as API keys).
     #[serde(default)]
     pub user_tool_configs: HashMap<String, Value>,
+    /// Built-in tool enable switches, keyed by tool name.
+    /// Missing key means enabled by default.
+    #[serde(default)]
+    pub builtin_tool_enabled: HashMap<String, bool>,
+
+    // ── MCP Servers ─────────────────────────────────────────────────────────
+    /// Configured MCP (Model Context Protocol) servers.
+    /// Each server exposes tools that are dynamically registered into the agent's tool registry.
+    #[serde(default)]
+    pub mcp_servers: Vec<crate::tools::mcp::McpServerConfig>,
+
+    // ── SSH Servers ──────────────────────────────────────────────────────────
+    /// Pre-configured SSH servers. The agent can connect by alias (connection_id)
+    /// without needing to know the credentials.
+    #[serde(default)]
+    pub ssh_servers: Vec<SshServerConfig>,
+
+    // ── Runtime Paths ───────────────────────────────────────────────────────
+    /// User-specified executable paths for runtimes not found on PATH.
+    /// Keys: "node", "npm", "python", "pip", "git"
+    /// Values: absolute path to the executable (e.g. "C:\\Python312\\python.exe")
+    #[serde(default)]
+    pub runtime_paths: HashMap<String, String>,
+
+    // ── Vision / Multimodal ─────────────────────────────────────────────────
+    /// Whether the current model supports vision (image input).
+    /// When true, inbound IM images are passed as visual content blocks to the LLM.
+    /// Auto-detected for known models (Claude 3+, GPT-4o, Gemini, etc.); set this
+    /// manually when using a custom model name that isn't auto-recognised.
+    #[serde(default)]
+    pub vision_enabled: bool,
+
+    // ── Overlay position ─────────────────────────────────────────────────────
+    /// Last saved X position of the overlay window (physical pixels).
+    /// None means "first launch — center relative to main window".
+    #[serde(default)]
+    pub overlay_x: Option<i32>,
+    /// Last saved Y position of the overlay window (physical pixels).
+    #[serde(default)]
+    pub overlay_y: Option<i32>,
 
     /// Internal: path to the config file (not serialized)
     #[serde(skip)]
@@ -222,12 +306,17 @@ impl Default for Settings {
             openai_api_key: String::new(),
             deepseek_api_key: String::new(),
             qwen_api_key: String::new(),
+            minimax_api_key: String::new(),
+            zhipu_api_key: String::new(),
+            kimi_api_key: String::new(),
             provider: default_provider(),
             model: default_model(),
             custom_base_url: String::new(),
             workspace_root: default_workspace(),
+            allow_outside_workspace: false,
             language: default_language(),
             max_tokens: default_max_tokens(),
+            context_window: 0,
             confirm_shell_commands: true,
             confirm_file_writes: true,
             browser_headless: true,
@@ -273,6 +362,13 @@ impl Default for Settings {
             heartbeat_interval_mins: default_heartbeat_interval(),
             heartbeat_prompt: default_heartbeat_prompt(),
             user_tool_configs: HashMap::new(),
+            builtin_tool_enabled: HashMap::new(),
+            mcp_servers: Vec::new(),
+            ssh_servers: Vec::new(),
+            runtime_paths: HashMap::new(),
+            vision_enabled: false,
+            overlay_x: None,
+            overlay_y: None,
             config_path: PathBuf::new(),
         }
     }
@@ -282,7 +378,21 @@ impl Settings {
     pub fn load(path: &Path) -> Result<Self> {
         let mut settings = if path.exists() {
             let content = std::fs::read_to_string(path)?;
-            serde_json::from_str::<Settings>(&content).unwrap_or_default()
+            match serde_json::from_str::<Settings>(&content) {
+                Ok(s) => s,
+                Err(e) => {
+                    // Log the parse error and keep the broken file as a backup
+                    tracing::error!(
+                        "Failed to parse settings file at '{}': {}. \
+                         Falling back to defaults. Original file preserved.",
+                        path.display(), e
+                    );
+                    // Rename broken file so it isn't overwritten silently
+                    let backup = path.with_extension("json.bak");
+                    let _ = std::fs::copy(path, &backup);
+                    Settings::default()
+                }
+            }
         } else {
             Settings::default()
         };
@@ -296,6 +406,9 @@ impl Settings {
             Self::try_decrypt_field(&store, &mut settings.openai_api_key);
             Self::try_decrypt_field(&store, &mut settings.deepseek_api_key);
             Self::try_decrypt_field(&store, &mut settings.qwen_api_key);
+            Self::try_decrypt_field(&store, &mut settings.minimax_api_key);
+            Self::try_decrypt_field(&store, &mut settings.zhipu_api_key);
+            Self::try_decrypt_field(&store, &mut settings.kimi_api_key);
             Self::try_decrypt_field(&store, &mut settings.feishu_app_secret);
             Self::try_decrypt_field(&store, &mut settings.wecom_agent_secret);
             Self::try_decrypt_field(&store, &mut settings.dingtalk_app_secret);
@@ -303,6 +416,11 @@ impl Settings {
             Self::try_decrypt_field(&store, &mut settings.matrix_access_token);
             Self::try_decrypt_field(&store, &mut settings.webhook_auth_token);
             Self::try_decrypt_field(&store, &mut settings.smtp_password);
+            // Decrypt SSH server credentials
+            for srv in &mut settings.ssh_servers {
+                Self::try_decrypt_field(&store, &mut srv.password);
+                Self::try_decrypt_field(&store, &mut srv.private_key);
+            }
         }
         Ok(settings)
     }
@@ -318,6 +436,9 @@ impl Settings {
             Self::encrypt_field(&store, &mut clone.openai_api_key);
             Self::encrypt_field(&store, &mut clone.deepseek_api_key);
             Self::encrypt_field(&store, &mut clone.qwen_api_key);
+            Self::encrypt_field(&store, &mut clone.minimax_api_key);
+            Self::encrypt_field(&store, &mut clone.zhipu_api_key);
+            Self::encrypt_field(&store, &mut clone.kimi_api_key);
             Self::encrypt_field(&store, &mut clone.feishu_app_secret);
             Self::encrypt_field(&store, &mut clone.wecom_agent_secret);
             Self::encrypt_field(&store, &mut clone.dingtalk_app_secret);
@@ -325,6 +446,11 @@ impl Settings {
             Self::encrypt_field(&store, &mut clone.matrix_access_token);
             Self::encrypt_field(&store, &mut clone.webhook_auth_token);
             Self::encrypt_field(&store, &mut clone.smtp_password);
+            // Encrypt SSH server credentials
+            for srv in &mut clone.ssh_servers {
+                Self::encrypt_field(&store, &mut srv.password);
+                Self::encrypt_field(&store, &mut srv.private_key);
+            }
         }
         let json = serde_json::to_string_pretty(&clone)?;
         std::fs::write(&self.config_path, json)?;
@@ -362,6 +488,9 @@ impl Settings {
             || !self.openai_api_key.trim().is_empty()
             || !self.deepseek_api_key.trim().is_empty()
             || !self.qwen_api_key.trim().is_empty()
+            || !self.minimax_api_key.trim().is_empty()
+            || !self.zhipu_api_key.trim().is_empty()
+            || !self.kimi_api_key.trim().is_empty()
     }
 
     /// Returns the active API key for the configured provider
@@ -370,6 +499,9 @@ impl Settings {
             "openai" | "custom" => &self.openai_api_key,
             "deepseek" => &self.deepseek_api_key,
             "qwen" | "tongyi" => &self.qwen_api_key,
+            "minimax" => &self.minimax_api_key,
+            "zhipu" => &self.zhipu_api_key,
+            "kimi" | "moonshot" => &self.kimi_api_key,
             _ => &self.anthropic_api_key,
         }
     }

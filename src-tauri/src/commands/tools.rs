@@ -33,7 +33,7 @@ pub async fn list_builtin_tools(_state: State<'_, AppState>) -> Result<Vec<Built
             windows_only: false,
         },
         BuiltinToolInfo {
-            name: "powershell".into(),
+            name: "powershell_query".into(),
             description: "执行 PowerShell 脚本，支持 Windows 系统管理任务".into(),
             icon: "🪟".into(),
             windows_only: false,
@@ -86,6 +86,12 @@ pub async fn list_builtin_tools(_state: State<'_, AppState>) -> Result<Vec<Built
             icon: "🔌".into(),
             windows_only: true,
         },
+        BuiltinToolInfo {
+            name: "call_fish".into(),
+            description: "委托子任务给专属 Fish 子代理，让专家处理特定领域任务".into(),
+            icon: "🐠".into(),
+            windows_only: false,
+        },
     ];
     Ok(tools)
 }
@@ -112,7 +118,7 @@ pub async fn trigger_heartbeat(state: State<'_, AppState>) -> Result<(), String>
         gateway: state.gateway.clone(),
     };
     tokio::spawn(async move {
-        let _ = crate::commands::chat::run_agent_headless(&state_ref, session_id, &prompt).await;
+        let _ = crate::commands::chat::run_agent_headless(&state_ref, session_id, &prompt, None, "internal").await;
     });
     Ok(())
 }

@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useDispatch } from "react-redux";
 import { useTranslation } from "react-i18next";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { settingsActions } from "../../store";
 import { settingsApi } from "../../services/tauri";
+import { setLanguage } from "../../i18n";
 
 interface Props {
   onComplete: () => void;
@@ -11,7 +13,7 @@ interface Props {
 type Step = "welcome" | "provider" | "policy" | "done";
 
 export default function Onboarding({ onComplete }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const dispatch = useDispatch();
   const [step, setStep] = useState<Step>("welcome");
   const [provider, setProvider] = useState("anthropic");
@@ -21,6 +23,23 @@ export default function Onboarding({ onComplete }: Props) {
   const [policyMode, setPolicyMode] = useState("balanced");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  const browseWorkspace = async () => {
+    try {
+      const selected = await openDialog({ directory: true, multiple: false, title: t("onboarding.workspaceBrowseTitle") });
+      if (selected && typeof selected === "string") {
+        setWorkspace(selected);
+      }
+    } catch {
+      // dialog cancelled or not available
+    }
+  };
+
+  const currentLang = i18n.language === "en" ? "en" : "zh";
+  const toggleLang = () => {
+    const next = currentLang === "zh" ? "en" : "zh";
+    setLanguage(next);
+  };
 
   const handleSave = async () => {
     if (!apiKey.trim()) {
@@ -66,7 +85,27 @@ export default function Onboarding({ onComplete }: Props) {
   };
 
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg-primary)", padding: 24 }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg-primary)", padding: 24, position: "relative" }}>
+      {/* Language toggle — always visible in top-right corner */}
+      <button
+        onClick={toggleLang}
+        style={{
+          position: "fixed",
+          top: 16,
+          right: 16,
+          padding: "6px 14px",
+          borderRadius: 20,
+          border: "1px solid var(--border-color)",
+          background: "var(--bg-secondary)",
+          color: "var(--text-secondary)",
+          cursor: "pointer",
+          fontSize: 13,
+          fontWeight: 500,
+          zIndex: 100,
+        }}
+      >
+        {currentLang === "zh" ? "EN" : "中文"}
+      </button>
       <div style={{ maxWidth: 480, width: "100%" }}>
         {step === "welcome" && (
           <div style={{ textAlign: "center" }}>
@@ -131,12 +170,23 @@ export default function Onboarding({ onComplete }: Props) {
 
             <div className="form-group">
               <label className="label">{t("onboarding.workspace")}</label>
-              <input
-                className="input"
-                value={workspace}
-                onChange={(e) => setWorkspace(e.target.value)}
-                placeholder={t("onboarding.workspacePlaceholder")}
-              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  className="input"
+                  value={workspace}
+                  onChange={(e) => setWorkspace(e.target.value)}
+                  placeholder={t("onboarding.workspacePlaceholder")}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={browseWorkspace}
+                  style={{ whiteSpace: "nowrap", padding: "0 14px" }}
+                >
+                  {t("onboarding.workspaceBrowse")}
+                </button>
+              </div>
               <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
                 {t("onboarding.workspaceHelp")}
               </p>

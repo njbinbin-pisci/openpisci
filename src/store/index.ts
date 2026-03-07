@@ -60,13 +60,26 @@ export interface ToolStep {
   expanded: boolean;
 }
 
+/** Per-session streaming state for the current agent turn */
+export interface StreamingState {
+  /** The text currently being streamed in the visible bubble */
+  current: string;
+  /** Text from the previous segment that is animating out (slide-up exit) */
+  exiting: string | null;
+  /** Incremented each time a new segment starts — used as React key to re-trigger enter animation */
+  segmentId: number;
+}
+
 interface ChatState {
   messagesBySession: Record<string, ChatMessage[]>;
-  streamingText: Record<string, string>;
+  /** Replaces the old flat `streamingText` — supports segment-based bubble replacement */
+  streaming: Record<string, StreamingState>;
   /** Tool steps for the current (or most recent) agent turn, keyed by sessionId.
    *  Steps are KEPT after completion so the user can review them.
-   *  Cleared only when a new user message is sent. */
+   *  Cleared automatically when the next agent turn begins. */
   toolSteps: Record<string, ToolStep[]>;
+  /** Tracks whether the last agent turn has finished — used to auto-clear steps on next turn start */
+  toolStepsTurnDone: Record<string, boolean>;
   isRunning: Record<string, boolean>;
 }
 
@@ -74,12 +87,14 @@ const chatSlice = createSlice({
   name: "chat",
   initialState: {
     messagesBySession: {},
-    streamingText: {},
+    streaming: {},
     toolSteps: {},
+    toolStepsTurnDone: {},
     isRunning: {},
   } as ChatState,
   reducers: {
     setMessages: (state, action: PayloadAction<{ sessionId: string; messages: ChatMessage[] }>) => {
+      // Replace messages, discarding any optimistic placeholders
       state.messagesBySession[action.payload.sessionId] = action.payload.messages;
     },
     appendMessage: (state, action: PayloadAction<{ sessionId: string; message: ChatMessage }>) => {
@@ -89,16 +104,49 @@ const chatSlice = createSlice({
       }
       state.messagesBySession[sessionId].push(message);
     },
+    /** Remove all optimistic placeholder messages (id starts with "optimistic_") for a session */
+    removeOptimisticMessages: (state, action: PayloadAction<string>) => {
+      const msgs = state.messagesBySession[action.payload];
+      if (msgs) {
+        state.messagesBySession[action.payload] = msgs.filter(
+          (m) => !m.id.startsWith("optimistic_")
+        );
+      }
+    },
     appendDelta: (state, action: PayloadAction<{ sessionId: string; delta: string }>) => {
       const { sessionId, delta } = action.payload;
-      state.streamingText[sessionId] = (state.streamingText[sessionId] ?? "") + delta;
+      if (!state.streaming[sessionId]) {
+        state.streaming[sessionId] = { current: "", exiting: null, segmentId: 0 };
+      }
+      state.streaming[sessionId].current += delta;
+    },
+    /** Called when a new LLM segment starts — keep current text visible, just mark segment boundary */
+    startNewSegment: (state, action: PayloadAction<string>) => {
+      const sid = action.payload;
+      const s = state.streaming[sid];
+      if (s) {
+        // Keep current text; new deltas will append to it (single bubble, no exit animation)
+        s.segmentId = (s.segmentId ?? 0) + 1;
+      } else {
+        state.streaming[sid] = { current: "", exiting: null, segmentId: 0 };
+      }
+    },
+    /** No-op kept for API compatibility — exiting animation is removed */
+    clearExiting: (state, action: PayloadAction<string>) => {
+      const s = state.streaming[action.payload];
+      if (s) s.exiting = null;
     },
     clearStreaming: (state, action: PayloadAction<string>) => {
-      delete state.streamingText[action.payload];
+      delete state.streaming[action.payload];
     },
-    /** Add a pending tool step when execution starts */
+    /** Add a pending tool step when execution starts.
+     *  If the previous turn is marked done, clear old steps first (new turn). */
     addToolStep: (state, action: PayloadAction<{ sessionId: string; id: string; name: string; input: unknown }>) => {
       const { sessionId, id, name, input } = action.payload;
+      if (state.toolStepsTurnDone[sessionId]) {
+        state.toolSteps[sessionId] = [];
+        state.toolStepsTurnDone[sessionId] = false;
+      }
       if (!state.toolSteps[sessionId]) state.toolSteps[sessionId] = [];
       state.toolSteps[sessionId].push({ id, name, input, completed: false, expanded: true });
     },
@@ -123,9 +171,14 @@ const chatSlice = createSlice({
     /** Clear all tool steps when a new user message is sent */
     clearToolSteps: (state, action: PayloadAction<string>) => {
       delete state.toolSteps[action.payload];
+      delete state.toolStepsTurnDone[action.payload];
     },
     setRunning: (state, action: PayloadAction<{ sessionId: string; running: boolean }>) => {
       state.isRunning[action.payload.sessionId] = action.payload.running;
+      if (!action.payload.running) {
+        // Mark turn as done so next tool_start will clear these steps
+        state.toolStepsTurnDone[action.payload.sessionId] = true;
+      }
     },
   },
 });

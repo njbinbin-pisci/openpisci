@@ -54,9 +54,9 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 
 | 平台 | 模式 |
 |------|------|
-| 飞书（Feishu/Lark） | 轮询收件 + 出站回复 |
+| 飞书（Feishu/Lark） | WebSocket 长连接收件 + 出站回复 |
 | 企业微信（WeCom） | 本地中继收件 + 出站回复 |
-| 钉钉（DingTalk） | 轮询收件 + 出站回复 |
+| 钉钉（DingTalk） | Stream 模式 WebSocket 收件 + 出站回复 |
 | Telegram | 长轮询收件 + 出站回复 |
 | Slack | 出站 Webhook |
 | Discord | 出站 Webhook |
@@ -95,7 +95,11 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 
 ### 下载安装
 
+官网：[www.dimnuo.com](https://www.dimnuo.com)
+
 前往 [Releases](https://github.com/njbinbin-pisci/openpisci/releases) 下载最新安装包（`.exe`）。
+
+> **⚠️ 安全警告**：OpenPisci 是一款具备文件读写、命令执行、UI 自动化等高权限操作能力的 AI Agent。建议在虚拟机（如 VMware、VirtualBox、Hyper-V）中运行，以防止 AI 误操作导致宿主机数据损失。开发者不对因直接在宿主机运行而造成的任何数据丢失或系统损坏承担责任。
 
 ### 首次配置
 
@@ -236,16 +240,6 @@ OpenPisci
     ├── services/       # Tauri IPC 服务层
     └── store/          # Redux 状态管理
 ```
-
----
-
-## 🤝 致谢
-
-OpenPisci 参考并借鉴了以下优秀开源项目：
-
-- [OpenClaw](https://github.com/mariozechner/openclaw) — 跨平台 AI Agent，pi-agent 架构参考
-- [OpenFang](https://github.com/RightNow-AI/openfang) — Rust + Tauri Agent OS，Loop Guard 与 Hand 系统参考
-- [LobsterAI](https://github.com/lobsterai/lobsterai) — Claude Agent SDK 集成参考
 
 ---
 

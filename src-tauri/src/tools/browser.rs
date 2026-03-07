@@ -254,7 +254,27 @@ impl BrowserTool {
                 mgr.headless()
             )));
         }
-        mgr.launch().await?;
+
+        // First attempt
+        match mgr.launch().await {
+            Ok(()) => {}
+            Err(first_err) => {
+                tracing::warn!("Browser launch attempt 1 failed: {}. Retrying after 1s...", first_err);
+                // Wait briefly and retry — Chrome may need time to fully exit
+                drop(mgr);
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                let mut mgr2 = self.manager.lock().await;
+                mgr2.launch().await.map_err(|e| anyhow::anyhow!(
+                    "Browser launch failed after retry.\nFirst error: {}\nRetry error: {}",
+                    first_err, e
+                ))?;
+                return Ok(ToolResult::ok(format!(
+                    "Browser launched (headless={}, needed retry)",
+                    mgr2.headless()
+                )));
+            }
+        }
+
         Ok(ToolResult::ok(format!(
             "Browser launched (headless={})",
             mgr.headless()

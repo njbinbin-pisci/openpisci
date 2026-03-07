@@ -28,6 +28,18 @@ pub struct ChatMessage {
     pub role: String,
     pub content: String,
     pub created_at: DateTime<Utc>,
+    /// JSON array of ToolUse blocks for assistant messages that made tool calls.
+    /// Serialized form of Vec<ContentBlock::ToolUse>.
+    #[serde(default)]
+    pub tool_calls_json: Option<String>,
+    /// JSON array of ToolResult blocks for user messages that carry tool results.
+    /// Serialized form of Vec<ContentBlock::ToolResult>.
+    #[serde(default)]
+    pub tool_results_json: Option<String>,
+    /// 1-based index of the conversation turn this message belongs to.
+    /// A "turn" starts with each user message.
+    #[serde(default)]
+    pub turn_index: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,6 +196,11 @@ impl Database {
         let _ = self.conn.execute("ALTER TABLE memories ADD COLUMN embedding BLOB", []);
         let _ = self.conn.execute("ALTER TABLE memories ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'personal'", []);
 
+        // Context management: add tool call persistence columns to messages (ignore if already exist)
+        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN tool_calls_json TEXT", []);
+        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN tool_results_json TEXT", []);
+        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN turn_index INTEGER", []);
+
         // Agent checkpoints for crash recovery
         self.conn.execute_batch("
             CREATE TABLE IF NOT EXISTS agent_checkpoints (
@@ -235,6 +252,18 @@ impl Database {
                 user_config TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+        ");
+
+        // One-time deduplication: remove duplicate messages caused by a previous bug where
+        // persist_agent_turn saved the full message history (including already-stored messages).
+        // Keep the earliest row (lowest rowid) for each (session_id, role, content) group.
+        let _ = self.conn.execute_batch("
+            DELETE FROM messages
+            WHERE rowid NOT IN (
+                SELECT MIN(rowid)
+                FROM messages
+                GROUP BY session_id, role, content, COALESCE(tool_calls_json,''), COALESCE(tool_results_json,'')
             );
         ");
 
@@ -372,12 +401,29 @@ impl Database {
     // ------------------------------------------------------------------
 
     pub fn append_message(&self, session_id: &str, role: &str, content: &str) -> Result<ChatMessage> {
+        self.append_message_full(session_id, role, content, None, None, None)
+    }
+
+    /// Persist a message with optional tool call data and turn index.
+    /// `tool_calls_json`: JSON array of ToolUse blocks (for assistant messages).
+    /// `tool_results_json`: JSON array of ToolResult blocks (for user/tool messages).
+    /// `turn_index`: 1-based conversation turn counter.
+    pub fn append_message_full(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        tool_calls_json: Option<&str>,
+        tool_results_json: Option<&str>,
+        turn_index: Option<i64>,
+    ) -> Result<ChatMessage> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, session_id, role, content, now_str],
+            "INSERT INTO messages (id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, session_id, role, content, now_str, tool_calls_json, tool_results_json, turn_index],
         )?;
         // Update session message count and updated_at
         self.conn.execute(
@@ -390,12 +436,16 @@ impl Database {
             role: role.to_string(),
             content: content.to_string(),
             created_at: now,
+            tool_calls_json: tool_calls_json.map(|s| s.to_string()),
+            tool_results_json: tool_results_json.map(|s| s.to_string()),
+            turn_index,
         })
     }
 
     pub fn get_messages(&self, session_id: &str, limit: i64, offset: i64) -> Result<Vec<ChatMessage>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, role, content, created_at FROM messages WHERE session_id = ?1 ORDER BY created_at ASC LIMIT ?2 OFFSET ?3"
+            "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index \
+             FROM messages WHERE session_id = ?1 ORDER BY created_at ASC, rowid ASC LIMIT ?2 OFFSET ?3"
         )?;
         let rows = stmt.query_map(params![session_id, limit, offset], |r| {
             Ok(ChatMessage {
@@ -404,9 +454,37 @@ impl Database {
                 role: r.get(2)?,
                 content: r.get(3)?,
                 created_at: r.get::<_, String>(4)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                tool_calls_json: r.get(5)?,
+                tool_results_json: r.get(6)?,
+                turn_index: r.get(7)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    /// Fetch the latest `limit` messages for a session, ordered chronologically (oldest first).
+    /// Unlike `get_messages`, this always includes the most recent messages rather than the oldest,
+    /// which is critical for building LLM context when a session has many messages.
+    pub fn get_messages_latest(&self, session_id: &str, limit: i64) -> Result<Vec<ChatMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index \
+             FROM messages WHERE session_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2"
+        )?;
+        let rows = stmt.query_map(params![session_id, limit], |r| {
+            Ok(ChatMessage {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                role: r.get(2)?,
+                content: r.get(3)?,
+                created_at: r.get::<_, String>(4)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                tool_calls_json: r.get(5)?,
+                tool_results_json: r.get(6)?,
+                turn_index: r.get(7)?,
+            })
+        })?;
+        let mut msgs: Vec<ChatMessage> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        msgs.reverse(); // Return in chronological order (oldest first)
+        Ok(msgs)
     }
 
     // ------------------------------------------------------------------
@@ -575,6 +653,25 @@ impl Database {
         self.conn.execute(
             "UPDATE skills SET enabled = ?1 WHERE id = ?2",
             params![enabled as i64, id],
+        )?;
+        Ok(())
+    }
+
+    /// Remove a skill record from the DB by ID.
+    pub fn delete_skill(&self, id: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM skills WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Insert or update a skill record in the DB.
+    /// Uses the skill name (lowercased, sanitised) as the ID.
+    /// If a record with the same ID already exists it is updated in-place.
+    pub fn upsert_skill(&self, id: &str, name: &str, description: &str, icon: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO skills (id, name, description, enabled, icon, config) \
+             VALUES (?1, ?2, ?3, 1, ?4, '{}') \
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, icon=excluded.icon",
+            params![id, name, description, icon],
         )?;
         Ok(())
     }

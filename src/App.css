@@ -53,7 +53,10 @@ body {
 }
 
 .logo {
-  font-size: 24px;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  border-radius: 6px;
 }
 
 .app-name {
@@ -276,6 +279,14 @@ textarea.input {
   margin-bottom: 16px;
 }
 
+.hint {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary, var(--text-secondary));
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
 .card {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -302,7 +313,9 @@ textarea.input {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 60px 20px;
+  flex: 1;
+  min-height: 0;
+  padding: 20px;
   color: var(--text-muted);
   text-align: center;
   gap: 12px;

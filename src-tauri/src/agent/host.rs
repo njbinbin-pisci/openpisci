@@ -49,6 +49,7 @@ impl HostAgent {
             model: self.model.clone(),
             max_tokens: self.max_tokens,
             stream: false,
+            vision_override: None,
         };
 
         let response = self.client.complete(req).await?;

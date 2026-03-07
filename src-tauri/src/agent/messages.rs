@@ -59,6 +59,10 @@ pub struct ToolResultRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
+    /// A new LLM call is starting — frontend should replace the current streaming bubble
+    /// with a fresh one (slide old one out, slide new one in).
+    /// `iteration` is the 1-based loop iteration index.
+    TextSegmentStart { iteration: u32 },
     /// Streaming text delta
     TextDelta { delta: String },
     /// Tool execution started

@@ -1,7 +1,10 @@
 pub mod claude;
 pub mod deepseek;
+pub mod kimi;
+pub mod minimax;
 pub mod openai;
 pub mod qwen;
+pub mod zhipu;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -96,6 +99,9 @@ pub struct LlmRequest {
     pub model: String,
     pub max_tokens: u32,
     pub stream: bool,
+    /// User-configured vision override. Some(true) = always send images,
+    /// Some(false) = never send images, None = auto-detect from model name.
+    pub vision_override: Option<bool>,
 }
 
 /// Non-streaming response
@@ -142,6 +148,9 @@ pub fn build_client(
         )),
         "deepseek" => Box::new(deepseek::DeepSeekClient::new(api_key)),
         "qwen" | "tongyi" => Box::new(qwen::QwenClient::new(api_key)),
+        "minimax" => Box::new(minimax::MiniMaxClient::new(api_key)),
+        "zhipu" => Box::new(zhipu::ZhipuClient::new(api_key)),
+        "kimi" | "moonshot" => Box::new(kimi::KimiClient::new(api_key)),
         _ => Box::new(claude::ClaudeClient::new(api_key)),
     }
 }

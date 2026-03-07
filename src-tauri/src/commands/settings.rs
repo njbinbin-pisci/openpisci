@@ -1,4 +1,5 @@
 use crate::store::{AppState, Settings};
+use crate::store::settings::SshServerConfig;
 use serde_json::Value;
 use tauri::State;
 use tracing::info;
@@ -16,18 +17,28 @@ pub async fn save_settings(
 ) -> Result<Settings, String> {
     let mut settings = state.settings.lock().await;
 
-    // LLM provider keys
+    // LLM provider keys — only overwrite if the incoming value is non-empty.
+    // An empty string means "unchanged" (the frontend may not send the decrypted key back).
     if let Some(v) = updates["anthropic_api_key"].as_str() {
-        settings.anthropic_api_key = v.to_string();
+        if !v.is_empty() { settings.anthropic_api_key = v.to_string(); }
     }
     if let Some(v) = updates["openai_api_key"].as_str() {
-        settings.openai_api_key = v.to_string();
+        if !v.is_empty() { settings.openai_api_key = v.to_string(); }
     }
     if let Some(v) = updates["deepseek_api_key"].as_str() {
-        settings.deepseek_api_key = v.to_string();
+        if !v.is_empty() { settings.deepseek_api_key = v.to_string(); }
     }
     if let Some(v) = updates["qwen_api_key"].as_str() {
-        settings.qwen_api_key = v.to_string();
+        if !v.is_empty() { settings.qwen_api_key = v.to_string(); }
+    }
+    if let Some(v) = updates["minimax_api_key"].as_str() {
+        if !v.is_empty() { settings.minimax_api_key = v.to_string(); }
+    }
+    if let Some(v) = updates["zhipu_api_key"].as_str() {
+        if !v.is_empty() { settings.zhipu_api_key = v.to_string(); }
+    }
+    if let Some(v) = updates["kimi_api_key"].as_str() {
+        if !v.is_empty() { settings.kimi_api_key = v.to_string(); }
     }
     if let Some(v) = updates["provider"].as_str() {
         settings.provider = v.to_string();
@@ -40,13 +51,21 @@ pub async fn save_settings(
     }
     if let Some(v) = updates["workspace_root"].as_str() {
         settings.workspace_root = v.to_string();
-        let _ = std::fs::create_dir_all(v);
+        if !v.is_empty() {
+            let _ = std::fs::create_dir_all(v);
+        }
+    }
+    if let Some(v) = updates["allow_outside_workspace"].as_bool() {
+        settings.allow_outside_workspace = v;
     }
     if let Some(v) = updates["language"].as_str() {
         settings.language = v.to_string();
     }
     if let Some(v) = updates["max_tokens"].as_u64() {
         settings.max_tokens = v as u32;
+    }
+    if let Some(v) = updates["context_window"].as_u64() {
+        settings.context_window = v as u32;
     }
     if let Some(v) = updates["confirm_shell_commands"].as_bool() {
         settings.confirm_shell_commands = v;
@@ -63,12 +82,18 @@ pub async fn save_settings(
     if let Some(v) = updates["tool_rate_limit_per_minute"].as_u64() {
         settings.tool_rate_limit_per_minute = v as u32;
     }
+    if let Some(map) = updates["builtin_tool_enabled"].as_object() {
+        settings.builtin_tool_enabled = map
+            .iter()
+            .filter_map(|(k, v)| v.as_bool().map(|b| (k.clone(), b)))
+            .collect();
+    }
     // Feishu
     if let Some(v) = updates["feishu_app_id"].as_str() {
         settings.feishu_app_id = v.to_string();
     }
     if let Some(v) = updates["feishu_app_secret"].as_str() {
-        settings.feishu_app_secret = v.to_string();
+        if !v.is_empty() { settings.feishu_app_secret = v.to_string(); }
     }
     if let Some(v) = updates["feishu_domain"].as_str() {
         settings.feishu_domain = v.to_string();
@@ -81,7 +106,7 @@ pub async fn save_settings(
         settings.wecom_corp_id = v.to_string();
     }
     if let Some(v) = updates["wecom_agent_secret"].as_str() {
-        settings.wecom_agent_secret = v.to_string();
+        if !v.is_empty() { settings.wecom_agent_secret = v.to_string(); }
     }
     if let Some(v) = updates["wecom_agent_id"].as_str() {
         settings.wecom_agent_id = v.to_string();
@@ -94,14 +119,14 @@ pub async fn save_settings(
         settings.dingtalk_app_key = v.to_string();
     }
     if let Some(v) = updates["dingtalk_app_secret"].as_str() {
-        settings.dingtalk_app_secret = v.to_string();
+        if !v.is_empty() { settings.dingtalk_app_secret = v.to_string(); }
     }
     if let Some(v) = updates["dingtalk_enabled"].as_bool() {
         settings.dingtalk_enabled = v;
     }
     // Telegram
     if let Some(v) = updates["telegram_bot_token"].as_str() {
-        settings.telegram_bot_token = v.to_string();
+        if !v.is_empty() { settings.telegram_bot_token = v.to_string(); }
     }
     if let Some(v) = updates["telegram_enabled"].as_bool() {
         settings.telegram_enabled = v;
@@ -132,7 +157,7 @@ pub async fn save_settings(
         settings.matrix_homeserver = v.to_string();
     }
     if let Some(v) = updates["matrix_access_token"].as_str() {
-        settings.matrix_access_token = v.to_string();
+        if !v.is_empty() { settings.matrix_access_token = v.to_string(); }
     }
     if let Some(v) = updates["matrix_room_id"].as_str() {
         settings.matrix_room_id = v.to_string();
@@ -145,7 +170,7 @@ pub async fn save_settings(
         settings.webhook_outbound_url = v.to_string();
     }
     if let Some(v) = updates["webhook_auth_token"].as_str() {
-        settings.webhook_auth_token = v.to_string();
+        if !v.is_empty() { settings.webhook_auth_token = v.to_string(); }
     }
     if let Some(v) = updates["webhook_enabled"].as_bool() {
         settings.webhook_enabled = v;
@@ -153,6 +178,97 @@ pub async fn save_settings(
     // WeCom relay inbox
     if let Some(v) = updates["wecom_inbox_file"].as_str() {
         settings.wecom_inbox_file = v.to_string();
+    }
+
+    // Email (SMTP / IMAP)
+    if let Some(v) = updates["smtp_host"].as_str() {
+        settings.smtp_host = v.to_string();
+    }
+    if let Some(v) = updates["smtp_port"].as_u64() {
+        settings.smtp_port = v as u16;
+    }
+    if let Some(v) = updates["smtp_username"].as_str() {
+        settings.smtp_username = v.to_string();
+    }
+    if let Some(v) = updates["smtp_password"].as_str() {
+        if !v.is_empty() { settings.smtp_password = v.to_string(); }
+    }
+    if let Some(v) = updates["imap_host"].as_str() {
+        settings.imap_host = v.to_string();
+    }
+    if let Some(v) = updates["imap_port"].as_u64() {
+        settings.imap_port = v as u16;
+    }
+    if let Some(v) = updates["smtp_from_name"].as_str() {
+        settings.smtp_from_name = v.to_string();
+    }
+    if let Some(v) = updates["email_enabled"].as_bool() {
+        settings.email_enabled = v;
+    }
+
+    // Agent loop
+    if let Some(v) = updates["max_iterations"].as_u64() {
+        settings.max_iterations = v as u32;
+    }
+
+    // Heartbeat
+    if let Some(v) = updates["heartbeat_enabled"].as_bool() {
+        settings.heartbeat_enabled = v;
+    }
+    if let Some(v) = updates["heartbeat_interval_mins"].as_u64() {
+        settings.heartbeat_interval_mins = v as u32;
+    }
+    if let Some(v) = updates["heartbeat_prompt"].as_str() {
+        settings.heartbeat_prompt = v.to_string();
+    }
+
+    // Vision / multimodal
+    if let Some(v) = updates["vision_enabled"].as_bool() {
+        settings.vision_enabled = v;
+    }
+
+    // SSH servers — full replacement when provided
+    if let Some(arr) = updates["ssh_servers"].as_array() {
+        let mut servers: Vec<SshServerConfig> = Vec::new();
+        for item in arr {
+            let id = item["id"].as_str().unwrap_or("").to_string();
+            if id.is_empty() { continue; }
+            let existing_password = settings.ssh_servers.iter()
+                .find(|s| s.id == id)
+                .map(|s| s.password.clone())
+                .unwrap_or_default();
+            let existing_key = settings.ssh_servers.iter()
+                .find(|s| s.id == id)
+                .map(|s| s.private_key.clone())
+                .unwrap_or_default();
+            servers.push(SshServerConfig {
+                id,
+                label: item["label"].as_str().unwrap_or("").to_string(),
+                host: item["host"].as_str().unwrap_or("").to_string(),
+                port: item["port"].as_u64().unwrap_or(22) as u16,
+                username: item["username"].as_str().unwrap_or("").to_string(),
+                // Only update password/key if non-empty (frontend may omit to keep existing)
+                password: {
+                    let v = item["password"].as_str().unwrap_or("");
+                    if v.is_empty() { existing_password } else { v.to_string() }
+                },
+                private_key: {
+                    let v = item["private_key"].as_str().unwrap_or("");
+                    if v.is_empty() { existing_key } else { v.to_string() }
+                },
+            });
+        }
+        settings.ssh_servers = servers;
+    }
+
+    // User tool configs
+    if let Some(map) = updates["user_tool_configs"].as_object() {
+        settings.user_tool_configs = map
+            .iter()
+            .filter_map(|(k, v)| v.as_object().map(|obj| {
+                (k.clone(), serde_json::Value::Object(obj.clone()))
+            }))
+            .collect();
     }
 
     let headless = settings.browser_headless;

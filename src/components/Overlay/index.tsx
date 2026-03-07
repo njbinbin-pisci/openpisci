@@ -15,6 +15,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { windowApi } from "../../services/tauri";
 import "./Overlay.css";
 
@@ -102,12 +103,36 @@ export default function OverlayApp() {
 
   // ── Make body transparent so Tauri's transparent window shows correctly ──
   useEffect(() => {
-    // Override the global body background (which is set to a dark color)
     document.documentElement.style.background = "transparent";
+    document.documentElement.style.overflow = "hidden";
     document.body.style.background = "transparent";
     document.body.style.overflow = "hidden";
+    document.body.style.margin = "0";
+    document.body.style.padding = "0";
     const root = document.getElementById("root");
-    if (root) root.style.background = "transparent";
+    if (root) {
+      root.style.background = "transparent";
+      root.style.overflow = "hidden";
+    }
+  }, []);
+
+  // ── Save overlay position after drag ends ─────────────────────────────────
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    // Use a debounce to avoid saving on every pixel during drag
+    let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+    getCurrentWindow().onMoved(({ payload: pos }) => {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        invoke("save_overlay_position", { x: pos.x, y: pos.y }).catch(() => {});
+      }, 500);
+    }).then((fn) => { unlisten = fn; });
+
+    return () => {
+      unlisten?.();
+      if (saveTimer) clearTimeout(saveTimer);
+    };
   }, []);
 
   // ── Toast management ──────────────────────────────────────────────────────

@@ -23,13 +23,20 @@ pub fn model_supports_vision(model: &str) -> bool {
         || m.contains("gpt-4-vision")
         || m.contains("gpt-4-turbo")
         || m.contains("o3")
-        // Qwen-VL variants
+        // Qwen — all qwen3+ and qwen-vl support vision
         || m.contains("qwen-vl")
-        // Claude 3+ (all support vision, handled by ClaudeClient but guard here too)
+        || m.contains("qwen3")
+        || m.contains("qwen2.5-vl")
+        || m.contains("qvq")
+        // Claude 3+ (all support vision)
         || m.contains("claude-3")
         || m.contains("claude-sonnet")
         || m.contains("claude-haiku")
         || m.contains("claude-opus")
+        // Gemini
+        || m.contains("gemini")
+        // MiniMax / Kimi with vision
+        || m.contains("abab6.5")
 }
 
 impl OpenAiClient {
@@ -93,7 +100,11 @@ impl OpenAiClient {
                 MessageContent::Blocks(blocks) => {
                     let new_blocks: Vec<ContentBlock> = blocks.iter().map(|b| {
                         if matches!(b, ContentBlock::Image { .. }) {
-                            Self::image_placeholder(is_latest_image_msg)
+                            if is_latest_image_msg {
+                                b.clone() // Keep the latest image for vision models
+                            } else {
+                                Self::image_placeholder(false) // Replace older images
+                            }
                         } else {
                             b.clone()
                         }
@@ -107,19 +118,131 @@ impl OpenAiClient {
     }
 
     fn convert_messages(&self, messages: &[LlmMessage], vision: bool) -> Vec<Value> {
+        // Pre-pass: build a set of indices that are "safe" to include.
+        // A tool_calls message is only safe if ALL its tool_call_ids are satisfied by
+        // immediately following tool-result messages. A tool_result message is only safe
+        // if it is preceded by a tool_calls message that contains its id.
+        // We do this by scanning forward and marking unsafe indices to skip.
+        let n = messages.len();
+        let mut skip = vec![false; n];
+
+        let mut i = 0;
+        while i < n {
+            let m = &messages[i];
+            // Check if this is an assistant message with tool_calls
+            let tool_call_ids: Vec<String> = if let MessageContent::Blocks(blocks) = &m.content {
+                blocks.iter().filter_map(|b| {
+                    if let ContentBlock::ToolUse { id, .. } = b { Some(id.clone()) } else { None }
+                }).collect()
+            } else {
+                vec![]
+            };
+
+            if !tool_call_ids.is_empty() {
+                // Collect the tool_call_ids that are satisfied by immediately following messages
+                let mut satisfied: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut j = i + 1;
+                while j < n {
+                    if let MessageContent::Blocks(blocks) = &messages[j].content {
+                        let has_result = blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }));
+                        if has_result {
+                            for b in blocks {
+                                if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                                    satisfied.insert(tool_use_id.clone());
+                                }
+                            }
+                            j += 1;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                // If any tool_call_id is not satisfied, skip this entire tool_calls+results block
+                let all_satisfied = tool_call_ids.iter().all(|id| satisfied.contains(id));
+                if !all_satisfied {
+                    tracing::warn!(
+                        "Skipping tool_calls message with unsatisfied ids {:?} (satisfied: {:?})",
+                        tool_call_ids, satisfied
+                    );
+                    skip[i] = true;
+                    // Also skip the immediately following tool-result messages for this block
+                    let mut k = i + 1;
+                    while k < n {
+                        if let MessageContent::Blocks(blocks) = &messages[k].content {
+                            if blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })) {
+                                skip[k] = true;
+                                k += 1;
+                                continue;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        // Debug: log the pre-pass skip decisions
+        for (idx, m) in messages.iter().enumerate() {
+            let summary = match &m.content {
+                MessageContent::Text(t) => format!("text({} chars)", t.len()),
+                MessageContent::Blocks(blocks) => {
+                    let uses: Vec<_> = blocks.iter().filter_map(|b| {
+                        if let ContentBlock::ToolUse { id, name, .. } = b { Some(format!("use({name}/{id})")) } else { None }
+                    }).collect();
+                    let results: Vec<_> = blocks.iter().filter_map(|b| {
+                        if let ContentBlock::ToolResult { tool_use_id, .. } = b { Some(format!("result({tool_use_id})")) } else { None }
+                    }).collect();
+                    let texts: usize = blocks.iter().filter(|b| matches!(b, ContentBlock::Text { .. })).count();
+                    format!("blocks[uses={uses:?} results={results:?} texts={texts}]")
+                }
+            };
+            tracing::debug!(
+                "convert_messages pre-pass [{idx}] role={} skip={} content={}",
+                m.role, skip[idx], summary
+            );
+        }
+
         let mut result: Vec<Value> = Vec::new();
         // Images from tool results that need to be appended as a separate user message
         // right after the tool messages (OpenAI format requires this).
         let mut pending_vision: Vec<Value> = Vec::new();
 
-        for m in messages {
+        for (idx, m) in messages.iter().enumerate() {
+            if skip[idx] {
+                tracing::debug!("convert_messages [{idx}] SKIPPED (pre-pass)");
+                continue;
+            }
+
             // Flush any pending vision images before starting a new non-tool message
             // (so they appear immediately after the last tool message).
             if !pending_vision.is_empty() && m.role != "tool" {
+                tracing::debug!("convert_messages [{idx}] flushing {} pending_vision images before role={}", pending_vision.len(), m.role);
                 result.push(json!({
                     "role": "user",
                     "content": std::mem::take(&mut pending_vision)
                 }));
+            }
+
+            // Defense: skip orphaned tool-result messages that have no preceding tool_calls.
+            // These can appear when context is truncated mid-turn.
+            if let MessageContent::Blocks(blocks) = &m.content {
+                let has_tool_result = blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }));
+                if has_tool_result {
+                    let last_role = result.last().and_then(|v| v["role"].as_str()).unwrap_or("none");
+                    let last_has_tool_calls = result.last()
+                        .and_then(|v| v["tool_calls"].as_array())
+                        .map(|a| !a.is_empty())
+                        .unwrap_or(false);
+                    if !last_has_tool_calls {
+                        tracing::warn!(
+                            "convert_messages [{idx}] SKIP orphaned tool_result (last result role={last_role}, has_tool_calls={last_has_tool_calls})"
+                        );
+                        continue;
+                    }
+                }
             }
 
             match &m.content {
@@ -155,8 +278,13 @@ impl OpenAiClient {
                                     // this branch is a safety fallback; simply skip.
                                 }
                                 ContentBlock::Text { text } if !text.is_empty() => {
-                                    // Inline text note alongside tool results (rare) → user message
-                                    result.push(json!({"role": "user", "content": text}));
+                                    // Text mixed into a tool-result block would break the OpenAI
+                                    // message ordering contract — drop it and log a warning.
+                                    let preview: String = text.chars().take(80).collect();
+                                    tracing::warn!(
+                                        "convert_messages: dropping Text block inside tool-result message to avoid API error (text={:?})",
+                                        preview
+                                    );
                                 }
                                 _ => {}
                             }
@@ -237,11 +365,30 @@ impl OpenAiClient {
             }));
         }
 
+        // Debug: log the final message sequence sent to the API
+        let seq: Vec<String> = result.iter().enumerate().map(|(i, v)| {
+            let role = v["role"].as_str().unwrap_or("?");
+            let detail = if let Some(tcs) = v["tool_calls"].as_array() {
+                let ids: Vec<_> = tcs.iter()
+                    .filter_map(|tc| tc["id"].as_str())
+                    .collect();
+                format!("tool_calls{ids:?}")
+            } else if v["tool_call_id"].is_string() {
+                format!("tool_call_id={}", v["tool_call_id"].as_str().unwrap_or("?"))
+            } else {
+                let content_len = v["content"].as_str().map(|s| s.len()).unwrap_or(0);
+                format!("content({content_len} chars)")
+            };
+            format!("[{i}]{role}:{detail}")
+        }).collect();
+        tracing::debug!("convert_messages final sequence: {}", seq.join(" → "));
+
         result
     }
 
     fn build_body(&self, req: &LlmRequest) -> Value {
-        let vision = model_supports_vision(&req.model);
+        let vision = req.vision_override.unwrap_or_else(|| model_supports_vision(&req.model));
+        tracing::info!("build_body: model={} vision_override={:?} vision={}", req.model, req.vision_override, vision);
         let stripped = self.strip_images(&req.messages, vision);
         let messages = self.convert_messages(&stripped, vision);
         let mut body = json!({

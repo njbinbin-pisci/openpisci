@@ -3,13 +3,53 @@ import { useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { RootState, chatActions, sessionsActions, ToolStep } from "../../store";
-import { chatApi, sessionsApi, AgentEventType } from "../../services/tauri";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
+import { RootState, chatActions, sessionsActions, ToolStep, StreamingState } from "../../store";
+import { chatApi, sessionsApi, gatewayApi, fishApi, AgentEventType, ChannelInfo, ChatAttachment } from "../../services/tauri";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import mermaid from "mermaid";
 import "./Chat.css";
+
+// ─── Mermaid diagram block ────────────────────────────────────────────────────
+mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
+
+let mermaidIdCounter = 0;
+
+function MermaidBlock({ code }: { code: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const idRef = useRef(`mermaid-${++mermaidIdCounter}`);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const id = idRef.current;
+    setError(null);
+    mermaid.render(id, code)
+      .then(({ svg }) => {
+        if (ref.current) ref.current.innerHTML = svg;
+      })
+      .catch((e) => {
+        setError(String(e));
+      });
+  }, [code]);
+
+  if (error) {
+    return (
+      <pre className="code-block">
+        <span className="code-lang">mermaid (parse error)</span>
+        <code>{code}</code>
+      </pre>
+    );
+  }
+  return <div ref={ref} className="mermaid-block" />;
+}
 
 /** Map a session.source value to a compact display emoji/label. */
 function sourceIcon(source: string): string {
   if (source === "chat" || !source) return "";
+  if (source.startsWith("fish_")) return "🐠";
   if (source.includes("telegram")) return "✈";
   if (source.includes("feishu") || source.includes("lark")) return "🪶";
   if (source.includes("wecom") || source.includes("wechat")) return "💬";
@@ -26,29 +66,78 @@ export default function Chat() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const { sessions, activeSessionId } = useSelector((s: RootState) => s.sessions);
-  const { messagesBySession, streamingText, toolSteps, isRunning } = useSelector(
+  const { messagesBySession, streaming, toolSteps, isRunning } = useSelector(
     (s: RootState) => s.chat
   );
 
   const [input, setInput] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
-  // "all" | "chat" | "im"
-  const [sessionFilter, setSessionFilter] = useState<"all" | "chat" | "im">("all");
+  // "all" | "chat" | "fish" | "im"
+  const [sessionFilter, setSessionFilter] = useState<"all" | "chat" | "fish" | "im">("all");
+
+  // Attachment state
+  const [attachment, setAttachment] = useState<ChatAttachment | null>(null);
+  // Preview URL for image attachments (object URL or base64 data URL)
+  const [attachmentPreview, setAttachmentPreview] = useState<string | null>(null);
+  // Set of fish IDs that are currently activated (have an active instance)
+  const [activeFishIds, setActiveFishIds] = useState<Set<string>>(new Set());
+  const [gatewayChannels, setGatewayChannels] = useState<ChannelInfo[]>([]);
+  const [gatewayConnecting, setGatewayConnecting] = useState(false);
+  const [gatewayDisconnecting, setGatewayDisconnecting] = useState(false);
+  // History pagination for IM sessions: how many messages have been loaded
+  const [historyLimit, setHistoryLimit] = useState(100);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [permissionRequest, setPermissionRequest] = useState<{
     requestId: string;
     toolName: string;
     toolInput: any;
     description: string;
   } | null>(null);
+
+  // Context debug preview
+  const [contextPreview, setContextPreview] = useState<{
+    system_prompt: string;
+    system_tokens: number;
+    messages: { role: string; content: string; tokens: number }[];
+    messages_tokens: number;
+    total_tokens: number;
+    tool_count: number;
+    tool_names: string[];
+    model: string;
+    context_budget: number;
+  } | null>(null);
+  const [contextPreviewLoading, setContextPreviewLoading] = useState(false);
+  const [contextPreviewTab, setContextPreviewTab] = useState<"messages" | "system" | "tools">("messages");
+
+  const handleShowContextPreview = async () => {
+    if (!activeSessionId) return;
+    setContextPreviewLoading(true);
+    try {
+      const preview = await invoke<typeof contextPreview>("get_context_preview", { sessionId: activeSessionId });
+      setContextPreview(preview);
+      setContextPreviewTab("messages");
+    } catch (e) {
+      alert("Failed to load context preview: " + String(e));
+    } finally {
+      setContextPreviewLoading(false);
+    }
+  };
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesAreaRef = useRef<HTMLDivElement>(null);
   const toolStepsScrollRef = useRef<HTMLDivElement>(null);
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Whether the user is scrolled near the bottom (so we auto-scroll on new messages)
+  const isNearBottomRef = useRef(true);
+  // Flag set during loadMoreHistory to suppress auto-scroll
+  const loadingMoreRef = useRef(false);
   // Keep a ref to the current sessionId so event callbacks always see the latest value
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+  // Keep a ref to isImSession so the event callback closure always sees the latest value
+  const isImSessionRef = useRef(false);
 
   // Throttle buffer for text_delta — accumulate deltas and flush every 80ms
   const deltaBufferRef = useRef<Record<string, string>>({});
@@ -71,18 +160,109 @@ export default function Chat() {
     };
   }, [dispatch]);
 
-  const activeMessages = activeSessionId ? messagesBySession[activeSessionId] ?? [] : [];
-  const streamingContent = activeSessionId ? streamingText[activeSessionId] ?? "" : "";
+  const activeMessages = (activeSessionId ? messagesBySession[activeSessionId] ?? [] : [])
+    // Filter out tool-result carrier messages (role=user, no text content, only tool_results_json)
+    .filter((m) => !(m.role === "user" && !m.content.trim() && m.tool_results_json))
+    // Filter out pure tool-call assistant messages (no text content, only tool_calls_json).
+    // Keep assistant messages that have actual text content even if they also have tool_calls_json.
+    .filter((m) => !(m.role === "assistant" && !m.content.trim() && m.tool_calls_json))
+    // Filter out duplicate consecutive messages with same role and content
+    .filter((m, i, arr) => {
+      if (i === 0) return true;
+      const prev = arr[i - 1];
+      return !(prev.role === m.role && prev.content === m.content);
+    });
+  const streamingState: StreamingState | null = activeSessionId ? streaming[activeSessionId] ?? null : null;
+  const streamingCurrent = streamingState?.current ?? "";
   const running = activeSessionId ? isRunning[activeSessionId] ?? false : false;
   const steps = activeSessionId ? toolSteps[activeSessionId] ?? [] : [];
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
 
-  // Load messages when session changes
+  // Tool steps panel: open while running, auto-close when agent finishes
+  const [stepsOpen, setStepsOpen] = useState(false);
+  const prevRunningRef = useRef(false);
+  useEffect(() => {
+    if (running && !prevRunningRef.current) {
+      // Agent just started — open the steps panel
+      setStepsOpen(true);
+    } else if (!running && prevRunningRef.current) {
+      // Agent just finished — hide the steps panel
+      setStepsOpen(false);
+    }
+    prevRunningRef.current = running;
+  }, [running]);
+  const isFishSession = !!(activeSession?.source && activeSession.source.startsWith("fish_"));
+  const isImSession = !!(activeSession?.source && activeSession.source !== "chat" && !isFishSession);
+  isImSessionRef.current = isImSession;
+  // True only when the fish session's fish is currently activated
+  const activeFishId = isFishSession ? activeSession!.source.replace(/^fish_/, "") : null;
+  const isFishActivated = activeFishId ? activeFishIds.has(activeFishId) : false;
+
+  // Load messages when the active session ID changes.
+  // Also sync running state from DB to fix stale state if im_session_done was missed.
   useEffect(() => {
     if (!activeSessionId) return;
-    sessionsApi.getMessages(activeSessionId).then((messages) => {
-      dispatch(chatActions.setMessages({ sessionId: activeSessionId, messages }));
-    });
+    setHistoryLimit(100);
+    isNearBottomRef.current = true;
+
+    const load = async () => {
+      try {
+        const [messages, { sessions: fresh }] = await Promise.all([
+          sessionsApi.getMessages(activeSessionId, 100, 0),
+          sessionsApi.list(),
+        ]);
+        dispatch(chatActions.setMessages({ sessionId: activeSessionId, messages }));
+        setHasMoreHistory(messages.length >= 100);
+        // Correct stale running state from DB
+        const s = fresh.find((x) => x.id === activeSessionId);
+        if (s && s.status !== "running") {
+          dispatch(chatActions.setRunning({ sessionId: activeSessionId, running: false }));
+          dispatch(chatActions.clearStreaming(activeSessionId));
+        }
+      } catch (e) {
+        console.error('[Chat] failed to load messages on session switch:', e);
+      }
+    };
+    load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, dispatch]);
+
+  // Load more history (older messages) for IM sessions
+  const loadMoreHistory = useCallback(() => {
+    if (!activeSessionId) return;
+    const el = messagesAreaRef.current;
+    // Snapshot scroll position before loading so we can restore it after
+    const scrollHeightBefore = el?.scrollHeight ?? 0;
+    const scrollTopBefore = el?.scrollTop ?? 0;
+    loadingMoreRef.current = true;
+    const newLimit = historyLimit + 100;
+    setHistoryLimit(newLimit);
+    sessionsApi.getMessages(activeSessionId, newLimit, 0).then((messages) => {
+      dispatch(chatActions.setMessages({ sessionId: activeSessionId, messages }));
+      setHasMoreHistory(messages.length >= newLimit);
+      // After React re-renders, restore scroll so the user stays at the same visual position
+      requestAnimationFrame(() => {
+        if (el) {
+          const added = el.scrollHeight - scrollHeightBefore;
+          el.scrollTop = scrollTopBefore + added;
+        }
+        loadingMoreRef.current = false;
+      });
+    }).catch(() => { loadingMoreRef.current = false; });
+  }, [activeSessionId, historyLimit, dispatch]);
+
+  // Auto-adjust filter when the active session changes (depends on sessions for source lookup)
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const activeSession = sessions.find((s) => s.id === activeSessionId);
+    if (activeSession?.source && activeSession.source !== "chat") {
+      if (activeSession.source.startsWith("fish_")) {
+        setSessionFilter("fish");
+      } else {
+        setSessionFilter("im");
+      }
+    }
+  }, [activeSessionId, sessions]);
 
   // Subscribe to agent events — use ref to avoid stale closure over activeSessionId
   useEffect(() => {
@@ -103,6 +283,18 @@ export default function Chat() {
       const sid = activeSessionIdRef.current;
       if (!sid) return;
       switch (event.type) {
+        case "text_segment_start":
+          // Flush any buffered delta before starting a new segment
+          {
+            const buffered = deltaBufferRef.current[sid];
+            if (buffered) {
+              delete deltaBufferRef.current[sid];
+              dispatch(chatActions.appendDelta({ sessionId: sid, delta: buffered }));
+            }
+          }
+          // Mark segment boundary — current text stays visible, new deltas will append
+          dispatch(chatActions.startNewSegment(sid));
+          break;
         case "text_delta":
           // Buffer delta for throttled flush (80ms interval)
           deltaBufferRef.current[sid] = (deltaBufferRef.current[sid] ?? "") + event.delta;
@@ -128,15 +320,19 @@ export default function Chat() {
           });
           break;
         case "done":
+          console.log('[Chat] agent done event, sid=', sid, 'isImSession=', isImSessionRef.current);
           dispatch(chatActions.setRunning({ sessionId: sid, running: false }));
-          // Backend persists the assistant message BEFORE emitting Done (race condition fix).
-          // Reload from DB then clear streaming text. Tool steps are kept for review.
-          sessionsApi.getMessages(sid).then((messages) => {
-            dispatch(chatActions.setMessages({ sessionId: sid, messages }));
-            dispatch(chatActions.clearStreaming(sid));
-          }).catch(() => {
-            dispatch(chatActions.clearStreaming(sid));
-          });
+          dispatch(chatActions.clearStreaming(sid));
+          dispatch(chatActions.removeOptimisticMessages(sid));
+          if (!isImSessionRef.current) {
+            // Regular chat: reload from DB immediately (persist is synchronous before Done event)
+            sessionsApi.getMessages(sid).then((messages) => {
+              console.log('[Chat] done: reloaded', messages.length, 'messages for', sid);
+              dispatch(chatActions.setMessages({ sessionId: sid, messages }));
+            }).catch(() => {});
+          }
+          // IM sessions: App.tsx listens for im_session_done (emitted AFTER persist_agent_turn),
+          // which will reload messages. No action needed here.
           break;
         case "error":
           dispatch(chatActions.setRunning({ sessionId: sid, running: false }));
@@ -162,10 +358,24 @@ export default function Chat() {
     };
   }, [activeSessionId, dispatch]);
 
-  // Auto-scroll messages to bottom when new messages or streaming text arrive
+  // Track whether user is near the bottom of the messages area
   useEffect(() => {
+    const el = messagesAreaRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const threshold = 120;
+      isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Auto-scroll to bottom only when user is near the bottom and not loading history
+  useEffect(() => {
+    if (loadingMoreRef.current) return;
+    if (!isNearBottomRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeMessages, streamingContent]);
+  }, [activeMessages, streamingCurrent]);
 
   // Scroll the tool-steps area to the bottom when a new step is added or toggled open
   useEffect(() => {
@@ -185,48 +395,247 @@ export default function Chat() {
     }
   }, [dispatch, t]);
 
+  // Load gateway status on mount and when switching to IM filter
+  useEffect(() => {
+    gatewayApi.list().then((r) => setGatewayChannels(r.channels)).catch(() => setGatewayChannels([]));
+  }, [sessionFilter]);
+
+  // Load activated fish list on mount and when switching to fish filter
+  useEffect(() => {
+    fishApi.list().then((list) => {
+      setActiveFishIds(new Set(list.filter((f) => !!f.instance).map((f) => f.id)));
+    }).catch(() => {});
+  }, [sessionFilter]);
+
+  const handleGatewayConnect = useCallback(async () => {
+    setGatewayConnecting(true);
+    try {
+      const r = await Promise.race([
+        gatewayApi.connect(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error(t("settings.channelTimeout"))), 20000)),
+      ]);
+      setGatewayChannels(r.channels);
+    } catch {
+      // ignore, user can retry
+    } finally {
+      setGatewayConnecting(false);
+    }
+  }, [t]);
+
+  const handleGatewayDisconnect = useCallback(async () => {
+    setGatewayDisconnecting(true);
+    try {
+      await gatewayApi.disconnect();
+      setGatewayChannels([]);
+    } catch {
+      // ignore
+    } finally {
+      setGatewayDisconnecting(false);
+    }
+  }, []);
+
   const handleDeleteSession = useCallback(async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
     try {
       await sessionsApi.delete(sessionId);
       dispatch(sessionsActions.removeSession(sessionId));
-      // If we deleted the active session, switch to another or clear
+      // If we deleted the active session, switch to the next session
+      // within the CURRENT filter to avoid jumping to a different tab
       if (activeSessionId === sessionId) {
-        const remaining = sessions.filter((s) => s.id !== sessionId);
+        const filterSession = (s: typeof sessions[0]) => {
+          const isFish = !!(s.source && s.source.startsWith("fish_"));
+          const fishActivated = isFish && activeFishIds.has(s.source!.replace(/^fish_/, ""));
+          if (sessionFilter === "chat") return !s.source || s.source === "chat";
+          if (sessionFilter === "fish") return isFish && fishActivated;
+          if (sessionFilter === "im") return !!(s.source && s.source !== "chat" && !isFish);
+          return !isFish || fishActivated;
+        };
+        const remaining = sessions.filter((s) => s.id !== sessionId && filterSession(s));
         dispatch(sessionsActions.setActiveSession(remaining.length > 0 ? remaining[0].id : null));
       }
     } catch (e) {
       setSendError(t("chat.failedDelete", { error: String(e) }));
     }
-  }, [activeSessionId, sessions, dispatch, t]);
+  }, [activeSessionId, sessions, sessionFilter, activeFishIds, dispatch, t]);
+
+  const handleAttach = useCallback(async () => {
+    try {
+      const selected = await openFileDialog({
+        multiple: false,
+        filters: [
+          { name: t("chat.attachImages"), extensions: ["png", "jpg", "jpeg", "gif", "webp"] },
+          { name: t("chat.attachFiles"), extensions: ["pdf", "txt", "md", "csv", "json", "ts", "tsx", "js", "jsx", "py", "rs", "go", "java", "c", "cpp", "h", "yaml", "toml", "xml", "html", "css"] },
+          { name: t("chat.attachAll"), extensions: ["*"] },
+        ],
+      });
+      if (!selected) return;
+
+      const filePath = selected as string;
+      const filename = filePath.split(/[\\/]/).pop() ?? filePath;
+      const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+      const imageExts = ["png", "jpg", "jpeg", "gif", "webp"];
+      const isImage = imageExts.includes(ext);
+
+      if (isImage) {
+        // Read file bytes and convert to base64 for vision model support
+        const bytes = await readFile(filePath);
+        const mimeMap: Record<string, string> = {
+          png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+          gif: "image/gif", webp: "image/webp",
+        };
+        const mediaType = mimeMap[ext] ?? "image/jpeg";
+        // Build base64 string
+        let binary = "";
+        const chunk = 8192;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode(...bytes.slice(i, i + chunk));
+        }
+        const b64 = btoa(binary);
+        setAttachment({ media_type: mediaType, path: filePath, data: b64, filename });
+        setAttachmentPreview(`data:${mediaType};base64,${b64}`);
+      } else {
+        // Non-image: just pass path
+        setAttachment({ media_type: "application/octet-stream", path: filePath, filename });
+        setAttachmentPreview(null);
+      }
+    } catch (e) {
+      console.error("attach error:", e);
+    }
+  }, [t]);
+
+  const clearAttachment = useCallback(() => {
+    setAttachment(null);
+    setAttachmentPreview(null);
+  }, []);
+
+  // ── File drag-and-drop ────────────────────────────────────────────────────
+  const [isDragging, setIsDragging] = useState(false);
+
+  const processDroppedFile = useCallback(async (filePath: string) => {
+    const filename = filePath.split(/[\\/]/).pop() ?? filePath;
+    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+    const imageExts = ["png", "jpg", "jpeg", "gif", "webp"];
+    const isImage = imageExts.includes(ext);
+
+    if (isImage) {
+      try {
+        const bytes = await readFile(filePath);
+        const mimeMap: Record<string, string> = {
+          png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+          gif: "image/gif", webp: "image/webp",
+        };
+        const mediaType = mimeMap[ext] ?? "image/jpeg";
+        let binary = "";
+        const chunk = 8192;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode(...bytes.slice(i, i + chunk));
+        }
+        const b64 = btoa(binary);
+        setAttachment({ media_type: mediaType, path: filePath, data: b64, filename });
+        setAttachmentPreview(`data:${mediaType};base64,${b64}`);
+      } catch (e) {
+        console.error("drop image read error:", e);
+        // Fallback: just use path
+        setAttachment({ media_type: "application/octet-stream", path: filePath, filename });
+      }
+    } else {
+      // Non-image: append path to input text
+      setInput((prev) => {
+        const sep = prev.trim() ? "\n" : "";
+        return prev + sep + filePath;
+      });
+    }
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (running) return;
+
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+
+    // Check if any file is an image (for single-image attachment)
+    const imageExts = ["png", "jpg", "jpeg", "gif", "webp"];
+    const imageFiles = files.filter(f => {
+      const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
+      return imageExts.includes(ext);
+    });
+    const nonImageFiles = files.filter(f => {
+      const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
+      return !imageExts.includes(ext);
+    });
+
+    // Single image and no non-image files: use attachment mechanism
+    if (imageFiles.length === 1 && nonImageFiles.length === 0) {
+      // Get path via webkitRelativePath or name; Tauri provides full path via dataTransfer
+      const filePath = (files[0] as any).path as string | undefined;
+      if (filePath) {
+        await processDroppedFile(filePath);
+        return;
+      }
+    }
+
+    // Multiple files or non-images: append all paths to input
+    for (const file of files) {
+      const filePath = (file as any).path as string | undefined;
+      if (filePath) {
+        await processDroppedFile(filePath);
+      }
+    }
+  }, [running, processDroppedFile]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!running) setIsDragging(true);
+  }, [running]);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  }, []);
 
   const handleSend = useCallback(async () => {
-    if (!input.trim() || !activeSessionId || running) return;
+    if ((!input.trim() && !attachment) || !activeSessionId || running) return;
 
     const content = input.trim();
     setInput("");
     setSendError(null);
+    const pendingAttachment = attachment;
+    clearAttachment();
 
-    // Clear tool steps from the previous turn before starting a new one
+    // Clear tool steps and any residual streaming text from the previous turn
     dispatch(chatActions.clearToolSteps(activeSessionId));
+    dispatch(chatActions.clearStreaming(activeSessionId));
 
     // Auto-title: if this is the first message in the session, derive a title from it
     const currentMessages = messagesBySession[activeSessionId] ?? [];
     if (currentMessages.length === 0) {
-      const raw = content.replace(/\s+/g, " ").trim();
+      const raw = (content || pendingAttachment?.filename || "").replace(/\s+/g, " ").trim();
       const title = raw.length > 30 ? raw.slice(0, 30) + "…" : raw;
-      sessionsApi.rename(activeSessionId, title).catch(() => {});
-      dispatch(sessionsActions.updateSessionTitle({ id: activeSessionId, title }));
+      if (title) {
+        sessionsApi.rename(activeSessionId, title).catch(() => {});
+        dispatch(sessionsActions.updateSessionTitle({ id: activeSessionId, title }));
+      }
     }
 
-    // Optimistically add user message
+    // Build display content for optimistic message (include attachment hint)
+    const displayContent = pendingAttachment
+      ? content
+        ? `${content}\n📎 ${pendingAttachment.filename ?? pendingAttachment.path ?? t("chat.attachment")}`
+        : `📎 ${pendingAttachment.filename ?? pendingAttachment.path ?? t("chat.attachment")}`
+      : content;
+
+    // Optimistically add user message (id prefixed with "optimistic_" so it can be removed on reload)
     dispatch(chatActions.appendMessage({
       sessionId: activeSessionId,
       message: {
-        id: Date.now().toString(),
+        id: `optimistic_${Date.now()}`,
         session_id: activeSessionId,
         role: "user",
-        content,
+        content: displayContent,
         created_at: new Date().toISOString(),
       },
     }));
@@ -234,19 +643,20 @@ export default function Chat() {
     dispatch(chatActions.setRunning({ sessionId: activeSessionId, running: true }));
 
     try {
-      console.log('[Chat] sending message to session:', activeSessionId);
-      // chat_send now returns immediately (agent runs in background).
-      // The event listener is already registered via the useEffect above,
-      // so no race condition — events will arrive after this call returns.
-      await chatApi.send(activeSessionId, content);
-      console.log('[Chat] chat_send returned (agent running in background)');
+      if (isFishSession && activeSession?.source) {
+        // Fish session: extract fish_id from source "fish_{id}" and call fish_chat_send
+        const fishId = activeSession.source.replace(/^fish_/, "");
+        await fishApi.chatSend(fishId, content);
+      } else {
+        await chatApi.send(activeSessionId, content, pendingAttachment ?? undefined);
+      }
     } catch (e) {
-      console.error('[Chat] chat_send error:', e);
+      console.error('[Chat] send error:', e);
       dispatch(chatActions.setRunning({ sessionId: activeSessionId, running: false }));
       dispatch(chatActions.clearStreaming(activeSessionId));
       setSendError(`${e}`);
     }
-  }, [input, activeSessionId, running, dispatch]);
+  }, [input, attachment, activeSessionId, running, isFishSession, activeSession, dispatch, clearAttachment, t]);
 
   const handleCancel = useCallback(() => {
     if (activeSessionId) {
@@ -285,7 +695,7 @@ export default function Chat() {
 
         {/* Filter tabs */}
         <div style={{ display: "flex", gap: 4, padding: "4px 8px 0", fontSize: 12 }}>
-          {(["all", "chat", "im"] as const).map((f) => (
+          {(["all", "chat", "fish", "im"] as const).map((f) => (
             <button
               key={f}
               onClick={() => setSessionFilter(f)}
@@ -300,42 +710,112 @@ export default function Chat() {
                 fontSize: 11,
               }}
             >
-              {f === "all" ? t("chat.filterAll") : f === "chat" ? t("chat.filterChat") : t("chat.filterIM")}
+              {f === "all" ? t("chat.filterAll") : f === "chat" ? t("chat.filterChat") : f === "fish" ? t("chat.filterFish") : t("chat.filterIM")}
             </button>
           ))}
         </div>
 
-        {sessions
-          .filter((s) => {
+        <div style={{ flex: 1, overflowY: "auto" }}>
+          {sessions
+            .filter((s) => {
+              const isFish = !!(s.source && s.source.startsWith("fish_"));
+              const fishActivated = isFish && activeFishIds.has(s.source!.replace(/^fish_/, ""));
+              if (sessionFilter === "chat") return !s.source || s.source === "chat";
+              if (sessionFilter === "fish") return isFish && fishActivated;
+              if (sessionFilter === "im") return !!(s.source && s.source !== "chat" && !isFish);
+              // "all": chat + activated fish + IM
+              return !isFish || fishActivated;
+            })
+            .map((s) => {
+              const icon = sourceIcon(s.source);
+              return (
+                <div
+                  key={s.id}
+                  className={`session-item ${s.id === activeSessionId ? "active" : ""}`}
+                  onClick={() => dispatch(sessionsActions.setActiveSession(s.id))}
+                >
+                  <span className="session-title">
+                    {icon && <span style={{ marginRight: 4, fontSize: 12 }}>{icon}</span>}
+                    {(s.title ?? t("chat.defaultTitle")).replace(/^🐠\s*/, "")}
+                  </span>
+                  <span className="session-item-right">
+                    <span className="session-count">{s.message_count}</span>
+                    <button
+                      className="session-delete-btn"
+                      title={t("chat.deleteChat")}
+                      onClick={(e) => handleDeleteSession(e, s.id)}
+                    >✕</button>
+                  </span>
+                </div>
+              );
+            })}
+          {sessions.filter((s) => {
+            const isFish = !!(s.source && s.source.startsWith("fish_"));
+            const fishActivated = isFish && activeFishIds.has(s.source!.replace(/^fish_/, ""));
             if (sessionFilter === "chat") return !s.source || s.source === "chat";
-            if (sessionFilter === "im") return s.source && s.source !== "chat";
-            return true;
-          })
-          .map((s) => {
-            const icon = sourceIcon(s.source);
-            return (
-              <div
-                key={s.id}
-                className={`session-item ${s.id === activeSessionId ? "active" : ""}`}
-                onClick={() => dispatch(sessionsActions.setActiveSession(s.id))}
-              >
-                <span className="session-title">
-                  {icon && <span style={{ marginRight: 4, fontSize: 12 }}>{icon}</span>}
-                  {s.title ?? t("chat.defaultTitle")}
-                </span>
-                <span className="session-item-right">
-                  <span className="session-count">{s.message_count}</span>
-                  <button
-                    className="session-delete-btn"
-                    title={t("chat.deleteChat")}
-                    onClick={(e) => handleDeleteSession(e, s.id)}
-                  >✕</button>
-                </span>
+            if (sessionFilter === "fish") return isFish && fishActivated;
+            if (sessionFilter === "im") return !!(s.source && s.source !== "chat" && !isFish);
+            return !isFish || fishActivated;
+          }).length === 0 && (
+            <div className="session-empty">{t("chat.noChats")}</div>
+          )}
+        </div>
+
+        {/* IM channel quick-connect panel — shown when IM filter is active */}
+        {sessionFilter === "im" && (
+          <div style={{
+            marginTop: "auto",
+            borderTop: "1px solid var(--border)",
+            padding: "10px 8px",
+            fontSize: 12,
+          }}>
+            {/* Connected channels list */}
+            {gatewayChannels.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                {gatewayChannels.map((ch) => (
+                  <div key={ch.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", color: "var(--text-secondary)" }}>
+                    <span style={{ fontSize: 11 }}>{ch.name}</span>
+                    <span style={{
+                      fontSize: 10,
+                      color: ch.status === "Connected" ? "#28a745" : ch.status === "Connecting" ? "#ffc107" : "var(--text-muted)",
+                      fontWeight: 600,
+                    }}>
+                      {ch.status === "Connected" ? "●" : ch.status === "Connecting" ? "◌" : "○"}
+                    </span>
+                  </div>
+                ))}
               </div>
-            );
-          })}
-        {sessions.length === 0 && (
-          <div className="session-empty">{t("chat.noChats")}</div>
+            )}
+            <div style={{ display: "flex", gap: 4 }}>
+              {(() => {
+                const hasConnected = gatewayChannels.some((ch) => ch.status === "Connected" || ch.status === "Connecting");
+                return (
+                  <>
+                    <button
+                      className="btn btn-primary"
+                      style={{ flex: 1, fontSize: 11, padding: "4px 0", justifyContent: "center" }}
+                      onClick={handleGatewayConnect}
+                      disabled={gatewayConnecting || gatewayDisconnecting}
+                    >
+                      {gatewayConnecting
+                        ? t("common.connecting")
+                        : hasConnected
+                          ? t("settings.reconnectChannels")
+                          : t("settings.connectChannels")}
+                    </button>
+                    <button
+                      className="btn"
+                      style={{ flex: 1, fontSize: 11, padding: "4px 0", justifyContent: "center", border: "1px solid var(--border)" }}
+                      onClick={handleGatewayDisconnect}
+                      disabled={gatewayDisconnecting || gatewayConnecting || !hasConnected}
+                    >
+                      {gatewayDisconnecting ? t("common.disconnecting") : t("settings.disconnectAll")}
+                    </button>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
         )}
       </div>
 
@@ -350,11 +830,38 @@ export default function Chat() {
               </div>
             )}
 
-            <div className="messages-area">
+            {isFishSession && (
+              <div style={{
+                padding: "6px 16px",
+                fontSize: 12,
+                color: "var(--text-secondary)",
+                background: "var(--bg-secondary)",
+                borderBottom: "1px solid var(--border)",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}>
+                <span style={{ fontSize: 16 }}>🐠</span>
+                <span style={{ fontWeight: 500 }}>{(activeSession?.title ?? t("chat.fishSession")).replace(/^🐠\s*/, "")}</span>
+                <span style={{ marginLeft: "auto", opacity: 0.6, fontSize: 11 }}>{t("chat.fishSessionHint")}</span>
+              </div>
+            )}
+
+            <div className="messages-area" ref={messagesAreaRef}>
+              {isImSession && hasMoreHistory && (
+                <div style={{ textAlign: "center", padding: "8px 0" }}>
+                  <button
+                    className="load-more-btn"
+                    onClick={loadMoreHistory}
+                  >
+                    {t("chat.loadMoreHistory")}
+                  </button>
+                </div>
+              )}
               {activeMessages.map((msg) => (
                 <div key={msg.id} className={`message message-${msg.role}`}>
                   <div className="message-role">
-                    {msg.role === "user" ? t("chat.you") : t("chat.pisci")}
+                    {msg.role === "user" ? t("chat.you") : isFishSession ? (activeSession?.title ?? t("chat.fishSession")).replace(/^🐠\s*/, "") : t("chat.pisci")}
                   </div>
                   <div className="message-content">
                     <MessageContent content={msg.content} />
@@ -362,72 +869,68 @@ export default function Chat() {
                 </div>
               ))}
 
-              {/* Tool steps — persist after completion, user can expand/collapse each */}
+              {/* Tool steps — visible while running; collapses to a single summary line when done */}
               {steps.length > 0 && (
                 <div className="tool-steps-container">
-                  <div className="tool-steps-header">
+                  <div
+                    className={`tool-steps-header${!running ? " tool-steps-header-clickable" : ""}`}
+                    onClick={!running ? () => setStepsOpen((o) => !o) : undefined}
+                  >
                     <span className="tool-steps-label">
                       {running
                         ? t("chat.agentWorking")
                         : t("chat.agentSteps", { count: steps.length })}
                     </span>
                     {!running && (
-                      <button
-                        className="tool-steps-toggle-all"
-                        onClick={() => {
-                          const allExpanded = steps.every((s) => s.expanded);
-                          steps.forEach((s) =>
-                            dispatch(chatActions.toggleToolStep({ sessionId: activeSessionId!, id: s.id }))
-                          );
-                          // After expanding all, scroll to the bottom of the steps area
-                          if (!allExpanded) {
-                            requestAnimationFrame(() => {
-                              const el = toolStepsScrollRef.current;
-                              if (el) el.scrollTop = el.scrollHeight;
-                            });
-                          }
-                        }}
-                      >
-                        {steps.every((s) => s.expanded) ? t("chat.collapseAll") : t("chat.expandAll")}
-                      </button>
+                      <span className="tool-steps-chevron">{stepsOpen ? "▲" : "▼"}</span>
                     )}
                   </div>
-                  {/* Scrollable body — isolated from flex container height constraints */}
-                  <div className="tool-steps-scroll" ref={toolStepsScrollRef}>
-                    {steps.map((step) => (
-                      <ToolStepCard
-                        key={step.id}
-                        step={step}
-                        onToggle={() => {
-                          dispatch(chatActions.toggleToolStep({ sessionId: activeSessionId!, id: step.id }));
-                          // If expanding, scroll this step into view after render
-                          if (!step.expanded) {
-                            requestAnimationFrame(() => {
-                              const el = toolStepsScrollRef.current;
-                              if (el) {
-                                // Find the toggled step's DOM element and scroll it visible
-                                const cards = el.querySelectorAll<HTMLElement>(".tool-step-card");
-                                const idx = steps.findIndex((s) => s.id === step.id);
-                                if (idx >= 0 && cards[idx]) {
-                                  cards[idx].scrollIntoView({ block: "nearest", behavior: "smooth" });
+                  {/* Steps body: always visible while running, hidden when done unless user opens */}
+                  {(running || stepsOpen) && (
+                    <div className="tool-steps-scroll" ref={toolStepsScrollRef}>
+                      {steps.map((step) => (
+                        <ToolStepCard
+                          key={step.id}
+                          step={step}
+                          onToggle={() => {
+                            dispatch(chatActions.toggleToolStep({ sessionId: activeSessionId!, id: step.id }));
+                            if (!step.expanded) {
+                              requestAnimationFrame(() => {
+                                const el = toolStepsScrollRef.current;
+                                if (el) {
+                                  const cards = el.querySelectorAll<HTMLElement>(".tool-step-card");
+                                  const idx = steps.findIndex((s) => s.id === step.id);
+                                  if (idx >= 0 && cards[idx]) {
+                                    cards[idx].scrollIntoView({ block: "nearest", behavior: "smooth" });
+                                  }
                                 }
-                              }
-                            });
-                          }
-                        }}
-                      />
-                    ))}
-                  </div>
+                              });
+                            }
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Streaming text bubble */}
-              {streamingContent && (
-                <div className="message message-assistant">
+              {/* Single streaming bubble — shows thinking dots until first text arrives,
+                  then displays the latest streamed text. Disappears when running stops.
+                  Hidden for IM sessions (headless agent, no real-time text stream). */}
+              {running && !isImSession && (
+                <div className="message message-assistant streaming-bubble">
                   <div className="message-role">{t("chat.pisci")}</div>
                   <div className="message-content">
-                    <MessageContent content={streamingContent} />
-                    <span className="cursor-blink">▋</span>
+                    {streamingCurrent ? (
+                      <>
+                        <MessageContent content={streamingCurrent} />
+                        <span className="cursor-blink">▋</span>
+                      </>
+                    ) : (
+                      <span className="thinking-dots">
+                        <span /><span /><span />
+                      </span>
+                    )}
                   </div>
                 </div>
               )}
@@ -435,7 +938,43 @@ export default function Chat() {
               <div ref={messagesEndRef} />
             </div>
 
-            <div className="input-area">
+            {isImSession && (
+              <div style={{ padding: "8px 16px", fontSize: 12, color: "var(--text-muted)", borderTop: "1px solid var(--border)", textAlign: "center" }}>
+                {t("chat.imSessionHint")}
+              </div>
+            )}
+
+            {isFishSession && !isFishActivated && (
+              <div style={{ padding: "12px 16px", fontSize: 12, color: "var(--text-muted)", borderTop: "1px solid var(--border)", textAlign: "center", background: "var(--bg-secondary)" }}>
+                {t("chat.fishNotActivated")}
+              </div>
+            )}
+
+            {!isImSession && (!isFishSession || isFishActivated) && <div
+              className={`input-area${isDragging ? " drag-over" : ""}`}
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+            >
+              {isDragging && (
+                <div className="drag-overlay">
+                  <div className="drag-overlay-text">📎 {t("chat.dropFiles")}</div>
+                </div>
+              )}
+              {/* Attachment preview strip */}
+              {attachment && (
+                <div className="attachment-preview">
+                  {attachmentPreview ? (
+                    <img src={attachmentPreview} className="attachment-thumb" alt={attachment.filename} />
+                  ) : (
+                    <span className="attachment-file-icon">📎</span>
+                  )}
+                  <span className="attachment-name" title={attachment.path}>
+                    {attachment.filename ?? attachment.path}
+                  </span>
+                  <button className="attachment-remove" onClick={clearAttachment} title={t("chat.removeAttachment")}>✕</button>
+                </div>
+              )}
               <textarea
                 ref={textareaRef}
                 className="chat-input"
@@ -447,6 +986,25 @@ export default function Chat() {
                 disabled={running}
               />
               <div className="input-actions">
+                <button
+                  className="btn btn-attach"
+                  onClick={handleAttach}
+                  disabled={running}
+                  title={t("chat.attachFile")}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                  </svg>
+                </button>
+                <button
+                  className="btn btn-attach"
+                  onClick={handleShowContextPreview}
+                  disabled={contextPreviewLoading || !activeSessionId}
+                  title={t("chat.debugContextTitle")}
+                  style={{ opacity: 0.6, fontSize: 14 }}
+                >
+                  {contextPreviewLoading ? "…" : "🔍"}
+                </button>
                 {running ? (
                   <button className="btn btn-danger" onClick={handleCancel}>
                     ⏹ {t("common.stop")}
@@ -455,17 +1013,19 @@ export default function Chat() {
                   <button
                     className="btn btn-primary"
                     onClick={handleSend}
-                    disabled={!input.trim()}
+                    disabled={!input.trim() && !attachment}
                   >
                     {t("common.send")} ↵
                   </button>
                 )}
               </div>
-            </div>
+            </div>}
           </>
         ) : (
           <div className="empty-state">
-            <div className="empty-state-icon">🐟</div>
+            <div className="empty-state-icon">
+              <img src="/pisci.png" alt="Pisci" style={{ width: 64, height: 64, objectFit: "contain", borderRadius: 14, opacity: 0.7 }} />
+            </div>
             <div className="empty-state-title">{t("chat.welcome")}</div>
             <div className="empty-state-desc">{t("chat.welcomeDesc")}</div>
             <button className="btn btn-primary" onClick={handleNewSession}>
@@ -501,49 +1061,184 @@ export default function Chat() {
           </div>
         </div>
       )}
+
+      {contextPreview && (
+        <div className="permission-overlay" onClick={() => setContextPreview(null)}>
+          <div
+            className="permission-dialog"
+            style={{ maxWidth: 780, width: "90vw", maxHeight: "85vh", display: "flex", flexDirection: "column", padding: 0, overflow: "hidden" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+              <div>
+                <span style={{ fontWeight: 600, fontSize: 15 }}>🔍 {t("chat.debugContextTitle")}</span>
+                <span style={{ marginLeft: 12, fontSize: 12, color: "var(--text-muted)" }}>
+                  {contextPreview.model} · ~{contextPreview.total_tokens.toLocaleString()} tokens / {contextPreview.context_budget.toLocaleString()} budget
+                </span>
+              </div>
+              <button
+                onClick={() => setContextPreview(null)}
+                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-muted)", lineHeight: 1 }}
+              >✕</button>
+            </div>
+
+            {/* Tabs */}
+            <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+              {(["messages", "system", "tools"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setContextPreviewTab(tab)}
+                  style={{
+                    padding: "8px 18px",
+                    border: "none",
+                    borderBottom: contextPreviewTab === tab ? "2px solid var(--accent)" : "2px solid transparent",
+                    background: "none",
+                    cursor: "pointer",
+                    fontSize: 13,
+                    fontWeight: contextPreviewTab === tab ? 600 : 400,
+                    color: contextPreviewTab === tab ? "var(--accent)" : "var(--text-secondary)",
+                  }}
+                >
+                  {tab === "messages" && `${t("chat.debugTabMessages")} (${contextPreview.messages.length})`}
+                  {tab === "system" && `${t("chat.debugTabSystem")} (~${contextPreview.system_tokens.toLocaleString()} tok)`}
+                  {tab === "tools" && `${t("chat.debugTabTools")} (${contextPreview.tool_count})`}
+                </button>
+              ))}
+            </div>
+
+            {/* Content */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "12px 18px" }}>
+              {contextPreviewTab === "messages" && (
+                <div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
+                    {t("chat.debugMessagesHint")} · ~{contextPreview.messages_tokens.toLocaleString()} tokens
+                  </div>
+                  {contextPreview.messages.length === 0 ? (
+                    <div style={{ color: "var(--text-muted)", fontSize: 13 }}>{t("chat.debugNoMessages")}</div>
+                  ) : (
+                    contextPreview.messages.map((msg, i) => (
+                      <div key={i} style={{
+                        marginBottom: 10,
+                        borderRadius: 6,
+                        border: "1px solid var(--border)",
+                        overflow: "hidden",
+                      }}>
+                        <div style={{
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                          padding: "5px 10px",
+                          background: msg.role === "user" ? "rgba(var(--accent-rgb),0.08)" : "var(--bg-secondary)",
+                          fontSize: 12, fontWeight: 600,
+                        }}>
+                          <span style={{ textTransform: "uppercase", letterSpacing: "0.05em", color: msg.role === "user" ? "var(--accent)" : "var(--text-secondary)" }}>
+                            {msg.role}
+                          </span>
+                          <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>~{msg.tokens} tok</span>
+                        </div>
+                        <pre style={{
+                          margin: 0, padding: "8px 10px",
+                          fontSize: 12, lineHeight: 1.5,
+                          whiteSpace: "pre-wrap", wordBreak: "break-word",
+                          maxHeight: 200, overflowY: "auto",
+                          color: "var(--text-primary)",
+                          background: "var(--bg-primary)",
+                        }}>
+                          {msg.content}
+                        </pre>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {contextPreviewTab === "system" && (
+                <div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
+                    ~{contextPreview.system_tokens.toLocaleString()} tokens
+                  </div>
+                  <pre style={{
+                    margin: 0, fontSize: 12, lineHeight: 1.6,
+                    whiteSpace: "pre-wrap", wordBreak: "break-word",
+                    color: "var(--text-primary)",
+                  }}>
+                    {contextPreview.system_prompt}
+                  </pre>
+                </div>
+              )}
+
+              {contextPreviewTab === "tools" && (
+                <div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
+                    {contextPreview.tool_count} {t("chat.debugToolsRegistered")}
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {contextPreview.tool_names.map((name) => (
+                      <span key={name} style={{
+                        padding: "3px 10px", borderRadius: 12,
+                        background: "var(--bg-secondary)", border: "1px solid var(--border)",
+                        fontSize: 12, color: "var(--text-secondary)",
+                      }}>
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-// Renders message content with basic markdown: code blocks and inline text
+// Renders message content with full Markdown support (GFM: tables, strikethrough, task lists, etc.)
 function MessageContent({ content }: { content: string }) {
-  const segments: React.ReactNode[] = [];
-  const lines = content.split("\n");
-  let i = 0;
-  let key = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    if (line.startsWith("```")) {
-      // Collect code block lines
-      const lang = line.slice(3).trim();
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      i++; // skip closing ```
-      segments.push(
-        <pre key={key++} className="code-block">
-          {lang && <span className="code-lang">{lang}</span>}
-          <code>{codeLines.join("\n")}</code>
-        </pre>
-      );
-    } else {
-      // Regular text line
-      segments.push(
-        <span key={key++}>
-          {line}
-          {i < lines.length - 1 && <br />}
-        </span>
-      );
-      i++;
-    }
-  }
-
-  return <>{segments}</>;
+  return (
+    <div className="markdown-body">
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        // Open links in new tab
+        a: ({ href, children }) => (
+          <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+        ),
+        // Code blocks with language label; mermaid gets special rendering
+        code: ({ className, children, ...props }) => {
+          const isBlock = !!className;
+          const lang = className?.replace("language-", "") ?? "";
+          if (isBlock) {
+            if (lang === "mermaid") {
+              return <MermaidBlock code={String(children).trimEnd()} />;
+            }
+            return (
+              <pre className="code-block">
+                {lang && <span className="code-lang">{lang}</span>}
+                <code>{children}</code>
+              </pre>
+            );
+          }
+          return <code className="inline-code" {...props}>{children}</code>;
+        },
+        // Inline images — clickable for full-size view
+        img: ({ src, alt }) => (
+          <img
+            src={src}
+            alt={alt || "image"}
+            className="message-image"
+            onClick={(e) => {
+              const w = window.open();
+              if (w) { w.document.write(`<img src="${src}" style="max-width:100%">`); }
+              e.stopPropagation();
+            }}
+          />
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+    </div>
+  );
 }
 
 // ─── Tool step card ───────────────────────────────────────────────────────────

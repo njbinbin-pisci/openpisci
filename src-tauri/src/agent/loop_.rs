@@ -47,6 +47,9 @@ pub struct AgentLoop {
     pub confirmation_responses: Option<ConfirmationResponseMap>,
     /// User confirmation preferences from Settings
     pub confirm_flags: ConfirmFlags,
+    /// User-configured vision override (from settings.vision_enabled).
+    /// None = auto-detect from model name.
+    pub vision_override: Option<bool>,
 }
 
 impl AgentLoop {
@@ -143,23 +146,71 @@ impl AgentLoop {
 
         let result = match self.registry.get(name) {
             Some(tool) => {
-                debug!("Executing tool: {}", name);
+                // Log key input fields to aid debugging (path, command, query, etc.)
+                let input_hint = match name {
+                    "file_read" | "file_write" => input["path"].as_str().unwrap_or("?").to_string(),
+                    "shell" => format!(
+                        "[{}] {}",
+                        input["interpreter"].as_str().unwrap_or("powershell"),
+                        input["command"].as_str().unwrap_or("?").chars().take(100).collect::<String>()
+                    ),
+                    "powershell_query" => format!(
+                        "query={} arch={}",
+                        input["query"].as_str().unwrap_or("?"),
+                        input["arch"].as_str().unwrap_or("x64")
+                    ),
+                    "web_search" => input["query"].as_str().unwrap_or("?").chars().take(80).collect(),
+                    "browser" => format!("action={} url={}", input["action"].as_str().unwrap_or("?"), input["url"].as_str().unwrap_or("")),
+                    "com_invoke" => format!(
+                        "action={} prog_id={} arch={}",
+                        input["action"].as_str().unwrap_or("?"),
+                        input["prog_id"].as_str().unwrap_or("?"),
+                        input["arch"].as_str().unwrap_or("x64")
+                    ),
+                    "wmi" => format!(
+                        "preset={} query={}",
+                        input["preset"].as_str().unwrap_or(""),
+                        input["query"].as_str().unwrap_or("?").chars().take(80).collect::<String>()
+                    ),
+                    "uia" => format!(
+                        "action={} name={} window={}",
+                        input["action"].as_str().unwrap_or("?"),
+                        input["name"].as_str().unwrap_or(""),
+                        input["window_title"].as_str().unwrap_or("")
+                    ),
+                    _ => input.to_string().chars().take(100).collect(),
+                };
+                debug!("Executing tool: {} | input: {}", name, input_hint);
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(TOOL_TIMEOUT_SECS),
                     tool.call(input.clone(), ctx),
                 ).await {
                     Ok(Ok(r)) => r,
                     Ok(Err(e)) => {
-                        warn!("Tool '{}' error: {}", name, e);
-                        super::tool::ToolResult::err(format!("Tool error: {}", e))
+                        let err_msg = e.to_string();
+                        warn!("Tool '{}' error: {} | input: {}", name, err_msg, input_hint);
+                        // Provide actionable error messages for common failure patterns
+                        let friendly = friendly_tool_error(name, &err_msg);
+                        super::tool::ToolResult::err(friendly)
                     }
                     Err(_) => {
                         warn!("Tool '{}' timed out after {}s", name, TOOL_TIMEOUT_SECS);
-                        super::tool::ToolResult::err(format!("Tool '{}' timed out after {} seconds", name, TOOL_TIMEOUT_SECS))
+                        super::tool::ToolResult::err(format!(
+                            "工具 '{}' 执行超时（{}秒）。可能原因：命令阻塞、网络超时或进程挂起。请尝试简化命令或分步执行。",
+                            name, TOOL_TIMEOUT_SECS
+                        ))
                     }
                 }
             }
-            None => super::tool::ToolResult::err(format!("Tool '{}' not found", name)),
+            None => {
+                warn!("Tool '{}' not found in registry", name);
+                let available: Vec<String> = self.registry.all().iter().map(|t| t.name().to_string()).collect();
+                super::tool::ToolResult::err(format!(
+                    "工具 '{}' 未找到。当前可用工具：{}。请检查工具名称是否正确，或在设置中启用该工具。",
+                    name,
+                    available.join(", ")
+                ))
+            }
         };
 
         let end_result = format!("[trace_id:{}] {}", trace_id, result.content);
@@ -269,6 +320,12 @@ impl AgentLoop {
 
             info!("agent loop iteration={} messages={}", _iteration, messages.len());
 
+            // Signal frontend that a new LLM call is starting — it should replace the
+            // current streaming bubble with a fresh one (slide old out, slide new in).
+            let _ = event_tx.send(AgentEvent::TextSegmentStart {
+                iteration: _iteration as u32 + 1,
+            }).await;
+
             // Build request
             let req = LlmRequest {
                 messages: messages.clone(),
@@ -277,6 +334,7 @@ impl AgentLoop {
                 model: self.model.clone(),
                 max_tokens: self.max_tokens,
                 stream: true,
+                vision_override: self.vision_override,
             };
 
             // Call LLM with exponential-backoff retry for transient failures
@@ -429,6 +487,138 @@ impl AgentLoop {
         // AgentEvent::Done AFTER persisting the result to the database.
         Ok((messages, total_input, total_output))
     }
+}
+
+/// Convert low-level tool errors into actionable, user-friendly messages.
+fn friendly_tool_error(tool_name: &str, raw_error: &str) -> String {
+    let raw_lower = raw_error.to_lowercase();
+
+    // File system errors
+    if raw_lower.contains("no such file") || raw_lower.contains("not found") || raw_lower.contains("cannot find") {
+        return format!(
+            "[{}] 文件或路径不存在。请确认路径正确，或先用 file_write 创建文件。\n详情：{}",
+            tool_name, raw_error
+        );
+    }
+    if raw_lower.contains("permission denied") || raw_lower.contains("access is denied")
+        || raw_lower.contains("拒绝访问") || raw_lower.contains("0x80070005")
+    {
+        if tool_name == "shell" || tool_name == "file_write" {
+            return format!(
+                "[{}] 权限不足（Access Denied）。\
+                 如需管理员权限，请对 shell 工具使用 elevated: true 参数，\
+                 Windows 会弹出 UAC 对话框请用户确认。\n详情：{}",
+                tool_name, raw_error
+            );
+        }
+        return format!(
+            "[{}] 权限不足，无法访问该文件/目录。\
+             如需管理员权限，请使用 shell 工具并设置 elevated: true。\n详情：{}",
+            tool_name, raw_error
+        );
+    }
+    if raw_lower.contains("already exists") {
+        return format!(
+            "[{}] 文件或目录已存在。如需覆盖，请使用 file_write（会自动覆盖）。\n详情：{}",
+            tool_name, raw_error
+        );
+    }
+
+    // Network errors
+    if raw_lower.contains("connection refused") || raw_lower.contains("connection reset") {
+        return format!(
+            "[{}] 网络连接失败。请检查网络连接或目标服务是否可用。\n详情：{}",
+            tool_name, raw_error
+        );
+    }
+    if raw_lower.contains("timeout") || raw_lower.contains("timed out") {
+        return format!(
+            "[{}] 网络请求超时。请检查网络状态，或稍后重试。\n详情：{}",
+            tool_name, raw_error
+        );
+    }
+    if raw_lower.contains("dns") || raw_lower.contains("resolve") || raw_lower.contains("no route") {
+        return format!(
+            "[{}] DNS 解析失败，无法访问目标地址。请检查网络连接。\n详情：{}",
+            tool_name, raw_error
+        );
+    }
+
+    // Shell/process errors
+    if tool_name == "shell" || tool_name == "powershell_query" {
+        if raw_lower.contains("not recognized") || raw_lower.contains("not found") {
+            return format!(
+                "[{}] 命令未找到。请确认命令名称正确，或该程序已安装并在 PATH 中。\n详情：{}",
+                tool_name, raw_error
+            );
+        }
+        if raw_lower.contains("exit code") {
+            return format!(
+                "[{}] 命令执行失败（非零退出码）。请检查命令语法和参数。\n详情：{}",
+                tool_name, raw_error
+            );
+        }
+    }
+
+    // Browser errors
+    if tool_name == "browser" {
+        if raw_lower.contains("chrome") || raw_lower.contains("browser") || raw_lower.contains("cdp") {
+            return format!(
+                "[{}] 浏览器连接失败。请确认 Chrome 已安装，或在设置中检查浏览器配置。\n详情：{}",
+                tool_name, raw_error
+            );
+        }
+        if raw_lower.contains("element") || raw_lower.contains("selector") {
+            return format!(
+                "[{}] 页面元素未找到。页面可能尚未加载完成，或选择器有误。建议先截图确认页面状态。\n详情：{}",
+                tool_name, raw_error
+            );
+        }
+    }
+
+    // WMI / COM errors
+    if tool_name == "wmi" || tool_name == "com" {
+        if raw_lower.contains("wmi") || raw_lower.contains("com") || raw_lower.contains("dispatch") {
+            return format!(
+                "[{}] Windows 系统接口调用失败。请确认以管理员权限运行，或该功能在当前系统版本可用。\n详情：{}",
+                tool_name, raw_error
+            );
+        }
+    }
+
+    // com_invoke errors
+    if tool_name == "com_invoke" {
+        if raw_lower.contains("regdb_e_classnotreg") || raw_lower.contains("0x80040154") {
+            return format!(
+                "[com_invoke] COM 对象未注册（REGDB_E_CLASSNOTREG）。\
+                 最常见原因：该 COM 对象是 32 位组件，需要用 arch=x86 参数。\
+                 请重试并添加 arch: \"x86\"。\n详情：{}",
+                raw_error
+            );
+        }
+        if raw_lower.contains("0x80020009") || raw_lower.contains("disp_e_exception") {
+            return format!(
+                "[com_invoke] COM 方法调用抛出异常。请检查方法名称和参数是否正确。\n详情：{}",
+                raw_error
+            );
+        }
+        if raw_lower.contains("0x80070005") || raw_lower.contains("e_accessdenied") {
+            return format!(
+                "[com_invoke] COM 对象访问被拒绝。可能需要管理员权限，或该对象不允许外部调用。\n详情：{}",
+                raw_error
+            );
+        }
+        if raw_lower.contains("progid") || raw_lower.contains("new-object") {
+            return format!(
+                "[com_invoke] 无法创建 COM 对象。请确认 ProgID 正确，软件已安装，\
+                 并尝试 arch=x86（32位软件）。\n详情：{}",
+                raw_error
+            );
+        }
+    }
+
+    // Generic fallback
+    format!("[{}] 工具执行失败：{}", tool_name, raw_error)
 }
 
 fn truncate_str(s: &str, max: usize) -> String {

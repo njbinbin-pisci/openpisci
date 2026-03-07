@@ -34,48 +34,46 @@ pub fn chrome_exe_name() -> &'static str {
 
 /// Check if a Chrome executable already exists at the given path
 pub fn chrome_exists(chrome_dir: &Path) -> Option<PathBuf> {
-    // Check for chrome-headless-shell
-    let headless = chrome_dir.join(chrome_exe_name());
-    if headless.exists() {
-        return Some(headless);
-    }
-    // Check for full chrome
+    // Prefer full chrome (better CDP compatibility) over chrome-headless-shell
     #[cfg(target_os = "windows")]
-    let full = chrome_dir.join("chrome.exe");
+    let full_name = "chrome.exe";
     #[cfg(not(target_os = "windows"))]
-    let full = chrome_dir.join("chrome");
-    if full.exists() {
-        return Some(full);
+    let full_name = "chrome";
+
+    // Walk subdirs (Chrome for Testing extracts into a versioned subdirectory)
+    fn find_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
+        let direct = dir.join(name);
+        if direct.exists() { return Some(direct); }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    let candidate = p.join(name);
+                    if candidate.exists() { return Some(candidate); }
+                }
+            }
+        }
+        None
+    }
+
+    if let Some(p) = find_in_dir(chrome_dir, full_name) {
+        return Some(p);
+    }
+    // Fallback: chrome-headless-shell
+    if let Some(p) = find_in_dir(chrome_dir, chrome_exe_name()) {
+        return Some(p);
     }
     None
 }
 
 /// Try to find a Chromium-based browser installed on the system.
-/// Priority on Windows: Edge (always present) → Chrome → Chrome Beta/Dev/Canary
+/// NOTE: Microsoft Edge is intentionally excluded — its CDP implementation is
+/// incompatible with chromiumoxide (WebSocket messages fail to deserialize).
+/// Priority on Windows: Chrome → Chrome Beta/Dev/Canary → Brave
 pub fn find_system_chrome() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        // Edge is built into Windows 10 1803+ and Windows 11 — check first
-        let edge_candidates = [
-            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-        ];
-        for path in &edge_candidates {
-            let p = PathBuf::from(path);
-            if p.exists() {
-                info!("Found system Edge: {}", p.display());
-                return Some(p);
-            }
-        }
-        // LOCALAPPDATA Edge (per-user install)
-        if let Ok(local) = std::env::var("LOCALAPPDATA") {
-            let p = PathBuf::from(&local).join(r"Microsoft\Edge\Application\msedge.exe");
-            if p.exists() {
-                info!("Found user-installed Edge: {}", p.display());
-                return Some(p);
-            }
-        }
-        // Google Chrome
+        // Google Chrome (most compatible with chromiumoxide/CDP)
         let chrome_candidates = [
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -98,7 +96,7 @@ pub fn find_system_chrome() -> Option<PathBuf> {
                 return Some(p);
             }
         }
-        // Brave browser (also Chromium-based)
+        // Brave browser (Chromium-based, CDP compatible)
         let brave_candidates = [
             r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
             r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
@@ -110,13 +108,16 @@ pub fn find_system_chrome() -> Option<PathBuf> {
                 return Some(p);
             }
         }
+        // Edge is intentionally last and skipped — its CDP is incompatible with chromiumoxide.
+        // Uncomment only if chromiumoxide adds Edge support.
+        // let edge_candidates = [...];
     }
     #[cfg(target_os = "macos")]
     {
         let candidates = [
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
             "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+            // Edge excluded on macOS too for the same CDP compatibility reason
         ];
         for path in &candidates {
             let p = PathBuf::from(path);
@@ -162,15 +163,22 @@ pub async fn download_chrome_for_testing(dest_dir: &Path) -> Result<PathBuf> {
 
     let platform = platform_str();
 
-    // Find the stable channel download URL for chrome-headless-shell
-    let download_url = resp["channels"]["Stable"]["downloads"]["chrome-headless-shell"]
+    // Prefer full "chrome" binary over "chrome-headless-shell":
+    // chrome-headless-shell lacks full CDP support and causes "error decoding response body"
+    // with chromiumoxide. Fall back to chrome-headless-shell only if chrome is unavailable.
+    let download_url = resp["channels"]["Stable"]["downloads"]["chrome"]
         .as_array()
-        .and_then(|arr| {
-            arr.iter().find(|item| item["platform"].as_str() == Some(platform))
-        })
+        .and_then(|arr| arr.iter().find(|item| item["platform"].as_str() == Some(platform)))
         .and_then(|item| item["url"].as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| anyhow::anyhow!("Could not find chrome-headless-shell download URL for platform: {}", platform))?;
+        .or_else(|| {
+            resp["channels"]["Stable"]["downloads"]["chrome-headless-shell"]
+                .as_array()
+                .and_then(|arr| arr.iter().find(|item| item["platform"].as_str() == Some(platform)))
+                .and_then(|item| item["url"].as_str())
+                .map(|s| s.to_string())
+        })
+        .ok_or_else(|| anyhow::anyhow!("Could not find chrome download URL for platform: {}", platform))?;
 
     let version = resp["channels"]["Stable"]["version"]
         .as_str()
@@ -183,7 +191,7 @@ pub async fn download_chrome_for_testing(dest_dir: &Path) -> Result<PathBuf> {
         .context("Failed to create Chrome download directory")?;
 
     // Download the zip
-    let zip_path = dest_dir.join("chrome-headless-shell.zip");
+    let zip_path = dest_dir.join("chrome-for-testing.zip");
     let mut resp = client
         .get(&download_url)
         .send()
@@ -254,8 +262,12 @@ fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<()> {
 }
 
 fn find_extracted_exe(dir: &Path) -> Option<PathBuf> {
-    let exe_name = chrome_exe_name();
-    // Walk directory looking for the executable
+    // Search for full chrome first (preferred), then chrome-headless-shell as fallback
+    #[cfg(target_os = "windows")]
+    let candidates = ["chrome.exe", "chrome-headless-shell.exe"];
+    #[cfg(not(target_os = "windows"))]
+    let candidates = ["chrome", "chrome-headless-shell"];
+
     fn walk(dir: &Path, exe_name: &str) -> Option<PathBuf> {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
@@ -271,5 +283,11 @@ fn find_extracted_exe(dir: &Path) -> Option<PathBuf> {
         }
         None
     }
-    walk(dir, exe_name)
+
+    for name in &candidates {
+        if let Some(found) = walk(dir, name) {
+            return Some(found);
+        }
+    }
+    None
 }

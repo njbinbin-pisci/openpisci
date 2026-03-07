@@ -13,9 +13,23 @@ impl Tool for UiaTool {
 
     fn description(&self) -> &str {
         "Control Windows desktop applications via UI Automation (UIA). \
-         Supports finding controls, clicking, typing, keyboard shortcuts, scrolling, \
-         drag-drop, window management, and more. \
-         Use screen_capture with Vision AI as fallback when UIA cannot find elements."
+         Supports finding controls, clicking, typing, keyboard shortcuts, scrolling, drag-drop, window management. \
+         \
+         Recommended workflow: \
+         1. list_windows — find the target window title \
+         2. find (with window_title) — locate a specific control by name/type \
+         3. click / type / send_hotkey — interact with the control \
+         \
+         When find fails (element not found): \
+         → Use screen_capture to take a screenshot and visually locate the element \
+         → Then use click with x/y coordinates instead of name-based find \
+         → Or use smart_find which tries fuzzy matching \
+         \
+         Tips: \
+         - Always specify window_title to narrow the search scope \
+         - Use annotate_elements to get a labeled map of all controls in a window \
+         - For text input fields, use 'type' action (not 'click' then 'type') \
+         - send_hotkey supports: ctrl+c, ctrl+v, alt+f4, win+d, ctrl+shift+esc, etc."
     }
 
     fn input_schema(&self) -> Value {
@@ -109,6 +123,10 @@ impl Tool for UiaTool {
                 "max_elements": {
                     "type": "integer",
                     "description": "Maximum number of elements to annotate (for annotate_elements, default 30)"
+                },
+                "logical_coords": {
+                    "type": "boolean",
+                    "description": "If true, x/y/x2/y2 are treated as logical (DPI-unaware) pixel coordinates from a screenshot and will be automatically multiplied by the DPI scale factor to get physical screen coordinates. Use this when coordinates come from screen_capture image analysis."
                 }
             },
             "required": ["action"]
@@ -178,16 +196,32 @@ impl UiaTool {
         let mut matcher = automation.create_matcher().from(root).timeout(timeout_ms);
         if let Some(name) = input["name"].as_str() {
             matcher = matcher.name(name);
-        } else if let Some(aid_fallback) = input["automation_id"].as_str() {
-            // Compatibility fallback: when automation_id APIs are limited,
-            // treat automation_id as a name hint to improve matching.
-            matcher = matcher.name(aid_fallback);
+        }
+        // automation_id is a unique control identifier (e.g. "btnOK"), distinct from name (display text)
+        // UIMatcher has no built-in automation_id filter, so use filter_fn
+        if let Some(aid) = input["automation_id"].as_str().map(|s| s.to_string()) {
+            matcher = matcher.filter_fn(Box::new(move |el: &uiautomation::UIElement| {
+                Ok(el.get_automation_id().unwrap_or_default() == aid)
+            }));
         }
         if let Some(class) = input["class_name"].as_str() {
             matcher = matcher.classname(class);
-        } else if let Some(control_type_fallback) = input["control_type"].as_str() {
-            // Compatibility fallback: map control_type to classname filter.
-            matcher = matcher.classname(control_type_fallback);
+        }
+        // control_type filter: map common names to Win32 classnames
+        if let Some(ct) = input["control_type"].as_str() {
+            let classname = match ct.to_lowercase().as_str() {
+                "button" => "Button",
+                "edit" | "textbox" => "Edit",
+                "combobox" => "ComboBox",
+                "listbox" => "ListBox",
+                "listview" => "SysListView32",
+                "treeview" => "SysTreeView32",
+                "toolbar" => "ToolbarWindow32",
+                "statusbar" => "msctls_statusbar32",
+                "tabcontrol" => "SysTabControl32",
+                _ => ct,
+            };
+            matcher = matcher.classname(classname);
         }
         matcher
     }
@@ -350,15 +384,80 @@ impl UiaTool {
 
     fn get_value(&self, input: &Value) -> Result<ToolResult> {
         use uiautomation::UIAutomation;
+        use uiautomation::patterns::{UIValuePattern, UITextPattern};
         let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
         let root = self.get_search_root(&automation, input)?;
         let matcher = self.build_matcher(&automation, root, input, 5000);
 
         match matcher.find_first() {
             Ok(element) => {
-                // Get element name/value
                 let name = element.get_name().unwrap_or_default();
-                Ok(ToolResult::ok(format!("Value: {}", name)))
+
+                // Try ValuePattern first (standard edit controls, combo boxes)
+                if let Ok(pattern) = element.get_pattern::<UIValuePattern>() {
+                    if let Ok(val) = pattern.get_value() {
+                        if !val.is_empty() {
+                            return Ok(ToolResult::ok(format!(
+                                "Element: '{}'\nValue (ValuePattern): {}",
+                                name, val
+                            )));
+                        }
+                    }
+                }
+
+                // Try TextPattern (RichEdit, document controls)
+                if let Ok(pattern) = element.get_pattern::<UITextPattern>() {
+                    if let Ok(doc_range) = pattern.get_document_range() {
+                        if let Ok(text) = doc_range.get_text(1_000_000) {
+                            if !text.is_empty() {
+                                return Ok(ToolResult::ok(format!(
+                                    "Element: '{}'\nValue (TextPattern): {}",
+                                    name, text
+                                )));
+                            }
+                        }
+                    }
+                }
+
+                // Win32 fallback: WM_GETTEXT for classic Edit / RichEdit controls
+                if let Ok(handle) = element.get_native_window_handle() {
+                    use windows::Win32::Foundation::{HWND, WPARAM, LPARAM};
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        SendMessageW, WM_GETTEXT, WM_GETTEXTLENGTH,
+                    };
+                    let hwnd_isize: isize = handle.into();
+                    let hwnd = HWND(hwnd_isize as *mut core::ffi::c_void);
+                    let len = unsafe {
+                        SendMessageW(hwnd, WM_GETTEXTLENGTH, WPARAM(0), LPARAM(0))
+                    };
+                    if len.0 > 0 {
+                        let buf_len = (len.0 as usize) + 1;
+                        let mut buf: Vec<u16> = vec![0u16; buf_len];
+                        let copied = unsafe {
+                            SendMessageW(
+                                hwnd,
+                                WM_GETTEXT,
+                                WPARAM(buf_len),
+                                LPARAM(buf.as_mut_ptr() as isize),
+                            )
+                        };
+                        if copied.0 > 0 {
+                            let text = String::from_utf16_lossy(&buf[..copied.0 as usize]);
+                            if !text.is_empty() {
+                                return Ok(ToolResult::ok(format!(
+                                    "Element: '{}'\nValue (WM_GETTEXT): {}",
+                                    name, text
+                                )));
+                            }
+                        }
+                    }
+                }
+
+                // Final fallback: element name only
+                Ok(ToolResult::ok(format!(
+                    "Element: '{}'\nNote: ValuePattern not supported by this control. Name returned as fallback.",
+                    name
+                )))
             }
             Err(e) => Ok(ToolResult::err(format!("Element not found: {}", e))),
         }
@@ -366,14 +465,83 @@ impl UiaTool {
 
     fn get_text(&self, input: &Value) -> Result<ToolResult> {
         use uiautomation::UIAutomation;
+        use uiautomation::patterns::{UIValuePattern, UITextPattern};
         let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
         let root = self.get_search_root(&automation, input)?;
         let matcher = self.build_matcher(&automation, root, input, 5000);
 
         match matcher.find_first() {
             Ok(element) => {
-                let text = element.get_name().unwrap_or_default();
-                Ok(ToolResult::ok(format!("Text: {}", text)))
+                let name = element.get_name().unwrap_or_default();
+
+                // Try TextPattern first (rich text, document controls).
+                // Use a large positive max_length instead of -1 to avoid crate-specific quirks
+                // where -1 may be interpreted as "0 characters" on some controls.
+                if let Ok(pattern) = element.get_pattern::<UITextPattern>() {
+                    if let Ok(doc_range) = pattern.get_document_range() {
+                        if let Ok(text) = doc_range.get_text(1_000_000) {
+                            if !text.is_empty() {
+                                return Ok(ToolResult::ok(format!(
+                                    "Element: '{}'\nText (TextPattern): {}",
+                                    name, text
+                                )));
+                            }
+                        }
+                    }
+                }
+
+                // Try ValuePattern as fallback (standard edit controls, combo boxes)
+                if let Ok(pattern) = element.get_pattern::<UIValuePattern>() {
+                    if let Ok(val) = pattern.get_value() {
+                        if !val.is_empty() {
+                            return Ok(ToolResult::ok(format!(
+                                "Element: '{}'\nText (ValuePattern): {}",
+                                name, val
+                            )));
+                        }
+                    }
+                }
+
+                // Win32 fallback: use WM_GETTEXT for Edit / RichEdit controls that don't
+                // expose TextPattern or ValuePattern via UIA (e.g. classic Notepad RichEdit).
+                if let Ok(handle) = element.get_native_window_handle() {
+                    use windows::Win32::Foundation::{HWND, WPARAM, LPARAM};
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        SendMessageW, WM_GETTEXT, WM_GETTEXTLENGTH,
+                    };
+                    let hwnd_isize: isize = handle.into();
+                    let hwnd = HWND(hwnd_isize as *mut core::ffi::c_void);
+                    let len = unsafe {
+                        SendMessageW(hwnd, WM_GETTEXTLENGTH, WPARAM(0), LPARAM(0))
+                    };
+                    if len.0 > 0 {
+                        let buf_len = (len.0 as usize) + 1;
+                        let mut buf: Vec<u16> = vec![0u16; buf_len];
+                        let copied = unsafe {
+                            SendMessageW(
+                                hwnd,
+                                WM_GETTEXT,
+                                WPARAM(buf_len),
+                                LPARAM(buf.as_mut_ptr() as isize),
+                            )
+                        };
+                        if copied.0 > 0 {
+                            let text = String::from_utf16_lossy(&buf[..copied.0 as usize]);
+                            if !text.is_empty() {
+                                return Ok(ToolResult::ok(format!(
+                                    "Element: '{}'\nText (WM_GETTEXT): {}",
+                                    name, text
+                                )));
+                            }
+                        }
+                    }
+                }
+
+                // Final fallback: element name only
+                Ok(ToolResult::ok(format!(
+                    "Element: '{}'\nNote: Could not read text content (TextPattern/ValuePattern/WM_GETTEXT all returned empty).",
+                    name
+                )))
             }
             Err(e) => Ok(ToolResult::err(format!("Element not found: {}", e))),
         }
@@ -388,9 +556,15 @@ impl UiaTool {
         let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
-            Mouse::new().click(&Point::new(x as i32, y as i32))
+            let (px, py) = if input["logical_coords"].as_bool().unwrap_or(false) {
+                let scale = crate::tools::dpi::get_dpi_scale();
+                ((x as f64 * scale) as i32, (y as f64 * scale) as i32)
+            } else {
+                (x as i32, y as i32)
+            };
+            Mouse::new().click(&Point::new(px, py))
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
-            return Ok(ToolResult::ok(format!("Clicked at ({}, {})", x, y)));
+            return Ok(ToolResult::ok(format!("Clicked at ({}, {})", px, py)));
         }
 
         let root = self.get_search_root(&automation, input)?;
@@ -537,27 +711,124 @@ impl UiaTool {
     }
 
     fn drag_drop(&self, input: &Value) -> Result<ToolResult> {
-        use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
-        use uiautomation::inputs::{Mouse, MouseButton};
-        use uiautomation::types::Point;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT,
+            MOUSEEVENTF_MOVE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_ABSOLUTE,
+            MOUSEEVENTF_VIRTUALDESK,
+        };
+        #[allow(unused_imports)]
+        use windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
 
-        let (x1, y1) = match (input["x"].as_i64(), input["y"].as_i64()) {
+        let (x1_raw, y1_raw) = match (input["x"].as_i64(), input["y"].as_i64()) {
             (Some(x), Some(y)) => (x as i32, y as i32),
             _ => return Ok(ToolResult::err("drag_drop requires x, y (start) and x2, y2 (end)")),
         };
-        let (x2, y2) = match (input["x2"].as_i64(), input["y2"].as_i64()) {
+        let (x2_raw, y2_raw) = match (input["x2"].as_i64(), input["y2"].as_i64()) {
             (Some(x), Some(y)) => (x as i32, y as i32),
             _ => return Ok(ToolResult::err("drag_drop requires x2, y2 (end coordinates)")),
         };
 
-        Mouse::new()
-            .drag_to(MouseButton::LEFT, &Point::new(x2, y2))
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        let _ = unsafe { SetCursorPos(x1, y1) };
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        Mouse::new()
-            .drag_to(MouseButton::LEFT, &Point::new(x2, y2))
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        // If logical_coords=true, the caller is providing coordinates from a screenshot
+        // (logical/DPI-unaware pixels). Multiply by DPI scale to get physical screen coords.
+        let (x1, y1, x2, y2) = if input["logical_coords"].as_bool().unwrap_or(false) {
+            let scale = crate::tools::dpi::get_dpi_scale();
+            let coords = (
+                (x1_raw as f64 * scale) as i32,
+                (y1_raw as f64 * scale) as i32,
+                (x2_raw as f64 * scale) as i32,
+                (y2_raw as f64 * scale) as i32,
+            );
+            tracing::info!(
+                "drag_drop: logical({},{})→({},{}) × dpi={:.2} → physical({},{})→({},{})",
+                x1_raw, y1_raw, x2_raw, y2_raw, scale,
+                coords.0, coords.1, coords.2, coords.3
+            );
+            coords
+        } else {
+            tracing::info!(
+                "drag_drop: physical({},{})→({},{})",
+                x1_raw, y1_raw, x2_raw, y2_raw
+            );
+            (x1_raw, y1_raw, x2_raw, y2_raw)
+        };
+
+        // MOUSEEVENTF_ABSOLUTE (without VIRTUALDESK) maps 0-65535 onto the primary
+        // monitor in logical pixels. GetDeviceCaps(HORZRES/VERTRES) always returns
+        // logical pixels regardless of DPI awareness mode — same coordinate space
+        // as screen_capture grid labels.
+        let (sw, sh) = unsafe {
+            use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC, GetDeviceCaps, HORZRES, VERTRES};
+            use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
+            let hwnd = GetDesktopWindow();
+            let hdc = GetDC(hwnd);
+            let w = GetDeviceCaps(hdc, HORZRES);
+            let h = GetDeviceCaps(hdc, VERTRES);
+            ReleaseDC(hwnd, hdc);
+            (w, h)
+        };
+
+        tracing::info!(
+            "drag_drop: logical_screen={}x{} input=({},{})→({},{})",
+            sw, sh, x1, y1, x2, y2
+        );
+
+        let to_abs = |px: i32, py: i32| -> (i32, i32) {
+            let ax = (px * 65535 + sw / 2) / sw.max(1);
+            let ay = (py * 65535 + sh / 2) / sh.max(1);
+            (ax, ay)
+        };
+
+        let (ax1, ay1) = to_abs(x1, y1);
+        let (ax2, ay2) = to_abs(x2, y2);
+        tracing::info!(
+            "drag_drop: abs=({},{})→({},{})",
+            ax1, ay1, ax2, ay2
+        );
+
+        // No VIRTUALDESK: maps 0-65535 to primary monitor logical pixels (matches GetDeviceCaps HORZRES)
+        let flags_move = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+        let flags_down = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE;
+        let flags_up   = MOUSEEVENTF_LEFTUP   | MOUSEEVENTF_ABSOLUTE;
+
+        let make_mouse_input = |dx: i32, dy: i32, flags| INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx, dy,
+                    mouseData: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+
+        unsafe {
+            // Move to start position
+            let ev = [make_mouse_input(ax1, ay1, flags_move)];
+            SendInput(&ev, std::mem::size_of::<INPUT>() as i32);
+            std::thread::sleep(std::time::Duration::from_millis(80));
+
+            // Press left button at start
+            let ev = [make_mouse_input(ax1, ay1, flags_down)];
+            SendInput(&ev, std::mem::size_of::<INPUT>() as i32);
+            std::thread::sleep(std::time::Duration::from_millis(80));
+
+            // Smoothly move to end position in steps (helps with apps that need
+            // intermediate mouse-move events to track drag, e.g. ball drag tests)
+            let steps = 20i32;
+            for i in 1..=steps {
+                let ix = ax1 + (ax2 - ax1) * i / steps;
+                let iy = ay1 + (ay2 - ay1) * i / steps;
+                let ev = [make_mouse_input(ix, iy, flags_move)];
+                SendInput(&ev, std::mem::size_of::<INPUT>() as i32);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+
+            // Release left button at end
+            let ev = [make_mouse_input(ax2, ay2, flags_up)];
+            SendInput(&ev, std::mem::size_of::<INPUT>() as i32);
+        }
 
         Ok(ToolResult::ok(format!("Dragged from ({},{}) to ({},{})", x1, y1, x2, y2)))
     }
@@ -672,14 +943,21 @@ impl UiaTool {
 
     fn expand_element(&self, input: &Value) -> Result<ToolResult> {
         use uiautomation::UIAutomation;
+        use uiautomation::patterns::UIExpandCollapsePattern;
         let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
         let root = self.get_search_root(&automation, input)?;
         let matcher = self.build_matcher(&automation, root, input, 5000);
         match matcher.find_first() {
             Ok(element) => {
-                // Try clicking to expand (most reliable fallback)
+                let name = element.get_name().unwrap_or_default();
+                // Try ExpandCollapsePattern first (correct semantic)
+                if let Ok(pattern) = element.get_pattern::<UIExpandCollapsePattern>() {
+                    pattern.expand().map_err(|e| anyhow::anyhow!("{}", e))?;
+                    return Ok(ToolResult::ok(format!("Expanded '{}' via ExpandCollapsePattern", name)));
+                }
+                // Fallback: click (toggles state, may not guarantee expanded)
                 element.click().map_err(|e| anyhow::anyhow!("{}", e))?;
-                Ok(ToolResult::ok(format!("Expanded (clicked): '{}'", element.get_name().unwrap_or_default())))
+                Ok(ToolResult::ok(format!("Expanded (clicked fallback): '{}'", name)))
             }
             Err(e) => Ok(ToolResult::err(format!("Element not found: {}", e))),
         }
@@ -687,13 +965,21 @@ impl UiaTool {
 
     fn collapse_element(&self, input: &Value) -> Result<ToolResult> {
         use uiautomation::UIAutomation;
+        use uiautomation::patterns::UIExpandCollapsePattern;
         let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
         let root = self.get_search_root(&automation, input)?;
         let matcher = self.build_matcher(&automation, root, input, 5000);
         match matcher.find_first() {
             Ok(element) => {
+                let name = element.get_name().unwrap_or_default();
+                // Try ExpandCollapsePattern first (correct semantic)
+                if let Ok(pattern) = element.get_pattern::<UIExpandCollapsePattern>() {
+                    pattern.collapse().map_err(|e| anyhow::anyhow!("{}", e))?;
+                    return Ok(ToolResult::ok(format!("Collapsed '{}' via ExpandCollapsePattern", name)));
+                }
+                // Fallback: click
                 element.click().map_err(|e| anyhow::anyhow!("{}", e))?;
-                Ok(ToolResult::ok(format!("Collapsed (clicked): '{}'", element.get_name().unwrap_or_default())))
+                Ok(ToolResult::ok(format!("Collapsed (clicked fallback): '{}'", name)))
             }
             Err(e) => Ok(ToolResult::err(format!("Element not found: {}", e))),
         }
@@ -773,26 +1059,110 @@ impl UiaTool {
     // ─── Window Management ────────────────────────────────────────────────────
 
     fn find_window_hwnd(&self, input: &Value) -> Result<windows::Win32::Foundation::HWND> {
-        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetForegroundWindow};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            FindWindowW, GetForegroundWindow, EnumWindows, GetWindowTextW, IsWindowVisible,
+        };
+        use windows::Win32::Foundation::{HWND, BOOL, LPARAM};
         use windows::core::PCWSTR;
 
-        if let Some(title) = input["name"].as_str().or(input["window_title"].as_str()) {
-            let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-            let hwnd = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) }
-                .map_err(|_| anyhow::anyhow!("Window '{}' not found", title))?;
+        let title = match input["name"].as_str().or(input["window_title"].as_str()) {
+            Some(t) => t,
+            None => return Ok(unsafe { GetForegroundWindow() }),
+        };
+
+        // First try exact match (fast path)
+        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        if let Ok(hwnd) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) } {
             return Ok(hwnd);
         }
-        Ok(unsafe { GetForegroundWindow() })
+
+        // Fallback: partial match via EnumWindows (consistent with get_search_root)
+        let title_lower = title.to_lowercase();
+        let result = std::sync::Arc::new(std::sync::Mutex::new(None::<HWND>));
+        let result_clone = result.clone();
+        let title_clone = title_lower.clone();
+
+        unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let data = &*(lparam.0 as *const (String, std::sync::Arc<std::sync::Mutex<Option<HWND>>>));
+            let (title_lower, result) = data;
+            if IsWindowVisible(hwnd).as_bool() {
+                let mut buf = [0u16; 512];
+                let len = GetWindowTextW(hwnd, &mut buf);
+                if len > 0 {
+                    let window_title = String::from_utf16_lossy(&buf[..len as usize]).to_lowercase();
+                    if window_title.contains(title_lower.as_str()) {
+                        *result.lock().unwrap() = Some(hwnd);
+                        return BOOL(0); // stop enumeration
+                    }
+                }
+            }
+            BOOL(1) // continue
+        }
+
+        let data = (title_clone, result_clone);
+        let _ = unsafe { EnumWindows(Some(enum_callback), LPARAM(&data as *const _ as isize)) };
+
+        let found = *result.lock().unwrap();
+        match found {
+            Some(hwnd) => Ok(hwnd),
+            None => Err(anyhow::anyhow!("Window '{}' not found (tried exact and partial match)", title)),
+        }
     }
 
     fn activate_window(&self, input: &Value) -> Result<ToolResult> {
-        use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+            GetForegroundWindow, IsIconic, IsWindowVisible,
+            GetWindowThreadProcessId, BringWindowToTop,
+        };
+        use windows::Win32::UI::Input::KeyboardAndMouse::SetActiveWindow;
+        use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+
         let hwnd = self.find_window_hwnd(input)?;
+
         unsafe {
-            let _ = ShowWindow(hwnd, SW_RESTORE);
+            // 1. Restore if minimized
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            } else {
+                let _ = ShowWindow(hwnd, SW_SHOW);
+            }
+
+            // 2. Already foreground — nothing to do
+            if GetForegroundWindow() == hwnd {
+                return Ok(ToolResult::ok("Window already in foreground"));
+            }
+
+            // 3. AttachThreadInput: the most reliable way to steal foreground
+            //    without sending global keyboard events (which would disturb
+            //    other windows like the IDE).
+            let fg_hwnd = GetForegroundWindow();
+            let fg_thread = GetWindowThreadProcessId(fg_hwnd, None);
+            let our_thread = GetCurrentThreadId();
+            let attached = fg_thread != 0 && fg_thread != our_thread;
+            if attached {
+                let _ = AttachThreadInput(our_thread, fg_thread, true);
+            }
+
+            let _ = BringWindowToTop(hwnd);
+            let _ = SetActiveWindow(hwnd);
             let _ = SetForegroundWindow(hwnd);
+
+            if attached {
+                let _ = AttachThreadInput(our_thread, fg_thread, false);
+            }
+
+            // Give the OS time to process the foreground change.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+
+            if GetForegroundWindow() != hwnd && IsWindowVisible(hwnd).as_bool() {
+                return Ok(ToolResult::ok(
+                    "Window activated (best-effort; foreground lock may be held by another process)"
+                ));
+            }
         }
-        Ok(ToolResult::ok("Window activated"))
+        Ok(ToolResult::ok("Window activated and in foreground"))
     }
 
     fn window_state(&self, input: &Value, state: &str) -> Result<ToolResult> {

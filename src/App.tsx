@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
-import { store, RootState, settingsActions, sessionsActions } from "./store";
+import { listen } from "@tauri-apps/api/event";
+import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
 import { settingsApi, sessionsApi, windowApi } from "./services/tauri";
 import { setLanguage } from "./i18n";
 import Chat from "./components/Chat";
@@ -15,10 +16,11 @@ import AuditLog from "./components/AuditLog";
 import About from "./components/About";
 import Onboarding from "./components/Onboarding";
 import OverlayApp from "./components/Overlay";
+import DebugPanel from "./components/Debug";
 import "./theme.css";
 import "./App.css";
 
-type Tab = "chat" | "memory" | "tools" | "fish" | "skills" | "scheduler" | "audit" | "settings" | "about";
+type Tab = "chat" | "memory" | "tools" | "fish" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
 
 // Detect if we are running in the overlay window
 const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") === "1";
@@ -36,6 +38,7 @@ function AppContent() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('pisci-theme', theme);
+    console.log('[Theme] data-theme set to:', theme, '| html attr:', document.documentElement.getAttribute('data-theme'));
     // Sync window border/title bar color with theme (Windows 11+)
     if (!IS_OVERLAY) {
       const apply = () => windowApi.setThemeBorder(theme).catch(() => {});
@@ -51,6 +54,15 @@ function AppContent() {
       setLanguage(settings.language as "zh" | "en");
     }
   }, [settings?.language]);
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      const { sessions } = await sessionsApi.list();
+      dispatch(sessionsActions.setSessions(sessions));
+    } catch (e) {
+      console.error("Failed to refresh sessions:", e);
+    }
+  }, [dispatch]);
 
   useEffect(() => {
     async function init() {
@@ -78,6 +90,54 @@ function AppContent() {
       }
     }
     init();
+  }, [dispatch]);
+
+  // im_session_updated: inbound user message arrived and was pre-written to DB.
+  // Reload messages immediately so the user sees their own message right away.
+  // Mark session as running to show the processing indicator.
+  useEffect(() => {
+    const unlisten = listen<string>("im_session_updated", async (event) => {
+      const sid = event.payload;
+      if (!sid) return;
+      console.log('[IM] im_session_updated sid=', sid);
+      try {
+        const [messages, { sessions: fresh }] = await Promise.all([
+          sessionsApi.getMessages(sid),
+          sessionsApi.list(),
+        ]);
+        console.log('[IM] im_session_updated: loaded', messages.length, 'messages');
+        dispatch(sessionsActions.setSessions(fresh));
+        dispatch(chatActions.setMessages({ sessionId: sid, messages }));
+        dispatch(chatActions.setRunning({ sessionId: sid, running: true }));
+      } catch (e) {
+        console.error("[IM] im_session_updated error:", e);
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [dispatch]);
+
+  // im_session_done: agent finished AND persisted all messages to DB.
+  // This is emitted AFTER persist_agent_turn completes, so getMessages will see the full reply.
+  useEffect(() => {
+    const unlisten = listen<string>("im_session_done", async (event) => {
+      const sid = event.payload;
+      if (!sid) return;
+      console.log('[IM] im_session_done sid=', sid);
+      try {
+        const [messages, { sessions: fresh }] = await Promise.all([
+          sessionsApi.getMessages(sid),
+          sessionsApi.list(),
+        ]);
+        console.log('[IM] im_session_done: loaded', messages.length, 'messages');
+        dispatch(sessionsActions.setSessions(fresh));
+        dispatch(chatActions.setMessages({ sessionId: sid, messages }));
+      } catch (e) {
+        console.error("[IM] im_session_done error:", e);
+      }
+      dispatch(chatActions.setRunning({ sessionId: sid, running: false }));
+      dispatch(chatActions.clearStreaming(sid));
+    });
+    return () => { unlisten.then((fn) => fn()); };
   }, [dispatch]);
 
   if (!initialized) {
@@ -109,7 +169,7 @@ function AppContent() {
     <div className="app">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <span className="logo">🐟</span>
+          <img src="/pisci.png" className="logo" alt="Pisci" />
           <span className="app-name">OpenPisci</span>
         </div>
         <nav className="sidebar-nav">
@@ -127,20 +187,20 @@ function AppContent() {
         </nav>
         <div className="sidebar-footer">
           <button
+            className={`nav-item ${activeTab === "debug" ? "active" : ""}`}
+            title={t("nav.debug")}
+            onClick={() => setActiveTab("debug")}
+          >
+            <span className="nav-icon">🔬</span>
+            <span className="nav-label">{t("nav.debug")}</span>
+          </button>
+          <button
             className="nav-item minimal-mode-btn"
-            title="极简模式（悬浮球）"
+            title={t("nav.minimalMode")}
             onClick={() => windowApi.enterMinimalMode()}
           >
             <span className="nav-icon">⚪</span>
-            <span className="nav-label">极简模式</span>
-          </button>
-          <button
-            className={`nav-item theme-toggle`}
-            title={theme === "violet" ? "切换金色主题" : "切换紫色主题"}
-            onClick={() => setTheme(theme === "violet" ? "gold" : "violet")}
-          >
-            <span className="nav-icon">{theme === "violet" ? "🌙" : "☀️"}</span>
-            <span className="nav-label">{theme === "violet" ? "金色" : "紫色"}</span>
+            <span className="nav-label">{t("nav.minimalMode")}</span>
           </button>
         </div>
       </aside>
@@ -162,6 +222,7 @@ function AppContent() {
         {activeTab === "audit" && <AuditLog />}
         {activeTab === "settings" && <Settings theme={theme} setTheme={setTheme} />}
         {activeTab === "about" && <About />}
+        {activeTab === "debug" && <DebugPanel />}
       </main>
     </div>
   );
