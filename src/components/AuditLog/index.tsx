@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { auditApi, AuditEntry } from "../../services/tauri";
+import ConfirmDialog from "../ConfirmDialog";
 
 const TOOL_COLORS: Record<string, string> = {
   shell: "#e67e22",
@@ -59,7 +60,6 @@ export default function AuditLog() {
   useEffect(() => { load(true); }, [filterTool]);
 
   const handleClearConfirmed = async () => {
-    setConfirmClearOpen(false);
     setClearing(true);
     try {
       await auditApi.clear();
@@ -68,6 +68,7 @@ export default function AuditLog() {
       setError(t("audit.failedClear", { error: String(e) }));
     } finally {
       setClearing(false);
+      setConfirmClearOpen(false);
     }
   };
 
@@ -196,36 +197,16 @@ export default function AuditLog() {
         )}
       </div>
 
-      {confirmClearOpen && (
-        <div style={{
-          position: "fixed", inset: 0, zIndex: 1000,
-          background: "rgba(0,0,0,0.5)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>
-          <div style={{
-            background: "var(--bg-primary)", border: "1px solid var(--border)",
-            borderRadius: 12, padding: "24px 28px", maxWidth: 360, width: "90%",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-          }}>
-            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 10 }}>
-              {t("audit.clearLog")}
-            </div>
-            <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 20 }}>
-              {t("audit.confirmClear")}
-            </div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button className="btn" onClick={() => setConfirmClearOpen(false)}
-                style={{ background: "var(--bg-secondary)", border: "1px solid var(--border)", color: "var(--text-secondary)", fontSize: 13 }}>
-                {t("common.cancel")}
-              </button>
-              <button className="btn" onClick={handleClearConfirmed}
-                style={{ background: "rgba(220,53,69,0.15)", border: "1px solid rgba(220,53,69,0.4)", color: "#ff6b6b", fontSize: 13, fontWeight: 600 }}>
-                {t("audit.clearLog")}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={confirmClearOpen}
+        title={t("audit.clearLog")}
+        message={t("audit.confirmClear")}
+        confirmLabel={t("audit.clearLog")}
+        cancelLabel={t("common.cancel")}
+        loading={clearing}
+        onConfirm={handleClearConfirmed}
+        onCancel={() => !clearing && setConfirmClearOpen(false)}
+      />
     </div>
   );
 }

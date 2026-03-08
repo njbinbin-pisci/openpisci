@@ -1,16 +1,31 @@
-/// Fish (小鱼) — User-defined sub-Agent system for OpenPisci.
+/// Fish (小鱼) — Stateless sub-Agent system for OpenPisci.
 ///
 /// Each Fish is a specialized Agent with its own persona, tool permissions,
-/// system prompt, and optional user configuration. Fish are defined via
-/// FISH.toml files and can be activated to create dedicated chat sessions.
+/// and system prompt. Fish are defined via FISH.toml files and invoked
+/// ephemerally by the main Agent through `call_fish` — no persistent session.
+///
+/// Fish can also be auto-generated from installed Skills (via SkillLoader),
+/// giving each skill its own isolated execution environment.
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
 // FISH.toml definition structures
 // ---------------------------------------------------------------------------
+
+/// Where a Fish definition comes from.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FishSource {
+    /// Compiled into the binary (hardcoded in builtin_fish())
+    #[default]
+    Builtin,
+    /// Auto-generated from an installed Skill (SKILL.md)
+    Skill,
+    /// User-created FISH.toml in the fish directory
+    User,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FishDefinition {
@@ -28,6 +43,9 @@ pub struct FishDefinition {
     /// Whether this is a built-in fish (not user-installed)
     #[serde(default)]
     pub builtin: bool,
+    /// Where this fish definition comes from
+    #[serde(default)]
+    pub source: FishSource,
 }
 
 fn default_icon() -> String {
@@ -77,19 +95,6 @@ pub struct FishSettingOption {
 }
 
 // ---------------------------------------------------------------------------
-// Fish instance (runtime state)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FishInstance {
-    pub fish_id: String,
-    pub session_id: String,
-    pub status: String, // "active", "paused", "error"
-    pub user_config: HashMap<String, String>,
-    pub created_at: String,
-}
-
-// ---------------------------------------------------------------------------
 // Built-in Fish definitions
 // ---------------------------------------------------------------------------
 
@@ -133,8 +138,71 @@ pub fn builtin_fish() -> Vec<FishDefinition> {
                 },
             ],
             builtin: true,
+            source: FishSource::Builtin,
         },
     ]
+}
+
+/// Skill → Fish icon mapping based on skill name keywords.
+fn skill_icon(skill_name: &str) -> &'static str {
+    let lower = skill_name.to_lowercase();
+    if lower.contains("office") || lower.contains("word") || lower.contains("excel") { return "📊"; }
+    if lower.contains("file") || lower.contains("文件") { return "📁"; }
+    if lower.contains("web") || lower.contains("browser") || lower.contains("网页") { return "🌐"; }
+    if lower.contains("system") || lower.contains("admin") || lower.contains("系统") { return "⚙️"; }
+    if lower.contains("desktop") || lower.contains("桌面") || lower.contains("uia") { return "🖥️"; }
+    if lower.contains("email") || lower.contains("邮件") { return "📧"; }
+    if lower.contains("code") || lower.contains("代码") { return "💻"; }
+    "🐡"
+}
+
+/// Build a Fish ID from a skill name (slugified).
+fn skill_fish_id(skill_name: &str) -> String {
+    let slug = skill_name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .collect::<String>();
+    // Collapse multiple dashes
+    let mut result = String::new();
+    let mut last_dash = false;
+    for c in slug.chars() {
+        if c == '-' {
+            if !last_dash { result.push(c); }
+            last_dash = true;
+        } else {
+            result.push(c);
+            last_dash = false;
+        }
+    }
+    format!("skill-{}", result.trim_matches('-'))
+}
+
+/// Convert a SkillDefinition into a FishDefinition.
+/// The skill's instructions become the fish's system_prompt.
+/// The skill's tools list becomes the fish's allowed tools.
+pub fn fish_from_skill(skill: &crate::skills::loader::SkillDefinition) -> FishDefinition {
+    FishDefinition {
+        id: skill_fish_id(&skill.name),
+        name: format!("{} 助手", skill.name),
+        description: skill.description.clone(),
+        icon: skill_icon(&skill.name).to_string(),
+        tools: skill.tools.clone(),
+        agent: FishAgentConfig {
+            system_prompt: format!(
+                "你是一条专注于「{}」任务的小鱼（OpenPisci 子 Agent）。\n\n{}\n\n\
+                请专注于你的专长领域，高效完成用户交给你的任务。\
+                遇到超出你工具权限范围的任务时，请明确告知用户。",
+                skill.name,
+                skill.instructions
+            ),
+            max_iterations: 25,
+            model: String::new(),
+        },
+        settings: vec![],
+        builtin: true,
+        source: FishSource::Skill,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -146,15 +214,51 @@ pub struct FishRegistry {
 }
 
 impl FishRegistry {
-    /// Load Fish from built-ins + user directory.
-    pub fn load(user_fish_dir: Option<&Path>) -> Self {
+    /// Load Fish from built-ins + skills (auto-generated) + user directory.
+    ///
+    /// `app_data_dir` is used to locate both the user fish directory
+    /// (`<app_data>/fish/`) and the skills directory (`<app_data>/skills/`).
+    pub fn load(app_data_dir: Option<&Path>) -> Self {
         let mut fish = builtin_fish();
 
-        if let Some(dir) = user_fish_dir {
-            if dir.exists() {
-                match load_user_fish(dir) {
-                    Ok(user_fish) => {
-                        tracing::info!("Loaded {} user fish from {}", user_fish.len(), dir.display());
+        // Auto-generate Fish from installed Skills
+        if let Some(dir) = app_data_dir {
+            let skills_dir = dir.join("skills");
+            if skills_dir.exists() {
+                let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+                match loader.load_all() {
+                    Ok(()) => {
+                        let skill_fish: Vec<FishDefinition> = loader
+                            .list_skills()
+                            .into_iter()
+                            .map(fish_from_skill)
+                            .collect();
+                        tracing::info!(
+                            "Generated {} skill-based fish from {}",
+                            skill_fish.len(),
+                            skills_dir.display()
+                        );
+                        fish.extend(skill_fish);
+                    }
+                    Err(e) => tracing::warn!("Failed to load skills for fish generation: {}", e),
+                }
+            }
+        }
+
+        // Load user-created FISH.toml files
+        if let Some(dir) = app_data_dir {
+            let user_fish_dir = dir.join("fish");
+            if user_fish_dir.exists() {
+                match load_user_fish(&user_fish_dir) {
+                    Ok(mut user_fish) => {
+                        tracing::info!(
+                            "Loaded {} user fish from {}",
+                            user_fish.len(),
+                            user_fish_dir.display()
+                        );
+                        for f in &mut user_fish {
+                            f.source = FishSource::User;
+                        }
                         fish.extend(user_fish);
                     }
                     Err(e) => tracing::warn!("Failed to load user fish: {}", e),
@@ -203,29 +307,7 @@ fn load_fish_toml(path: &PathBuf) -> Result<FishDefinition> {
         .with_context(|| format!("parsing {}", path.display()))
 }
 
-/// Build a system prompt for a Fish, injecting user config values.
-pub fn build_fish_system_prompt(def: &FishDefinition, user_config: &HashMap<String, String>) -> String {
-    let mut prompt = def.agent.system_prompt.clone();
-
-    // Inject user config as context
-    if !user_config.is_empty() {
-        let config_block: String = user_config.iter()
-            .filter_map(|(k, v)| {
-                if v.is_empty() { return None; }
-                // Find the label for this key
-                let label = def.settings.iter()
-                    .find(|s| s.key == *k)
-                    .map(|s| s.label.as_str())
-                    .unwrap_or(k.as_str());
-                Some(format!("- {}: {}", label, v))
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        if !config_block.is_empty() {
-            prompt.push_str(&format!("\n\n## 用户配置\n{}", config_block));
-        }
-    }
-
-    prompt
+/// Build a system prompt for a Fish.
+pub fn build_fish_system_prompt(def: &FishDefinition) -> String {
+    def.agent.system_prompt.clone()
 }

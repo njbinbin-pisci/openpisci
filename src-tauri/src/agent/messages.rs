@@ -82,4 +82,16 @@ pub enum AgentEvent {
     Done { total_input_tokens: u32, total_output_tokens: u32 },
     /// Error occurred
     Error { message: String },
+    /// A sub-agent (Fish) is executing — forwarded to the parent session so the user
+    /// can see real-time progress without switching sessions.
+    FishProgress {
+        fish_id: String,
+        fish_name: String,
+        /// 1-based iteration index inside the Fish agent loop
+        iteration: u32,
+        /// Which tool the Fish is currently calling (None = LLM thinking)
+        tool_name: Option<String>,
+        /// "thinking" | "tool_call" | "tool_done" | "done"
+        status: String,
+    },
 }

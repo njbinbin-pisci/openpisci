@@ -5,6 +5,7 @@ import {
   BuiltinToolInfo, UserToolInfo, ConfigFieldSchema,
   McpServerConfig, McpToolInfo,
 } from "../../services/tauri";
+import ConfirmDialog from "../ConfirmDialog";
 import "./Tools.css";
 
 // ─── Config Form (for user tools) ────────────────────────────────────────────
@@ -227,11 +228,7 @@ function UserToolCard({ tool, onUninstall, onConfigure }: UserToolCardProps) {
           </button>
           <button
             className="btn btn-sm btn-danger"
-            onClick={() => {
-              if (confirm(t("tools.confirmUninstall", { name: tool.name }))) {
-                onUninstall(tool.name);
-              }
-            }}
+            onClick={() => onUninstall(tool.name)}
           >
             {t("tools.uninstall")}
           </button>
@@ -479,11 +476,7 @@ function McpServerCard({ server, onEdit, onDelete }: McpServerCardProps) {
           </button>
           <button
             className="btn btn-sm btn-danger"
-            onClick={() => {
-              if (confirm(t("tools.mcpDeleteConfirm", { name: server.name }))) {
-                onDelete(server.name);
-              }
-            }}
+            onClick={() => onDelete(server.name)}
           >
             {t("tools.mcpDeleteServer")}
           </button>
@@ -521,6 +514,12 @@ export default function Tools() {
 
   // Shared status
   const [status, setStatus] = useState<{ type: "ok" | "err"; msg: string } | null>(null);
+
+  // Confirm dialog
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string; message: string; confirmLabel: string; action: () => Promise<void>;
+  } | null>(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
 
   // ── Load builtin tools ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -577,14 +576,21 @@ export default function Tools() {
     }
   };
 
-  const handleUninstall = async (name: string) => {
-    try {
-      await userToolsApi.uninstall(name);
-      setStatus({ type: "ok", msg: t("tools.uninstallSuccess") });
-      await refreshUserTools();
-    } catch (err) {
-      setStatus({ type: "err", msg: `${t("tools.uninstallFailed")}: ${err}` });
-    }
+  const handleUninstall = (name: string) => {
+    setConfirmAction({
+      title: t("tools.uninstall"),
+      message: t("tools.confirmUninstall", { name }),
+      confirmLabel: t("tools.uninstall"),
+      action: async () => {
+        try {
+          await userToolsApi.uninstall(name);
+          setStatus({ type: "ok", msg: t("tools.uninstallSuccess") });
+          await refreshUserTools();
+        } catch (err) {
+          setStatus({ type: "err", msg: `${t("tools.uninstallFailed")}: ${err}` });
+        }
+      },
+    });
   };
 
   // ── Load MCP servers ────────────────────────────────────────────────────────
@@ -624,9 +630,16 @@ export default function Tools() {
     setAddingServer(false);
   };
 
-  const handleMcpDelete = async (name: string) => {
-    const next = mcpServers.filter(s => s.name !== name);
-    await saveMcpServers(next);
+  const handleMcpDelete = (name: string) => {
+    setConfirmAction({
+      title: t("tools.mcpDeleteServer"),
+      message: t("tools.mcpDeleteConfirm", { name }),
+      confirmLabel: t("tools.mcpDeleteServer"),
+      action: async () => {
+        const next = mcpServers.filter(s => s.name !== name);
+        await saveMcpServers(next);
+      },
+    });
   };
 
   return (
@@ -792,6 +805,24 @@ export default function Tools() {
           onCancel={() => { setAddingServer(false); setEditingServer(null); }}
         />
       )}
+
+      <ConfirmDialog
+        open={!!confirmAction}
+        title={confirmAction?.title ?? ""}
+        message={confirmAction?.message ?? ""}
+        confirmLabel={confirmAction?.confirmLabel}
+        cancelLabel={t("common.cancel")}
+        loading={confirmLoading}
+        onConfirm={async () => {
+          if (!confirmAction) return;
+          setConfirmLoading(true);
+          try { await confirmAction.action(); } finally {
+            setConfirmLoading(false);
+            setConfirmAction(null);
+          }
+        }}
+        onCancel={() => !confirmLoading && setConfirmAction(null)}
+      />
     </div>
   );
 }

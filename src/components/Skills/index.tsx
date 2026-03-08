@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { RootState, skillsActions } from "../../store";
 import { skillsApi, clawHubApi, SkillCatalogItem, ClawHubSkill, SkillCompatibilityCheck } from "../../services/tauri";
+import ConfirmDialog from "../ConfirmDialog";
 
 const SOURCE_BADGE: Record<string, { label: string; color: string }> = {
   builtin:   { label: "builtin",   color: "var(--text-muted)" },
@@ -26,6 +27,10 @@ export default function Skills() {
 
   // Catalog (detailed skill info from file system)
   const [catalog, setCatalog] = useState<SkillCatalogItem[]>([]);
+
+  // Uninstall confirmation dialog
+  const [uninstallTarget, setUninstallTarget] = useState<string | null>(null);
+  const [uninstalling, setUninstalling] = useState(false);
 
   // ClawHub marketplace
   const [hubTab, setHubTab] = useState<"local" | "hub">("local");
@@ -89,8 +94,14 @@ export default function Skills() {
     }
   };
 
-  const handleUninstall = async (skillName: string) => {
-    if (!window.confirm(t("skills.uninstallConfirm", { name: skillName }))) return;
+  const handleUninstall = (skillName: string) => {
+    setUninstallTarget(skillName);
+  };
+
+  const doUninstall = async () => {
+    if (!uninstallTarget) return;
+    const skillName = uninstallTarget;
+    setUninstalling(true);
     setError(null);
     try {
       await skillsApi.uninstall(skillName);
@@ -98,6 +109,9 @@ export default function Skills() {
       loadSkills();
     } catch (e) {
       setError(t("skills.uninstallFailed", { error: String(e) }));
+    } finally {
+      setUninstalling(false);
+      setUninstallTarget(null);
     }
   };
 
@@ -202,6 +216,17 @@ export default function Skills() {
             <button onClick={() => setSuccessMsg(null)} style={{ background: "none", border: "none", color: "#28a745", cursor: "pointer" }}>✕</button>
           </div>
         )}
+
+        <ConfirmDialog
+          open={!!uninstallTarget}
+          title={t("skills.uninstallConfirmTitle", { defaultValue: "确认卸载" })}
+          message={t("skills.uninstallConfirm", { name: uninstallTarget ?? "" })}
+          confirmLabel={t("skills.uninstallBtn", { defaultValue: "卸载" })}
+          cancelLabel={t("common.cancel")}
+          loading={uninstalling}
+          onConfirm={doUninstall}
+          onCancel={() => !uninstalling && setUninstallTarget(null)}
+        />
 
         {/* Tab switcher */}
         <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid var(--border)", paddingBottom: 0 }}>

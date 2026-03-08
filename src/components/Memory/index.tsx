@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { RootState, memoryActions } from "../../store";
 import { memoryApi } from "../../services/tauri";
+import ConfirmDialog from "../ConfirmDialog";
 
 export default function Memory() {
   const { t } = useTranslation();
@@ -14,6 +15,7 @@ export default function Memory() {
   const [showAdd, setShowAdd] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   useEffect(() => {
     memoryApi.list().then(({ memories }) => {
@@ -47,12 +49,15 @@ export default function Memory() {
   };
 
   const handleClearConfirmed = async () => {
-    setConfirmClearOpen(false);
+    setClearing(true);
     try {
       await memoryApi.clear();
       dispatch(memoryActions.setMemories([]));
     } catch (e) {
       setError(t("memory.failedClear", { error: String(e) }));
+    } finally {
+      setClearing(false);
+      setConfirmClearOpen(false);
     }
   };
 
@@ -148,21 +153,16 @@ export default function Memory() {
         )}
       </div>
 
-      {confirmClearOpen && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-          <div className="card" style={{ minWidth: 300, maxWidth: 400, padding: 24 }}>
-            <p style={{ marginBottom: 20, color: "var(--text-primary)" }}>{t("memory.confirmClear")}</p>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button className="btn btn-secondary" onClick={() => setConfirmClearOpen(false)}>
-                {t("common.cancel")}
-              </button>
-              <button className="btn btn-danger" onClick={handleClearConfirmed}>
-                {t("memory.clearAll")}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={confirmClearOpen}
+        title={t("memory.clearAll")}
+        message={t("memory.confirmClear")}
+        confirmLabel={t("memory.clearAll")}
+        cancelLabel={t("common.cancel")}
+        loading={clearing}
+        onConfirm={handleClearConfirmed}
+        onCancel={() => !clearing && setConfirmClearOpen(false)}
+      />
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { RootState, schedulerActions } from "../../store";
 import { schedulerApi, ScheduledTask } from "../../services/tauri";
+import ConfirmDialog from "../ConfirmDialog";
 
 export default function Scheduler() {
   const { t } = useTranslation();
@@ -18,6 +19,8 @@ export default function Scheduler() {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     schedulerApi.list().then(({ tasks }) => {
@@ -51,13 +54,21 @@ export default function Scheduler() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm(t("scheduler.confirmDelete"))) return;
+  const handleDelete = (id: string) => {
+    setDeleteTarget(id);
+  };
+
+  const doDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      await schedulerApi.delete(id);
-      dispatch(schedulerActions.removeTask(id));
+      await schedulerApi.delete(deleteTarget);
+      dispatch(schedulerActions.removeTask(deleteTarget));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
     }
   };
 
@@ -200,6 +211,17 @@ export default function Scheduler() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title={t("common.delete")}
+        message={t("scheduler.confirmDelete")}
+        confirmLabel={t("common.delete")}
+        cancelLabel={t("common.cancel")}
+        loading={deleting}
+        onConfirm={doDelete}
+        onCancel={() => !deleting && setDeleteTarget(null)}
+      />
     </div>
   );
 }

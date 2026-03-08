@@ -179,7 +179,21 @@ impl SkillLoader {
         {
             "workspace".to_string()
         } else {
-            "builtin".to_string()
+            // Distinguish builtin skills (created by create_builtin_skills) from
+            // user-installed skills that also live in the top-level skills dir.
+            const BUILTIN_IDS: &[&str] = &[
+                "office-automation", "file-management", "web-automation",
+                "system-admin", "desktop-control",
+            ];
+            let dir_name = path.parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if BUILTIN_IDS.contains(&dir_name) {
+                "builtin".to_string()
+            } else {
+                "installed".to_string()
+            }
         };
 
         let tools = frontmatter

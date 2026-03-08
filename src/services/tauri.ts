@@ -197,7 +197,18 @@ export type AgentEventType =
   | { type: "message_commit"; message: unknown }
   | { type: "permission_request"; request_id: string; tool_name: string; tool_input: unknown; description: string }
   | { type: "done"; total_input_tokens: number; total_output_tokens: number }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | {
+      type: "fish_progress";
+      fish_id: string;
+      fish_name: string;
+      /** 1-based iteration index inside the Fish agent loop */
+      iteration: number;
+      /** Which tool the Fish is currently calling (null = LLM thinking) */
+      tool_name: string | null;
+      /** "thinking" | "tool_call" | "tool_done" | "done" */
+      status: string;
+    };
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -471,6 +482,9 @@ export interface FishAgentConfig {
   model: string;
 }
 
+/** Where a Fish definition comes from */
+export type FishSource = "builtin" | "skill" | "user";
+
 export interface FishDefinition {
   id: string;
   name: string;
@@ -480,36 +494,12 @@ export interface FishDefinition {
   agent: FishAgentConfig;
   settings: FishSettingDef[];
   builtin: boolean;
-}
-
-export interface FishInstance {
-  fish_id: string;
-  session_id: string;
-  status: string;
-  user_config: Record<string, string>;
-  created_at: string;
-}
-
-export interface FishWithStatus {
-  id: string;
-  name: string;
-  description: string;
-  icon: string;
-  tools: string[];
-  agent: FishAgentConfig;
-  settings: FishSettingDef[];
-  builtin: boolean;
-  instance?: FishInstance;
+  /** "builtin" | "skill" | "user" */
+  source: FishSource;
 }
 
 export const fishApi = {
-  list: () => invoke<FishWithStatus[]>('list_fish'),
-  activate: (fishId: string, userConfig: Record<string, string>) =>
-    invoke<string>('activate_fish', { fishId, userConfig }),
-  deactivate: (fishId: string) => invoke<void>('deactivate_fish', { fishId }),
-  getStatus: (fishId: string) => invoke<FishInstance | null>('get_fish_status', { fishId }),
-  chatSend: (fishId: string, content: string) =>
-    invoke<void>('fish_chat_send', { fishId, content }),
+  list: () => invoke<FishDefinition[]>('list_fish'),
 };
 
 // ---------------------------------------------------------------------------

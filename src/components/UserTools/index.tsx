@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { userToolsApi, UserToolInfo, ConfigFieldSchema } from "../../services/tauri";
+import ConfirmDialog from "../ConfirmDialog";
 import "./UserTools.css";
 
 // ─── Config Form ─────────────────────────────────────────────────────────────
@@ -184,11 +185,7 @@ function ToolCard({ tool, onUninstall, onConfigure }: ToolCardProps) {
           </button>
           <button
             className="btn btn-sm btn-danger"
-            onClick={() => {
-              if (confirm(`确认卸载工具「${tool.name}」？`)) {
-                onUninstall(tool.name);
-              }
-            }}
+            onClick={() => onUninstall(tool.name)}
           >
             {t("userTools.uninstall")}
           </button>
@@ -208,6 +205,8 @@ export default function UserTools() {
   const [installing, setInstalling] = useState(false);
   const [status, setStatus] = useState<{ type: "ok" | "err"; msg: string } | null>(null);
   const [configuringTool, setConfiguringTool] = useState<UserToolInfo | null>(null);
+  const [uninstallTarget, setUninstallTarget] = useState<string | null>(null);
+  const [uninstalling, setUninstalling] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -239,13 +238,22 @@ export default function UserTools() {
     }
   };
 
-  const handleUninstall = async (name: string) => {
+  const handleUninstall = (name: string) => {
+    setUninstallTarget(name);
+  };
+
+  const doUninstall = async () => {
+    if (!uninstallTarget) return;
+    setUninstalling(true);
     try {
-      await userToolsApi.uninstall(name);
+      await userToolsApi.uninstall(uninstallTarget);
       setStatus({ type: "ok", msg: t("userTools.uninstallSuccess") });
       await refresh();
     } catch (err) {
       setStatus({ type: "err", msg: `${t("userTools.uninstallFailed")}: ${err}` });
+    } finally {
+      setUninstalling(false);
+      setUninstallTarget(null);
     }
   };
 
@@ -312,6 +320,17 @@ export default function UserTools() {
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={!!uninstallTarget}
+        title={t("userTools.uninstall")}
+        message={`${t("tools.confirmUninstall", { name: uninstallTarget ?? "" })}`}
+        confirmLabel={t("userTools.uninstall")}
+        cancelLabel={t("common.cancel")}
+        loading={uninstalling}
+        onConfirm={doUninstall}
+        onCancel={() => !uninstalling && setUninstallTarget(null)}
+      />
     </div>
   );
 }

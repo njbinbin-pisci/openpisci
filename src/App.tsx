@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
@@ -54,15 +54,6 @@ function AppContent() {
       setLanguage(settings.language as "zh" | "en");
     }
   }, [settings?.language]);
-
-  const refreshSessions = useCallback(async () => {
-    try {
-      const { sessions } = await sessionsApi.list();
-      dispatch(sessionsActions.setSessions(sessions));
-    } catch (e) {
-      console.error("Failed to refresh sessions:", e);
-    }
-  }, [dispatch]);
 
   useEffect(() => {
     async function init() {
@@ -208,15 +199,7 @@ function AppContent() {
         {activeTab === "chat" && <Chat />}
         {activeTab === "memory" && <Memory />}
         {activeTab === "tools" && <Tools />}
-        {activeTab === "fish" && (
-          <FishPage
-            onGoToChat={(sessionId) => {
-              // Switch to chat tab and select the fish session
-              dispatch(sessionsActions.setActiveSession(sessionId));
-              setActiveTab("chat");
-            }}
-          />
-        )}
+        {activeTab === "fish" && <FishPage />}
         {activeTab === "skills" && <Skills />}
         {activeTab === "scheduler" && <Scheduler />}
         {activeTab === "audit" && <AuditLog />}

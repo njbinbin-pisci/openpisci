@@ -1,4 +1,4 @@
-use crate::agent::loop_::AgentLoop;
+use crate::agent::loop_::{AgentLoop, ConfirmFlags};
 use crate::agent::messages::AgentEvent;
 use crate::agent::tool::ToolContext;
 use crate::llm::{build_client, ContentBlock, LlmMessage, MessageContent};
@@ -369,6 +369,7 @@ pub async fn chat_send(
         vision_override: Some(vision_capable),
     };
 
+    let tool_settings_for_fish = tool_settings.clone();
     let ctx = ToolContext {
         session_id: session_id.clone(),
         workspace_root: std::path::PathBuf::from(&workspace_root),
@@ -409,6 +410,13 @@ pub async fn chat_send(
     let provider_clone = provider.clone();
     let api_key_clone = api_key.clone();
     let base_url_clone = base_url.clone();
+    let workspace_root_clone = workspace_root.clone();
+    let policy_mode_clone = policy_mode.clone();
+    let tool_rate_limit_clone = tool_rate_limit_per_minute;
+    let allow_outside_ws_clone = allow_outside_workspace;
+    let builtin_tool_enabled_clone = builtin_tool_enabled.clone();
+    let state_browser = state.browser.clone();
+    let max_tokens_val = max_tokens;
 
     tracing::info!("chat_send: spawning agent background task for session={}", session_id);
 
@@ -446,8 +454,152 @@ pub async fn chat_send(
             let mut total_in = 0u32;
             let mut total_out = 0u32;
             let mut last_err: Option<anyhow::Error> = None;
+
+            // Load app_data_dir once for Fish registry lookups
+            let app_data_dir_for_fish = app_clone.path().app_data_dir().ok();
+
             for task in &tasks {
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) { break; }
+
+                // Try to route this sub-task to a Fish agent based on app_hint
+                let fish_id_opt = task.app_hint.as_deref()
+                    .and_then(crate::agent::host::HostAgent::route_to_fish);
+
+                if let Some(fish_id) = fish_id_opt {
+                    let registry = crate::fish::FishRegistry::load(app_data_dir_for_fish.as_deref());
+                    if let Some(fish_def) = registry.get(fish_id) {
+                        let fish_def = fish_def.clone();
+
+                        let _ = event_tx.send(AgentEvent::TextDelta {
+                            delta: format!("🐠 路由到「{}」: {}\n", fish_def.name, task.description),
+                        }).await;
+
+                        // Stateless Fish call: build a fresh AgentLoop with only the task
+                        let fish_msgs = vec![LlmMessage {
+                            role: "user".into(),
+                            content: MessageContent::text(&task.description),
+                        }];
+
+                        let fish_cancel = Arc::new(AtomicBool::new(false));
+                        let fish_client = build_client(
+                            &provider_clone, &api_key_clone,
+                            if base_url_clone.is_empty() { None } else { Some(&base_url_clone) },
+                        );
+                        let fish_user_tools_dir = app_clone.path().app_data_dir().map(|d| d.join("user-tools")).ok();
+                        let fish_registry_tools = Arc::new(tools::build_registry(
+                            state_browser.clone(),
+                            fish_user_tools_dir.as_deref(),
+                            Some(db_arc.clone()),
+                            Some(&builtin_tool_enabled_clone),
+                            None, None, None, None,
+                        ));
+                        let fish_policy = Arc::new(crate::policy::PolicyGate::with_profile_and_flags(
+                            &workspace_root_clone, &policy_mode_clone,
+                            tool_rate_limit_clone, allow_outside_ws_clone,
+                        ));
+                        let fish_agent = AgentLoop {
+                            client: fish_client,
+                            registry: fish_registry_tools,
+                            policy: fish_policy,
+                            system_prompt: fish_def.agent.system_prompt.clone(),
+                            model: model_clone.clone(),
+                            max_tokens: max_tokens_val,
+                            db: None,
+                            app_handle: Some(app_clone.clone()),
+                            confirmation_responses: None,
+                            confirm_flags: ConfirmFlags { confirm_shell: false, confirm_file_write: false },
+                            vision_override: Some(vision_capable),
+                        };
+                        let fish_ctx = ToolContext {
+                            session_id: format!("fish_ephemeral_{}", fish_id),
+                            workspace_root: std::path::PathBuf::from(&workspace_root_clone),
+                            bypass_permissions: false,
+                            settings: tool_settings_for_fish.clone(),
+                            max_iterations: Some(fish_def.agent.max_iterations),
+                        };
+
+                        let (fish_tx, mut fish_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
+                        let fish_id_fwd = fish_id.to_string();
+                        let fish_name_fwd = fish_def.name.clone();
+                        let parent_sid = session_id_clone.clone();
+                        let app_fwd2 = app_clone.clone();
+                        let fish_fwd = tokio::spawn(async move {
+                            let mut it: u32 = 0;
+                            while let Some(ev) = fish_rx.recv().await {
+                                let prog = match &ev {
+                                    AgentEvent::TextSegmentStart { iteration } => {
+                                        it = *iteration;
+                                        Some(AgentEvent::FishProgress { fish_id: fish_id_fwd.clone(), fish_name: fish_name_fwd.clone(), iteration: *iteration, tool_name: None, status: "thinking".into() })
+                                    }
+                                    AgentEvent::ToolStart { name, .. } => Some(AgentEvent::FishProgress { fish_id: fish_id_fwd.clone(), fish_name: fish_name_fwd.clone(), iteration: it, tool_name: Some(name.clone()), status: "tool_call".into() }),
+                                    AgentEvent::ToolEnd { name, .. } => Some(AgentEvent::FishProgress { fish_id: fish_id_fwd.clone(), fish_name: fish_name_fwd.clone(), iteration: it, tool_name: Some(name.clone()), status: "tool_done".into() }),
+                                    AgentEvent::Done { .. } => Some(AgentEvent::FishProgress { fish_id: fish_id_fwd.clone(), fish_name: fish_name_fwd.clone(), iteration: it, tool_name: None, status: "done".into() }),
+                                    _ => None,
+                                };
+                                if let Some(p) = prog {
+                                    let payload = serde_json::to_value(&p).unwrap_or_default();
+                                    let _ = app_fwd2.emit(&format!("agent_event_{}", parent_sid), payload);
+                                }
+                            }
+                        });
+
+                        let fish_result = fish_agent.run(fish_msgs, fish_tx, fish_cancel, fish_ctx).await;
+                        let _ = fish_fwd.await;
+
+                        match fish_result {
+                            Ok((final_fish_msgs, _, _)) => {
+                                let reply = final_fish_msgs.iter().rev()
+                                    .find(|m| m.role == "assistant")
+                                    .map(|m| m.content.as_text())
+                                    .unwrap_or_default();
+                                let fish_result_msg = LlmMessage {
+                                    role: "assistant".into(),
+                                    content: MessageContent::text(format!(
+                                        "[{}完成子任务: {}]\n\n结果:\n{}",
+                                        fish_def.name, task.description, reply
+                                    )),
+                                };
+                                all_messages.push(fish_result_msg);
+                                let _ = event_tx.send(AgentEvent::TextDelta {
+                                    delta: format!("✓ 「{}」已完成\n", fish_def.name),
+                                }).await;
+                            }
+                            Err(e) => {
+                                tracing::warn!("Fish '{}' failed for sub-task: {}", fish_id, e);
+                                let _ = event_tx.send(AgentEvent::TextDelta {
+                                    delta: format!("⚠ 「{}」执行失败，由主 Agent 接管: {}\n", fish_def.name, e),
+                                }).await;
+                                let sub_msgs = [LlmMessage {
+                                    role: "user".into(),
+                                    content: MessageContent::text(format!(
+                                        "Execute this sub-task: {}\n\nContext from previous steps is available in the conversation.",
+                                        task.description
+                                    )),
+                                }];
+                                let combined: Vec<LlmMessage> = all_messages.iter().chain(sub_msgs.iter()).cloned().collect();
+                                let (sub_tx, mut sub_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
+                                let event_tx_c = event_tx.clone();
+                                let fwd = tokio::spawn(async move {
+                                    while let Some(ev) = sub_rx.recv().await {
+                                        let _ = event_tx_c.send(ev).await;
+                                    }
+                                });
+                                match agent.run(combined, sub_tx, cancel.clone(), ctx.clone()).await {
+                                    Ok((msgs, ti, to)) => {
+                                        all_messages = msgs;
+                                        total_in += ti;
+                                        total_out += to;
+                                    }
+                                    Err(e2) => { last_err = Some(e2); break; }
+                                }
+                                let _ = fwd.await;
+                            }
+                        }
+                        continue;
+                    }
+                }
+
+                // No Fish match — execute with main Agent
                 let _ = event_tx.send(AgentEvent::TextDelta {
                     delta: format!("▶ Sub-task: {}\n", task.description),
                 }).await;
@@ -850,218 +1002,6 @@ pub async fn run_agent_headless(
     Ok((response_text, image_data, image_mime))
 }
 
-/// Fish-specific chat send: same as chat_send but with a custom system prompt and tool filter.
-/// Called by `commands::fish::fish_chat_send`.
-pub async fn fish_chat_send_impl(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    session_id: String,
-    content: String,
-    system_prompt_override: Option<String>,
-    max_iterations_override: u32,
-    allowed_tools: Vec<String>,
-) -> Result<(), String> {
-    tracing::info!("fish_chat_send_impl: session={} fish_tools={:?}", session_id, allowed_tools);
-
-    let (provider, model, api_key, base_url, workspace_root, max_tokens, context_window, confirm_shell, confirm_file_write, policy_mode, tool_rate_limit_per_minute, tool_settings, builtin_tool_enabled, allow_outside_workspace, vision_enabled) = {
-        let settings = state.settings.lock().await;
-        (
-            settings.provider.clone(),
-            settings.model.clone(),
-            settings.active_api_key().to_string(),
-            settings.custom_base_url.clone(),
-            settings.workspace_root.clone(),
-            settings.max_tokens,
-            settings.context_window,
-            settings.confirm_shell_commands,
-            settings.confirm_file_writes,
-            settings.policy_mode.clone(),
-            settings.tool_rate_limit_per_minute,
-            std::sync::Arc::new(crate::agent::tool::ToolSettings::from_settings(&settings)),
-            settings.builtin_tool_enabled.clone(),
-            settings.allow_outside_workspace,
-            settings.vision_enabled,
-        )
-    };
-
-    if api_key.is_empty() {
-        return Err("API key not configured".into());
-    }
-
-    {
-        let db = state.db.lock().await;
-        db.append_message(&session_id, "user", &content).map_err(|e| e.to_string())?;
-        db.update_session_status(&session_id, "running").map_err(|e| e.to_string())?;
-    }
-
-    let llm_messages = {
-        let db = state.db.lock().await;
-        let history = db.get_messages_latest(&session_id, 2000).map_err(|e| e.to_string())?;
-        build_context_messages(&history, compute_context_budget(context_window, max_tokens))
-    };
-
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let mut flags = state.cancel_flags.lock().await;
-        flags.insert(session_id.clone(), cancel.clone());
-    }
-
-    let client = build_client(&provider, &api_key, if base_url.is_empty() { None } else { Some(&base_url) });
-
-    let user_tools_dir = app.path().app_data_dir().map(|d| d.join("user-tools")).ok();
-    // Build full registry — tool filtering for Fish is enforced via the allowed_tools list
-    // passed to the LLM tool definitions (future enhancement); for now use full registry.
-    // Note: call_fish is intentionally excluded from Fish sessions to prevent recursion.
-    let registry = Arc::new(tools::build_registry(
-        state.browser.clone(),
-        user_tools_dir.as_deref(),
-        Some(state.db.clone()),
-        Some(&builtin_tool_enabled),
-        None, // no call_fish in Fish sessions (prevent recursion)
-        None, // no app_control in Fish sessions (prevent recursion)
-        None,
-        None, // no skill_search in Fish sessions
-    ));
-
-    let policy = Arc::new(PolicyGate::with_profile_and_flags(&workspace_root, &policy_mode, tool_rate_limit_per_minute, allow_outside_workspace));
-
-    // Build system prompt: fish override or default
-    let memory_context = {
-        let db = state.db.lock().await;
-        let keywords: Vec<&str> = content.split_whitespace().take(10).collect();
-        match db.search_memories_fts(&keywords.join(" "), 5) {
-            Ok(mems) if !mems.is_empty() => {
-                let mut ctx = String::from("\n\n## Personal Context (from memory)\n");
-                for m in &mems { ctx.push_str(&format!("- {}\n", m.content)); }
-                ctx
-            }
-            _ => String::new(),
-        }
-    };
-
-    // Inject task state for headless sessions
-    let task_state_context = {
-        let db = state.db.lock().await;
-        match db.load_task_state("session", &session_id) {
-            Ok(Some(ts)) if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) => {
-                let mut ctx = String::from("\n\n## Active Task State\n");
-                if !ts.goal.is_empty() {
-                    ctx.push_str(&format!("**Goal:** {}\n", ts.goal));
-                }
-                if !ts.summary.is_empty() {
-                    ctx.push_str(&format!("**Progress:** {}\n", ts.summary));
-                }
-                if ts.state_json != "{}" && !ts.state_json.is_empty() {
-                    ctx.push_str(&format!("**Details:** {}\n", ts.state_json));
-                }
-                ctx
-            }
-            _ => String::new(),
-        }
-    };
-
-    let injection_budget = compute_injection_budget(context_window);
-    let full_memory_context = budget_truncate(
-        &format!("{}{}", memory_context, task_state_context),
-        injection_budget,
-    );
-
-    let system_prompt = match system_prompt_override {
-        Some(p) => format!("{}{}", p, full_memory_context),
-        None => build_system_prompt(&full_memory_context, ""),
-    };
-
-    let agent = crate::agent::loop_::AgentLoop {
-        client,
-        registry,
-        policy,
-        system_prompt,
-        model: model.clone(),
-        max_tokens,
-        db: Some(state.db.clone()),
-        app_handle: Some(state.app_handle.clone()),
-        confirmation_responses: Some(state.confirmation_responses.clone()),
-        confirm_flags: crate::agent::loop_::ConfirmFlags { confirm_shell, confirm_file_write },
-        vision_override: Some(vision_enabled || model_supports_vision(&provider, &model)),
-    };
-
-    let ctx = crate::agent::tool::ToolContext {
-        session_id: session_id.clone(),
-        workspace_root: std::path::PathBuf::from(&workspace_root),
-        bypass_permissions: false,
-        settings: tool_settings,
-        max_iterations: Some(max_iterations_override),
-    };
-
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
-    let app_clone = app.clone();
-    let session_id_clone = session_id.clone();
-    let db_arc = state.db.clone();
-    let cancel_flags_arc = state.cancel_flags.clone();
-    let model_clone = model.clone();
-    let max_tokens_clone = max_tokens;
-    let provider_clone2 = provider.clone();
-    let api_key_clone2 = api_key.clone();
-    let base_url_clone2 = base_url.clone();
-
-    let fish_context_len = llm_messages.len();
-    tokio::spawn(async move {
-        let app_fwd = app_clone.clone();
-        let sid_fwd = session_id_clone.clone();
-        let forward_handle = tokio::spawn(async move {
-            while let Some(event) = event_rx.recv().await {
-                let payload = serde_json::to_value(&event).unwrap_or_default();
-                let _ = app_fwd.emit(&format!("agent_event_{}", sid_fwd), payload.clone());
-                let _ = app_fwd.emit("agent_broadcast", payload);
-            }
-        });
-
-        let result = agent.run(llm_messages, event_tx.clone(), cancel.clone(), ctx).await;
-
-        match &result {
-            Ok((final_messages, total_in, total_out)) => {
-                {
-                    let db = db_arc.lock().await;
-                    persist_agent_turn(&db, &session_id_clone, final_messages, fish_context_len);
-                    let _ = db.update_session_status(&session_id_clone, "idle");
-                }
-                // Auto-extract memories in background
-                {
-                    let db_for_mem = db_arc.clone();
-                    let sid_for_mem = session_id_clone.clone();
-                    let msgs_for_mem = final_messages.clone();
-                    let model_for_mem = model_clone.clone();
-                    let mem_client = build_client(
-                        &provider_clone2,
-                        &api_key_clone2,
-                        if base_url_clone2.is_empty() { None } else { Some(&base_url_clone2) },
-                    );
-                    tokio::spawn(async move {
-                        auto_extract_memories(db_for_mem, sid_for_mem, msgs_for_mem, mem_client, model_for_mem, max_tokens_clone).await;
-                    });
-                }
-                let _ = event_tx.send(AgentEvent::Done {
-                    total_input_tokens: *total_in,
-                    total_output_tokens: *total_out,
-                }).await;
-            }
-            Err(e) => {
-                let db = db_arc.lock().await;
-                let _ = db.update_session_status(&session_id_clone, "idle");
-                drop(db);
-                let _ = event_tx.send(AgentEvent::Error { message: e.to_string() }).await;
-            }
-        }
-
-        drop(event_tx);
-        let _ = forward_handle.await;
-        let mut flags = cancel_flags_arc.lock().await;
-        flags.remove(&session_id_clone);
-    });
-
-    Ok(())
-}
-
 /// Cancel an in-progress agent run
 #[tauri::command]
 pub async fn chat_cancel(
@@ -1216,6 +1156,31 @@ When asked about software installed on this machine, ALWAYS follow this order:
 3. Search registry for COM: `shell cmd` → `reg query HKLM\SOFTWARE\Classes /f "AppName" /s`
 4. Check WOW6432Node for 32-bit software: `powershell_query(get_registry, arch=x86, path=HKLM:\SOFTWARE\WOW6432Node\...)`
 5. Try instantiating COM objects: `com_invoke(create, prog_id=..., arch=x86)`
+
+## Sub-Agent Delegation (call_fish)
+
+You have access to specialized Fish sub-agents via the `call_fish` tool. Fish agents are **stateless, ephemeral workers** — each call starts fresh with no memory of previous calls.
+
+**When to use call_fish:**
+- The task involves many intermediate steps whose details are NOT relevant to the final answer (e.g. scanning hundreds of files, batch processing, data collection)
+- The task is self-contained and can be described in a single instruction
+- You want to keep your own context clean — Fish results are summarized, so intermediate tool calls, retries, and exploration do NOT pollute your conversation history
+
+**When NOT to use call_fish:**
+- The task requires back-and-forth with the user (Fish cannot interact with the user)
+- You need to build on intermediate results across multiple dependent steps that require your judgment
+- The task is simple enough that one or two tool calls will suffice
+
+**Best practices:**
+1. First call `call_fish(action="list")` to see which Fish are available and what they specialize in
+2. Write a clear, complete task description — include all necessary context (paths, requirements, constraints) since the Fish has no access to your conversation history
+3. The Fish returns only its final result — all intermediate reasoning and tool calls are discarded, saving your context budget
+4. If no Fish is available for the task, handle it yourself as usual
+
+**Example delegation pattern:**
+- User asks: "帮我整理 C:\Projects 下所有 Python 项目的依赖清单"
+- Good: `call_fish(action="call", fish_id="file-management", task="扫描 C:\\Projects 下所有包含 requirements.txt 或 pyproject.toml 的目录，列出每个项目名称及其依赖列表")`
+- The Fish will do all the scanning, reading, and aggregation internally, and return only the final summary
 
 ## Key Rules
 

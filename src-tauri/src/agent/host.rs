@@ -90,6 +90,45 @@ impl HostAgent {
             || request.contains("并且");
         word_count > 20 || has_multiple_actions
     }
+
+    /// Map an `app_hint` from a decomposed SubTask to a Fish ID.
+    ///
+    /// Returns `Some(fish_id)` if the hint matches a known skill-based Fish,
+    /// or `None` if the main Agent should handle the sub-task directly.
+    ///
+    /// The fish IDs here correspond to the auto-generated skill Fish IDs
+    /// produced by `fish::skill_fish_id()` from the built-in skill names.
+    pub fn route_to_fish(hint: &str) -> Option<&'static str> {
+        let h = hint.to_lowercase();
+        if h.contains("file") || h.contains("文件") || h.contains("folder") || h.contains("目录") {
+            return Some("skill-file-management");
+        }
+        if h.contains("office") || h.contains("excel") || h.contains("word")
+            || h.contains("ppt") || h.contains("spreadsheet") || h.contains("表格")
+            || h.contains("文档") || h.contains("报告")
+        {
+            return Some("skill-office-automation");
+        }
+        if h.contains("web") || h.contains("browser") || h.contains("网页")
+            || h.contains("crawl") || h.contains("scrape") || h.contains("url")
+            || h.contains("浏览器") || h.contains("抓取")
+        {
+            return Some("skill-web-automation");
+        }
+        if h.contains("system") || h.contains("windows") || h.contains("powershell")
+            || h.contains("process") || h.contains("service") || h.contains("系统")
+            || h.contains("进程") || h.contains("服务")
+        {
+            return Some("skill-system-admin");
+        }
+        if h.contains("desktop") || h.contains("uia") || h.contains("桌面")
+            || h.contains("click") || h.contains("window") || h.contains("窗口")
+            || h.contains("界面") || h.contains("自动化操作")
+        {
+            return Some("skill-desktop-control");
+        }
+        None
+    }
 }
 
 #[derive(Debug, Deserialize)]

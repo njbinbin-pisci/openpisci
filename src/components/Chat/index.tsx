@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { RootState, chatActions, sessionsActions, ToolStep, StreamingState } from "../../store";
-import { chatApi, sessionsApi, gatewayApi, fishApi, AgentEventType, ChannelInfo, ChatAttachment } from "../../services/tauri";
+import { chatApi, sessionsApi, gatewayApi, AgentEventType, ChannelInfo, ChatAttachment } from "../../services/tauri";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
@@ -47,10 +47,18 @@ function MermaidBlock({ code }: { code: string }) {
   return <div ref={ref} className="mermaid-block" />;
 }
 
+// ── Session classification ────────────────────────────────────────────────────
+
+type SessionKind = "chat" | "im";
+
+function classifySession(source: string | undefined | null): SessionKind {
+  if (!source || source === "chat") return "chat";
+  return "im";
+}
+
 /** Map a session.source value to a compact display emoji/label. */
 function sourceIcon(source: string): string {
   if (source === "chat" || !source) return "";
-  if (source.startsWith("fish_")) return "🐠";
   if (source.includes("telegram")) return "✈";
   if (source.includes("feishu") || source.includes("lark")) return "🪶";
   if (source.includes("wecom") || source.includes("wechat")) return "💬";
@@ -73,15 +81,12 @@ export default function Chat() {
 
   const [input, setInput] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
-  // "all" | "chat" | "fish" | "im"
-  const [sessionFilter, setSessionFilter] = useState<"all" | "chat" | "fish" | "im">("all");
+  const [sessionFilter, setSessionFilter] = useState<"all" | SessionKind>("all");
 
   // Attachment state
   const [attachment, setAttachment] = useState<ChatAttachment | null>(null);
   // Preview URL for image attachments (object URL or base64 data URL)
   const [attachmentPreview, setAttachmentPreview] = useState<string | null>(null);
-  // Set of fish IDs that are currently activated (have an active instance)
-  const [activeFishIds, setActiveFishIds] = useState<Set<string>>(new Set());
   const [gatewayChannels, setGatewayChannels] = useState<ChannelInfo[]>([]);
   const [gatewayConnecting, setGatewayConnecting] = useState(false);
   const [gatewayDisconnecting, setGatewayDisconnecting] = useState(false);
@@ -202,12 +207,9 @@ export default function Chat() {
     }
     prevRunningRef.current = running;
   }, [running]);
-  const isFishSession = !!(activeSession?.source && activeSession.source.startsWith("fish_"));
-  const isImSession = !!(activeSession?.source && activeSession.source !== "chat" && !isFishSession);
+  const activeSessionKind = classifySession(activeSession?.source);
+  const isImSession = activeSessionKind === "im";
   isImSessionRef.current = isImSession;
-  // True only when the fish session's fish is currently activated
-  const activeFishId = isFishSession ? activeSession!.source.replace(/^fish_/, "") : null;
-  const isFishActivated = activeFishId ? activeFishIds.has(activeFishId) : false;
 
   // Load messages when the active session ID changes.
   // Also sync running state from DB to fix stale state if im_session_done was missed.
@@ -262,18 +264,20 @@ export default function Chat() {
     }).catch(() => { loadingMoreRef.current = false; });
   }, [activeSessionId, historyLimit, dispatch]);
 
-  // Auto-adjust filter when the active session changes (depends on sessions for source lookup)
+  // When the active session changes, ensure the filter includes it.
+  // Only switch filter if the active session would be hidden under the current filter.
   useEffect(() => {
     if (!activeSessionId) return;
-    const activeSession = sessions.find((s) => s.id === activeSessionId);
-    if (activeSession?.source && activeSession.source !== "chat") {
-      if (activeSession.source.startsWith("fish_")) {
-        setSessionFilter("fish");
-      } else {
-        setSessionFilter("im");
-      }
-    }
-  }, [activeSessionId, sessions]);
+    const s = sessions.find((x) => x.id === activeSessionId);
+    if (!s) return;
+    const kind = classifySession(s.source);
+    // "all" always shows everything — no need to switch
+    if (sessionFilter === "all") return;
+    // If the current filter already matches the session kind, no change needed
+    if (sessionFilter === kind) return;
+    // The active session is hidden by the current filter — switch to "all"
+    setSessionFilter("all");
+  }, [activeSessionId, sessions, sessionFilter]);
 
   // Subscribe to agent events — use ref to avoid stale closure over activeSessionId
   useEffect(() => {
@@ -345,6 +349,16 @@ export default function Chat() {
           // IM sessions: App.tsx listens for im_session_done (emitted AFTER persist_agent_turn),
           // which will reload messages. No action needed here.
           break;
+        case "fish_progress":
+          dispatch(chatActions.updateFishProgress({
+            sessionId: sid,
+            fishId: event.fish_id,
+            fishName: event.fish_name,
+            iteration: event.iteration,
+            toolName: event.tool_name,
+            status: event.status,
+          }));
+          break;
         case "error":
           dispatch(chatActions.setRunning({ sessionId: sid, running: false }));
           dispatch(chatActions.clearStreaming(sid));
@@ -411,12 +425,7 @@ export default function Chat() {
     gatewayApi.list().then((r) => setGatewayChannels(r.channels)).catch(() => setGatewayChannels([]));
   }, [sessionFilter]);
 
-  // Load activated fish list on mount and when switching to fish filter
-  useEffect(() => {
-    fishApi.list().then((list) => {
-      setActiveFishIds(new Set(list.filter((f) => !!f.instance).map((f) => f.id)));
-    }).catch(() => {});
-  }, [sessionFilter]);
+  // (activeFishIds removed — session filtering no longer depends on Fish activation state)
 
   const handleGatewayConnect = useCallback(async () => {
     setGatewayConnecting(true);
@@ -450,24 +459,18 @@ export default function Chat() {
     try {
       await sessionsApi.delete(sessionId);
       dispatch(sessionsActions.removeSession(sessionId));
-      // If we deleted the active session, switch to the next session
-      // within the CURRENT filter to avoid jumping to a different tab
       if (activeSessionId === sessionId) {
-        const filterSession = (s: typeof sessions[0]) => {
-          const isFish = !!(s.source && s.source.startsWith("fish_"));
-          const fishActivated = isFish && activeFishIds.has(s.source!.replace(/^fish_/, ""));
-          if (sessionFilter === "chat") return !s.source || s.source === "chat";
-          if (sessionFilter === "fish") return isFish && fishActivated;
-          if (sessionFilter === "im") return !!(s.source && s.source !== "chat" && !isFish);
-          return !isFish || fishActivated;
-        };
-        const remaining = sessions.filter((s) => s.id !== sessionId && filterSession(s));
+        const remaining = sessions.filter((s) => {
+          if (s.id === sessionId) return false;
+          if (sessionFilter === "all") return true;
+          return classifySession(s.source) === sessionFilter;
+        });
         dispatch(sessionsActions.setActiveSession(remaining.length > 0 ? remaining[0].id : null));
       }
     } catch (e) {
       setSendError(t("chat.failedDelete", { error: String(e) }));
     }
-  }, [activeSessionId, sessions, sessionFilter, activeFishIds, dispatch, t]);
+  }, [activeSessionId, sessions, sessionFilter, dispatch, t]);
 
   const handleAttach = useCallback(async () => {
     try {
@@ -654,20 +657,14 @@ export default function Chat() {
     dispatch(chatActions.setRunning({ sessionId: activeSessionId, running: true }));
 
     try {
-      if (isFishSession && activeSession?.source) {
-        // Fish session: extract fish_id from source "fish_{id}" and call fish_chat_send
-        const fishId = activeSession.source.replace(/^fish_/, "");
-        await fishApi.chatSend(fishId, content);
-      } else {
-        await chatApi.send(activeSessionId, content, pendingAttachment ?? undefined);
-      }
+      await chatApi.send(activeSessionId, content, pendingAttachment ?? undefined);
     } catch (e) {
       console.error('[Chat] send error:', e);
       dispatch(chatActions.setRunning({ sessionId: activeSessionId, running: false }));
       dispatch(chatActions.clearStreaming(activeSessionId));
       setSendError(`${e}`);
     }
-  }, [input, attachment, activeSessionId, running, isFishSession, activeSession, dispatch, clearAttachment, t]);
+  }, [input, attachment, activeSessionId, running, activeSession, dispatch, clearAttachment, t]);
 
   const handleCancel = useCallback(() => {
     if (activeSessionId) {
@@ -695,6 +692,12 @@ export default function Chat() {
     }
   };
 
+  // ── Filtered session list (single source of truth) ───────────────────────
+  const filteredSessions = sessions.filter((s) => {
+    if (sessionFilter === "all") return true;
+    return classifySession(s.source) === sessionFilter;
+  });
+
   return (
     <div className="chat-layout">
       {/* Session sidebar */}
@@ -706,7 +709,7 @@ export default function Chat() {
 
         {/* Filter tabs */}
         <div style={{ display: "flex", gap: 4, padding: "4px 8px 0", fontSize: 12 }}>
-          {(["all", "chat", "fish", "im"] as const).map((f) => (
+          {(["all", "chat", "im"] as const).map((f) => (
             <button
               key={f}
               onClick={() => setSessionFilter(f)}
@@ -721,23 +724,13 @@ export default function Chat() {
                 fontSize: 11,
               }}
             >
-              {f === "all" ? t("chat.filterAll") : f === "chat" ? t("chat.filterChat") : f === "fish" ? t("chat.filterFish") : t("chat.filterIM")}
+              {f === "all" ? t("chat.filterAll") : f === "chat" ? t("chat.filterChat") : t("chat.filterIM")}
             </button>
           ))}
         </div>
 
         <div style={{ flex: 1, overflowY: "auto" }}>
-          {sessions
-            .filter((s) => {
-              const isFish = !!(s.source && s.source.startsWith("fish_"));
-              const fishActivated = isFish && activeFishIds.has(s.source!.replace(/^fish_/, ""));
-              if (sessionFilter === "chat") return !s.source || s.source === "chat";
-              if (sessionFilter === "fish") return isFish && fishActivated;
-              if (sessionFilter === "im") return !!(s.source && s.source !== "chat" && !isFish);
-              // "all": chat + activated fish + IM
-              return !isFish || fishActivated;
-            })
-            .map((s) => {
+          {filteredSessions.map((s) => {
               const icon = sourceIcon(s.source);
               return (
                 <div
@@ -760,14 +753,7 @@ export default function Chat() {
                 </div>
               );
             })}
-          {sessions.filter((s) => {
-            const isFish = !!(s.source && s.source.startsWith("fish_"));
-            const fishActivated = isFish && activeFishIds.has(s.source!.replace(/^fish_/, ""));
-            if (sessionFilter === "chat") return !s.source || s.source === "chat";
-            if (sessionFilter === "fish") return isFish && fishActivated;
-            if (sessionFilter === "im") return !!(s.source && s.source !== "chat" && !isFish);
-            return !isFish || fishActivated;
-          }).length === 0 && (
+          {filteredSessions.length === 0 && (
             <div className="session-empty">{t("chat.noChats")}</div>
           )}
         </div>
@@ -841,23 +827,6 @@ export default function Chat() {
               </div>
             )}
 
-            {isFishSession && (
-              <div style={{
-                padding: "6px 16px",
-                fontSize: 12,
-                color: "var(--text-secondary)",
-                background: "var(--bg-secondary)",
-                borderBottom: "1px solid var(--border)",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-              }}>
-                <span style={{ fontSize: 16 }}>🐠</span>
-                <span style={{ fontWeight: 500 }}>{(activeSession?.title ?? t("chat.fishSession")).replace(/^🐠\s*/, "")}</span>
-                <span style={{ marginLeft: "auto", opacity: 0.6, fontSize: 11 }}>{t("chat.fishSessionHint")}</span>
-              </div>
-            )}
-
             <div className="messages-area" ref={messagesAreaRef}>
               {isImSession && hasMoreHistory && (
                 <div style={{ textAlign: "center", padding: "8px 0" }}>
@@ -872,7 +841,7 @@ export default function Chat() {
               {activeMessages.map((msg) => (
                 <div key={msg.id} className={`message message-${msg.role}`}>
                   <div className="message-role">
-                    {msg.role === "user" ? t("chat.you") : isFishSession ? (activeSession?.title ?? t("chat.fishSession")).replace(/^🐠\s*/, "") : t("chat.pisci")}
+                    {msg.role === "user" ? t("chat.you") : t("chat.pisci")}
                   </div>
                   <div className="message-content">
                     <MessageContent content={msg.content} />
@@ -955,13 +924,7 @@ export default function Chat() {
               </div>
             )}
 
-            {isFishSession && !isFishActivated && (
-              <div style={{ padding: "12px 16px", fontSize: 12, color: "var(--text-muted)", borderTop: "1px solid var(--border)", textAlign: "center", background: "var(--bg-secondary)" }}>
-                {t("chat.fishNotActivated")}
-              </div>
-            )}
-
-            {!isImSession && (!isFishSession || isFishActivated) && <div
+            {!isImSession && <div
               className={`input-area${isDragging ? " drag-over" : ""}`}
               onDrop={handleDrop}
               onDragOver={handleDragOver}
@@ -1360,6 +1323,34 @@ function toolSummary(name: string, input: unknown): string {
   return Object.entries(i).slice(0, 2).map(([k, v]) => `${k}=${String(v).slice(0, 30)}`).join(" ");
 }
 
+function FishProgressBadge({ progress }: { progress: NonNullable<ToolStep["fishProgress"]> }) {
+  const statusLabel: Record<string, string> = {
+    thinking: "思考中",
+    tool_call: "调用工具",
+    tool_done: "工具完成",
+    done: "已完成",
+  };
+  const label = statusLabel[progress.status] ?? progress.status;
+  const isRunning = progress.status !== "done";
+
+  return (
+    <div className="fish-progress-badge">
+      <span className="fish-progress-icon">🐠</span>
+      <span className="fish-progress-name">{progress.fishName}</span>
+      {progress.iteration > 0 && (
+        <span className="fish-progress-iter">第 {progress.iteration} 步</span>
+      )}
+      {progress.toolName && (
+        <span className="fish-progress-tool">{progress.toolName}</span>
+      )}
+      <span className={`fish-progress-status ${isRunning ? "fish-status-running" : "fish-status-done"}`}>
+        {isRunning && <span className="step-spinner" style={{ width: 10, height: 10, marginRight: 4 }} />}
+        {label}
+      </span>
+    </div>
+  );
+}
+
 function ToolStepCard({ step, onToggle }: { step: ToolStep; onToggle: () => void }) {
   const { t } = useTranslation();
   const maxResultLen = 400;
@@ -1391,8 +1382,20 @@ function ToolStepCard({ step, onToggle }: { step: ToolStep; onToggle: () => void
         <span className="tool-step-chevron">{step.expanded ? "▲" : "▼"}</span>
       </button>
 
+      {/* Fish progress inline — shown even when step is collapsed */}
+      {step.fishProgress && step.fishProgress.status !== "done" && (
+        <FishProgressBadge progress={step.fishProgress} />
+      )}
+
       {step.expanded && (
         <div className="tool-step-body">
+          {/* Fish progress detail when expanded */}
+          {step.fishProgress && (
+            <div className="tool-step-section">
+              <span className="tool-step-section-label">🐠 小鱼进度</span>
+              <FishProgressBadge progress={step.fishProgress} />
+            </div>
+          )}
           <div className="tool-step-section">
             <span className="tool-step-section-label">{t("chat.toolStepInput")}</span>
             <pre className="tool-step-pre">

@@ -521,10 +521,6 @@ pub fn run() {
             // Fish (小鱼) sub-Agents
             commands::fish::get_fish_dir,
             commands::fish::list_fish,
-            commands::fish::activate_fish,
-            commands::fish::deactivate_fish,
-            commands::fish::get_fish_status,
-            commands::fish::fish_chat_send,
             // MCP servers
             commands::mcp::list_mcp_servers,
             commands::mcp::save_mcp_servers,

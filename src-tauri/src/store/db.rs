@@ -1068,64 +1068,6 @@ impl Database {
     // Fish instances
     // ------------------------------------------------------------------
 
-    pub fn upsert_fish_instance(
-        &self,
-        fish_id: &str,
-        session_id: &str,
-        status: &str,
-        user_config_json: &str,
-    ) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        self.conn.execute(
-            "INSERT INTO fish_instances (fish_id, session_id, status, user_config, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5) \
-             ON CONFLICT(fish_id) DO UPDATE SET \
-               session_id = excluded.session_id, \
-               status = excluded.status, \
-               user_config = excluded.user_config, \
-               updated_at = excluded.updated_at",
-            params![fish_id, session_id, status, user_config_json, now],
-        )?;
-        Ok(())
-    }
-
-    pub fn get_fish_instance(&self, fish_id: &str) -> Result<Option<crate::fish::FishInstance>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT fish_id, session_id, status, user_config, created_at FROM fish_instances WHERE fish_id = ?1"
-        )?;
-        let mut rows = stmt.query_map(params![fish_id], |r| {
-            Ok(crate::fish::FishInstance {
-                fish_id: r.get(0)?,
-                session_id: r.get(1)?,
-                status: r.get(2)?,
-                user_config: serde_json::from_str(&r.get::<_, String>(3)?).unwrap_or_default(),
-                created_at: r.get(4)?,
-            })
-        })?;
-        Ok(rows.next().transpose()?)
-    }
-
-    pub fn list_fish_instances(&self) -> Result<Vec<crate::fish::FishInstance>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT fish_id, session_id, status, user_config, created_at FROM fish_instances ORDER BY updated_at DESC"
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok(crate::fish::FishInstance {
-                fish_id: r.get(0)?,
-                session_id: r.get(1)?,
-                status: r.get(2)?,
-                user_config: serde_json::from_str(&r.get::<_, String>(3)?).unwrap_or_default(),
-                created_at: r.get(4)?,
-            })
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-    }
-
-    pub fn delete_fish_instance(&self, fish_id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM fish_instances WHERE fish_id = ?1", params![fish_id])?;
-        Ok(())
-    }
-
     // ------------------------------------------------------------------
     // Task States
     // ------------------------------------------------------------------

@@ -58,6 +58,14 @@ export interface ToolStep {
   completed: boolean;
   /** whether the detail panel is expanded */
   expanded: boolean;
+  /** If this step is a Fish sub-agent delegation, track its progress */
+  fishProgress?: {
+    fishId: string;
+    fishName: string;
+    iteration: number;
+    toolName: string | null;
+    status: string;
+  };
 }
 
 /** Per-session streaming state for the current agent turn */
@@ -167,6 +175,28 @@ const chatSlice = createSlice({
       const { sessionId, id } = action.payload;
       const step = state.toolSteps[sessionId]?.find((s) => s.id === id);
       if (step) step.expanded = !step.expanded;
+    },
+    /** Update the Fish progress on the call_fish tool step */
+    updateFishProgress: (state, action: PayloadAction<{
+      sessionId: string;
+      fishId: string;
+      fishName: string;
+      iteration: number;
+      toolName: string | null;
+      status: string;
+    }>) => {
+      const { sessionId, fishId, fishName, iteration, toolName, status } = action.payload;
+      const steps = state.toolSteps[sessionId];
+      if (!steps) return;
+      // Find the call_fish step for this fish (most recent one)
+      const step = [...steps].reverse().find((s) => s.name === "call_fish");
+      if (step) {
+        step.fishProgress = { fishId, fishName, iteration, toolName, status };
+        if (status === "done") {
+          step.completed = true;
+          step.expanded = false;
+        }
+      }
     },
     /** Clear all tool steps when a new user message is sent */
     clearToolSteps: (state, action: PayloadAction<string>) => {
