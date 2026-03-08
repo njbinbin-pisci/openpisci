@@ -41,6 +41,7 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 | `ssh` | SSH 远程连接与命令执行 |
 | `pdf` | PDF 读写 |
 | `memory_store` | 向长期记忆写入信息 |
+| `plan_todo` | 为复杂任务维护可视化执行计划与待办状态 |
 | 用户自定义工具 | TypeScript 插件，支持自定义配置接口 |
 | MCP 工具 | 通过 MCP 协议接入外部工具服务器 |
 
@@ -270,6 +271,12 @@ OpenPisci
 ---
 
 ## 📋 更新日志
+
+### v0.4.1
+- **新增 `plan_todo` 工具**：Agent 可像 Cursor 一样维护当前复杂任务的待办计划，支持 `pending / in_progress / completed / cancelled` 状态更新
+- **计划面板实时可视化**：聊天界面新增计划面板，执行中和执行后都可查看当前任务计划与进度
+- **计划策略提示词**：系统提示词新增 Planning 段落，引导 Agent 在复杂任务中主动维护短计划
+- **工具控制能力继续开放**：主题切换、极简模式、窗口移动、内置工具开关、用户工具配置已可通过 Agent 的 `app_control` 工具操作
 
 ### v0.4.0
 - **小鱼无状态重构**：小鱼（Fish）从独立会话模式重构为无状态临时工作者，由主 Agent 通过 `call_fish` 委派子任务，中间过程不污染主上下文

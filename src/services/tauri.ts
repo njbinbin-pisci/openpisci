@@ -199,6 +199,14 @@ export type AgentEventType =
   | { type: "done"; total_input_tokens: number; total_output_tokens: number }
   | { type: "error"; message: string }
   | {
+      type: "plan_update";
+      items: Array<{
+        id: string;
+        content: string;
+        status: "pending" | "in_progress" | "completed" | "cancelled";
+      }>;
+    }
+  | {
       type: "fish_progress";
       fish_id: string;
       fish_name: string;

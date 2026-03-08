@@ -1,3 +1,5 @@
+#![recursion_limit = "512"]
+
 // lib.rs — Tauri application library entry point.
 // main.rs calls run() from here; this allows Tauri mobile targets to work.
 
@@ -223,6 +225,7 @@ pub fn run() {
                 let gateway = state.gateway.clone();
                 let db = state.db.clone();
                 let settings = state.settings.clone();
+                let plan_state = state.plan_state.clone();
                 let browser = state.browser.clone();
                 let cancel_flags = state.cancel_flags.clone();
                 let confirm_resp = state.confirmation_responses.clone();
@@ -237,6 +240,20 @@ pub fn run() {
                         info!("Gateway inbound consumer started");
                         while let Some(msg) = rx.recv().await {
                             info!("Inbound IM message from {} via {}: {}", msg.sender, msg.channel, &msg.content[..msg.content.len().min(80)]);
+
+                            if let Err(e) = crate::commands::window::enter_unattended_im_mode(&app_h, &store::AppState {
+                                db: db.clone(),
+                                settings: settings.clone(),
+                                plan_state: plan_state.clone(),
+                                browser: browser.clone(),
+                                cancel_flags: cancel_flags.clone(),
+                                confirmation_responses: confirm_resp.clone(),
+                                app_handle: app_h.clone(),
+                                scheduler: sched.clone(),
+                                gateway: gateway.clone(),
+                            }).await {
+                                tracing::warn!("Failed to enter unattended IM mode: {}", e);
+                            }
 
                             // Deterministic session ID: one persistent session per (channel, sender)
                             let session_id = format!("im_{}_{}", msg.channel, msg.sender);
@@ -283,6 +300,7 @@ pub fn run() {
                             let state_ref = store::AppState {
                                 db: db.clone(),
                                 settings: settings.clone(),
+                                plan_state: plan_state.clone(),
                                 browser: browser.clone(),
                                 cancel_flags: cancel_flags.clone(),
                                 confirmation_responses: confirm_resp.clone(),
@@ -375,6 +393,7 @@ pub fn run() {
             {
                 let settings_arc = state.settings.clone();
                 let db_arc = state.db.clone();
+                let plan_state_arc = state.plan_state.clone();
                 let browser_arc = state.browser.clone();
                 let cancel_flags_arc = state.cancel_flags.clone();
                 let confirm_resp_arc = state.confirmation_responses.clone();
@@ -402,6 +421,7 @@ pub fn run() {
                         let state_ref = store::AppState {
                             db: db_arc.clone(),
                             settings: settings_arc.clone(),
+                            plan_state: plan_state_arc.clone(),
                             browser: browser_arc.clone(),
                             cancel_flags: cancel_flags_arc.clone(),
                             confirmation_responses: confirm_resp_arc.clone(),
@@ -530,6 +550,7 @@ pub fn run() {
             commands::window::exit_minimal_mode,
             commands::window::set_overlay_position,
             commands::window::save_overlay_position,
+            commands::window::set_app_theme,
             commands::window::set_window_theme_border,
         ])
         .run(tauri::generate_context!())

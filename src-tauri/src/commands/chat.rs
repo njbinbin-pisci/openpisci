@@ -217,6 +217,11 @@ pub async fn chat_send(
 
     // Save user message to DB (use effective_content which may include file path annotation)
     {
+        let mut plans = state.plan_state.lock().await;
+        plans.remove(&session_id);
+    }
+
+    {
         let db = state.db.lock().await;
         db.append_message(&session_id, "user", &effective_content)
             .map_err(|e| e.to_string())?;
@@ -773,6 +778,11 @@ pub async fn run_agent_headless(
         return Err("API key not configured".into());
     }
 
+    {
+        let mut plans = state.plan_state.lock().await;
+        plans.remove(session_id);
+    }
+
     // vision_capable: user override OR auto-detection by provider/model name
     let vision_capable = vision_setting || model_supports_vision(&provider, &model);
 
@@ -1156,6 +1166,22 @@ When asked about software installed on this machine, ALWAYS follow this order:
 3. Search registry for COM: `shell cmd` → `reg query HKLM\SOFTWARE\Classes /f "AppName" /s`
 4. Check WOW6432Node for 32-bit software: `powershell_query(get_registry, arch=x86, path=HKLM:\SOFTWARE\WOW6432Node\...)`
 5. Try instantiating COM objects: `com_invoke(create, prog_id=..., arch=x86)`
+
+## Planning (plan_todo)
+
+For complex, multi-step tasks, keep a short visible plan using the `plan_todo` tool.
+
+**When to use `plan_todo`:**
+- The task needs meaningful sequencing, tracking, or progress visibility
+- You expect to use several tools or spend more than a trivial amount of time
+- The user would benefit from seeing what is pending, active, or completed
+
+**How to use it well:**
+1. Create a concise plan early, usually 2-7 items
+2. Keep exactly one item as `in_progress` at a time
+3. Mark items `completed` or `cancelled` as soon as their status changes
+4. If the plan changes substantially, replace the whole list instead of patching it awkwardly
+5. Do not use `plan_todo` for very simple one-step requests
 
 ## Sub-Agent Delegation (call_fish)
 

@@ -68,7 +68,11 @@ describe("chatApi", () => {
   it("send() calls chat_send with sessionId and content", async () => {
     mockInvoke.mockResolvedValueOnce(null);
     await chatApi.send("sess1", "hello");
-    expect(mockInvoke).toHaveBeenCalledWith("chat_send", { sessionId: "sess1", content: "hello" });
+    expect(mockInvoke).toHaveBeenCalledWith("chat_send", {
+      sessionId: "sess1",
+      content: "hello",
+      attachment: null,
+    });
   });
 
   it("cancel() calls chat_cancel with sessionId", async () => {

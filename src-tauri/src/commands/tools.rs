@@ -69,6 +69,12 @@ pub async fn list_builtin_tools(_state: State<'_, AppState>) -> Result<Vec<Built
             windows_only: false,
         },
         BuiltinToolInfo {
+            name: "plan_todo".into(),
+            description: "维护当前复杂任务的可视化执行计划与待办状态".into(),
+            icon: "📋".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
             name: "uia".into(),
             description: "通过 Windows UI Automation 控制桌面应用程序界面元素".into(),
             icon: "🖱️".into(),
@@ -110,6 +116,7 @@ pub async fn trigger_heartbeat(state: State<'_, AppState>) -> Result<(), String>
     let state_ref = crate::store::AppState {
         db: state.db.clone(),
         settings: state.settings.clone(),
+        plan_state: state.plan_state.clone(),
         browser: state.browser.clone(),
         cancel_flags: state.cancel_flags.clone(),
         confirmation_responses: state.confirmation_responses.clone(),

@@ -48,6 +48,14 @@ function AppContent() {
     }
   }, [theme]);
 
+  useEffect(() => {
+    const unlisten = listen<string>("app_theme_changed", (event) => {
+      const next = event.payload === "gold" ? "gold" : "violet";
+      setTheme(next);
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
   // 当 settings.language 变化时同步 i18n
   useEffect(() => {
     if (settings?.language) {

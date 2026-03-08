@@ -5,14 +5,110 @@
 //!   overlay - 280x56 transparent always-on-top HUD strip
 
 use crate::store::AppState;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tracing::info;
+
+const OVERLAY_MARGIN: i32 = 16;
+
+fn get_overlay_size(app: &AppHandle) -> (i32, i32) {
+    app.get_webview_window("overlay")
+        .and_then(|overlay| overlay.outer_size().ok())
+        .map(|size| (size.width as i32, size.height as i32))
+        .unwrap_or((280, 56))
+}
+
+#[cfg(target_os = "windows")]
+fn primary_work_area_bottom_right(app: &AppHandle) -> (i32, i32) {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWORKAREA};
+
+    let (overlay_w, overlay_h) = get_overlay_size(app);
+    let mut rect = RECT::default();
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            Some((&mut rect as *mut RECT).cast()),
+            Default::default(),
+        )
+    }
+    .is_ok();
+
+    if ok {
+        let x = (rect.right - overlay_w - OVERLAY_MARGIN).max(rect.left);
+        let y = (rect.bottom - overlay_h - OVERLAY_MARGIN).max(rect.top);
+        (x, y)
+    } else {
+        (100, 100)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn primary_work_area_bottom_right(app: &AppHandle) -> (i32, i32) {
+    let (overlay_w, overlay_h) = get_overlay_size(app);
+    ((1920 - overlay_w - OVERLAY_MARGIN).max(0), (1080 - overlay_h - OVERLAY_MARGIN).max(0))
+}
+
+async fn persist_overlay_position(state: &State<'_, AppState>, x: i32, y: i32) -> Result<(), String> {
+    let mut settings = state.settings.lock().await;
+    settings.overlay_x = Some(x);
+    settings.overlay_y = Some(y);
+    settings.save().map_err(|e| e.to_string())
+}
+
+pub async fn enter_unattended_im_mode(
+    app: &AppHandle,
+    state: &crate::store::AppState,
+) -> Result<(), String> {
+    let main = app.get_webview_window("main")
+        .ok_or("Main window not found")?;
+    let overlay = app.get_webview_window("overlay")
+        .ok_or("Overlay window not found")?;
+
+    let (x, y) = primary_work_area_bottom_right(app);
+    overlay
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+
+    {
+        let mut settings = state.settings.lock().await;
+        settings.overlay_x = Some(x);
+        settings.overlay_y = Some(y);
+        settings.save().map_err(|e| e.to_string())?;
+    }
+
+    let _ = main.hide();
+    overlay.show().map_err(|e| e.to_string())?;
+    overlay.set_always_on_top(true).map_err(|e| e.to_string())?;
+
+    info!("Entered unattended IM mode at ({}, {})", x, y);
+    Ok(())
+}
 
 // ─── Theme-based window border color (Windows 11+) ──────────────────────────
 
 /// Set the main window title bar and border color to match the app theme.
 /// violet → purple (#7c6af7), gold → gold (#c9a84c).
 /// Windows 11+ only; no-op on older Windows or non-Windows.
+pub async fn apply_app_theme(app: &AppHandle, theme: &str) -> Result<(), String> {
+    let theme = theme.trim();
+    if theme != "violet" && theme != "gold" {
+        return Err(format!("Unsupported theme '{}'", theme));
+    }
+    app.emit("app_theme_changed", theme.to_string())
+        .map_err(|e| e.to_string())?;
+    set_window_theme_border(app.clone(), theme.to_string()).await?;
+    Ok(())
+}
+
+/// Broadcast an application theme change to the frontend and sync the native border color.
+#[tauri::command]
+pub async fn set_app_theme(app: AppHandle, theme: String) -> Result<(), String> {
+    apply_app_theme(&app, &theme).await
+}
+
+/// Set the native window title bar and border color to match the app theme.
+/// This does not change the frontend theme by itself.
 #[tauri::command]
 pub async fn set_window_theme_border(_app: AppHandle, theme: String) -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
@@ -141,8 +237,5 @@ pub async fn save_overlay_position(
     x: i32,
     y: i32,
 ) -> Result<(), String> {
-    let mut settings = state.settings.lock().await;
-    settings.overlay_x = Some(x);
-    settings.overlay_y = Some(y);
-    settings.save().map_err(|e| e.to_string())
+    persist_overlay_position(&state, x, y).await
 }

@@ -13,6 +13,8 @@ pub use settings::Settings;
 pub struct AppState {
     pub db: Arc<Mutex<Database>>,
     pub settings: Arc<Mutex<Settings>>,
+    /// Current visible execution plan per session
+    pub plan_state: Arc<Mutex<std::collections::HashMap<String, Vec<crate::agent::plan::PlanTodoItem>>>>,
     /// Active agent cancellation tokens: session_id -> cancel flag
     pub cancel_flags: Arc<Mutex<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
     /// Shared browser manager (Chrome for Testing)
@@ -54,6 +56,7 @@ impl AppState {
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
             settings: Arc::new(Mutex::new(settings)),
+            plan_state: Arc::new(Mutex::new(std::collections::HashMap::new())),
             cancel_flags: Arc::new(Mutex::new(std::collections::HashMap::new())),
             browser: crate::browser::create_browser_manager(browser_options),
             scheduler: Arc::new(scheduler),

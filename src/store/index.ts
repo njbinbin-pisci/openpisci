@@ -68,6 +68,12 @@ export interface ToolStep {
   };
 }
 
+export interface PlanTodoItem {
+  id: string;
+  content: string;
+  status: "pending" | "in_progress" | "completed" | "cancelled";
+}
+
 /** Per-session streaming state for the current agent turn */
 export interface StreamingState {
   /** The text currently being streamed in the visible bubble */
@@ -88,6 +94,7 @@ interface ChatState {
   toolSteps: Record<string, ToolStep[]>;
   /** Tracks whether the last agent turn has finished — used to auto-clear steps on next turn start */
   toolStepsTurnDone: Record<string, boolean>;
+  planBySession: Record<string, PlanTodoItem[]>;
   isRunning: Record<string, boolean>;
 }
 
@@ -98,6 +105,7 @@ const chatSlice = createSlice({
     streaming: {},
     toolSteps: {},
     toolStepsTurnDone: {},
+    planBySession: {},
     isRunning: {},
   } as ChatState,
   reducers: {
@@ -197,6 +205,12 @@ const chatSlice = createSlice({
           step.expanded = false;
         }
       }
+    },
+    setPlan: (state, action: PayloadAction<{ sessionId: string; items: PlanTodoItem[] }>) => {
+      state.planBySession[action.payload.sessionId] = action.payload.items;
+    },
+    clearPlan: (state, action: PayloadAction<string>) => {
+      delete state.planBySession[action.payload];
     },
     /** Clear all tool steps when a new user message is sent */
     clearToolSteps: (state, action: PayloadAction<string>) => {

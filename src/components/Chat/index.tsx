@@ -5,7 +5,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { RootState, chatActions, sessionsActions, ToolStep, StreamingState } from "../../store";
+import { RootState, chatActions, sessionsActions, ToolStep, StreamingState, PlanTodoItem } from "../../store";
 import { chatApi, sessionsApi, gatewayApi, AgentEventType, ChannelInfo, ChatAttachment } from "../../services/tauri";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -75,7 +75,7 @@ export default function Chat() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const { sessions, activeSessionId } = useSelector((s: RootState) => s.sessions);
-  const { messagesBySession, streaming, toolSteps, isRunning } = useSelector(
+  const { messagesBySession, streaming, toolSteps, planBySession, isRunning } = useSelector(
     (s: RootState) => s.chat
   );
 
@@ -192,15 +192,18 @@ export default function Chat() {
   const streamingCurrent = streamingState?.current ?? "";
   const running = activeSessionId ? isRunning[activeSessionId] ?? false : false;
   const steps = activeSessionId ? toolSteps[activeSessionId] ?? [] : [];
+  const activePlan = activeSessionId ? planBySession[activeSessionId] ?? [] : [];
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
   // Tool steps panel: open while running, auto-close when agent finishes
   const [stepsOpen, setStepsOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(true);
   const prevRunningRef = useRef(false);
   useEffect(() => {
     if (running && !prevRunningRef.current) {
       // Agent just started — open the steps panel
       setStepsOpen(true);
+      setPlanOpen(true);
     } else if (!running && prevRunningRef.current) {
       // Agent just finished — hide the steps panel
       setStepsOpen(false);
@@ -325,6 +328,9 @@ export default function Chat() {
             result: event.result,
             isError: event.is_error ?? false,
           }));
+          break;
+        case "plan_update":
+          dispatch(chatActions.setPlan({ sessionId: sid, items: event.items }));
           break;
         case "permission_request":
           setPermissionRequest({
@@ -622,6 +628,7 @@ export default function Chat() {
 
     // Clear tool steps and any residual streaming text from the previous turn
     dispatch(chatActions.clearToolSteps(activeSessionId));
+    dispatch(chatActions.clearPlan(activeSessionId));
     dispatch(chatActions.clearStreaming(activeSessionId));
 
     // Auto-title: if this is the first message in the session, derive a title from it
@@ -848,6 +855,29 @@ export default function Chat() {
                   </div>
                 </div>
               ))}
+
+              {activePlan.length > 0 && (
+                <div className="tool-steps-container plan-steps-container">
+                  <div
+                    className={`tool-steps-header${!running ? " tool-steps-header-clickable" : ""}`}
+                    onClick={!running ? () => setPlanOpen((o) => !o) : undefined}
+                  >
+                    <span className="tool-steps-label">
+                      {running
+                        ? t("chat.planWorking", { count: activePlan.length })
+                        : t("chat.planSummary", { count: activePlan.length })}
+                    </span>
+                    {!running && (
+                      <span className="tool-steps-chevron">{planOpen ? "▲" : "▼"}</span>
+                    )}
+                  </div>
+                  {(running || planOpen) && (
+                    <div className="tool-steps-scroll">
+                      <PlanPanel items={activePlan} />
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Tool steps — visible while running; collapses to a single summary line when done */}
               {steps.length > 0 && (
@@ -1300,6 +1330,7 @@ const TOOL_ICONS: Record<string, string> = {
   wmi: "🔧",
   com: "📋",
   office: "📊",
+  plan_todo: "🗂️",
 };
 
 function toolIcon(name: string): string {
@@ -1321,6 +1352,44 @@ function toolSummary(name: string, input: unknown): string {
   if (name === "web_search") return String(i["query"] ?? "").slice(0, 80);
   if (name === "screen_capture") return String(i["mode"] ?? "fullscreen");
   return Object.entries(i).slice(0, 2).map(([k, v]) => `${k}=${String(v).slice(0, 30)}`).join(" ");
+}
+
+function planStatusLabel(t: ReturnType<typeof useTranslation>["t"], status: PlanTodoItem["status"]): string {
+  switch (status) {
+    case "pending":
+      return t("chat.planPending");
+    case "in_progress":
+      return t("chat.planInProgress");
+    case "completed":
+      return t("chat.planCompleted");
+    case "cancelled":
+      return t("chat.planCancelled");
+    default:
+      return status;
+  }
+}
+
+function PlanPanel({ items }: { items: PlanTodoItem[] }) {
+  const { t } = useTranslation();
+  return (
+    <div className="plan-panel">
+      {items.map((item, index) => (
+        <div key={item.id} className={`plan-item plan-${item.status}`}>
+          <div className="plan-item-left">
+            <span className="plan-item-index">{index + 1}</span>
+            <span className="plan-item-content">{item.content}</span>
+          </div>
+          <div className="plan-item-right">
+            <span className="plan-item-id">{item.id}</span>
+            <span className={`plan-item-status plan-status-${item.status}`}>
+              {item.status === "in_progress" && <span className="step-spinner" style={{ width: 10, height: 10, marginRight: 4 }} />}
+              {planStatusLabel(t, item.status)}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function FishProgressBadge({ progress }: { progress: NonNullable<ToolStep["fishProgress"]> }) {

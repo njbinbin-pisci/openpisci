@@ -41,6 +41,7 @@ OpenPisci is a local-first AI Agent desktop application for Windows, built with 
 | `ssh` | SSH remote connection and command execution |
 | `pdf` | PDF read/write |
 | `memory_store` | Write information to long-term memory |
+| `plan_todo` | Maintain a visible execution plan and todo state for complex tasks |
 | User-defined tools | TypeScript plugins with custom configuration interfaces |
 | MCP tools | Connect to external tool servers via the MCP protocol |
 
@@ -268,6 +269,12 @@ OpenPisci
 ---
 
 ## 📋 Changelog
+
+### v0.4.1
+- **New `plan_todo` tool**: the Agent can now maintain a Cursor-style visible task plan with `pending / in_progress / completed / cancelled` states during complex work
+- **Real-time plan panel**: the chat UI now shows the current task plan live during execution and keeps it visible for review after completion
+- **Planning prompt guidance**: the system prompt now includes a Planning section so the Agent proactively maintains short plans for multi-step tasks
+- **More app controls exposed to the Agent**: theme switching, minimal mode, window movement, built-in tool toggles, and user tool configuration are now controllable via `app_control`
 
 ### v0.4.0
 - **Stateless Fish refactor**: Fish sub-agents redesigned from session-based to stateless ephemeral workers; the main Agent delegates via `call_fish`, intermediate steps don't pollute the main context

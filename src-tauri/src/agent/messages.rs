@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use crate::agent::plan::PlanTodoItem;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -82,6 +83,8 @@ pub enum AgentEvent {
     Done { total_input_tokens: u32, total_output_tokens: u32 },
     /// Error occurred
     Error { message: String },
+    /// Visible plan/todo list for the current task
+    PlanUpdate { items: Vec<PlanTodoItem> },
     /// A sub-agent (Fish) is executing — forwarded to the parent session so the user
     /// can see real-time progress without switching sessions.
     FishProgress {

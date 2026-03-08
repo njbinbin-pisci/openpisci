@@ -16,6 +16,7 @@ pub mod dpi;
 pub mod email;
 pub mod memory_tool;
 pub mod user_tool;
+pub mod plan_todo;
 pub mod call_fish;
 pub mod mcp;
 pub mod skill_search;
@@ -118,6 +119,12 @@ pub fn build_registry(
         }
     }
 
+    if is_enabled("plan_todo") {
+        if let Some(ref app) = app_handle {
+            registry.register(Box::new(plan_todo::PlanTodoTool { app: app.clone() }));
+        }
+    }
+
     // call_fish tool — lets the main agent delegate sub-tasks to Fish agents
     if is_enabled("call_fish") {
         if let Some(ref app) = app_handle {
@@ -134,6 +141,7 @@ pub fn build_registry(
                 db: db_arc.clone(),
                 settings: settings_arc.clone(),
                 app_data_dir: data_dir.clone(),
+                app_handle: app_handle.clone(),
             }));
         }
     }
