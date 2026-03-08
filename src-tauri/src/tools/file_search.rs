@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-const MAX_RESULTS: usize = 200;
-const MAX_CONTENT_BYTES: usize = 50 * 1024; // 50 KB per file for grep
+const MAX_RESULTS: usize = 500;
+const MAX_CONTENT_BYTES: usize = 200 * 1024; // 200 KB per file for grep
 
 pub struct FileSearchTool;
 
@@ -52,9 +52,14 @@ impl Tool for FileSearchTool {
                     "type": "string",
                     "description": "For grep only: file name filter (e.g. '*.txt', '*.rs'). Only files matching this pattern will be searched."
                 },
+                "file_extensions": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "For grep/glob: restrict search to files with these extensions (e.g. [\"rs\", \"toml\"]). More precise than `include`."
+                },
                 "max_results": {
                     "type": "integer",
-                    "description": "Maximum number of results to return (default 50, max 200)"
+                    "description": "Maximum number of results to return (default 50, max 500)"
                 },
                 "max_depth": {
                     "type": "integer",
@@ -101,13 +106,23 @@ impl Tool for FileSearchTool {
         let max_results = (input["max_results"].as_u64().unwrap_or(50) as usize).min(MAX_RESULTS);
         let max_depth = input["max_depth"].as_u64().unwrap_or(10) as usize;
 
+        // Collect file_extensions filter (lowercase, no leading dot)
+        let file_extensions: Vec<String> = input["file_extensions"]
+            .as_array()
+            .map(|arr| arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.trim_start_matches('.').to_lowercase())
+                .collect())
+            .unwrap_or_default();
+        let ext_filter: Option<&[String]> = if file_extensions.is_empty() { None } else { Some(&file_extensions) };
+
         match action {
-            "glob" => self.do_glob(pattern, &root, max_results, max_depth),
+            "glob" => self.do_glob(pattern, &root, max_results, max_depth, ext_filter),
             "grep" => {
                 let include = input["include"].as_str();
                 let case_sensitive = input["case_sensitive"].as_bool().unwrap_or(false);
                 let context_lines = input["context_lines"].as_u64().unwrap_or(0) as usize;
-                self.do_grep(pattern, &root, include, max_results, max_depth, case_sensitive, context_lines)
+                self.do_grep(pattern, &root, include, ext_filter, max_results, max_depth, case_sensitive, context_lines)
             }
             _ => Ok(ToolResult::err(format!("Unknown action: {}", action))),
         }
@@ -115,8 +130,14 @@ impl Tool for FileSearchTool {
 }
 
 impl FileSearchTool {
-    fn do_glob(&self, pattern: &str, root: &Path, max_results: usize, max_depth: usize) -> Result<ToolResult> {
-        // Convert glob pattern to regex
+    fn do_glob(
+        &self,
+        pattern: &str,
+        root: &Path,
+        max_results: usize,
+        max_depth: usize,
+        ext_filter: Option<&[String]>,
+    ) -> Result<ToolResult> {
         let regex_pat = glob_to_regex(pattern);
         let re = match regex::Regex::new(&regex_pat) {
             Ok(r) => r,
@@ -126,13 +147,20 @@ impl FileSearchTool {
         let mut matches: Vec<String> = Vec::new();
         walk_dir(root, 0, max_depth, &mut |path: &Path| {
             if matches.len() >= max_results {
-                return false; // stop
+                return false;
             }
             if path.is_file() {
-                let file_name = path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
-                // For ** patterns, match against the full relative path from root
+                // Apply extension filter
+                if let Some(exts) = ext_filter {
+                    let file_ext = path.extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.to_lowercase())
+                        .unwrap_or_default();
+                    if !exts.iter().any(|e| e == &file_ext) {
+                        return true;
+                    }
+                }
+                let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 let rel = path.strip_prefix(root).unwrap_or(path);
                 let rel_str = rel.to_string_lossy().replace('\\', "/");
                 if re.is_match(&rel_str) || re.is_match(file_name) {
@@ -163,6 +191,7 @@ impl FileSearchTool {
         pattern: &str,
         root: &Path,
         include: Option<&str>,
+        ext_filter: Option<&[String]>,
         max_results: usize,
         max_depth: usize,
         case_sensitive: bool,
@@ -197,26 +226,35 @@ impl FileSearchTool {
                 return true;
             }
 
-            // Apply include filter
-            if let Some(ref inc_re) = include_re {
-                let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+            // Apply extension filter (takes priority over include pattern)
+            if let Some(exts) = ext_filter {
+                let file_ext = path.extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                    .unwrap_or_default();
+                if !exts.iter().any(|e| e == &file_ext) {
+                    return true;
+                }
+            } else if let Some(ref inc_re) = include_re {
+                // Fall back to include glob pattern
                 if !inc_re.is_match(fname) {
                     return true;
                 }
             }
 
-            // Skip binary files and very large files
             let meta = match std::fs::metadata(path) {
                 Ok(m) => m,
                 Err(_) => return true,
             };
             if meta.len() > MAX_CONTENT_BYTES as u64 * 4 {
-                return true; // skip very large files
+                return true;
             }
 
             let content = match std::fs::read_to_string(path) {
                 Ok(c) => c,
-                Err(_) => return true, // skip binary/unreadable files
+                Err(_) => return true,
             };
 
             let lines: Vec<&str> = content.lines().collect();
@@ -241,7 +279,7 @@ impl FileSearchTool {
                                 path.display(), marker, actual_line, ctx_line.trim_end()
                             ));
                         }
-                        file_matches.push(String::new()); // separator
+                        file_matches.push(String::new());
                     }
                 }
             }
@@ -255,11 +293,14 @@ impl FileSearchTool {
         });
 
         if results.is_empty() {
+            let filter_note = match (ext_filter, include) {
+                (Some(exts), _) => format!(" (extensions: {})", exts.join(", ")),
+                (None, Some(i)) => format!(" (filter: {})", i),
+                _ => String::new(),
+            };
             return Ok(ToolResult::ok(format!(
                 "No matches found for '{}' under {}{}",
-                pattern,
-                root.display(),
-                include.map(|i| format!(" (filter: {})", i)).unwrap_or_default()
+                pattern, root.display(), filter_note
             )));
         }
 

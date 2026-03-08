@@ -102,72 +102,174 @@ impl ScreenTool {
 
     fn list_monitors(&self) -> Result<ToolResult> {
         use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW};
-        use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
+        use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowTextW, IsWindowVisible, GetWindowRect,
+            IsIconic, GetAncestor, GA_ROOT,
+        };
+        use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
 
-        unsafe extern "system" fn enum_proc(
+        // Step 1: enumerate monitors
+        struct MonitorInfo {
+            rect: RECT,
+            primary: bool,
+            index: usize,
+        }
+
+        unsafe extern "system" fn monitor_enum_proc(
             hmonitor: windows::Win32::Graphics::Gdi::HMONITOR,
             _hdc: windows::Win32::Graphics::Gdi::HDC,
             _lprect: *mut RECT,
             lparam: LPARAM,
         ) -> BOOL {
-            let list = &mut *(lparam.0 as *mut Vec<String>);
+            let list = &mut *(lparam.0 as *mut Vec<(windows::Win32::Graphics::Gdi::HMONITOR, MonitorInfo)>);
             let mut info = MONITORINFOEXW::default();
             info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
             if GetMonitorInfoW(hmonitor, &mut info.monitorInfo as *mut _ as *mut _).as_bool() {
-                let r = info.monitorInfo.rcMonitor;
-                let primary = if info.monitorInfo.dwFlags & 1 != 0 { " [PRIMARY]" } else { "" };
-                list.push(format!(
-                    "Monitor {}: {}x{} at ({},{}){}",
-                    list.len(),
-                    r.right - r.left,
-                    r.bottom - r.top,
-                    r.left, r.top,
-                    primary
-                ));
+                let idx = list.len();
+                list.push((hmonitor, MonitorInfo {
+                    rect: info.monitorInfo.rcMonitor,
+                    primary: info.monitorInfo.dwFlags & 1 != 0,
+                    index: idx,
+                }));
             }
             BOOL(1)
         }
 
-        let mut monitors: Vec<String> = Vec::new();
+        let mut monitor_list: Vec<(windows::Win32::Graphics::Gdi::HMONITOR, MonitorInfo)> = Vec::new();
         unsafe {
             let _ = EnumDisplayMonitors(
-                None,
-                None,
-                Some(enum_proc),
-                LPARAM(&mut monitors as *mut Vec<String> as isize),
+                None, None,
+                Some(monitor_enum_proc),
+                LPARAM(&mut monitor_list as *mut _ as isize),
             );
         }
 
+        // Step 2: enumerate visible top-level windows and assign to monitors
+        struct WinData {
+            // (monitor_handle, title, rect)
+            windows: Vec<(windows::Win32::Graphics::Gdi::HMONITOR, String, RECT)>,
+        }
+
+        unsafe extern "system" fn win_enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let data = &mut *(lparam.0 as *mut WinData);
+            // Only visible, non-minimized top-level windows with a title
+            if !IsWindowVisible(hwnd).as_bool() { return BOOL(1); }
+            if IsIconic(hwnd).as_bool() { return BOOL(1); }
+            // Must be a root window (no owner/parent that is also a window)
+            let root = GetAncestor(hwnd, GA_ROOT);
+            if root != hwnd { return BOOL(1); }
+
+            let mut buf = [0u16; 256];
+            let len = GetWindowTextW(hwnd, &mut buf);
+            if len <= 0 { return BOOL(1); }
+            let title = String::from_utf16_lossy(&buf[..len as usize]);
+            if title.trim().is_empty() { return BOOL(1); }
+
+            let mut rect = std::mem::zeroed::<RECT>();
+            if GetWindowRect(hwnd, &mut rect).is_err() { return BOOL(1); }
+            // Skip tiny/offscreen windows
+            if rect.right - rect.left < 10 || rect.bottom - rect.top < 10 { return BOOL(1); }
+
+            let hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            data.windows.push((hmon, title, rect));
+            BOOL(1)
+        }
+
+        let mut win_data = WinData { windows: Vec::new() };
+        unsafe {
+            let _ = EnumWindows(Some(win_enum_proc), LPARAM(&mut win_data as *mut _ as isize));
+        }
+
+        // Step 3: build output
+        let mut lines: Vec<String> = Vec::new();
+        for (hmon, mi) in &monitor_list {
+            let r = &mi.rect;
+            let primary_tag = if mi.primary { " [PRIMARY]" } else { "" };
+            lines.push(format!(
+                "Monitor {} (index={}): {}x{} at ({},{}){}",
+                mi.index, mi.index,
+                r.right - r.left, r.bottom - r.top,
+                r.left, r.top,
+                primary_tag
+            ));
+            lines.push("  Windows on this monitor:".to_string());
+            let wins_on: Vec<_> = win_data.windows.iter()
+                .filter(|(wmon, _, _)| *wmon == *hmon)
+                .collect();
+            if wins_on.is_empty() {
+                lines.push("    (none)".to_string());
+            } else {
+                for (_, title, wr) in &wins_on {
+                    lines.push(format!(
+                        "    - \"{}\" at ({},{})-({}{})",
+                        title, wr.left, wr.top, wr.right, wr.bottom
+                    ));
+                }
+            }
+        }
+
         Ok(ToolResult::ok(format!(
-            "Found {} monitor(s):\n{}",
-            monitors.len(),
-            monitors.join("\n")
+            "Found {} monitor(s). Use monitor_index=N with action=capture to screenshot a specific display.\n\n{}",
+            monitor_list.len(),
+            lines.join("\n")
         )))
     }
 
     // ─── Full screen capture ─────────────────────────────────────────────────
 
     pub(crate) fn capture_full(&self, input: &Value) -> Result<ToolResult> {
-        use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC, GetDeviceCaps, HORZRES, VERTRES};
-        use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
+        use windows::Win32::Graphics::Gdi::{
+            CreateDCA, DeleteDC, EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW,
+        };
+        use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
 
+        let monitor_index = input["monitor_index"].as_u64().unwrap_or(0) as usize;
+
+        // Enumerate monitors to find the target monitor's physical rect.
+        // GetMonitorInfoW returns physical pixel coordinates (screen coordinates).
+        unsafe extern "system" fn mon_enum(
+            _hmon: windows::Win32::Graphics::Gdi::HMONITOR,
+            _hdc: windows::Win32::Graphics::Gdi::HDC,
+            _lprect: *mut RECT,
+            lparam: LPARAM,
+        ) -> BOOL {
+            let list = &mut *(lparam.0 as *mut Vec<RECT>);
+            let mut info = MONITORINFOEXW::default();
+            info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+            if GetMonitorInfoW(_hmon, &mut info.monitorInfo as *mut _ as *mut _).as_bool() {
+                list.push(info.monitorInfo.rcMonitor);
+            }
+            BOOL(1)
+        }
+
+        let mut rects: Vec<RECT> = Vec::new();
         unsafe {
-            let hwnd = GetDesktopWindow();
-            let hdc = GetDC(hwnd);
+            let _ = EnumDisplayMonitors(None, None, Some(mon_enum), LPARAM(&mut rects as *mut _ as isize));
+        }
 
-            // GetDeviceCaps(HORZRES/VERTRES) returns the logical pixel dimensions of the
-            // primary display — the same coordinate space used by SendInput with
-            // MOUSEEVENTF_ABSOLUTE (without VIRTUALDESK). This ensures grid labels in
-            // screenshots directly correspond to the x/y values passed to uia drag_drop/click.
-            let width  = GetDeviceCaps(hdc, HORZRES);
-            let height = GetDeviceCaps(hdc, VERTRES);
+        let rect = rects.get(monitor_index).copied().unwrap_or_else(|| {
+            rects.first().copied().unwrap_or(RECT { left: 0, top: 0, right: 1920, bottom: 1080 })
+        });
 
-            tracing::info!("capture_full: logical {}x{}", width, height);
+        let x = rect.left;
+        let y = rect.top;
+        let width  = rect.right  - rect.left;
+        let height = rect.bottom - rect.top;
 
-            let pixels = self.capture_dc_region(hdc, 0, 0, width, height)?;
-            ReleaseDC(hwnd, hdc);
+        tracing::info!(
+            "capture_full: monitor_index={} physical rect=({},{})+({}x{})",
+            monitor_index, x, y, width, height
+        );
 
-            self.encode_and_return_with_offset(&pixels, width as u32, height as u32, input, 0, 0)
+        // Use "DISPLAY" DC which covers the full virtual desktop in physical pixel coordinates.
+        // This is the same coordinate space as SM_CXVIRTUALSCREEN / SendInput+VIRTUALDESK.
+        unsafe {
+            let display_name = windows::core::s!("DISPLAY");
+            let hdc = CreateDCA(display_name, None, None, None);
+            let pixels = self.capture_dc_region(hdc, x, y, width, height)?;
+            DeleteDC(hdc);
+            self.encode_and_return_with_offset(&pixels, width as u32, height as u32, input, x, y)
         }
     }
 
@@ -417,23 +519,21 @@ impl ScreenTool {
 
         #[cfg(target_os = "windows")]
         let coord_note = {
-            let scale = crate::tools::dpi::get_dpi_scale();
             let grid_note = if draw_grid {
                 format!(
-                    " Grid overlay: lines every {}px. Labels show absolute screen coordinates \
-                     (directly usable for uia click/drag_drop x/y parameters).",
+                    " Grid overlay: lines every {}px. Labels show absolute physical screen coordinates \
+                     (directly usable for uia click/drag_drop x/y parameters — no conversion needed).",
                     grid_spacing
                 )
             } else {
-                " Tip: use grid=true to overlay coordinate labels for precise element location.".to_string()
+                " Tip: use grid=true to overlay coordinate labels for precise element location. \
+                 Use list_monitors to see all displays and window positions.".to_string()
             };
             format!(
-                "\nScreen coords: image origin at ({},{}) on screen. \
-                 DPI scale: {:.2}x. Image pixels = logical screen coordinates \
-                 (same coordinate system as uia click/drag_drop x/y parameters, \
-                 no conversion needed).{}",
+                "\nScreen coords: image origin at ({},{}) in physical screen coordinates. \
+                 Coordinates are physical pixels (same system as uia click/drag_drop). \
+                 Use list_monitors to discover monitor layout and window positions.{}",
                 origin_x, origin_y,
-                scale,
                 grid_note,
             )
         };

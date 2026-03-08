@@ -3,6 +3,8 @@ pub mod file_read;
 pub mod file_write;
 pub mod file_search;
 pub mod file_list;
+pub mod code_run;
+pub mod file_diff;
 pub mod process_control;
 pub mod shell;
 pub mod web_search;
@@ -71,6 +73,12 @@ pub fn build_registry(
     }
     if is_enabled("file_edit") {
         registry.register(Box::new(file_write::FileEditTool));
+    }
+    if is_enabled("file_diff") {
+        registry.register(Box::new(file_diff::FileDiffTool));
+    }
+    if is_enabled("code_run") {
+        registry.register(Box::new(code_run::CodeRunTool));
     }
     if is_enabled("file_search") {
         registry.register(Box::new(file_search::FileSearchTool));

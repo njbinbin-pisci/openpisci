@@ -324,12 +324,39 @@ pub async fn chat_send(
         }
     };
 
+    // Inject task state into the system prompt if one exists for this session
+    let task_state_context = {
+        let db = state.db.lock().await;
+        match db.load_task_state("session", &session_id) {
+            Ok(Some(ts)) if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) => {
+                let mut ctx = String::from("\n\n## Active Task State\n");
+                if !ts.goal.is_empty() {
+                    ctx.push_str(&format!("**Goal:** {}\n", ts.goal));
+                }
+                if !ts.summary.is_empty() {
+                    ctx.push_str(&format!("**Progress:** {}\n", ts.summary));
+                }
+                if ts.state_json != "{}" && !ts.state_json.is_empty() {
+                    ctx.push_str(&format!("**Details:** {}\n", ts.state_json));
+                }
+                ctx
+            }
+            _ => String::new(),
+        }
+    };
+
+    let injection_budget = compute_injection_budget(context_window);
+    let full_memory_context = budget_truncate(
+        &format!("{}{}", memory_context, task_state_context),
+        injection_budget,
+    );
+
     let model_for_host = model.clone();
     let agent = AgentLoop {
         client,
         registry,
         policy,
-        system_prompt: build_system_prompt(&memory_context, &skill_context),
+        system_prompt: build_system_prompt(&full_memory_context, &skill_context),
         model: model.clone(),
         max_tokens,
         db: Some(state.db.clone()),
@@ -912,9 +939,36 @@ pub async fn fish_chat_send_impl(
         }
     };
 
+    // Inject task state for headless sessions
+    let task_state_context = {
+        let db = state.db.lock().await;
+        match db.load_task_state("session", &session_id) {
+            Ok(Some(ts)) if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) => {
+                let mut ctx = String::from("\n\n## Active Task State\n");
+                if !ts.goal.is_empty() {
+                    ctx.push_str(&format!("**Goal:** {}\n", ts.goal));
+                }
+                if !ts.summary.is_empty() {
+                    ctx.push_str(&format!("**Progress:** {}\n", ts.summary));
+                }
+                if ts.state_json != "{}" && !ts.state_json.is_empty() {
+                    ctx.push_str(&format!("**Details:** {}\n", ts.state_json));
+                }
+                ctx
+            }
+            _ => String::new(),
+        }
+    };
+
+    let injection_budget = compute_injection_budget(context_window);
+    let full_memory_context = budget_truncate(
+        &format!("{}{}", memory_context, task_state_context),
+        injection_budget,
+    );
+
     let system_prompt = match system_prompt_override {
-        Some(p) => format!("{}{}", p, memory_context),
-        None => build_system_prompt(&memory_context, ""),
+        Some(p) => format!("{}{}", p, full_memory_context),
+        None => build_system_prompt(&full_memory_context, ""),
     };
 
     let agent = crate::agent::loop_::AgentLoop {
@@ -1021,6 +1075,24 @@ pub async fn chat_cancel(
     Ok(())
 }
 
+/// Budget-aware truncation for injected context (memory, task state, skills).
+/// Inspired by OpenClaw's bootstrap-budget.ts which caps injected file content.
+/// `max_chars` is the budget for this section; content exceeding it is truncated.
+fn budget_truncate(content: &str, max_chars: usize) -> String {
+    if content.chars().count() <= max_chars {
+        return content.to_string();
+    }
+    let truncated: String = content.chars().take(max_chars).collect();
+    format!("{}\n[... context truncated to fit budget ...]", truncated)
+}
+
+/// Max chars for memory + task_state injected into system prompt.
+/// Roughly 15% of context window (in chars, ~4 chars/token).
+fn compute_injection_budget(context_window: u32) -> usize {
+    let budget_tokens = (context_window as f64 * 0.15) as usize;
+    (budget_tokens * 4).max(2_000)
+}
+
 pub fn build_system_prompt(memory_context: &str, skill_context: &str) -> String {
     format!(
         r#"You are Pisci, a powerful Windows AI Agent. You run on the user's local Windows machine and can control the entire desktop environment.
@@ -1048,7 +1120,14 @@ Today's date: {date}
 
 **Editing part of an existing file:**
 → Use `file_edit` — replaces an exact string occurrence. Much safer than rewriting the whole file.
+→ Use `file_edit` with `edits` array to make multiple changes to the same file in one call (atomic).
 → Use `file_write` only when creating a new file or replacing the entire content.
+→ Use `file_diff` to preview what a change will look like before applying it.
+
+**Building, testing, or running code:**
+→ Use `code_run` — designed for coding tasks, returns structured exit_code/stdout/stderr/duration.
+→ Examples: `code_run("cargo build", cwd="C:\\myproject")`, `code_run("npm test", cwd="C:\\app")`
+→ Use `shell` for general system commands; use `code_run` specifically for build/test/run workflows.
 
 **Running commands / scripts:**
 → Use `shell` (default: 64-bit PowerShell)
@@ -1097,6 +1176,37 @@ Today's date: {date}
   `add_slides` creates multiple slides in one call. layout=1 (title only), 2 (title+content), 11 (blank).
 → Do NOT use `shell` to write Office files — always use `office` actions which handle all escaping internally.
 → Use `uia` for UI-level interaction with Office apps
+
+## Coding Task Workflow
+
+When working on a software project (editing code, fixing bugs, adding features):
+
+**1. Understand the codebase first**
+- `file_list(path=<project_root>, recursive=true, max_depth=3)` — get the directory structure
+- `file_search(grep, "<symbol or keyword>", path=<root>, file_extensions=["rs","ts","py"])` — locate relevant code
+- `file_read(<file>)` — read the full file before editing; use offset/limit for large files
+
+**2. Make changes with file_edit (not file_write)**
+- Prefer `file_edit` with `edits` array for multiple changes to the same file — one call, atomic
+- Each `old_string` must be unique in the file; include enough context lines to make it unique
+- Use `file_diff(path=<file>, new_content=<proposed>)` to preview before applying large edits
+- Only use `file_write` when creating a new file from scratch
+
+**3. Verify with code_run**
+- After editing: `code_run("cargo check", cwd=<root>)` or `code_run("npm run build", cwd=<root>)`
+- Run tests: `code_run("cargo test", cwd=<root>)` or `code_run("pytest", cwd=<root>)`
+- Read the `exit_code` and `stderr` — fix errors iteratively before declaring success
+
+**4. Debug cycle**
+- `code_run` → read stderr → `file_search(grep, "<error symbol>", ...)` → `file_read` → `file_edit` → repeat
+- For Rust: fix errors in order — later errors often cascade from earlier ones
+- For Python: check for missing imports (`pip install`) or virtual environment issues
+
+**Key coding rules:**
+- Always read a file with `file_read` before editing it — never guess the current content
+- Prefer small, targeted `file_edit` calls over full `file_write` rewrites
+- After a successful build/test, summarize what was changed and why
+- If `code_run` times out on a slow build, increase `timeout_secs` (max 300)
 
 ## Windows System Exploration Pattern
 
@@ -1512,67 +1622,118 @@ fn trim_tool_result(content: &str, head: usize, tail: usize) -> String {
 }
 
 /// Build a two-message summary of a conversation turn for use in compressed context.
-/// Returns (user_summary, assistant_summary) preserving the correct role structure so
-/// the LLM never sees its own words attributed to the user or vice versa.
+/// Returns (user_summary, assistant_summary) preserving the correct role structure.
+///
+/// Inspired by OpenClaw's compaction MERGE_SUMMARIES_INSTRUCTIONS which prioritizes:
+/// - Active tasks and their current status
+/// - Decisions made and their rationale
+/// - Key artifacts (file paths, URLs, identifiers)
+/// - What was being done and what the outcome was
 fn summarize_turn(turn: &ConvTurn) -> (String, String) {
-    // Collect tool call names and result snippets
-    let mut tool_summaries: Vec<String> = Vec::new();
+    let mut tool_entries: Vec<String> = Vec::new();
+    let mut error_count = 0usize;
+    let mut success_count = 0usize;
+    let mut key_artifacts: Vec<String> = Vec::new();
 
     for msg in &turn.agent_msgs {
-        // Tool calls from assistant messages
         if let Some(ref calls_json) = msg.tool_calls_json {
             if let Ok(calls) = serde_json::from_str::<Vec<serde_json::Value>>(calls_json) {
                 for call in &calls {
                     let name = call.get("name")
                         .and_then(|v| v.as_str())
                         .unwrap_or("tool");
-                    tool_summaries.push(name.to_string());
+                    let input = call.get("input").cloned().unwrap_or(serde_json::Value::Null);
+                    let artifact = extract_key_artifact(name, &input);
+                    if let Some(a) = artifact {
+                        key_artifacts.push(a);
+                    }
+                    tool_entries.push(name.to_string());
                 }
             }
         }
-        // Tool results — pair with tool names collected above
         if let Some(ref results_json) = msg.tool_results_json {
             if let Ok(results) = serde_json::from_str::<Vec<serde_json::Value>>(results_json) {
                 for (i, result) in results.iter().enumerate() {
                     let content = result.get("content")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    let snippet: String = content.chars().take(60).collect();
+                    let is_error = result.get("is_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if is_error {
+                        error_count += 1;
+                    } else {
+                        success_count += 1;
+                    }
+                    let snippet: String = content.chars().take(120).collect();
                     let snippet = snippet.replace('\n', " ");
-                    if let Some(name) = tool_summaries.get_mut(i) {
-                        *name = format!("{}→\"{}\"", name, snippet);
+                    let status = if is_error { "ERR" } else { "OK" };
+                    if let Some(entry) = tool_entries.get_mut(i) {
+                        *entry = format!("{}[{}]→\"{}\"", entry, status, snippet);
                     }
                 }
             }
         }
     }
 
-    // Find the final assistant text answer
     let final_answer = turn.agent_msgs.iter().rev()
         .find(|m| m.role == "assistant" && !m.content.is_empty() && m.tool_calls_json.is_none())
         .map(|m| m.content.as_str())
         .unwrap_or("");
-    let answer_snippet: String = final_answer.chars().take(200).collect();
+    let answer_snippet: String = final_answer.chars().take(300).collect();
 
-    let tools_part = if tool_summaries.is_empty() {
+    let tools_part = if tool_entries.is_empty() {
         String::new()
     } else {
-        format!(" [tools: {}]", tool_summaries.join(", "))
+        let stats = format!("{}ok/{}err", success_count, error_count);
+        format!(" [tools({}): {}]", stats, tool_entries.join(", "))
+    };
+
+    let artifacts_part = if key_artifacts.is_empty() {
+        String::new()
+    } else {
+        let deduped: Vec<_> = key_artifacts.iter().collect::<std::collections::HashSet<_>>()
+            .into_iter().collect();
+        format!(" [artifacts: {}]", deduped.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))
     };
 
     let user_summary = format!(
         "[历史第{}轮] {}",
         turn.index,
-        turn.user_msg.content.chars().take(80).collect::<String>(),
+        turn.user_msg.content.chars().take(150).collect::<String>(),
     );
     let assistant_summary = format!(
-        "[历史第{}轮回复]{} {}",
+        "[历史第{}轮回复]{}{} {}",
         turn.index,
         tools_part,
+        artifacts_part,
         answer_snippet,
     );
 
     (user_summary, assistant_summary)
+}
+
+/// Extract key identifiers (file paths, URLs, queries) from tool input for summary.
+fn extract_key_artifact(tool_name: &str, input: &serde_json::Value) -> Option<String> {
+    match tool_name {
+        "file_read" | "file_write" | "file_edit" => {
+            input["path"].as_str().map(|p| {
+                let short: String = p.chars().rev().take(60).collect::<String>().chars().rev().collect();
+                if short.len() < p.len() { format!("...{}", short) } else { short }
+            })
+        }
+        "shell" | "powershell_query" => {
+            input["command"].as_str()
+                .or_else(|| input["query"].as_str())
+                .map(|c| {
+                    let s: String = c.chars().take(50).collect();
+                    format!("cmd:{}", s)
+                })
+        }
+        "web_search" => input["query"].as_str().map(|q| format!("search:{}", q.chars().take(40).collect::<String>())),
+        "browser" => input["url"].as_str().map(|u| u.chars().take(60).collect()),
+        _ => None,
+    }
 }
 
 /// Build LLM context messages from stored history using layered compression.
@@ -1620,10 +1781,12 @@ pub fn build_context_messages(history: &[ChatMessage], budget: usize) -> Vec<Llm
     }
 
     let total_turns = turns.len();
-    let mut result: Vec<LlmMessage> = Vec::new();
+    // Collect each turn's messages as a separate group so we can prepend older turns
+    // without reversing the internal message order within each turn.
+    let mut turn_groups: Vec<Vec<LlmMessage>> = Vec::new();
     let mut token_est: usize = 0;
 
-    // Process turns from newest to oldest, then reverse at the end.
+    // Process turns from newest to oldest; we prepend each group later.
     for (rev_idx, turn) in turns.iter().rev().enumerate() {
         let turn_age = rev_idx; // 0 = most recent turn
 
@@ -1633,8 +1796,6 @@ pub fn build_context_messages(history: &[ChatMessage], budget: usize) -> Vec<Llm
 
         if turn_age < CTX_FULL_TURNS {
             // ── Full fidelity: reconstruct ContentBlocks ──────────────────
-            // Pre-budget the ENTIRE turn atomically to avoid partial turns
-            // (a partial turn with tool_results but no tool_calls causes API errors).
             let mut turn_tokens = estimate_tokens(&turn.user_msg.content);
             let mut turn_msgs: Vec<LlmMessage> = vec![LlmMessage {
                 role: "user".into(),
@@ -1653,12 +1814,11 @@ pub fn build_context_messages(history: &[ChatMessage], budget: usize) -> Vec<Llm
                     },
                 });
             }
-            if token_est + turn_tokens > budget && !result.is_empty() { break; }
-            result.extend(turn_msgs);
+            if token_est + turn_tokens > budget && !turn_groups.is_empty() { break; }
+            turn_groups.push(turn_msgs);
             token_est += turn_tokens;
         } else if turn_age < CTX_COMPACT_AFTER {
             // ── Trimmed: tool results head+tail, rest full ─────────────────
-            // Pre-budget the entire turn atomically.
             let mut turn_tokens = estimate_tokens(&turn.user_msg.content);
             let mut turn_msgs: Vec<LlmMessage> = vec![LlmMessage {
                 role: "user".into(),
@@ -1689,35 +1849,39 @@ pub fn build_context_messages(history: &[ChatMessage], budget: usize) -> Vec<Llm
                     });
                 }
             }
-            if token_est + turn_tokens > budget && !result.is_empty() { break; }
-            result.extend(turn_msgs);
+            if token_est + turn_tokens > budget && !turn_groups.is_empty() { break; }
+            turn_groups.push(turn_msgs);
             token_est += turn_tokens;
         } else {
             // ── Compact: entire turn → user + assistant summary pair ───────
-            // Two messages preserve the correct role structure so the LLM
-            // never sees the user's words attributed to the assistant.
             let (user_summary, assistant_summary) = summarize_turn(turn);
             let t = estimate_tokens(&user_summary) + estimate_tokens(&assistant_summary);
-            if token_est + t > budget && !result.is_empty() { break; }
-            result.push(LlmMessage {
-                role: "user".into(),
-                content: MessageContent::text(&user_summary),
-            });
-            result.push(LlmMessage {
-                role: "assistant".into(),
-                content: MessageContent::text(&assistant_summary),
-            });
+            if token_est + t > budget && !turn_groups.is_empty() { break; }
+            turn_groups.push(vec![
+                LlmMessage {
+                    role: "user".into(),
+                    content: MessageContent::text(&user_summary),
+                },
+                LlmMessage {
+                    role: "assistant".into(),
+                    content: MessageContent::text(&assistant_summary),
+                },
+            ]);
             token_est += t;
         }
     }
 
-    // We built from newest→oldest; reverse to get chronological order
-    result.reverse();
+    // turn_groups was built newest-first; reverse the *groups* (not the messages
+    // inside each group) to restore chronological turn order.
+    turn_groups.reverse();
+    let mut result: Vec<LlmMessage> = turn_groups.into_iter().flatten().collect();
 
-    // Post-process: remove any tool_calls messages that are not immediately followed
-    // by matching tool-result messages for ALL their tool_call_ids.
-    // This handles the case where the last agent turn was interrupted mid-tool-call.
+    // Post-process: remove trailing orphaned tool_call messages (interrupted mid-turn).
     result = sanitize_tool_call_pairs(result);
+
+    // Strip orphaned ToolUse blocks inside assistant messages that lack a matching
+    // tool_result in the next message. Previously only applied in the headless path.
+    result = sanitize_tool_use_result_pairing(result);
 
     tracing::debug!(
         "build_context_messages: {} turns → {} LlmMessages, ~{} tokens (budget={})",
@@ -1964,13 +2128,17 @@ pub async fn auto_extract_memories(
         return;
     }
 
-    // Build a compact conversation summary for the extraction prompt
-    let conv_summary: String = messages.iter()
+    // Build a compact conversation summary for the extraction prompt.
+    // Take the LAST messages (most recent) rather than the first, since recent
+    // context is far more likely to contain extractable memories.
+    let relevant_msgs: Vec<_> = messages.iter()
         .filter(|m| m.role == "user" || m.role == "assistant")
-        .take(10)
+        .collect();
+    let start = relevant_msgs.len().saturating_sub(12);
+    let conv_summary: String = relevant_msgs[start..].iter()
         .map(|m| {
             let text = m.content.as_text();
-            let truncated: String = text.chars().take(300).collect();
+            let truncated: String = text.chars().take(400).collect();
             format!("{}: {}", m.role, truncated)
         })
         .collect::<Vec<_>>()
@@ -2035,25 +2203,45 @@ pub async fn auto_extract_memories(
 
 // ─── Context Preview (Debug) ──────────────────────────────────────────────────
 
+/// A single content block within a preview message.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContextPreviewBlock {
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        /// JSON-serialised input (full, not truncated)
+        input: String,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+        /// true when content was truncated to fit display
+        truncated: bool,
+    },
+    Image {
+        note: String,
+    },
+}
+
 /// Serialisable representation of one LLM message for the debug preview.
 #[derive(Debug, Serialize)]
 pub struct ContextPreviewMessage {
     pub role: String,
-    /// Plain-text rendering of the message content (tool blocks summarised).
-    pub content: String,
+    pub blocks: Vec<ContextPreviewBlock>,
     /// Estimated token count for this message.
     pub tokens: usize,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ContextPreview {
-    pub system_prompt: String,
-    pub system_tokens: usize,
     pub messages: Vec<ContextPreviewMessage>,
     pub messages_tokens: usize,
     pub total_tokens: usize,
-    pub tool_count: usize,
-    pub tool_names: Vec<String>,
     pub model: String,
     pub context_budget: usize,
 }
@@ -2063,28 +2251,20 @@ pub struct ContextPreview {
 /// No LLM call is made — this is read-only and safe to call at any time.
 #[tauri::command]
 pub async fn get_context_preview(
-    app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<ContextPreview, String> {
     // Load settings
-    let (provider, model, workspace_root, max_tokens, context_window, policy_mode,
-         tool_rate_limit_per_minute, builtin_tool_enabled, allow_outside_workspace) = {
+    let (model, max_tokens, context_window) = {
         let settings = state.settings.lock().await;
         (
-            settings.provider.clone(),
             settings.model.clone(),
-            settings.workspace_root.clone(),
             settings.max_tokens,
             settings.context_window,
-            settings.policy_mode.clone(),
-            settings.tool_rate_limit_per_minute,
-            settings.builtin_tool_enabled.clone(),
-            settings.allow_outside_workspace,
         )
     };
 
-    // Build context messages from history
+    // Build context messages from history — this is the exact payload sent to the LLM
     let budget = compute_context_budget(context_window, max_tokens);
     let llm_messages = {
         let db = state.db.lock().await;
@@ -2093,96 +2273,72 @@ pub async fn get_context_preview(
         build_context_messages(&history, budget)
     };
 
-    // Build skill context for system prompt
-    let skill_context = {
-        let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
-        let skills_dir = app_dir.join("skills");
-        let mut loader = crate::skills::loader::SkillLoader::new(skills_dir);
-        let _ = loader.load_all();
-        let enabled_names: Vec<String> = loader.list_skills().iter().map(|s| s.name.clone()).collect();
-        loader.generate_skill_directory(&enabled_names)
-    };
-
-    // Build memory context (use last user message as query)
-    let memory_context = {
-        let db = state.db.lock().await;
-        let last_user = db.get_messages_latest(&session_id, 50)
-            .unwrap_or_default()
-            .into_iter()
-            .rev()
-            .find(|m| m.role == "user" && m.tool_results_json.is_none())
-            .map(|m| m.content)
-            .unwrap_or_default();
-        let keywords: Vec<&str> = last_user.split_whitespace().take(10).collect();
-        let query = keywords.join(" ");
-        match db.search_memories_fts(&query, 5) {
-            Ok(mems) if !mems.is_empty() => {
-                let mut ctx = String::from("\n\n## Personal Context (from memory)\n");
-                for m in &mems { ctx.push_str(&format!("- {}\n", m.content)); }
-                ctx
-            }
-            _ => String::new(),
-        }
-    };
-
-    let system_prompt = build_system_prompt(&memory_context, &skill_context);
-
-    // Build tool registry to get tool names
-    let user_tools_dir = app.path().app_data_dir()
-        .map(|d| d.join("user-tools"))
-        .ok();
-    let app_data_dir = app.path().app_data_dir().ok();
-    let registry = crate::tools::build_registry(
-        state.browser.clone(),
-        user_tools_dir.as_deref(),
-        Some(state.db.clone()),
-        Some(&builtin_tool_enabled),
-        Some(app.clone()),
-        Some(state.settings.clone()),
-        app_data_dir,
-        None,
-    );
-    let tool_defs = registry.to_tool_defs();
-    let tool_count = tool_defs.len();
-    let tool_names: Vec<String> = tool_defs.iter().map(|t| t.name.clone()).collect();
-
-    // Convert LlmMessages to preview-friendly structs
+    // Convert LlmMessages to preview-friendly structs with structured blocks
     let messages: Vec<ContextPreviewMessage> = llm_messages.iter().map(|m| {
-        let content = match &m.content {
-            crate::llm::MessageContent::Text(t) => t.clone(),
-            crate::llm::MessageContent::Blocks(blocks) => {
-                blocks.iter().map(|b| match b {
-                    crate::llm::ContentBlock::Text { text } => text.clone(),
-                    crate::llm::ContentBlock::ToolUse { name, input, .. } => {
-                        format!("[tool_use: {} input={}]", name,
-                            serde_json::to_string(input).unwrap_or_default().chars().take(200).collect::<String>())
+        let blocks: Vec<ContextPreviewBlock> = match &m.content {
+            crate::llm::MessageContent::Text(t) => {
+                if t.is_empty() {
+                    vec![]
+                } else {
+                    vec![ContextPreviewBlock::Text { text: t.clone() }]
+                }
+            }
+            crate::llm::MessageContent::Blocks(raw_blocks) => {
+                raw_blocks.iter().map(|b| match b {
+                    crate::llm::ContentBlock::Text { text } => {
+                        ContextPreviewBlock::Text { text: text.clone() }
+                    }
+                    crate::llm::ContentBlock::ToolUse { id, name, input } => {
+                        ContextPreviewBlock::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: serde_json::to_string_pretty(input).unwrap_or_default(),
+                        }
                     }
                     crate::llm::ContentBlock::ToolResult { tool_use_id, content, is_error } => {
-                        let snippet: String = content.chars().take(300).collect();
-                        format!("[tool_result id={} error={} content={}{}]",
-                            tool_use_id, is_error, snippet,
-                            if content.len() > 300 { "…" } else { "" })
+                        const PREVIEW_LIMIT: usize = 4000;
+                        let truncated = content.len() > PREVIEW_LIMIT;
+                        let display = if truncated {
+                            let head: String = content.chars().take(PREVIEW_LIMIT * 3 / 4).collect();
+                            let tail_start = content.char_indices()
+                                .rev()
+                                .nth(PREVIEW_LIMIT / 4)
+                                .map(|(i, _)| i)
+                                .unwrap_or(content.len());
+                            format!("{}\n\n… [truncated] …\n\n{}", head, &content[tail_start..])
+                        } else {
+                            content.clone()
+                        };
+                        ContextPreviewBlock::ToolResult {
+                            tool_use_id: tool_use_id.clone(),
+                            content: display,
+                            is_error: *is_error,
+                            truncated,
+                        }
                     }
-                    crate::llm::ContentBlock::Image { .. } => "[image]".to_string(),
-                }).collect::<Vec<_>>().join("\n")
+                    crate::llm::ContentBlock::Image { .. } => {
+                        ContextPreviewBlock::Image { note: "[image attachment]".to_string() }
+                    }
+                }).collect()
             }
         };
-        let tokens = estimate_tokens(&content);
-        ContextPreviewMessage { role: m.role.clone(), content, tokens }
+        // Estimate tokens from text representation
+        let token_text: String = blocks.iter().map(|b| match b {
+            ContextPreviewBlock::Text { text } => text.clone(),
+            ContextPreviewBlock::ToolUse { name, input, .. } => format!("{} {}", name, input),
+            ContextPreviewBlock::ToolResult { content, .. } => content.clone(),
+            ContextPreviewBlock::Image { .. } => String::new(),
+        }).collect::<Vec<_>>().join(" ");
+        let tokens = estimate_tokens(&token_text);
+        ContextPreviewMessage { role: m.role.clone(), blocks, tokens }
     }).collect();
 
-    let system_tokens = estimate_tokens(&system_prompt);
     let messages_tokens: usize = messages.iter().map(|m| m.tokens).sum();
-    let total_tokens = system_tokens + messages_tokens;
 
     Ok(ContextPreview {
-        system_prompt,
-        system_tokens,
         messages,
         messages_tokens,
-        total_tokens,
-        tool_count,
-        tool_names,
+        total_tokens: messages_tokens,
         model,
         context_budget: budget,
     })

@@ -1,4 +1,11 @@
 /// Agent Loop — the core recursive query-tool-result cycle.
+///
+/// Runtime guards inspired by OpenClaw's middleware architecture:
+/// - Per-tool loop detection (generic_repeat, known_poll, ping_pong, circuit_breaker)
+/// - No-progress detection via result hash comparison
+/// - Tool result size guard (dynamic, based on context window)
+/// - In-memory message compaction for long-running tasks
+/// - Checkpoint size guard for DB persistence
 use super::messages::AgentEvent;
 use super::tool::{ToolContext, ToolRegistry};
 use crate::llm::{ContentBlock, ImageSource, LlmClient, LlmMessage, LlmRequest, MessageContent};
@@ -8,6 +15,8 @@ use anyhow::Result;
 use futures::future::join_all;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -20,6 +29,26 @@ const TOOL_TIMEOUT_SECS: u64 = 120;
 const LLM_MAX_RETRIES: u32 = 3;
 const READ_TOOL_MAX_CONCURRENCY: usize = 4;
 
+// ── Runtime guard thresholds (inspired by OpenClaw) ──────────────────────────
+// OpenClaw uses 10/20/30; we use slightly lower values for desktop scenarios
+// where iterations are more expensive and user patience is lower.
+const TOOL_CALL_HISTORY_SIZE: usize = 25;
+const WARNING_THRESHOLD: usize = 8;
+const CRITICAL_THRESHOLD: usize = 16;
+const CIRCUIT_BREAKER_THRESHOLD: usize = 25;
+const PING_PONG_WARNING: usize = 8;
+const PING_PONG_CRITICAL: usize = 16;
+const TOOL_RESULT_HARD_MAX_CHARS: usize = 48_000;
+const CONTEXT_SINGLE_RESULT_SHARE: f64 = 0.5;
+const CHECKPOINT_MAX_BYTES: usize = 8_000_000;
+const MSG_COMPACT_AFTER_ITERATIONS: usize = 6;
+
+/// Tools that are known polling/status-checking tools. These get stricter
+/// no-progress detection (inspired by OpenClaw's known_poll_no_progress).
+const KNOWN_POLL_TOOLS: &[&str] = &[
+    "process_control", "shell", "powershell_query",
+];
+
 static TOOL_RATE_STATE: Lazy<Mutex<HashMap<String, Vec<std::time::Instant>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -31,6 +60,324 @@ pub struct ConfirmFlags {
 }
 
 type ConfirmationResponseMap = Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>;
+
+// ── Loop Detection (per-tool tracking, inspired by OpenClaw) ─────────────────
+
+/// Severity level for loop detection, matching OpenClaw's warning/critical model.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LoopLevel {
+    Ok,
+    Warning,
+    Critical,
+}
+
+/// Which detector triggered.
+#[derive(Debug, Clone)]
+enum LoopDetector {
+    GenericRepeat,
+    KnownPollNoProgress,
+    PingPong,
+    GlobalCircuitBreaker,
+}
+
+/// Result of loop detection analysis.
+#[derive(Debug, Clone)]
+struct LoopDetectionResult {
+    level: LoopLevel,
+    detector: Option<LoopDetector>,
+    count: usize,
+    message: String,
+}
+
+impl LoopDetectionResult {
+    fn ok() -> Self {
+        Self { level: LoopLevel::Ok, detector: None, count: 0, message: String::new() }
+    }
+}
+
+/// A single recorded tool call with its outcome, for per-tool history tracking.
+#[derive(Clone, Debug)]
+struct ToolCallRecord {
+    name: String,
+    input_hash: u64,
+    result_hash: u64,
+}
+
+/// Per-session tool call history for loop detection.
+/// Maintains a sliding window of recent tool calls (like OpenClaw's toolCallHistory).
+struct LoopDetectorState {
+    history: Vec<ToolCallRecord>,
+}
+
+impl LoopDetectorState {
+    fn new() -> Self {
+        Self { history: Vec::new() }
+    }
+
+    /// Record a completed tool call with its result hash.
+    fn record(&mut self, name: &str, input: &serde_json::Value, result_hash: u64) {
+        let input_hash = stable_hash_input(name, input);
+        self.history.push(ToolCallRecord {
+            name: name.to_string(),
+            input_hash,
+            result_hash,
+        });
+        if self.history.len() > TOOL_CALL_HISTORY_SIZE {
+            self.history.remove(0);
+        }
+    }
+
+    /// Run all detectors against the current history, return the most severe result.
+    fn detect(&self, pending_name: &str, pending_input: &serde_json::Value) -> LoopDetectionResult {
+        let pending_hash = stable_hash_input(pending_name, pending_input);
+
+        // 1. Global circuit breaker: same tool+input with no progress
+        let no_progress_streak = self.count_no_progress_streak(pending_name, pending_hash);
+        if no_progress_streak >= CIRCUIT_BREAKER_THRESHOLD {
+            return LoopDetectionResult {
+                level: LoopLevel::Critical,
+                detector: Some(LoopDetector::GlobalCircuitBreaker),
+                count: no_progress_streak,
+                message: format!(
+                    "全局熔断：工具 '{}' 已连续{}次调用且结果无变化，强制终止该工具调用。请换一种方法。",
+                    pending_name, no_progress_streak
+                ),
+            };
+        }
+
+        // 2. Known poll tools: stricter thresholds for status-checking tools
+        let is_poll = KNOWN_POLL_TOOLS.iter().any(|t| pending_name.contains(t));
+        if is_poll {
+            let streak = self.count_same_tool_streak(pending_name, pending_hash);
+            if streak >= CRITICAL_THRESHOLD {
+                return LoopDetectionResult {
+                    level: LoopLevel::Critical,
+                    detector: Some(LoopDetector::KnownPollNoProgress),
+                    count: streak,
+                    message: format!(
+                        "轮询工具 '{}' 已连续调用{}次且无进展，强制终止。请检查目标状态或换一种方法。",
+                        pending_name, streak
+                    ),
+                };
+            }
+            if streak >= WARNING_THRESHOLD {
+                return LoopDetectionResult {
+                    level: LoopLevel::Warning,
+                    detector: Some(LoopDetector::KnownPollNoProgress),
+                    count: streak,
+                    message: format!(
+                        "轮询工具 '{}' 已连续调用{}次，结果无变化。建议检查是否需要换一种方法或增加等待时间。",
+                        pending_name, streak
+                    ),
+                };
+            }
+        }
+
+        // 3. Ping-pong detection: A→B→A→B alternating pattern
+        let ping_pong_count = self.detect_ping_pong(pending_name, pending_hash);
+        if ping_pong_count >= PING_PONG_CRITICAL {
+            return LoopDetectionResult {
+                level: LoopLevel::Critical,
+                detector: Some(LoopDetector::PingPong),
+                count: ping_pong_count,
+                message: format!(
+                    "检测到工具交替调用循环（ping-pong），已持续{}次。强制终止，请分析原因并换一种方法。",
+                    ping_pong_count
+                ),
+            };
+        }
+        if ping_pong_count >= PING_PONG_WARNING {
+            return LoopDetectionResult {
+                level: LoopLevel::Warning,
+                detector: Some(LoopDetector::PingPong),
+                count: ping_pong_count,
+                message: format!(
+                    "检测到工具交替调用模式，已持续{}次。请检查是否陷入了循环，考虑换一种方法。",
+                    ping_pong_count
+                ),
+            };
+        }
+
+        // 4. Generic repeat: same tool+input appearing too many times
+        let repeat_count = self.count_same_tool_total(pending_name, pending_hash);
+        if repeat_count >= CRITICAL_THRESHOLD {
+            return LoopDetectionResult {
+                level: LoopLevel::Critical,
+                detector: Some(LoopDetector::GenericRepeat),
+                count: repeat_count,
+                message: format!(
+                    "工具 '{}' 以相同参数被调用了{}次，强制终止。请换一种方法解决问题。",
+                    pending_name, repeat_count
+                ),
+            };
+        }
+        if repeat_count >= WARNING_THRESHOLD {
+            return LoopDetectionResult {
+                level: LoopLevel::Warning,
+                detector: Some(LoopDetector::GenericRepeat),
+                count: repeat_count,
+                message: format!(
+                    "工具 '{}' 以相同参数已被调用{}次。请检查是否需要换一种方法，避免无效重复。",
+                    pending_name, repeat_count
+                ),
+            };
+        }
+
+        LoopDetectionResult::ok()
+    }
+
+    /// Count consecutive calls to the same tool+input at the tail of history
+    /// where the result hash is also unchanged (no progress).
+    fn count_no_progress_streak(&self, name: &str, input_hash: u64) -> usize {
+        let mut count = 0usize;
+        let mut last_result: Option<u64> = None;
+        for rec in self.history.iter().rev() {
+            if rec.name == name && rec.input_hash == input_hash {
+                match last_result {
+                    None => { last_result = Some(rec.result_hash); count += 1; }
+                    Some(lr) if lr == rec.result_hash => { count += 1; }
+                    _ => break,
+                }
+            } else {
+                break;
+            }
+        }
+        count
+    }
+
+    /// Count consecutive calls to the same tool+input at the tail of history.
+    fn count_same_tool_streak(&self, name: &str, input_hash: u64) -> usize {
+        self.history.iter().rev()
+            .take_while(|r| r.name == name && r.input_hash == input_hash)
+            .count()
+    }
+
+    /// Count total occurrences of the same tool+input in the history window.
+    fn count_same_tool_total(&self, name: &str, input_hash: u64) -> usize {
+        self.history.iter()
+            .filter(|r| r.name == name && r.input_hash == input_hash)
+            .count()
+    }
+
+    /// Detect A→B→A→B alternating pattern at the tail of history.
+    /// Returns the number of alternating pairs found.
+    fn detect_ping_pong(&self, pending_name: &str, pending_hash: u64) -> usize {
+        if self.history.len() < 2 { return 0; }
+
+        let last = self.history.last().unwrap();
+        if last.name == pending_name && last.input_hash == pending_hash {
+            return 0; // Same as last — not a ping-pong, it's a repeat
+        }
+
+        // Check if the pattern is: ...A, B, A, B where pending is A and last is B
+        let a_name = pending_name;
+        let a_hash = pending_hash;
+        let b_name = &last.name;
+        let b_hash = last.input_hash;
+
+        let mut alternations = 0usize;
+        let mut expect_b = true; // Walking backwards from last, first should be B
+        for rec in self.history.iter().rev() {
+            if expect_b && rec.name == *b_name && rec.input_hash == b_hash {
+                alternations += 1;
+                expect_b = false;
+            } else if !expect_b && rec.name == a_name && rec.input_hash == a_hash {
+                expect_b = true;
+            } else {
+                break;
+            }
+        }
+        alternations
+    }
+}
+
+/// Compute a stable hash for a tool name + normalized input.
+fn stable_hash_input(name: &str, input: &serde_json::Value) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    name.hash(&mut hasher);
+    let mut normalized = input.clone();
+    if let Some(obj) = normalized.as_object_mut() {
+        obj.remove("_trace_id");
+    }
+    normalized.to_string().hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Compute a stable hash of a single tool result content string.
+fn stable_hash_result(content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
+}
+
+// ── Tool Result Guard ────────────────────────────────────────────────────────
+
+/// Truncate a tool result string if it exceeds the limit, keeping head + tail.
+/// The limit is the smaller of the hard max and a dynamic limit based on context window.
+fn guard_tool_result_content(content: &str, max_chars: usize) -> String {
+    let limit = max_chars.min(TOOL_RESULT_HARD_MAX_CHARS);
+    let char_count = content.chars().count();
+    if char_count <= limit {
+        return content.to_string();
+    }
+    let head_size = (limit * 3) / 4;
+    let tail_size = limit / 4;
+    let head: String = content.chars().take(head_size).collect();
+    let tail: String = content.chars().skip(char_count - tail_size).collect();
+    format!(
+        "{}\n\n[... truncated {} chars (limit: {}) ...]\n\n{}",
+        head,
+        char_count - head_size - tail_size,
+        limit,
+        tail
+    )
+}
+
+/// Compute dynamic per-result char limit based on context window.
+/// Inspired by OpenClaw's SINGLE_TOOL_RESULT_CONTEXT_SHARE.
+fn dynamic_result_limit(context_window_tokens: usize) -> usize {
+    let context_chars = context_window_tokens * 4; // ~4 chars per token
+    let limit = (context_chars as f64 * CONTEXT_SINGLE_RESULT_SHARE) as usize;
+    limit.min(TOOL_RESULT_HARD_MAX_CHARS).max(4_000)
+}
+
+// ── In-memory Message Compaction ─────────────────────────────────────────────
+
+/// Compact older tool results in the in-memory messages to reduce token usage.
+/// Keeps the last `keep_recent` user-tool-result messages intact; older ones get
+/// their ToolResult content truncated to a short summary.
+/// Inspired by OpenClaw's tool-result-context-guard which replaces oldest results
+/// with "[compacted: tool output removed to free context]".
+fn compact_old_tool_results(messages: &mut [LlmMessage], keep_recent: usize) {
+    let tool_result_indices: Vec<usize> = messages.iter().enumerate()
+        .filter(|(_, m)| {
+            m.role == "user" && matches!(&m.content, MessageContent::Blocks(blocks) if blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })))
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    if tool_result_indices.len() <= keep_recent {
+        return;
+    }
+
+    let compact_count = tool_result_indices.len() - keep_recent;
+    for &idx in tool_result_indices.iter().take(compact_count) {
+        if let MessageContent::Blocks(ref mut blocks) = messages[idx].content {
+            for block in blocks.iter_mut() {
+                if let ContentBlock::ToolResult { content, .. } = block {
+                    let original_len = content.chars().count();
+                    if original_len > 500 {
+                        let summary: String = content.chars().take(200).collect();
+                        *content = format!(
+                            "{}... [compacted, was {} chars]",
+                            summary, original_len
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
 
 pub struct AgentLoop {
     pub client: Box<dyn LlmClient>,
@@ -235,8 +582,14 @@ impl AgentLoop {
             });
         }
 
+        let guarded_content = guard_tool_result_content(
+            &result.content,
+            dynamic_result_limit(self.max_tokens as usize * 4),
+        );
         blocks.push(ContentBlock::ToolResult {
-            tool_use_id: id.to_string(), content: result.content, is_error: result.is_error,
+            tool_use_id: id.to_string(),
+            content: guarded_content,
+            is_error: result.is_error,
         });
         if let Some(img) = result.image {
             blocks.push(ContentBlock::Image {
@@ -313,9 +666,16 @@ impl AgentLoop {
         }
 
         let max_iterations = ctx.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS as u32) as usize;
+        let mut loop_detector = LoopDetectorState::new();
+
         for _iteration in 0..max_iterations {
             if cancel.load(Ordering::Relaxed) {
                 break;
+            }
+
+            // Compact old tool results to keep memory and token usage bounded.
+            if _iteration >= MSG_COMPACT_AFTER_ITERATIONS {
+                compact_old_tool_results(&mut messages, 4);
             }
 
             info!("agent loop iteration={} messages={}", _iteration, messages.len());
@@ -397,6 +757,46 @@ impl AgentLoop {
                 break;
             }
 
+            // ── Per-tool loop detection (before execution) ──────────────────
+            // Check each tool call against the sliding window history.
+            // Critical = block the tool call; Warning = inject hint but continue.
+            let mut blocked_tool_ids: Vec<String> = Vec::new();
+            let mut warning_messages: Vec<String> = Vec::new();
+            for (id, name, input) in &tool_calls {
+                let detection = loop_detector.detect(name, input);
+                match detection.level {
+                    LoopLevel::Critical => {
+                        warn!(
+                            "Loop CRITICAL [{}]: tool='{}' count={} detector={:?}",
+                            ctx.session_id, name, detection.count, detection.detector
+                        );
+                        blocked_tool_ids.push(id.clone());
+                        warning_messages.push(detection.message);
+                    }
+                    LoopLevel::Warning => {
+                        warn!(
+                            "Loop WARNING [{}]: tool='{}' count={} detector={:?}",
+                            ctx.session_id, name, detection.count, detection.detector
+                        );
+                        warning_messages.push(detection.message);
+                    }
+                    LoopLevel::Ok => {}
+                }
+            }
+
+            // If ALL tool calls in this iteration are blocked, break the loop.
+            if !blocked_tool_ids.is_empty() && blocked_tool_ids.len() == tool_calls.len() {
+                let combined_msg = warning_messages.join("\n");
+                let _ = event_tx.send(AgentEvent::TextDelta {
+                    delta: format!("\n\n[系统] {}\n", combined_msg),
+                }).await;
+                messages.push(LlmMessage {
+                    role: "assistant".into(),
+                    content: MessageContent::text(&text_buf),
+                });
+                break;
+            }
+
             // Build assistant message with tool calls
             let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
             if !text_buf.is_empty() {
@@ -414,20 +814,43 @@ impl AgentLoop {
                 content: MessageContent::Blocks(assistant_blocks),
             });
 
-            // Execute tools — read-only tools run concurrently, write tools run serially
+            // Execute tools — read-only concurrently, write serially.
+            // Blocked tools (by loop detector) get a synthetic error result instead.
             let mut tool_result_blocks: Vec<ContentBlock> = Vec::new();
 
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
 
-            // Partition into read-only and write groups (preserving order)
-            let read_only_calls: Vec<_> = tool_calls.iter()
+            // Separate blocked, read-only, and write calls
+            let active_calls: Vec<_> = tool_calls.iter()
+                .filter(|(id, _, _)| !blocked_tool_ids.contains(id))
+                .cloned().collect();
+            let read_only_calls: Vec<_> = active_calls.iter()
                 .filter(|(_, name, _)| self.registry.get(name).map(|t| t.is_read_only()).unwrap_or(false))
                 .cloned().collect();
-            let write_calls: Vec<_> = tool_calls.iter()
+            let write_calls: Vec<_> = active_calls.iter()
                 .filter(|(_, name, _)| !self.registry.get(name).map(|t| t.is_read_only()).unwrap_or(false))
                 .cloned().collect();
+
+            // Inject synthetic error results for blocked tools
+            for (id, name, _) in &tool_calls {
+                if blocked_tool_ids.contains(id) {
+                    let msg = warning_messages.iter()
+                        .find(|m| m.contains(name.as_str()))
+                        .cloned()
+                        .unwrap_or_else(|| format!("工具 '{}' 被循环检测器阻断。", name));
+                    tool_result_blocks.push(ContentBlock::ToolResult {
+                        tool_use_id: id.clone(),
+                        content: format!("[循环检测] {}", msg),
+                        is_error: true,
+                    });
+                    let _ = event_tx.send(AgentEvent::ToolEnd {
+                        id: id.clone(), name: name.clone(),
+                        result: format!("[循环检测] {}", msg), is_error: true,
+                    }).await;
+                }
+            }
 
             // Execute read-only tools concurrently
             if !read_only_calls.is_empty() {
@@ -455,18 +878,43 @@ impl AgentLoop {
                 tool_result_blocks.extend(blocks);
             }
 
+            // ── Record results into loop detector + inject warnings ──────────
+            for block in &tool_result_blocks {
+                if let ContentBlock::ToolResult { tool_use_id, content, .. } = block {
+                    if let Some((_, name, input)) = tool_calls.iter().find(|(id, _, _)| id == tool_use_id) {
+                        let rh = stable_hash_result(content);
+                        loop_detector.record(name, input, rh);
+                    }
+                }
+            }
+
+            // Inject any warning messages (non-blocking) into the tool results
+            if !warning_messages.is_empty() && blocked_tool_ids.is_empty() {
+                let combined = warning_messages.join("\n");
+                tool_result_blocks.push(ContentBlock::ToolResult {
+                    tool_use_id: "system_loop_warning".to_string(),
+                    content: format!("[循环检测警告] {}", combined),
+                    is_error: true,
+                });
+            }
+
             // Add tool results as user message
             messages.push(LlmMessage {
                 role: "user".into(),
                 content: MessageContent::Blocks(tool_result_blocks),
             });
 
-            // Write checkpoint after each iteration so a crash can be resumed
+            // Write checkpoint after each iteration (with size guard)
             if let Some(ref db_arc) = self.db {
                 let db = db_arc.lock().await;
                 match serde_json::to_string(&messages) {
                     Ok(json) => {
-                        if let Err(e) = db.upsert_checkpoint(&ctx.session_id, _iteration, &json) {
+                        if json.len() > CHECKPOINT_MAX_BYTES {
+                            warn!(
+                                "Checkpoint too large ({} bytes > {} limit), skipping write",
+                                json.len(), CHECKPOINT_MAX_BYTES
+                            );
+                        } else if let Err(e) = db.upsert_checkpoint(&ctx.session_id, _iteration, &json) {
                             warn!("Failed to write checkpoint: {}", e);
                         }
                     }

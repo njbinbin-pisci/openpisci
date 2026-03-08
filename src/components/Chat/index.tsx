@@ -9,6 +9,7 @@ import { RootState, chatActions, sessionsActions, ToolStep, StreamingState } fro
 import { chatApi, sessionsApi, gatewayApi, fishApi, AgentEventType, ChannelInfo, ChatAttachment } from "../../services/tauri";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import mermaid from "mermaid";
 import "./Chat.css";
 
@@ -95,27 +96,37 @@ export default function Chat() {
   } | null>(null);
 
   // Context debug preview
+  type ContextPreviewBlock =
+    | { type: "text"; text: string }
+    | { type: "tool_use"; id: string; name: string; input: string }
+    | { type: "tool_result"; tool_use_id: string; content: string; is_error: boolean; truncated: boolean }
+    | { type: "image"; note: string };
+
   const [contextPreview, setContextPreview] = useState<{
-    system_prompt: string;
-    system_tokens: number;
-    messages: { role: string; content: string; tokens: number }[];
+    messages: { role: string; blocks: ContextPreviewBlock[]; tokens: number }[];
     messages_tokens: number;
     total_tokens: number;
-    tool_count: number;
-    tool_names: string[];
     model: string;
     context_budget: number;
   } | null>(null);
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false);
-  const [contextPreviewTab, setContextPreviewTab] = useState<"messages" | "system" | "tools">("messages");
+  // Track which tool_use/tool_result blocks are expanded (by index key "msgIdx-blockIdx")
+  const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set());
+  const toggleBlock = (key: string) => {
+    setExpandedBlocks(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
 
   const handleShowContextPreview = async () => {
     if (!activeSessionId) return;
     setContextPreviewLoading(true);
     try {
-      const preview = await invoke<typeof contextPreview>("get_context_preview", { sessionId: activeSessionId });
+      const preview = await invoke<NonNullable<typeof contextPreview>>("get_context_preview", { sessionId: activeSessionId });
       setContextPreview(preview);
-      setContextPreviewTab("messages");
+      setExpandedBlocks(new Set());
     } catch (e) {
       alert("Failed to load context preview: " + String(e));
     } finally {
@@ -1066,123 +1077,146 @@ export default function Chat() {
         <div className="permission-overlay" onClick={() => setContextPreview(null)}>
           <div
             className="permission-dialog"
-            style={{ maxWidth: 780, width: "90vw", maxHeight: "85vh", display: "flex", flexDirection: "column", padding: 0, overflow: "hidden" }}
+            style={{ maxWidth: 860, width: "92vw", maxHeight: "88vh", display: "flex", flexDirection: "column", padding: 0, overflow: "hidden" }}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-              <div>
-                <span style={{ fontWeight: 600, fontSize: 15 }}>🔍 {t("chat.debugContextTitle")}</span>
-                <span style={{ marginLeft: 12, fontSize: 12, color: "var(--text-muted)" }}>
-                  {contextPreview.model} · ~{contextPreview.total_tokens.toLocaleString()} tokens / {contextPreview.context_budget.toLocaleString()} budget
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontWeight: 600, fontSize: 13 }}>{t("chat.debugContextTitle")}</span>
+                <span style={{ fontSize: 11, color: "var(--text-muted)", background: "var(--bg-secondary)", padding: "2px 7px", borderRadius: 8, border: "1px solid var(--border)" }}>
+                  {contextPreview.model}
                 </span>
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  {contextPreview.messages.length} 条消息 · ~{contextPreview.messages_tokens.toLocaleString()} / {contextPreview.context_budget.toLocaleString()} tok
+                </span>
+                <div style={{ width: 60, height: 4, borderRadius: 2, background: "var(--bg-secondary)", overflow: "hidden" }}>
+                  <div style={{
+                    height: "100%",
+                    width: `${Math.min(100, Math.round(contextPreview.messages_tokens / contextPreview.context_budget * 100))}%`,
+                    background: contextPreview.messages_tokens / contextPreview.context_budget > 0.85 ? "#e05c5c" : "var(--accent)",
+                    borderRadius: 2,
+                  }} />
+                </div>
               </div>
               <button
                 onClick={() => setContextPreview(null)}
-                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-muted)", lineHeight: 1 }}
+                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-muted)", lineHeight: 1, padding: "0 4px" }}
               >✕</button>
             </div>
 
-            {/* Tabs */}
-            <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-              {(["messages", "system", "tools"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setContextPreviewTab(tab)}
-                  style={{
-                    padding: "8px 18px",
-                    border: "none",
-                    borderBottom: contextPreviewTab === tab ? "2px solid var(--accent)" : "2px solid transparent",
-                    background: "none",
-                    cursor: "pointer",
-                    fontSize: 13,
-                    fontWeight: contextPreviewTab === tab ? 600 : 400,
-                    color: contextPreviewTab === tab ? "var(--accent)" : "var(--text-secondary)",
-                  }}
-                >
-                  {tab === "messages" && `${t("chat.debugTabMessages")} (${contextPreview.messages.length})`}
-                  {tab === "system" && `${t("chat.debugTabSystem")} (~${contextPreview.system_tokens.toLocaleString()} tok)`}
-                  {tab === "tools" && `${t("chat.debugTabTools")} (${contextPreview.tool_count})`}
-                </button>
-              ))}
-            </div>
-
-            {/* Content */}
-            <div style={{ flex: 1, overflowY: "auto", padding: "12px 18px" }}>
-              {contextPreviewTab === "messages" && (
-                <div>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
-                    {t("chat.debugMessagesHint")} · ~{contextPreview.messages_tokens.toLocaleString()} tokens
-                  </div>
-                  {contextPreview.messages.length === 0 ? (
-                    <div style={{ color: "var(--text-muted)", fontSize: 13 }}>{t("chat.debugNoMessages")}</div>
-                  ) : (
-                    contextPreview.messages.map((msg, i) => (
-                      <div key={i} style={{
-                        marginBottom: 10,
-                        borderRadius: 6,
-                        border: "1px solid var(--border)",
-                        overflow: "hidden",
-                      }}>
-                        <div style={{
-                          display: "flex", justifyContent: "space-between", alignItems: "center",
-                          padding: "5px 10px",
-                          background: msg.role === "user" ? "rgba(var(--accent-rgb),0.08)" : "var(--bg-secondary)",
-                          fontSize: 12, fontWeight: 600,
-                        }}>
-                          <span style={{ textTransform: "uppercase", letterSpacing: "0.05em", color: msg.role === "user" ? "var(--accent)" : "var(--text-secondary)" }}>
-                            {msg.role}
-                          </span>
-                          <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>~{msg.tokens} tok</span>
-                        </div>
-                        <pre style={{
-                          margin: 0, padding: "8px 10px",
-                          fontSize: 12, lineHeight: 1.5,
-                          whiteSpace: "pre-wrap", wordBreak: "break-word",
-                          maxHeight: 200, overflowY: "auto",
-                          color: "var(--text-primary)",
-                          background: "var(--bg-primary)",
-                        }}>
-                          {msg.content}
-                        </pre>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-
-              {contextPreviewTab === "system" && (
-                <div>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
-                    ~{contextPreview.system_tokens.toLocaleString()} tokens
-                  </div>
-                  <pre style={{
-                    margin: 0, fontSize: 12, lineHeight: 1.6,
-                    whiteSpace: "pre-wrap", wordBreak: "break-word",
-                    color: "var(--text-primary)",
-                  }}>
-                    {contextPreview.system_prompt}
-                  </pre>
-                </div>
-              )}
-
-              {contextPreviewTab === "tools" && (
-                <div>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
-                    {contextPreview.tool_count} {t("chat.debugToolsRegistered")}
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {contextPreview.tool_names.map((name) => (
-                      <span key={name} style={{
-                        padding: "3px 10px", borderRadius: 12,
-                        background: "var(--bg-secondary)", border: "1px solid var(--border)",
-                        fontSize: 12, color: "var(--text-secondary)",
-                      }}>
-                        {name}
+            {/* Message list — no tabs, just the raw LLM context */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px" }}>
+              {contextPreview.messages.length === 0 ? (
+                <div style={{ color: "var(--text-muted)", fontSize: 13, padding: "30px 0", textAlign: "center" }}>{t("chat.debugNoMessages")}</div>
+              ) : (
+                contextPreview.messages.map((msg, msgIdx) => (
+                  <div key={msgIdx} style={{ marginBottom: 8, borderRadius: 6, border: "1px solid var(--border)", overflow: "hidden" }}>
+                    {/* Role header */}
+                    <div style={{
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                      padding: "4px 10px",
+                      background: msg.role === "user" ? "rgba(var(--accent-rgb),0.10)" : "var(--bg-secondary)",
+                      fontSize: 11, fontWeight: 700, letterSpacing: "0.06em",
+                    }}>
+                      <span style={{ color: msg.role === "user" ? "var(--accent)" : "var(--text-secondary)", textTransform: "uppercase" }}>
+                        {msg.role}
                       </span>
-                    ))}
+                      <span style={{ color: "var(--text-muted)", fontWeight: 400, fontSize: 11 }}>~{msg.tokens} tok</span>
+                    </div>
+                    {/* Blocks */}
+                    <div style={{ background: "var(--bg-primary)" }}>
+                      {msg.blocks.map((block, blockIdx) => {
+                        const key = `${msgIdx}-${blockIdx}`;
+                        const expanded = expandedBlocks.has(key);
+                        const sep = blockIdx > 0 ? { borderTop: "1px solid var(--border)" } : {};
+                        if (block.type === "text") {
+                          return (
+                            <pre key={blockIdx} style={{
+                              margin: 0, padding: "8px 10px",
+                              fontSize: 12, lineHeight: 1.55,
+                              whiteSpace: "pre-wrap", wordBreak: "break-word",
+                              color: "var(--text-primary)",
+                              ...sep,
+                            }}>
+                              {block.text || <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>(empty)</span>}
+                            </pre>
+                          );
+                        }
+                        if (block.type === "tool_use") {
+                          let inputParsed: Record<string, unknown> | null = null;
+                          try { inputParsed = JSON.parse(block.input); } catch { /* raw */ }
+                          return (
+                            <div key={blockIdx} style={sep}>
+                              <button onClick={() => toggleBlock(key)} style={{
+                                display: "flex", alignItems: "center", gap: 6, width: "100%",
+                                padding: "5px 10px", background: "rgba(120,180,255,0.06)",
+                                border: "none", cursor: "pointer", textAlign: "left",
+                              }}>
+                                <span style={{ fontSize: 11, color: "#7ab4ff", fontFamily: "monospace", fontWeight: 700 }}>⚙ {block.name}</span>
+                                <span style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "monospace" }}>{block.id}</span>
+                                <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-muted)" }}>{expanded ? "▲" : "▼"}</span>
+                              </button>
+                              {expanded && (
+                                <pre style={{
+                                  margin: 0, padding: "6px 10px 8px",
+                                  fontSize: 11, lineHeight: 1.5,
+                                  whiteSpace: "pre-wrap", wordBreak: "break-word",
+                                  color: "var(--text-primary)",
+                                  background: "rgba(120,180,255,0.04)",
+                                  borderTop: "1px solid var(--border)",
+                                }}>
+                                  {inputParsed !== null ? JSON.stringify(inputParsed, null, 2) : block.input}
+                                </pre>
+                              )}
+                            </div>
+                          );
+                        }
+                        if (block.type === "tool_result") {
+                          const isErr = block.is_error;
+                          return (
+                            <div key={blockIdx} style={sep}>
+                              <button onClick={() => toggleBlock(key)} style={{
+                                display: "flex", alignItems: "center", gap: 6, width: "100%",
+                                padding: "5px 10px",
+                                background: isErr ? "rgba(224,92,92,0.06)" : "rgba(80,200,120,0.06)",
+                                border: "none", cursor: "pointer", textAlign: "left",
+                              }}>
+                                <span style={{ fontSize: 11, fontFamily: "monospace", fontWeight: 700, color: isErr ? "#e05c5c" : "#50c878" }}>
+                                  {isErr ? "✗" : "✓"} result
+                                </span>
+                                <span style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "monospace" }}>{block.tool_use_id}</span>
+                                {block.truncated && <span style={{ fontSize: 10, color: "#e0a050" }}>truncated</span>}
+                                <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-muted)" }}>{expanded ? "▲" : "▼"}</span>
+                              </button>
+                              {expanded && (
+                                <pre style={{
+                                  margin: 0, padding: "6px 10px 8px",
+                                  fontSize: 11, lineHeight: 1.5,
+                                  whiteSpace: "pre-wrap", wordBreak: "break-word",
+                                  color: isErr ? "#e05c5c" : "var(--text-primary)",
+                                  background: isErr ? "rgba(224,92,92,0.04)" : "rgba(80,200,120,0.04)",
+                                  borderTop: "1px solid var(--border)",
+                                  maxHeight: 400, overflowY: "auto",
+                                }}>
+                                  {block.content}
+                                </pre>
+                              )}
+                            </div>
+                          );
+                        }
+                        if (block.type === "image") {
+                          return (
+                            <div key={blockIdx} style={{ padding: "5px 10px", fontSize: 11, color: "var(--text-muted)", fontStyle: "italic", ...sep }}>
+                              {block.note}
+                            </div>
+                          );
+                        }
+                        return null;
+                      })}
+                    </div>
                   </div>
-                </div>
+                ))
               )}
             </div>
           </div>
@@ -1192,17 +1226,67 @@ export default function Chat() {
   );
 }
 
+// Matches bare local paths not already inside a Markdown link or code span.
+// Windows:  C:\foo\bar.txt  or  C:/foo/bar.txt
+// UNC:      \\server\share\file.txt
+// Unix/Mac: /home/user/file.txt  /Users/foo/bar.md
+// The character class excludes whitespace and Markdown-special chars but allows CJK and other Unicode.
+const LOCAL_PATH_RE =
+  /(?<!\]\()(?<![`\w/\\])(((?:[A-Za-z]:[\\/]|\\\\)[^\s`"'<>[\]()（）【】]+)|(?:\/(?:home|Users|tmp|var|etc|opt|srv|mnt|data)\/[^\s`"'<>[\]()（）【】]+))/g;
+
+function linkifyPaths(text: string): string {
+  return text.replace(LOCAL_PATH_RE, (match) => {
+    // Skip if already inside a markdown link target or code fence line
+    const encoded = match.replace(/\\/g, "/");
+    const uri = encoded.startsWith("//")
+      ? `file:${encoded}`           // UNC \\server\share → file://server/share
+      : `file:///${encoded.replace(/^\//, "")}`; // Unix /home/... or Windows C:/...
+    return `[${match}](${uri})`;
+  });
+}
+
+function isLocalPath(href: string | undefined): boolean {
+  if (!href) return false;
+  return href.startsWith("file://") || /^[A-Za-z]:[\\/]/.test(href) || href.startsWith("\\\\");
+}
+
 // Renders message content with full Markdown support (GFM: tables, strikethrough, task lists, etc.)
 function MessageContent({ content }: { content: string }) {
+  const processed = linkifyPaths(content);
   return (
     <div className="markdown-body">
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        // Open links in new tab
-        a: ({ href, children }) => (
-          <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
-        ),
+        // Local paths → shell.open(); web URLs → new tab
+        a: ({ href, children }) => {
+          if (isLocalPath(href)) {
+            // Decode file:///C:/path → C:\path for shell.open
+            const toNativePath = (uri: string) => {
+              if (uri.startsWith("file:///")) {
+                return decodeURIComponent(uri.slice(8)).replace(/\//g, "\\");
+              }
+              if (uri.startsWith("file://")) {
+                return decodeURIComponent(uri.slice(7));
+              }
+              return uri; // already a plain path
+            };
+            return (
+              <a
+                href="#"
+                title={href}
+                style={{ cursor: "pointer" }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  shellOpen(toNativePath(href!)).catch(console.error);
+                }}
+              >
+                {children}
+              </a>
+            );
+          }
+          return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+        },
         // Code blocks with language label; mermaid gets special rendering
         code: ({ className, children, ...props }) => {
           const isBlock = !!className;
@@ -1235,7 +1319,7 @@ function MessageContent({ content }: { content: string }) {
         ),
       }}
     >
-      {content}
+      {processed}
     </ReactMarkdown>
     </div>
   );

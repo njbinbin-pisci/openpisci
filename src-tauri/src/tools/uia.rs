@@ -556,12 +556,9 @@ impl UiaTool {
         let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
-            let (px, py) = if input["logical_coords"].as_bool().unwrap_or(false) {
-                let scale = crate::tools::dpi::get_dpi_scale();
-                ((x as f64 * scale) as i32, (y as f64 * scale) as i32)
-            } else {
-                (x as i32, y as i32)
-            };
+            // Coordinates are physical screen pixels (same as screen_capture grid labels).
+            // logical_coords is deprecated — no DPI conversion needed.
+            let (px, py) = (x as i32, y as i32);
             Mouse::new().click(&Point::new(px, py))
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             return Ok(ToolResult::ok(format!("Clicked at ({}, {})", px, py)));
@@ -600,6 +597,7 @@ impl UiaTool {
         let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
+            // Physical screen pixel coordinates (same as screen_capture grid labels).
             Mouse::new().double_click(&Point::new(x as i32, y as i32))
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             return Ok(ToolResult::ok(format!("Double-clicked at ({}, {})", x, y)));
@@ -627,6 +625,7 @@ impl UiaTool {
         let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
+            // Physical screen pixel coordinates (same as screen_capture grid labels).
             Mouse::new().right_click(&Point::new(x as i32, y as i32))
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             return Ok(ToolResult::ok(format!("Right-clicked at ({}, {})", x, y)));
@@ -652,8 +651,24 @@ impl UiaTool {
         use uiautomation::UIAutomation;
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
-            use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
-            unsafe { SetCursorPos(x as i32, y as i32).map_err(|e| anyhow::anyhow!("{}", e))?; }
+            // Physical screen pixel coordinates. Use SendInput+VIRTUALDESK for multi-monitor support.
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT,
+                MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK,
+            };
+            let (vx, vy, vw, vh) = Self::virtual_screen();
+            let (ax, ay) = Self::to_abs_virtualdesk(x as i32, y as i32, vx, vy, vw, vh);
+            let ev = [INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: INPUT_0 {
+                    mi: MOUSEINPUT {
+                        dx: ax, dy: ay, mouseData: 0,
+                        dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                        time: 0, dwExtraInfo: 0,
+                    },
+                },
+            }];
+            unsafe { SendInput(&ev, std::mem::size_of::<INPUT>() as i32); }
             return Ok(ToolResult::ok(format!("Hovered at ({}, {})", x, y)));
         }
 
@@ -674,9 +689,9 @@ impl UiaTool {
     }
 
     fn scroll_element(&self, input: &Value) -> Result<ToolResult> {
-        use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
         use windows::Win32::UI::Input::KeyboardAndMouse::{
             SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT, MOUSE_EVENT_FLAGS,
+            MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK,
             MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL,
         };
 
@@ -684,7 +699,20 @@ impl UiaTool {
         let amount = input["amount"].as_i64().unwrap_or(3) as i32;
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
-            unsafe { let _ = SetCursorPos(x as i32, y as i32); }
+            // Move cursor using SendInput+VIRTUALDESK for multi-monitor support.
+            let (vx, vy, vw, vh) = Self::virtual_screen();
+            let (ax, ay) = Self::to_abs_virtualdesk(x as i32, y as i32, vx, vy, vw, vh);
+            let ev = [INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: INPUT_0 {
+                    mi: MOUSEINPUT {
+                        dx: ax, dy: ay, mouseData: 0,
+                        dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                        time: 0, dwExtraInfo: 0,
+                    },
+                },
+            }];
+            unsafe { SendInput(&ev, std::mem::size_of::<INPUT>() as i32); }
         }
 
         let (flags, wheel_data): (MOUSE_EVENT_FLAGS, i32) = match direction {
@@ -710,85 +738,63 @@ impl UiaTool {
         Ok(ToolResult::ok(format!("Scrolled {} by {} ticks", direction, amount)))
     }
 
+    /// Get the virtual desktop bounds in physical pixels.
+    /// Returns (vx, vy, vw, vh) where (vx,vy) is the top-left origin (may be negative
+    /// when a monitor is positioned to the left/above the primary).
+    fn virtual_screen() -> (i32, i32, i32, i32) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetSystemMetrics, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+            SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+        };
+        unsafe {
+            let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+            let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+            let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+            let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+            (vx, vy, vw, vh)
+        }
+    }
+
+    /// Convert physical screen coordinates to SendInput absolute values (0-65535).
+    /// Uses the full virtual desktop so coordinates on any monitor are valid.
+    fn to_abs_virtualdesk(px: i32, py: i32, vx: i32, vy: i32, vw: i32, vh: i32) -> (i32, i32) {
+        let ax = ((px - vx) * 65535 + vw / 2) / vw.max(1);
+        let ay = ((py - vy) * 65535 + vh / 2) / vh.max(1);
+        (ax, ay)
+    }
+
     fn drag_drop(&self, input: &Value) -> Result<ToolResult> {
         use windows::Win32::UI::Input::KeyboardAndMouse::{
             SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT,
-            MOUSEEVENTF_MOVE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_ABSOLUTE,
-            MOUSEEVENTF_VIRTUALDESK,
+            MOUSEEVENTF_MOVE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+            MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK,
         };
-        #[allow(unused_imports)]
-        use windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
 
-        let (x1_raw, y1_raw) = match (input["x"].as_i64(), input["y"].as_i64()) {
+        let (x1, y1) = match (input["x"].as_i64(), input["y"].as_i64()) {
             (Some(x), Some(y)) => (x as i32, y as i32),
             _ => return Ok(ToolResult::err("drag_drop requires x, y (start) and x2, y2 (end)")),
         };
-        let (x2_raw, y2_raw) = match (input["x2"].as_i64(), input["y2"].as_i64()) {
+        let (x2, y2) = match (input["x2"].as_i64(), input["y2"].as_i64()) {
             (Some(x), Some(y)) => (x as i32, y as i32),
             _ => return Ok(ToolResult::err("drag_drop requires x2, y2 (end coordinates)")),
         };
 
-        // If logical_coords=true, the caller is providing coordinates from a screenshot
-        // (logical/DPI-unaware pixels). Multiply by DPI scale to get physical screen coords.
-        let (x1, y1, x2, y2) = if input["logical_coords"].as_bool().unwrap_or(false) {
-            let scale = crate::tools::dpi::get_dpi_scale();
-            let coords = (
-                (x1_raw as f64 * scale) as i32,
-                (y1_raw as f64 * scale) as i32,
-                (x2_raw as f64 * scale) as i32,
-                (y2_raw as f64 * scale) as i32,
-            );
-            tracing::info!(
-                "drag_drop: logical({},{})→({},{}) × dpi={:.2} → physical({},{})→({},{})",
-                x1_raw, y1_raw, x2_raw, y2_raw, scale,
-                coords.0, coords.1, coords.2, coords.3
-            );
-            coords
-        } else {
-            tracing::info!(
-                "drag_drop: physical({},{})→({},{})",
-                x1_raw, y1_raw, x2_raw, y2_raw
-            );
-            (x1_raw, y1_raw, x2_raw, y2_raw)
-        };
-
-        // MOUSEEVENTF_ABSOLUTE (without VIRTUALDESK) maps 0-65535 onto the primary
-        // monitor in logical pixels. GetDeviceCaps(HORZRES/VERTRES) always returns
-        // logical pixels regardless of DPI awareness mode — same coordinate space
-        // as screen_capture grid labels.
-        let (sw, sh) = unsafe {
-            use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC, GetDeviceCaps, HORZRES, VERTRES};
-            use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
-            let hwnd = GetDesktopWindow();
-            let hdc = GetDC(hwnd);
-            let w = GetDeviceCaps(hdc, HORZRES);
-            let h = GetDeviceCaps(hdc, VERTRES);
-            ReleaseDC(hwnd, hdc);
-            (w, h)
-        };
-
+        // Coordinates are physical screen pixels (same as screen_capture grid labels).
+        // logical_coords is deprecated — coordinates from screenshots are already physical.
+        let (vx, vy, vw, vh) = Self::virtual_screen();
         tracing::info!(
-            "drag_drop: logical_screen={}x{} input=({},{})→({},{})",
-            sw, sh, x1, y1, x2, y2
+            "drag_drop: physical({},{})→({},{}) virtual_screen=({},{})+({}x{})",
+            x1, y1, x2, y2, vx, vy, vw, vh
         );
 
-        let to_abs = |px: i32, py: i32| -> (i32, i32) {
-            let ax = (px * 65535 + sw / 2) / sw.max(1);
-            let ay = (py * 65535 + sh / 2) / sh.max(1);
-            (ax, ay)
-        };
+        let (ax1, ay1) = Self::to_abs_virtualdesk(x1, y1, vx, vy, vw, vh);
+        let (ax2, ay2) = Self::to_abs_virtualdesk(x2, y2, vx, vy, vw, vh);
+        tracing::info!("drag_drop: abs=({},{})→({},{})", ax1, ay1, ax2, ay2);
 
-        let (ax1, ay1) = to_abs(x1, y1);
-        let (ax2, ay2) = to_abs(x2, y2);
-        tracing::info!(
-            "drag_drop: abs=({},{})→({},{})",
-            ax1, ay1, ax2, ay2
-        );
-
-        // No VIRTUALDESK: maps 0-65535 to primary monitor logical pixels (matches GetDeviceCaps HORZRES)
-        let flags_move = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
-        let flags_down = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE;
-        let flags_up   = MOUSEEVENTF_LEFTUP   | MOUSEEVENTF_ABSOLUTE;
+        // VIRTUALDESK: maps 0-65535 to the full virtual desktop (all monitors, physical pixels)
+        let flags_move = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+        let flags_down = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+        let flags_up   = MOUSEEVENTF_LEFTUP   | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
 
         let make_mouse_input = |dx: i32, dy: i32, flags| INPUT {
             r#type: INPUT_MOUSE,
@@ -814,8 +820,7 @@ impl UiaTool {
             SendInput(&ev, std::mem::size_of::<INPUT>() as i32);
             std::thread::sleep(std::time::Duration::from_millis(80));
 
-            // Smoothly move to end position in steps (helps with apps that need
-            // intermediate mouse-move events to track drag, e.g. ball drag tests)
+            // Smoothly move to end position in steps
             let steps = 20i32;
             for i in 1..=steps {
                 let ix = ax1 + (ax2 - ax1) * i / steps;

@@ -11,30 +11,38 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 ## ✨ 核心特性
 
 ### 🤖 强大的 Agent 能力
-- **多 LLM 支持**：Claude（Anthropic）、GPT（OpenAI）、DeepSeek、通义千问（Qwen），以及任意 OpenAI 兼容接口
+- **多 LLM 支持**：Claude（Anthropic）、GPT（OpenAI）、DeepSeek、通义千问（Qwen）、智谱、Kimi、MiniMax，以及任意 OpenAI 兼容接口
 - **自动记忆**：对话结束后自动调用 LLM 提取关键信息存入长期记忆，下次对话自动注入相关上下文
 - **主动记忆**：Agent 在对话中可主动调用 `memory_store` 工具保存重要信息
 - **任务分解**：复杂任务自动分解为子任务并依次执行（HostAgent）
 - **崩溃恢复**：每次迭代写入 checkpoint，程序崩溃后可从断点恢复
 - **心跳机制**：可配置定时心跳，Agent 自主检查待处理任务
+- **循环检测**：四种检测器（GenericRepeat / KnownPollNoProgress / PingPong / GlobalCircuitBreaker）防止 Agent 陷入死循环
 
 ### 🛠️ 丰富的 Windows 工具集
 
 | 工具 | 说明 |
 |------|------|
-| `file_read` / `file_write` | 文件读写 |
-| `shell` / `powershell` | PowerShell 命令执行 |
-| `powershell_query` | 结构化查询系统信息（进程、服务、注册表等） |
+| `file_read` / `file_write` | 文件读写（支持分块读取大文件） |
+| `file_edit` | 精确字符串替换，支持 `edits` 数组批量原子修改 |
+| `file_diff` | 修改前预览 unified diff，或对比两个文件 |
+| `file_list` | 结构化目录列表（JSON，含大小/修改时间） |
+| `file_search` | 按名称 glob 搜索或按内容 grep 搜索（支持 `file_extensions` 过滤） |
+| `code_run` | 专为编程场景设计的命令执行工具，返回结构化输出并自动诊断常见错误 |
+| `shell` / `powershell_query` | PowerShell 命令执行 / 结构化系统查询 |
 | `wmi` | WMI/WQL 查询硬件和系统信息 |
 | `web_search` | 多引擎并行搜索（DuckDuckGo、Bing、百度、360），结果合并去重 |
 | `browser` | Chrome 浏览器自动化（CDP 协议） |
 | `uia` | Windows UI Automation — 控制任意桌面应用 |
 | `screen_capture` | 截图（全屏/窗口/区域），支持 Vision AI 分析 |
-| `com` | 剪贴板读写、文件关联打开、特殊目录路径 |
-| `office` | 通过 COM 自动化 Word、Excel、Outlook |
+| `com` / `com_invoke` | COM/ActiveX 对象调用（支持 32/64 位） |
+| `office` | 通过 COM 自动化 Word、Excel、PowerPoint、Outlook |
 | `email` | 发送/接收邮件（SMTP/IMAP） |
+| `ssh` | SSH 远程连接与命令执行 |
+| `pdf` | PDF 读写 |
 | `memory_store` | 向长期记忆写入信息 |
 | 用户自定义工具 | TypeScript 插件，支持自定义配置接口 |
+| MCP 工具 | 通过 MCP 协议接入外部工具服务器 |
 
 ### 🐠 小鱼（Fish）子 Agent 系统
 - 通过 `FISH.toml` 定义专属子 Agent，拥有独立人设、工具权限和配置
@@ -49,6 +57,23 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 - 内置技能：Office 自动化、文件管理、Web 自动化、系统管理、桌面控制
 
 > **注意**：SKILL.md 是 OpenPisci 自定义的技能格式，与 Anthropic MCP（Model Context Protocol）是两套不同的规范。
+
+### 💻 编程能力（v0.3.0 新增）
+- **`code_run` 工具**：专为编程任务设计，返回结构化 `exit_code` / `stdout` / `stderr` / `duration_ms`，并对 Rust/Python/Node 常见错误自动诊断
+- **`file_edit` 批量替换**：`edits` 数组一次调用原子修改多处，先全量验证再统一写入
+- **`file_diff` 工具**：修改前预览 unified diff，或对比两个文件，帮助 Agent 自我校验
+- **`file_search` 增强**：结果上限提升至 500，新增 `file_extensions` 精确过滤，单文件 grep 上限提升至 200KB
+- **编程工作流指导**：系统提示词内置完整的"理解→修改→验证→调试"闭环指导
+
+### 🔍 上下文预览（v0.3.0 新增）
+- 点击聊天界面的 🔍 按钮，查看下一轮将要发给 LLM 的完整消息序列
+- 结构化展示每条消息的 role、blocks（文本/工具调用/工具结果），工具调用和结果可折叠展开
+- 显示 token 使用量与上下文预算进度条，帮助了解上下文压缩效果
+
+### 🔗 文件链接（v0.3.0 新增）
+- LLM 输出中的本地路径（如 `C:\Users\...\file.md`）自动转为可点击链接
+- 点击后用系统默认程序打开对应文件或目录
+- 支持 Windows 路径、UNC 路径、Unix 路径，以及 `file://` URI
 
 ### 📱 多平台 IM 网关
 
@@ -225,14 +250,14 @@ OpenPisci
 │   │   ├── commands/   # Tauri IPC 命令层
 │   │   ├── fish/       # Fish 子 Agent 系统
 │   │   ├── gateway/    # IM 网关（飞书、钉钉、Telegram 等）
-│   │   ├── llm/        # LLM 客户端（Claude、OpenAI、DeepSeek、Qwen）
+│   │   ├── llm/        # LLM 客户端（Claude、OpenAI、DeepSeek、Qwen 等）
 │   │   ├── memory/     # 记忆系统（向量搜索、FTS）
 │   │   ├── policy/     # 策略门控、注入检测
 │   │   ├── scheduler/  # Cron 调度器
 │   │   ├── security/   # 加密、密钥管理
 │   │   ├── skills/     # 技能加载器（SKILL.md 格式）
 │   │   ├── store/      # SQLite 数据库、设置持久化
-│   │   └── tools/      # 工具实现
+│   │   └── tools/      # 工具实现（含 code_run、file_diff 等）
 │   └── Cargo.toml
 └── src/                # React 前端
     ├── components/     # 页面组件
@@ -240,6 +265,23 @@ OpenPisci
     ├── services/       # Tauri IPC 服务层
     └── store/          # Redux 状态管理
 ```
+
+---
+
+## 📋 更新日志
+
+### v0.3.0
+- **编程能力增强**：新增 `code_run` 工具（结构化输出 + 错误诊断）、`file_diff` 工具（unified diff 预览）
+- **`file_edit` 批量替换**：支持 `edits` 数组，一次调用原子修改多处
+- **`file_search` 增强**：结果上限 500，新增 `file_extensions` 过滤，grep 单文件上限 200KB
+- **上下文预览**：聊天界面新增 🔍 按钮，结构化查看发给 LLM 的消息序列（含 token 统计）
+- **文件链接**：LLM 输出中的本地路径自动转为可点击链接，点击用系统程序打开
+
+### v0.2.0
+- 多模态视觉 Agent（截图 + Vision AI）
+- UIA 精度测试
+- MCP / SSH / PDF 工具
+- 多 LLM 支持扩展（智谱、Kimi、MiniMax）
 
 ---
 

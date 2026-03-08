@@ -11,30 +11,38 @@ OpenPisci is a local-first AI Agent desktop application for Windows, built with 
 ## ✨ Key Features
 
 ### 🤖 Powerful Agent Capabilities
-- **Multi-LLM support**: Claude (Anthropic), GPT (OpenAI), DeepSeek, Qwen, and any OpenAI-compatible endpoint
+- **Multi-LLM support**: Claude (Anthropic), GPT (OpenAI), DeepSeek, Qwen, Zhipu, Kimi, MiniMax, and any OpenAI-compatible endpoint
 - **Automatic memory extraction**: After each conversation, an LLM pass extracts 0–3 key facts and stores them as long-term memories; relevant memories are injected automatically in future sessions
 - **Active memory**: The agent can call the `memory_store` tool mid-conversation to save important information
 - **Task decomposition**: Complex tasks are broken down and executed step-by-step via HostAgent
 - **Crash recovery**: Checkpoints are written every iteration; the agent resumes from the last checkpoint after a crash
 - **Heartbeat mechanism**: Configurable periodic heartbeat for proactive task checking
+- **Loop detection**: Four detectors (GenericRepeat / KnownPollNoProgress / PingPong / GlobalCircuitBreaker) prevent the agent from getting stuck in infinite loops
 
 ### 🛠️ Rich Windows Toolset
 
 | Tool | Description |
 |------|-------------|
-| `file_read` / `file_write` | Read and write files |
-| `shell` / `powershell` | PowerShell command execution |
-| `powershell_query` | Structured queries for processes, services, registry, etc. |
+| `file_read` / `file_write` | Read and write files (chunked reading for large files) |
+| `file_edit` | Exact string replacement; supports `edits` array for atomic multi-location edits |
+| `file_diff` | Preview unified diff before writing, or compare two files |
+| `file_list` | Structured directory listing (JSON with size, modified date, type) |
+| `file_search` | Glob search by name or grep search by content (supports `file_extensions` filter) |
+| `code_run` | Coding-focused command runner with structured output and automatic error diagnosis |
+| `shell` / `powershell_query` | PowerShell execution / structured system queries |
 | `wmi` | WMI/WQL queries for hardware and system information |
 | `web_search` | Parallel multi-engine search (DuckDuckGo, Bing, Baidu, 360); results merged and deduplicated |
 | `browser` | Chrome browser automation via CDP |
 | `uia` | Windows UI Automation — control any desktop application |
 | `screen_capture` | Screenshots (full screen / window / region), with optional Vision AI analysis |
-| `com` | Clipboard read/write, file association open, special folder paths |
-| `office` | Automate Word, Excel, Outlook via COM |
+| `com` / `com_invoke` | COM/ActiveX object invocation (32-bit and 64-bit) |
+| `office` | Automate Word, Excel, PowerPoint, Outlook via COM |
 | `email` | Send/receive email (SMTP/IMAP) |
+| `ssh` | SSH remote connection and command execution |
+| `pdf` | PDF read/write |
 | `memory_store` | Write information to long-term memory |
 | User-defined tools | TypeScript plugins with custom configuration interfaces |
+| MCP tools | Connect to external tool servers via the MCP protocol |
 
 ### 🐠 Fish (小鱼) Sub-Agent System
 - Define custom sub-agents via `FISH.toml` with their own persona, tool permissions, and configuration
@@ -50,13 +58,30 @@ OpenPisci is a local-first AI Agent desktop application for Windows, built with 
 
 > **Note**: SKILL.md is OpenPisci's own skill format. It is **not** the same as Anthropic's MCP (Model Context Protocol) — they are two separate specifications.
 
+### 💻 Coding Capabilities (new in v0.3.0)
+- **`code_run` tool**: Designed for coding tasks — returns structured `exit_code` / `stdout` / `stderr` / `duration_ms` and automatically diagnoses common Rust/Python/Node errors
+- **`file_edit` batch edits**: `edits` array atomically applies multiple replacements in one call — validates all first, then writes once
+- **`file_diff` tool**: Preview unified diff before applying changes, or compare two files — helps the agent self-verify edits
+- **`file_search` enhancements**: Result limit raised to 500, new `file_extensions` filter, per-file grep limit raised to 200 KB
+- **Coding workflow guidance**: System prompt includes a complete "understand → edit → verify → debug" loop
+
+### 🔍 Context Preview (new in v0.3.0)
+- Click the 🔍 button in the chat UI to inspect the exact message sequence that will be sent to the LLM on the next turn
+- Structured display of each message's role and blocks (text / tool_use / tool_result), with collapsible tool calls and results
+- Shows token usage vs. context budget with a progress bar, making context compression effects visible
+
+### 🔗 Clickable File Links (new in v0.3.0)
+- Local paths in LLM output (e.g. `C:\Users\...\file.md`) are automatically converted to clickable links
+- Clicking opens the file or directory with the system's default application
+- Supports Windows paths, UNC paths, Unix paths, and `file://` URIs
+
 ### 📱 Multi-Platform IM Gateway
 
 | Platform | Mode |
 |----------|------|
-| Feishu / Lark | Polling inbound + outbound reply |
+| Feishu / Lark | WebSocket long-connection inbound + outbound reply |
 | WeCom (Enterprise WeChat) | Local relay inbound + outbound reply |
-| DingTalk | Polling inbound + outbound reply |
+| DingTalk | Stream-mode WebSocket inbound + outbound reply |
 | Telegram | Long-polling inbound + outbound reply |
 | Slack | Outbound webhook |
 | Discord | Outbound webhook |
@@ -96,6 +121,8 @@ OpenPisci is a local-first AI Agent desktop application for Windows, built with 
 ### Download
 
 Go to [Releases](https://github.com/njbinbin-pisci/openpisci/releases) and download the latest installer (`.exe`).
+
+> **⚠️ Security Warning**: OpenPisci is an AI Agent with high-privilege capabilities including file read/write, command execution, and UI automation. It is strongly recommended to run it inside a virtual machine (VMware, VirtualBox, Hyper-V) to prevent accidental damage to your host system. The developers are not responsible for any data loss or system damage caused by running it directly on a host machine.
 
 ### First-time Setup
 
@@ -221,14 +248,14 @@ OpenPisci
 │   │   ├── commands/   # Tauri IPC command layer
 │   │   ├── fish/       # Fish sub-agent system
 │   │   ├── gateway/    # IM gateways (Feishu, DingTalk, Telegram, etc.)
-│   │   ├── llm/        # LLM clients (Claude, OpenAI, DeepSeek, Qwen)
+│   │   ├── llm/        # LLM clients (Claude, OpenAI, DeepSeek, Qwen, etc.)
 │   │   ├── memory/     # Memory system (vector search, FTS)
 │   │   ├── policy/     # Policy gate, injection detection
 │   │   ├── scheduler/  # Cron scheduler
 │   │   ├── security/   # Encryption, key management
 │   │   ├── skills/     # Skill loader (SKILL.md format)
 │   │   ├── store/      # SQLite database, settings persistence
-│   │   └── tools/      # Tool implementations
+│   │   └── tools/      # Tool implementations (incl. code_run, file_diff)
 │   └── Cargo.toml
 └── src/                # React frontend
     ├── components/     # Page components
@@ -236,6 +263,23 @@ OpenPisci
     ├── services/       # Tauri IPC service layer
     └── store/          # Redux state management
 ```
+
+---
+
+## 📋 Changelog
+
+### v0.3.0
+- **Coding capabilities**: New `code_run` tool (structured output + error diagnosis), `file_diff` tool (unified diff preview)
+- **`file_edit` batch edits**: `edits` array for atomic multi-location edits in one call
+- **`file_search` enhancements**: Result limit 500, new `file_extensions` filter, grep limit 200 KB per file
+- **Context preview**: New 🔍 button in chat UI — inspect the exact message sequence sent to the LLM with token stats
+- **Clickable file links**: Local paths in LLM output auto-converted to clickable links that open with the system default app
+
+### v0.2.0
+- Multimodal vision agent (screenshot + Vision AI)
+- UIA precision test
+- MCP / SSH / PDF tools
+- Extended multi-LLM support (Zhipu, Kimi, MiniMax)
 
 ---
 

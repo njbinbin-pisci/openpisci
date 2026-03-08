@@ -253,6 +253,28 @@ pub async fn execute_task(
     ));
     let policy = Arc::new(PolicyGate::with_profile_and_flags(&workspace_root, &policy_mode, tool_rate_limit_per_minute, allow_outside_workspace));
 
+    // Inject task state for scheduled tasks (cross-run continuity)
+    let task_state_section = {
+        let db_lock = db.lock().await;
+        let scope_id = format!("sched_{}", task_id);
+        match db_lock.load_task_state("scheduled_task", &scope_id) {
+            Ok(Some(ts)) if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) => {
+                let mut ctx = String::from("\n\n## Previous Task State\n");
+                if !ts.goal.is_empty() {
+                    ctx.push_str(&format!("**Goal:** {}\n", ts.goal));
+                }
+                if !ts.summary.is_empty() {
+                    ctx.push_str(&format!("**Progress from last run:** {}\n", ts.summary));
+                }
+                if ts.state_json != "{}" && !ts.state_json.is_empty() {
+                    ctx.push_str(&format!("**Details:** {}\n", ts.state_json));
+                }
+                ctx
+            }
+            _ => String::new(),
+        }
+    };
+
     let agent = AgentLoop {
         client,
         registry,
@@ -260,9 +282,10 @@ pub async fn execute_task(
         system_prompt: format!(
             "You are Pisci, a Windows AI Agent running a scheduled task.\n\
              Task ID: {}\n\
-             Today's date: {}",
+             Today's date: {}{}",
             task_id,
-            chrono::Utc::now().format("%Y-%m-%d")
+            chrono::Utc::now().format("%Y-%m-%d"),
+            task_state_section
         ),
         model,
         max_tokens,

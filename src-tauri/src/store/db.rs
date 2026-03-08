@@ -49,6 +49,7 @@ pub struct Memory {
     pub category: String,
     pub confidence: f64,
     pub source_session_id: Option<String>,
+    pub memory_type: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -88,6 +89,20 @@ pub struct AuditEntry {
     pub input_summary: Option<String>,
     pub result_summary: Option<String>,
     pub is_error: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskState {
+    pub id: String,
+    pub scope_type: String,
+    pub scope_id: String,
+    pub goal: String,
+    pub state_json: String,
+    pub summary: String,
+    pub status: String,
+    pub version: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +268,25 @@ impl Database {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+        ");
+
+        // Task state table for structured task progress tracking.
+        // scope_type: 'session' (chat) or 'scheduled_task' (scheduler).
+        // state_json stores structured progress: goal, done_items, pending_items, etc.
+        let _ = self.conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS task_states (
+                id TEXT PRIMARY KEY,
+                scope_type TEXT NOT NULL DEFAULT 'session',
+                scope_id TEXT NOT NULL,
+                goal TEXT NOT NULL DEFAULT '',
+                state_json TEXT NOT NULL DEFAULT '{}',
+                summary TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                version INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_states_scope ON task_states(scope_type, scope_id);
         ");
 
         // One-time deduplication: remove duplicate messages caused by a previous bug where
@@ -502,6 +536,7 @@ impl Database {
                 category: r.get(2)?,
                 confidence: r.get(3)?,
                 source_session_id: r.get(4)?,
+                memory_type: "personal".to_string(),
                 created_at: r.get::<_, String>(5)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
                 updated_at: r.get::<_, String>(6)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
             })
@@ -509,7 +544,30 @@ impl Database {
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
     }
 
+    /// Save a memory with dedup: if a very similar memory already exists (same category,
+    /// high content overlap), update it instead of creating a duplicate.
     pub fn save_memory(&self, content: &str, category: &str, confidence: f64, source_session_id: Option<&str>) -> Result<Memory> {
+        // Dedup: check for existing memories in the same category with high content overlap
+        if let Some(existing) = self.find_similar_memory(content, category)? {
+            let now_str = Utc::now().to_rfc3339();
+            let new_confidence = confidence.max(existing.confidence);
+            self.conn.execute(
+                "UPDATE memories SET content = ?1, confidence = ?2, updated_at = ?3 WHERE id = ?4",
+                params![content, new_confidence, now_str, existing.id],
+            )?;
+            tracing::info!("Memory dedup: updated existing memory {} instead of creating duplicate", existing.id);
+            return Ok(Memory {
+                id: existing.id,
+                content: content.to_string(),
+                category: category.to_string(),
+                confidence: new_confidence,
+                source_session_id: existing.source_session_id,
+                memory_type: existing.memory_type,
+                created_at: existing.created_at,
+                updated_at: Utc::now(),
+            });
+        }
+
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
@@ -523,9 +581,46 @@ impl Database {
             category: category.to_string(),
             confidence,
             source_session_id: source_session_id.map(String::from),
+            memory_type: "personal".to_string(),
             created_at: now,
             updated_at: now,
         })
+    }
+
+    /// Find a memory in the same category that has high content overlap with the given text.
+    /// Uses word-level Jaccard similarity (threshold: 0.6).
+    fn find_similar_memory(&self, content: &str, category: &str) -> Result<Option<Memory>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, content, category, confidence, source_session_id, memory_type, created_at, updated_at \
+             FROM memories WHERE category = ?1 ORDER BY updated_at DESC LIMIT 50"
+        )?;
+        let rows = stmt.query_map(params![category], |r| {
+            Ok(Memory {
+                id: r.get(0)?,
+                content: r.get(1)?,
+                category: r.get(2)?,
+                confidence: r.get(3)?,
+                source_session_id: r.get(4)?,
+                memory_type: r.get::<_, String>(5).unwrap_or_else(|_| "personal".to_string()),
+                created_at: r.get::<_, String>(6)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                updated_at: r.get::<_, String>(7)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+
+        let new_words: std::collections::HashSet<&str> = content.split_whitespace().collect();
+        if new_words.is_empty() { return Ok(None); }
+
+        for mem in rows.flatten() {
+            let existing_words: std::collections::HashSet<&str> = mem.content.split_whitespace().collect();
+            if existing_words.is_empty() { continue; }
+            let intersection = new_words.intersection(&existing_words).count();
+            let union = new_words.union(&existing_words).count();
+            let jaccard = intersection as f64 / union as f64;
+            if jaccard >= 0.6 {
+                return Ok(Some(mem));
+            }
+        }
+        Ok(None)
     }
 
     pub fn delete_memory(&self, id: &str) -> Result<()> {
@@ -567,6 +662,7 @@ impl Database {
                     category: r.get(2)?,
                     confidence: r.get(3)?,
                     source_session_id: r.get(4)?,
+                    memory_type: "personal".to_string(),
                     created_at: r.get::<_, String>(5)?
                         .parse::<DateTime<Utc>>()
                         .unwrap_or_else(|_| Utc::now()),
@@ -880,6 +976,7 @@ impl Database {
                 category: r.get(2)?,
                 confidence: r.get(3)?,
                 source_session_id: r.get(4)?,
+                memory_type: "personal".to_string(),
                 created_at: r.get::<_, String>(5)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
                 updated_at: r.get::<_, String>(6)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
             })
@@ -1027,5 +1124,105 @@ impl Database {
     pub fn delete_fish_instance(&self, fish_id: &str) -> Result<()> {
         self.conn.execute("DELETE FROM fish_instances WHERE fish_id = ?1", params![fish_id])?;
         Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // Task States
+    // ------------------------------------------------------------------
+
+    /// Get or create a task state for the given scope (session or scheduled_task).
+    pub fn get_or_create_task_state(&self, scope_type: &str, scope_id: &str) -> Result<TaskState> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, scope_type, scope_id, goal, state_json, summary, status, version, created_at, updated_at \
+             FROM task_states WHERE scope_type = ?1 AND scope_id = ?2 \
+             ORDER BY updated_at DESC LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![scope_type, scope_id], |r| {
+            Ok(TaskState {
+                id: r.get(0)?,
+                scope_type: r.get(1)?,
+                scope_id: r.get(2)?,
+                goal: r.get(3)?,
+                state_json: r.get(4)?,
+                summary: r.get(5)?,
+                status: r.get(6)?,
+                version: r.get(7)?,
+                created_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                updated_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+
+        if let Some(existing) = rows.next().transpose()? {
+            return Ok(existing);
+        }
+
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO task_states (id, scope_type, scope_id, goal, state_json, summary, status, version, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, '', '{}', '', 'active', 1, ?4, ?4)",
+            params![id, scope_type, scope_id, now],
+        )?;
+
+        Ok(TaskState {
+            id,
+            scope_type: scope_type.to_string(),
+            scope_id: scope_id.to_string(),
+            goal: String::new(),
+            state_json: "{}".to_string(),
+            summary: String::new(),
+            status: "active".to_string(),
+            version: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        })
+    }
+
+    /// Update a task state with new goal, state_json, summary, and status.
+    pub fn update_task_state(
+        &self,
+        id: &str,
+        goal: Option<&str>,
+        state_json: Option<&str>,
+        summary: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE task_states SET \
+             goal = COALESCE(?2, goal), \
+             state_json = COALESCE(?3, state_json), \
+             summary = COALESCE(?4, summary), \
+             status = COALESCE(?5, status), \
+             version = version + 1, \
+             updated_at = ?6 \
+             WHERE id = ?1",
+            params![id, goal, state_json, summary, status, now],
+        )?;
+        Ok(())
+    }
+
+    /// Load task state for a scope, if it exists.
+    pub fn load_task_state(&self, scope_type: &str, scope_id: &str) -> Result<Option<TaskState>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, scope_type, scope_id, goal, state_json, summary, status, version, created_at, updated_at \
+             FROM task_states WHERE scope_type = ?1 AND scope_id = ?2 \
+             ORDER BY updated_at DESC LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![scope_type, scope_id], |r| {
+            Ok(TaskState {
+                id: r.get(0)?,
+                scope_type: r.get(1)?,
+                scope_id: r.get(2)?,
+                goal: r.get(3)?,
+                state_json: r.get(4)?,
+                summary: r.get(5)?,
+                status: r.get(6)?,
+                version: r.get(7)?,
+                created_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                updated_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        Ok(rows.next().transpose()?)
     }
 }
