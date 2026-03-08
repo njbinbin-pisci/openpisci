@@ -46,9 +46,10 @@ OpenPisci is a local-first AI Agent desktop application for Windows, built with 
 
 ### 🐠 Fish (小鱼) Sub-Agent System
 - Define custom sub-agents via `FISH.toml` with their own persona, tool permissions, and configuration
-- Built-in "File Assistant" Fish for file management tasks
+- Fish are **stateless, ephemeral workers**: the main Agent delegates sub-tasks via the `call_fish` tool; the Fish returns only the final result
+- **Key benefit**: intermediate reasoning and tool calls inside the Fish do NOT pollute the main Agent's context, effectively saving context window budget
 - User Fish definitions live in `%APPDATA%\com.pisci.desktop\fish\`
-- Each Fish runs in its own isolated session with a dynamically rendered config form
+- Ideal for batch file processing, data collection, code scanning, and other multi-step tasks
 
 ### ⚡ Skills System
 - Skills are defined in `SKILL.md` format: YAML frontmatter (name, description, tool list, etc.) + Markdown body (instructions)
@@ -189,7 +190,7 @@ default = ""
 placeholder = "e.g. C:\\Users\\YourName\\Documents"
 ```
 
-Restart the app and the new Fish will appear on the Fish page.
+Restart the app and the new Fish will appear on the Fish page. The main Agent will automatically delegate matching tasks to Fish via the `call_fish` tool.
 
 ---
 
@@ -267,6 +268,12 @@ OpenPisci
 ---
 
 ## 📋 Changelog
+
+### v0.4.0
+- **Stateless Fish refactor**: Fish sub-agents redesigned from session-based to stateless ephemeral workers; the main Agent delegates via `call_fish`, intermediate steps don't pollute the main context
+- **Enhanced call_fish prompts**: System prompt now includes a Sub-Agent Delegation strategy section, guiding the main Agent to proactively use Fish for multi-step tasks
+- **Unified confirmation dialogs**: New shared `ConfirmDialog` component replaces all `window.confirm()` calls (skill uninstall, tool uninstall, MCP delete, scheduled task delete, memory clear, audit log clear)
+- **Skill loader fix**: Fixed installed skills being incorrectly classified as built-in, causing them not to appear in the UI
 
 ### v0.3.0
 - **Coding capabilities**: New `code_run` tool (structured output + error diagnosis), `file_diff` tool (unified diff preview)
