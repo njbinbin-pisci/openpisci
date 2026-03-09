@@ -1,0 +1,423 @@
+.chatpool {
+  display: flex;
+  height: 100%;
+  gap: 0;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+
+/* ── Sidebar ── */
+
+.chatpool-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+}
+
+.chatpool-new-btn {
+  margin: 12px 12px 8px;
+  padding: 8px 0;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.chatpool-new-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent);
+}
+
+.chatpool-new-dialog {
+  padding: 0 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chatpool-input {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: 12px;
+  box-sizing: border-box;
+  transition: border-color 0.2s;
+}
+
+.chatpool-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.chatpool-new-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.chatpool-btn {
+  padding: 5px 12px;
+  border-radius: var(--radius);
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: opacity 0.15s, background 0.2s;
+}
+
+.chatpool-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chatpool-btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.chatpool-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.chatpool-btn-secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.chatpool-btn-secondary:hover:not(:disabled) {
+  background: var(--bg-primary);
+}
+
+/* ── Session list ── */
+
+.chatpool-session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 6px;
+}
+
+.chatpool-empty-hint {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.chatpool-session-item {
+  position: relative;
+  padding: 10px 10px;
+  margin: 2px 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.chatpool-session-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.chatpool-session-item.active {
+  background: var(--accent);
+}
+
+.chatpool-session-item.active .chatpool-session-name {
+  color: #fff;
+}
+
+.chatpool-session-item.active .chatpool-session-time {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.chatpool-session-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 20px;
+}
+
+.chatpool-session-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.chatpool-session-delete {
+  position: absolute;
+  top: 8px;
+  right: 6px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+  padding: 2px 4px;
+}
+
+.chatpool-session-item:hover .chatpool-session-delete {
+  opacity: 1;
+}
+
+.chatpool-session-delete:hover {
+  color: var(--error);
+}
+
+/* ── Participants panel ── */
+
+.chatpool-participants {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.chatpool-participants-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+
+.chatpool-participant {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.chatpool-participant-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+}
+
+.chatpool-participant-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.chatpool-participant-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.chatpool-participant-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.chatpool-participant-todos {
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  flex-shrink: 0;
+}
+
+/* ── Main area ── */
+
+.chatpool-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chatpool-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-muted);
+}
+
+.chatpool-empty-icon {
+  font-size: 40px;
+  opacity: 0.5;
+}
+
+.chatpool-empty p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.chatpool-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ── Message bubble ── */
+
+.pool-msg {
+  display: flex;
+  gap: 0;
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: background 0.15s;
+}
+
+.pool-msg:hover {
+  background: var(--bg-secondary);
+}
+
+.pool-msg-bar {
+  width: 4px;
+  flex-shrink: 0;
+  border-radius: 4px 0 0 4px;
+}
+
+.pool-msg-body {
+  flex: 1;
+  padding: 8px 12px;
+  min-width: 0;
+}
+
+.pool-msg-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.pool-msg-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.pool-msg-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pool-msg-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.pool-msg-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* task_assign card */
+.pool-msg--task_assign .pool-msg-body {
+  background: rgba(124, 58, 237, 0.05);
+  border: 1px solid rgba(124, 58, 237, 0.15);
+  border-left: none;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.pool-msg-task-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pool-msg-task-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pool-msg-priority {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: #fff;
+}
+
+.pool-msg-priority--urgent { background: #eb3b5a; }
+.pool-msg-priority--high { background: #fd9644; }
+.pool-msg-priority--medium { background: #45b7d1; }
+.pool-msg-priority--low { background: #778ca3; }
+
+/* status_update */
+.pool-msg--status_update .pool-msg-body {
+  padding: 4px 12px;
+}
+
+.pool-msg-status-line {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* result card */
+.pool-msg--result .pool-msg-bar {
+  background: var(--success) !important;
+}
+
+.pool-msg-result-card {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.55;
+  padding: 6px 10px;
+  background: rgba(34, 197, 94, 0.06);
+  border: 1px solid rgba(34, 197, 94, 0.15);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Read-only bar ── */
+
+.chatpool-readonly-bar {
+  flex-shrink: 0;
+  padding: 10px 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+}

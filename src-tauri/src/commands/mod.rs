@@ -1,11 +1,14 @@
 pub mod audit;
+pub mod board;
 pub mod chat;
 pub mod debug;
 pub mod fish;
 pub mod gateway;
+pub mod koi;
 pub mod mcp;
 pub mod memory;
 pub mod permission;
+pub mod pool;
 pub mod scheduler;
 pub mod settings;
 pub mod skills;

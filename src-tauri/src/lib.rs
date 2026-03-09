@@ -8,6 +8,7 @@ mod browser;
 mod commands;
 mod fish;
 mod gateway;
+mod koi;
 mod llm;
 mod memory;
 mod policy;
@@ -581,6 +582,24 @@ pub fn run() {
             // Fish (小鱼) sub-Agents
             commands::fish::get_fish_dir,
             commands::fish::list_fish,
+            // Koi (锦鲤) persistent Agents
+            commands::koi::list_kois,
+            commands::koi::get_koi,
+            commands::koi::create_koi,
+            commands::koi::update_koi,
+            commands::koi::delete_koi,
+            commands::koi::get_koi_palette,
+            // Chat Pool
+            commands::pool::list_pool_sessions,
+            commands::pool::create_pool_session,
+            commands::pool::delete_pool_session,
+            commands::pool::get_pool_messages,
+            commands::pool::send_pool_message,
+            // Board (Kanban)
+            commands::board::list_koi_todos,
+            commands::board::create_koi_todo,
+            commands::board::update_koi_todo,
+            commands::board::delete_koi_todo,
             // MCP servers
             commands::mcp::list_mcp_servers,
             commands::mcp::save_mcp_servers,

@@ -9,6 +9,7 @@ import Chat from "./components/Chat";
 import Memory from "./components/Memory";
 import Tools from "./components/Tools";
 import FishPage from "./components/Fish";
+import Pond from "./components/Pond";
 import Skills from "./components/Skills";
 import Scheduler from "./components/Scheduler";
 import Settings from "./components/Settings";
@@ -20,7 +21,7 @@ import DebugPanel from "./components/Debug";
 import "./theme.css";
 import "./App.css";
 
-type Tab = "chat" | "memory" | "tools" | "fish" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
+type Tab = "chat" | "memory" | "tools" | "fish" | "pond" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
 
 // Detect if we are running in the overlay window
 const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") === "1";
@@ -171,6 +172,7 @@ function AppContent() {
     { id: "chat", label: t("nav.chat"), icon: "💬" },
     { id: "memory", label: t("nav.memory"), icon: "💡" },
     { id: "tools", label: t("nav.tools"), icon: "🔧" },
+    { id: "pond", label: t("nav.pond"), icon: "🏊" },
     { id: "fish", label: t("nav.fish"), icon: "🐠" },
     { id: "skills", label: t("nav.skills"), icon: "⚡" },
     { id: "scheduler", label: t("nav.scheduler"), icon: "⏰" },
@@ -222,6 +224,7 @@ function AppContent() {
         {activeTab === "chat" && <Chat />}
         {activeTab === "memory" && <Memory />}
         {activeTab === "tools" && <Tools />}
+        {activeTab === "pond" && <Pond />}
         {activeTab === "fish" && <FishPage />}
         {activeTab === "skills" && <Skills />}
         {activeTab === "scheduler" && <Scheduler />}

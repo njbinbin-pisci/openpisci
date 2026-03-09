@@ -19,6 +19,7 @@ pub mod user_tool;
 pub mod plan_todo;
 pub mod vision_context;
 pub mod call_fish;
+pub mod call_koi;
 pub mod mcp;
 pub mod skill_search;
 pub mod ssh;

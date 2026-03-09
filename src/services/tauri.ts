@@ -511,6 +511,133 @@ export const fishApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Koi (锦鲤) persistent Agents
+// ---------------------------------------------------------------------------
+
+export interface KoiDefinition {
+  id: string;
+  name: string;
+  icon: string;
+  color: string;
+  system_prompt: string;
+  description: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KoiWithStats {
+  id: string;
+  name: string;
+  icon: string;
+  color: string;
+  system_prompt: string;
+  description: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  memory_count: number;
+  todo_count: number;
+  active_todo_count: number;
+}
+
+export interface KoiTodo {
+  id: string;
+  owner_id: string;
+  title: string;
+  description: string;
+  status: string;
+  priority: string;
+  assigned_by: string;
+  pool_session_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PoolSession {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PoolMessage {
+  id: number;
+  pool_session_id: string;
+  sender_id: string;
+  content: string;
+  msg_type: string;
+  metadata: string;
+  created_at: string;
+}
+
+export interface KoiPalette {
+  colors: [string, string][];
+  icons: string[];
+}
+
+export const koiApi = {
+  list: () => invoke<KoiWithStats[]>("list_kois"),
+  get: (id: string) => invoke<KoiDefinition | null>("get_koi", { id }),
+  create: (input: {
+    name: string;
+    icon: string;
+    color: string;
+    system_prompt: string;
+    description: string;
+  }) => invoke<KoiDefinition>("create_koi", { input }),
+  update: (input: {
+    id: string;
+    name?: string;
+    icon?: string;
+    color?: string;
+    system_prompt?: string;
+    description?: string;
+  }) => invoke<void>("update_koi", { input }),
+  delete: (id: string) => invoke<void>("delete_koi", { id }),
+  palette: () => invoke<KoiPalette>("get_koi_palette"),
+};
+
+export const poolApi = {
+  listSessions: () => invoke<PoolSession[]>("list_pool_sessions"),
+  createSession: (name: string) => invoke<PoolSession>("create_pool_session", { name }),
+  deleteSession: (id: string) => invoke<void>("delete_pool_session", { id }),
+  getMessages: (input: { session_id: string; limit?: number; offset?: number }) =>
+    invoke<PoolMessage[]>("get_pool_messages", { input }),
+  sendMessage: (input: {
+    session_id: string;
+    sender_id: string;
+    content: string;
+    msg_type?: string;
+    metadata?: string;
+  }) => invoke<PoolMessage>("send_pool_message", { input }),
+  onMessage: (sessionId: string, handler: (msg: PoolMessage) => void): Promise<UnlistenFn> =>
+    listen<PoolMessage>(`pool_message_${sessionId}`, (e) => handler(e.payload)),
+};
+
+export const boardApi = {
+  listTodos: (ownerId?: string) => invoke<KoiTodo[]>("list_koi_todos", { ownerId }),
+  createTodo: (input: {
+    owner_id: string;
+    title: string;
+    description?: string;
+    priority?: string;
+    assigned_by?: string;
+    pool_session_id?: string;
+  }) => invoke<KoiTodo>("create_koi_todo", { input }),
+  updateTodo: (input: {
+    id: string;
+    title?: string;
+    description?: string;
+    status?: string;
+    priority?: string;
+  }) => invoke<void>("update_koi_todo", { input }),
+  deleteTodo: (id: string) => invoke<void>("delete_koi_todo", { id }),
+  onTodoUpdated: (handler: (data: unknown) => void): Promise<UnlistenFn> =>
+    listen("koi_todo_updated", (e) => handler(e.payload)),
+};
+
+// ---------------------------------------------------------------------------
 // MCP Servers
 // ---------------------------------------------------------------------------
 

@@ -1,5 +1,8 @@
 import { configureStore, createSlice, PayloadAction } from "@reduxjs/toolkit";
-import type { Session, ChatMessage, Memory, Skill, ScheduledTask, Settings } from "../services/tauri";
+import type {
+  Session, ChatMessage, Memory, Skill, ScheduledTask, Settings,
+  KoiWithStats, KoiTodo, PoolSession, PoolMessage,
+} from "../services/tauri";
 
 // ---------------------------------------------------------------------------
 // Sessions slice
@@ -330,6 +333,126 @@ const settingsSlice = createSlice({
 });
 
 // ---------------------------------------------------------------------------
+// Koi slice
+// ---------------------------------------------------------------------------
+
+interface KoiState {
+  kois: KoiWithStats[];
+  loading: boolean;
+}
+
+const koiSlice = createSlice({
+  name: "koi",
+  initialState: { kois: [], loading: false } as KoiState,
+  reducers: {
+    setKois: (state, action: PayloadAction<KoiWithStats[]>) => {
+      state.kois = action.payload;
+    },
+    addKoi: (state, action: PayloadAction<KoiWithStats>) => {
+      state.kois.push(action.payload);
+    },
+    removeKoi: (state, action: PayloadAction<string>) => {
+      state.kois = state.kois.filter((k) => k.id !== action.payload);
+    },
+    updateKoiInList: (state, action: PayloadAction<Partial<KoiWithStats> & { id: string }>) => {
+      const idx = state.kois.findIndex((k) => k.id === action.payload.id);
+      if (idx >= 0) state.kois[idx] = { ...state.kois[idx], ...action.payload };
+    },
+    setLoading: (state, action: PayloadAction<boolean>) => {
+      state.loading = action.payload;
+    },
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Pool (Chat Pool) slice
+// ---------------------------------------------------------------------------
+
+export type PondSubTab = "kois" | "pool" | "board";
+
+interface PoolState {
+  sessions: PoolSession[];
+  activeSessionId: string | null;
+  messagesBySession: Record<string, PoolMessage[]>;
+  loading: boolean;
+}
+
+const poolSlice = createSlice({
+  name: "pool",
+  initialState: { sessions: [], activeSessionId: null, messagesBySession: {}, loading: false } as PoolState,
+  reducers: {
+    setPoolSessions: (state, action: PayloadAction<PoolSession[]>) => {
+      state.sessions = action.payload;
+    },
+    addPoolSession: (state, action: PayloadAction<PoolSession>) => {
+      state.sessions.unshift(action.payload);
+    },
+    removePoolSession: (state, action: PayloadAction<string>) => {
+      state.sessions = state.sessions.filter((s) => s.id !== action.payload);
+      delete state.messagesBySession[action.payload];
+      if (state.activeSessionId === action.payload) {
+        state.activeSessionId = state.sessions[0]?.id ?? null;
+      }
+    },
+    setActivePoolSession: (state, action: PayloadAction<string | null>) => {
+      state.activeSessionId = action.payload;
+    },
+    setPoolMessages: (state, action: PayloadAction<{ sessionId: string; messages: PoolMessage[] }>) => {
+      state.messagesBySession[action.payload.sessionId] = action.payload.messages;
+    },
+    appendPoolMessage: (state, action: PayloadAction<PoolMessage>) => {
+      const sid = action.payload.pool_session_id;
+      if (!state.messagesBySession[sid]) state.messagesBySession[sid] = [];
+      const exists = state.messagesBySession[sid].some((m) => m.id === action.payload.id);
+      if (!exists) state.messagesBySession[sid].push(action.payload);
+    },
+    setLoading: (state, action: PayloadAction<boolean>) => {
+      state.loading = action.payload;
+    },
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Board slice
+// ---------------------------------------------------------------------------
+
+interface BoardState {
+  todos: KoiTodo[];
+  filterOwnerId: string | null;
+  filterPriority: string | null;
+  loading: boolean;
+}
+
+const boardSlice = createSlice({
+  name: "board",
+  initialState: { todos: [], filterOwnerId: null, filterPriority: null, loading: false } as BoardState,
+  reducers: {
+    setTodos: (state, action: PayloadAction<KoiTodo[]>) => {
+      state.todos = action.payload;
+    },
+    addTodo: (state, action: PayloadAction<KoiTodo>) => {
+      state.todos.unshift(action.payload);
+    },
+    removeTodo: (state, action: PayloadAction<string>) => {
+      state.todos = state.todos.filter((t) => t.id !== action.payload);
+    },
+    updateTodoInList: (state, action: PayloadAction<Partial<KoiTodo> & { id: string }>) => {
+      const idx = state.todos.findIndex((t) => t.id === action.payload.id);
+      if (idx >= 0) state.todos[idx] = { ...state.todos[idx], ...action.payload };
+    },
+    setFilterOwnerId: (state, action: PayloadAction<string | null>) => {
+      state.filterOwnerId = action.payload;
+    },
+    setFilterPriority: (state, action: PayloadAction<string | null>) => {
+      state.filterPriority = action.payload;
+    },
+    setLoading: (state, action: PayloadAction<boolean>) => {
+      state.loading = action.payload;
+    },
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
 
@@ -341,6 +464,9 @@ export const store = configureStore({
     skills: skillsSlice.reducer,
     scheduler: schedulerSlice.reducer,
     settings: settingsSlice.reducer,
+    koi: koiSlice.reducer,
+    pool: poolSlice.reducer,
+    board: boardSlice.reducer,
   },
 });
 
@@ -353,3 +479,6 @@ export const memoryActions = memorySlice.actions;
 export const skillsActions = skillsSlice.actions;
 export const schedulerActions = schedulerSlice.actions;
 export const settingsActions = settingsSlice.actions;
+export const koiActions = koiSlice.actions;
+export const poolActions = poolSlice.actions;
+export const boardActions = boardSlice.actions;
