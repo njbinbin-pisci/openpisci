@@ -8,6 +8,7 @@
 /// - Checkpoint size guard for DB persistence
 use super::messages::AgentEvent;
 use super::tool::{ToolContext, ToolRegistry};
+use super::vision;
 use crate::llm::{ContentBlock, ImageSource, LlmClient, LlmMessage, LlmRequest, MessageContent};
 use crate::policy::{PolicyDecision, PolicyGate};
 use crate::store::Database;
@@ -408,7 +409,7 @@ impl AgentLoop {
         input: &serde_json::Value,
         ctx: &ToolContext,
         event_tx: &mpsc::Sender<AgentEvent>,
-        _cancel: &Arc<AtomicBool>,
+        cancel: &Arc<AtomicBool>,
     ) -> Vec<ContentBlock> {
         let span = tracing::info_span!("tool_exec", tool = %name, session_id = %ctx.session_id);
         info!(parent: &span, "executing tool");
@@ -527,25 +528,57 @@ impl AgentLoop {
                     ),
                     _ => input.to_string().chars().take(100).collect(),
                 };
+                // Check cancel before starting the tool
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = event_tx.send(AgentEvent::ToolEnd {
+                        id: id.to_string(), name: name.to_string(),
+                        result: "已取消".into(), is_error: true,
+                    }).await;
+                    blocks.push(ContentBlock::ToolResult {
+                        tool_use_id: id.to_string(),
+                        content: "已取消".into(),
+                        is_error: true,
+                    });
+                    return blocks;
+                }
+
                 debug!("Executing tool: {} | input: {}", name, input_hint);
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(TOOL_TIMEOUT_SECS),
-                    tool.call(input.clone(), ctx),
-                ).await {
-                    Ok(Ok(r)) => r,
-                    Ok(Err(e)) => {
-                        let err_msg = e.to_string();
-                        warn!("Tool '{}' error: {} | input: {}", name, err_msg, input_hint);
-                        // Provide actionable error messages for common failure patterns
-                        let friendly = friendly_tool_error(name, &err_msg);
-                        super::tool::ToolResult::err(friendly)
+                let cancel_clone = Arc::clone(cancel);
+                // Poll cancel flag every 200 ms while the tool runs
+                let cancel_watcher = async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        if cancel_clone.load(Ordering::Relaxed) {
+                            break;
+                        }
                     }
-                    Err(_) => {
-                        warn!("Tool '{}' timed out after {}s", name, TOOL_TIMEOUT_SECS);
-                        super::tool::ToolResult::err(format!(
-                            "工具 '{}' 执行超时（{}秒）。可能原因：命令阻塞、网络超时或进程挂起。请尝试简化命令或分步执行。",
-                            name, TOOL_TIMEOUT_SECS
-                        ))
+                };
+                tokio::select! {
+                    biased;
+                    res = tokio::time::timeout(
+                        std::time::Duration::from_secs(TOOL_TIMEOUT_SECS),
+                        tool.call(input.clone(), ctx),
+                    ) => {
+                        match res {
+                            Ok(Ok(r)) => r,
+                            Ok(Err(e)) => {
+                                let err_msg = e.to_string();
+                                warn!("Tool '{}' error: {} | input: {}", name, err_msg, input_hint);
+                                let friendly = friendly_tool_error(name, &err_msg);
+                                super::tool::ToolResult::err(friendly)
+                            }
+                            Err(_) => {
+                                warn!("Tool '{}' timed out after {}s", name, TOOL_TIMEOUT_SECS);
+                                super::tool::ToolResult::err(format!(
+                                    "工具 '{}' 执行超时（{}秒）。可能原因：命令阻塞、网络超时或进程挂起。请尝试简化命令或分步执行。",
+                                    name, TOOL_TIMEOUT_SECS
+                                ))
+                            }
+                        }
+                    }
+                    _ = cancel_watcher => {
+                        warn!("Tool '{}' interrupted by user cancel", name);
+                        super::tool::ToolResult::err("已被用户取消".to_string())
                     }
                 }
             }
@@ -582,10 +615,17 @@ impl AgentLoop {
             });
         }
 
-        let guarded_content = guard_tool_result_content(
+        let mut guarded_content = guard_tool_result_content(
             &result.content,
             dynamic_result_limit(self.max_tokens as usize * 4),
         );
+        if let Some(img) = result.image.as_ref() {
+            let artifact = vision::store_tool_image(&ctx.session_id, name, None, img).await;
+            guarded_content.push_str(&format!(
+                "\n\n[vision_artifact] id={} label=\"{}\" media_type={}\nUse vision_context to list/select reusable images for a later reasoning step.",
+                artifact.id, artifact.label, artifact.media_type
+            ));
+        }
         blocks.push(ContentBlock::ToolResult {
             tool_use_id: id.to_string(),
             content: guarded_content,
@@ -687,8 +727,9 @@ impl AgentLoop {
             }).await;
 
             // Build request
+            let req_messages = vision::inject_selected_context(&messages, &ctx.session_id).await;
             let req = LlmRequest {
-                messages: messages.clone(),
+                messages: req_messages,
                 system: Some(self.system_prompt.clone()),
                 tools: self.registry.to_tool_defs(),
                 model: self.model.clone(),
@@ -856,6 +897,7 @@ impl AgentLoop {
             if !read_only_calls.is_empty() {
                 let mut start = 0usize;
                 while start < read_only_calls.len() {
+                    if cancel.load(Ordering::Relaxed) { break; }
                     let end = (start + READ_TOOL_MAX_CONCURRENCY).min(read_only_calls.len());
                     let batch = &read_only_calls[start..end];
                     let futs: Vec<_> = batch

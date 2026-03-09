@@ -183,10 +183,9 @@ pub async fn scan_skill_catalog(state: State<'_, AppState>) -> Result<Vec<SkillC
 
 /// Install a skill from a URL (raw SKILL.md) or local file path.
 /// The SKILL.md is downloaded, parsed, and written to the app skills directory.
-#[tauri::command]
-pub async fn install_skill(
-    state: State<'_, AppState>,
-    source: String,
+async fn install_skill_from_content(
+    state: &State<'_, AppState>,
+    content: String,
 ) -> Result<SkillCatalogItem, String> {
     let app_dir = state
         .app_handle
@@ -194,36 +193,6 @@ pub async fn install_skill(
         .app_data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
     let skills_dir = app_dir.join("skills");
-
-    let content = if source.starts_with("http://") || source.starts_with("https://") {
-        // Basic URL validation — reject internal/private addresses
-        let blocked = ["localhost", "127.0.0.1", "0.0.0.0", "192.168.", "10.", "172."];
-        for pat in blocked {
-            if source.contains(pat) {
-                return Err(format!("Blocked URL: '{}' points to a private/local address", source));
-            }
-        }
-        info!("Downloading skill from URL: {}", source);
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| e.to_string())?;
-        let resp = client
-            .get(&source)
-            .header("User-Agent", "Pisci-Desktop/1.0")
-            .send()
-            .await
-            .map_err(|e| format!("Download failed: {}", e))?;
-        if !resp.status().is_success() {
-            return Err(format!("HTTP {} when downloading: {}", resp.status(), source));
-        }
-        resp.text().await.map_err(|e| format!("Failed to read response: {}", e))?
-    } else {
-        // Local file path
-        tokio::fs::read_to_string(&source)
-            .await
-            .map_err(|e| format!("Failed to read local file '{}': {}", source, e))?
-    };
 
     // Parse and validate frontmatter
     let loader = crate::skills::loader::SkillLoader::new(&skills_dir);
@@ -322,6 +291,252 @@ pub async fn install_skill(
             });
         }
     }
+
+    Ok(SkillCatalogItem {
+        name: skill.name,
+        description: skill.description,
+        version: skill.version,
+        source: "installed".to_string(),
+        tools: skill.tools,
+        dependencies: skill.dependencies,
+        permissions: skill.permissions,
+        platform: skill.platform,
+    })
+}
+
+#[tauri::command]
+pub async fn install_skill(
+    state: State<'_, AppState>,
+    source: String,
+) -> Result<SkillCatalogItem, String> {
+    let source_trimmed = source.trim().to_string();
+
+    // ── Detect zip: local path ending in .zip, or URL ending in .zip ──────────
+    let is_zip_url = (source_trimmed.starts_with("http://") || source_trimmed.starts_with("https://"))
+        && source_trimmed.to_lowercase().ends_with(".zip");
+    let is_zip_local = !source_trimmed.starts_with("http://")
+        && !source_trimmed.starts_with("https://")
+        && source_trimmed.to_lowercase().ends_with(".zip");
+
+    if is_zip_url || is_zip_local {
+        return install_skill_from_zip(&state, &source_trimmed).await;
+    }
+
+    let content = if source_trimmed.starts_with("http://") || source_trimmed.starts_with("https://") {
+        // Basic URL validation — reject internal/private addresses
+        let blocked = ["localhost", "127.0.0.1", "0.0.0.0", "192.168.", "10.", "172."];
+        for pat in blocked {
+            if source_trimmed.contains(pat) {
+                return Err(format!("Blocked URL: '{}' points to a private/local address", source_trimmed));
+            }
+        }
+        info!("Downloading skill from URL: {}", source_trimmed);
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let resp = client
+            .get(&source_trimmed)
+            .header("User-Agent", "Pisci-Desktop/1.0")
+            .send()
+            .await
+            .map_err(|e| format!("Download failed: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {} when downloading: {}", resp.status(), source_trimmed));
+        }
+        resp.text().await.map_err(|e| format!("Failed to read response: {}", e))?
+    } else {
+        // Local file path
+        tokio::fs::read_to_string(&source_trimmed)
+            .await
+            .map_err(|e| format!("Failed to read local file '{}': {}", source_trimmed, e))?
+    };
+
+    install_skill_from_content(&state, content).await
+}
+
+/// Install a skill from a .zip archive (local path or URL).
+///
+/// The zip must contain a `SKILL.md` at the root or inside a single top-level
+/// directory. All other files in the same directory as `SKILL.md` are extracted
+/// alongside it (e.g. `reference.md`, `examples.md`, helper scripts).
+async fn install_skill_from_zip(
+    state: &State<'_, AppState>,
+    source: &str,
+) -> Result<SkillCatalogItem, String> {
+    // ── 1. Fetch zip bytes ────────────────────────────────────────────────────
+    let zip_bytes: Vec<u8> = if source.starts_with("http://") || source.starts_with("https://") {
+        let blocked = ["localhost", "127.0.0.1", "0.0.0.0", "192.168.", "10.", "172."];
+        for pat in blocked {
+            if source.contains(pat) {
+                return Err(format!("Blocked URL: '{}' points to a private/local address", source));
+            }
+        }
+        info!("Downloading skill zip from URL: {}", source);
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let resp = client
+            .get(source)
+            .header("User-Agent", "Pisci-Desktop/1.0")
+            .send()
+            .await
+            .map_err(|e| format!("Download failed: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {} when downloading zip: {}", resp.status(), source));
+        }
+        resp.bytes().await.map_err(|e| format!("Failed to read zip bytes: {}", e))?.to_vec()
+    } else {
+        tokio::fs::read(source)
+            .await
+            .map_err(|e| format!("Failed to read zip file '{}': {}", source, e))?
+    };
+
+    // ── 2. Parse zip and locate SKILL.md ─────────────────────────────────────
+    let cursor = std::io::Cursor::new(&zip_bytes);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| format!("Failed to open zip archive: {}", e))?;
+
+    // Find SKILL.md — accept root-level or one directory deep
+    let skill_md_path: Option<String> = {
+        let mut found = None;
+        for i in 0..archive.len() {
+            let file = archive.by_index(i).map_err(|e| e.to_string())?;
+            let name = file.name().to_string();
+            let parts: Vec<&str> = name.trim_end_matches('/').split('/').collect();
+            // Accept: "SKILL.md" or "skill-name/SKILL.md"
+            if (parts.len() == 1 || parts.len() == 2) && parts.last() == Some(&"SKILL.md") {
+                found = Some(name);
+                break;
+            }
+        }
+        found
+    };
+
+    let skill_md_path = skill_md_path
+        .ok_or_else(|| "Zip archive does not contain a SKILL.md file".to_string())?;
+
+    // Determine the prefix directory (empty string if SKILL.md is at root)
+    let prefix: String = {
+        let parts: Vec<&str> = skill_md_path.split('/').collect();
+        if parts.len() == 2 { format!("{}/", parts[0]) } else { String::new() }
+    };
+
+    // ── 3. Read SKILL.md content ──────────────────────────────────────────────
+    let skill_md_content = {
+        let mut file = archive.by_name(&skill_md_path)
+            .map_err(|e| format!("Failed to read SKILL.md from zip: {}", e))?;
+        let mut content = String::new();
+        std::io::Read::read_to_string(&mut file, &mut content)
+            .map_err(|e| format!("Failed to decode SKILL.md: {}", e))?;
+        content
+    };
+
+    // ── 4. Parse, validate, register in DB ───────────────────────────────────
+    let app_dir = state
+        .app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
+    let skills_dir = app_dir.join("skills");
+
+    let loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+    let skill = loader
+        .parse_skill_from_content(&skill_md_content)
+        .map_err(|e| format!("Failed to parse SKILL.md: {}", e))?;
+
+    if skill.name.is_empty() || skill.name == "unnamed" {
+        return Err("SKILL.md must declare a 'name' field in frontmatter".into());
+    }
+
+    let compat = check_skill_compatibility(&skill).await;
+    if !compat.compatible {
+        return Err(format!(
+            "技能 '{}' 与当前系统不兼容：\n{}",
+            skill.name,
+            compat.issues.join("\n")
+        ));
+    }
+
+    let safe_name: String = skill
+        .name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect::<String>()
+        .to_lowercase();
+
+    {
+        let db = state.db.lock().await;
+        db.upsert_skill(&safe_name, &skill.name, &skill.description, "📦")
+            .map_err(|e| format!("Failed to register skill in database: {}", e))?;
+    }
+
+    let skill_dir = skills_dir.join(&safe_name);
+    if let Err(e) = tokio::fs::create_dir_all(&skill_dir).await {
+        let db = state.db.lock().await;
+        let _ = db.delete_skill(&safe_name);
+        return Err(format!("Failed to create skill directory: {}", e));
+    }
+
+    // ── 5. Extract all files that share the same prefix ──────────────────────
+    // Re-open archive (cursor consumed above)
+    let cursor2 = std::io::Cursor::new(&zip_bytes);
+    let mut archive2 = zip::ZipArchive::new(cursor2)
+        .map_err(|e| format!("Failed to re-open zip archive: {}", e))?;
+
+    let mut extracted_count = 0usize;
+    for i in 0..archive2.len() {
+        let mut file = archive2.by_index(i).map_err(|e| e.to_string())?;
+        let raw_name = file.name().to_string();
+
+        // Skip directories
+        if raw_name.ends_with('/') {
+            continue;
+        }
+
+        // Only extract files under the same prefix as SKILL.md
+        if !raw_name.starts_with(&prefix) {
+            continue;
+        }
+
+        // Relative path inside the skill directory
+        let rel = &raw_name[prefix.len()..];
+
+        // Security: reject path traversal
+        if rel.contains("..") || rel.starts_with('/') {
+            warn!("Zip install: skipping suspicious path '{}'", raw_name);
+            continue;
+        }
+
+        let dest = skill_dir.join(rel);
+
+        // Create parent directories if needed
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                warn!("Zip install: failed to create dir {:?}: {}", parent, e);
+                continue;
+            }
+        }
+
+        let mut content_bytes = Vec::new();
+        if let Err(e) = std::io::Read::read_to_end(&mut file, &mut content_bytes) {
+            warn!("Zip install: failed to read '{}': {}", raw_name, e);
+            continue;
+        }
+
+        if let Err(e) = std::fs::write(&dest, &content_bytes) {
+            warn!("Zip install: failed to write {:?}: {}", dest, e);
+            continue;
+        }
+
+        extracted_count += 1;
+    }
+
+    info!(
+        "Installed skill '{}' from zip ({} file(s)) to {:?}",
+        skill.name, extracted_count, skill_dir
+    );
 
     Ok(SkillCatalogItem {
         name: skill.name,
@@ -492,7 +707,7 @@ pub async fn clawhub_search(query: String, limit: Option<u32>) -> Result<ClawHub
             if slug.is_empty() { return None; }
             let name = r["displayName"].as_str().unwrap_or(&slug).to_string();
             let description = r["summary"].as_str().unwrap_or("").to_string();
-            let version = r["version"].as_str().unwrap_or("latest").to_string();
+            let version = r["version"].as_str().unwrap_or("").to_string();
             let skill_url = Some(format!("{}/api/v1/skills/{}/file?path=SKILL.md", CLAWHUB_API, slug));
             let zip_url = Some(format!("{}/api/v1/download?slug={}", CLAWHUB_API, slug));
             Some(ClawHubSkill {
@@ -603,8 +818,13 @@ pub async fn clawhub_install(
         .build()
         .map_err(|e| e.to_string())?;
 
-    // Build the file URL, optionally pinning a version
-    let file_url = if let Some(ref ver) = version {
+    let normalized_version = version
+        .as_deref()
+        .map(str::trim)
+        .filter(|ver| !ver.is_empty() && *ver != "latest" && *ver != "null");
+
+    // Build the file URL, optionally pinning a concrete version
+    let file_url = if let Some(ver) = normalized_version {
         format!("{}/api/v1/skills/{}/file?path=SKILL.md&version={}", CLAWHUB_API, slug, ver)
     } else {
         format!("{}/api/v1/skills/{}/file?path=SKILL.md", CLAWHUB_API, slug)
@@ -620,7 +840,7 @@ pub async fn clawhub_install(
     } else {
         let file_status = resp.status();
         // Fallback: download the zip bundle and extract SKILL.md
-        let zip_url = if let Some(ref ver) = version {
+        let zip_url = if let Some(ver) = normalized_version {
             format!("{}/api/v1/download?slug={}&version={}", CLAWHUB_API, slug, ver)
         } else {
             format!("{}/api/v1/download?slug={}", CLAWHUB_API, slug)
@@ -642,8 +862,7 @@ pub async fn clawhub_install(
             .map_err(|e| format!("从 zip 中提取 SKILL.md 失败：{}", e))?
     };
 
-    // Delegate to existing install_skill logic (includes compat check)
-    install_skill(state, content).await
+    install_skill_from_content(&state, content).await
 }
 
 /// Extract SKILL.md text from a zip archive bytes.

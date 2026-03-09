@@ -1,11 +1,15 @@
 /// PDF read/write tool.
 ///
 /// Supports: read_text, get_info, extract_images, merge, split,
-///           add_watermark, encrypt, decrypt, fill_form, add_annotation, to_images.
+///           add_watermark, encrypt, decrypt, fill_form, add_annotation, to_images,
+///           render_page_image, render_region_image.
 use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
+use base64::Engine;
+use image::GenericImageView;
 use serde_json::{json, Value};
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 pub struct PdfTool;
@@ -32,7 +36,9 @@ impl Tool for PdfTool {
          - decrypt: remove password protection\n\
          - fill_form: fill AcroForm text fields\n\
          - add_annotation: add a text annotation to a page\n\
-         - to_images: render each page to a PNG (requires Ghostscript or pdftoppm)"
+         - to_images: render each page to a PNG (requires Ghostscript or pdftoppm)\n\
+         - render_page_image: render one page and return it inline for multimodal analysis\n\
+         - render_region_image: render one page, crop a pixel region, and return it inline"
     }
 
     fn input_schema(&self) -> Value {
@@ -44,7 +50,7 @@ impl Tool for PdfTool {
                     "enum": [
                         "read_text","get_info","extract_images","merge","split",
                         "add_watermark","encrypt","decrypt","fill_form",
-                        "add_annotation","to_images"
+                        "add_annotation","to_images","render_page_image","render_region_image"
                     ],
                     "description": "Operation to perform"
                 },
@@ -102,7 +108,7 @@ impl Tool for PdfTool {
                 },
                 "page": {
                     "type": "integer",
-                    "description": "1-based page number for add_annotation"
+                    "description": "1-based page number for add_annotation / render_page_image / render_region_image"
                 },
                 "rect": {
                     "type": "array",
@@ -113,7 +119,14 @@ impl Tool for PdfTool {
                 },
                 "dpi": {
                     "type": "integer",
-                    "description": "Resolution for to_images (default 150)"
+                    "description": "Resolution for to_images / render_page_image / render_region_image (default 150)"
+                },
+                "crop_rect": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "minItems": 4,
+                    "maxItems": 4,
+                    "description": "Pixel crop rectangle [left, top, width, height] after rendering the page (render_region_image)"
                 }
             },
             "required": ["action"]
@@ -159,6 +172,8 @@ fn dispatch(action: &str, input: &Value, workspace: &Path) -> Result<ToolResult>
         "fill_form"      => fill_form(input, workspace),
         "add_annotation" => add_annotation(input, workspace),
         "to_images"      => to_images(input, workspace),
+        "render_page_image" => render_page_image(input, workspace),
+        "render_region_image" => render_region_image(input, workspace),
         other            => Ok(ToolResult::err(format!("Unknown action: {}", other))),
     }
 }
@@ -966,6 +981,171 @@ fn to_images(input: &Value, workspace: &Path) -> Result<ToolResult> {
          - Linux:   sudo apt install poppler-utils\n\
          - macOS:   brew install poppler"
     ))
+}
+
+fn render_page_image(input: &Value, workspace: &Path) -> Result<ToolResult> {
+    let path = try_tr!(require_path(input, workspace));
+    if !path.exists() {
+        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+    }
+    let page = input["page"].as_u64().unwrap_or(1) as u32;
+    if page == 0 {
+        return Ok(ToolResult::err("Parameter 'page' must be >= 1"));
+    }
+    let dpi = input["dpi"].as_u64().unwrap_or(150) as u32;
+    let bytes = match render_pdf_page_png_bytes(&path, page, dpi) {
+        Ok(v) => v,
+        Err(e) => return Ok(ToolResult::err(e.to_string())),
+    };
+    let img = match image::load_from_memory(&bytes) {
+        Ok(v) => v,
+        Err(e) => return Ok(ToolResult::err(format!("Failed to decode rendered page image: {}", e))),
+    };
+    let (width, height) = img.dimensions();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(ToolResult::ok(format!(
+        "Rendered page {} from {} at {} DPI as an inline image ({}x{} px).",
+        page,
+        path.display(),
+        dpi,
+        width,
+        height
+    ))
+    .with_image(crate::agent::tool::ImageData::png(b64)))
+}
+
+fn render_region_image(input: &Value, workspace: &Path) -> Result<ToolResult> {
+    let path = try_tr!(require_path(input, workspace));
+    if !path.exists() {
+        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+    }
+    let page = input["page"].as_u64().unwrap_or(1) as u32;
+    if page == 0 {
+        return Ok(ToolResult::err("Parameter 'page' must be >= 1"));
+    }
+    let dpi = input["dpi"].as_u64().unwrap_or(150) as u32;
+    let rect_vals: Vec<u32> = match input["crop_rect"].as_array() {
+        Some(arr) if arr.len() == 4 => arr
+            .iter()
+            .filter_map(|v| v.as_u64().map(|n| n as u32))
+            .collect(),
+        _ => return Ok(ToolResult::err("Missing required parameter: crop_rect [left, top, width, height]")),
+    };
+    if rect_vals.len() != 4 || rect_vals[2] == 0 || rect_vals[3] == 0 {
+        return Ok(ToolResult::err("Invalid crop_rect. Expected [left, top, width, height] with width/height > 0"));
+    }
+    let bytes = match render_pdf_page_png_bytes(&path, page, dpi) {
+        Ok(v) => v,
+        Err(e) => return Ok(ToolResult::err(e.to_string())),
+    };
+    let img = match image::load_from_memory(&bytes) {
+        Ok(v) => v,
+        Err(e) => return Ok(ToolResult::err(format!("Failed to decode rendered page image: {}", e))),
+    };
+    let (img_w, img_h) = img.dimensions();
+    let left = rect_vals[0];
+    let top = rect_vals[1];
+    let width = rect_vals[2];
+    let height = rect_vals[3];
+    if left >= img_w || top >= img_h || left.saturating_add(width) > img_w || top.saturating_add(height) > img_h {
+        return Ok(ToolResult::err(format!(
+            "crop_rect exceeds rendered page bounds. Page size is {}x{} px.",
+            img_w, img_h
+        )));
+    }
+    let cropped = img.crop_imm(left, top, width, height);
+    let mut out = Cursor::new(Vec::new());
+    if let Err(e) = cropped.write_to(&mut out, image::ImageFormat::Png) {
+        return Ok(ToolResult::err(format!("Failed to encode cropped region: {}", e)));
+    }
+    let png_bytes = out.into_inner();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(png_bytes);
+    Ok(ToolResult::ok(format!(
+        "Rendered page {} from {} at {} DPI and cropped region [{}, {}, {}, {}] into an inline image.",
+        page,
+        path.display(),
+        dpi,
+        left,
+        top,
+        width,
+        height
+    ))
+    .with_image(crate::agent::tool::ImageData::png(b64)))
+}
+
+fn render_pdf_page_png_bytes(path: &Path, page: u32, dpi: u32) -> anyhow::Result<Vec<u8>> {
+    let temp_dir = std::env::temp_dir().join(format!("pisci_pdf_{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&temp_dir)?;
+
+    let result = (|| -> anyhow::Result<Vec<u8>> {
+        let pdftoppm = which_tool("pdftoppm");
+        let gs = which_tool("gswin64c")
+            .or_else(|| which_tool("gswin32c"))
+            .or_else(|| which_tool("gs"));
+
+        if let Some(pdftoppm_path) = pdftoppm {
+            let prefix = temp_dir.join("page");
+            let output = std::process::Command::new(&pdftoppm_path)
+                .args([
+                    "-f",
+                    &page.to_string(),
+                    "-l",
+                    &page.to_string(),
+                    "-r",
+                    &dpi.to_string(),
+                    "-png",
+                    path.to_str().unwrap_or(""),
+                    prefix.to_str().unwrap_or("page"),
+                ])
+                .output()?;
+            if !output.status.success() {
+                return Err(anyhow::anyhow!(
+                    "pdftoppm failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            let png = std::fs::read_dir(&temp_dir)?
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .find(|p| p.extension().map(|x| x == "png").unwrap_or(false))
+                .ok_or_else(|| anyhow::anyhow!("No PNG file produced for page {}", page))?;
+            return Ok(std::fs::read(png)?);
+        }
+
+        if let Some(gs_path) = gs {
+            let out_file = temp_dir.join("page.png");
+            let output = std::process::Command::new(&gs_path)
+                .args([
+                    "-dNOPAUSE",
+                    "-dBATCH",
+                    "-dSAFER",
+                    "-sDEVICE=png16m",
+                    &format!("-r{}", dpi),
+                    &format!("-dFirstPage={}", page),
+                    &format!("-dLastPage={}", page),
+                    &format!("-sOutputFile={}", out_file.to_str().unwrap_or("")),
+                    path.to_str().unwrap_or(""),
+                ])
+                .output()?;
+            if !output.status.success() {
+                return Err(anyhow::anyhow!(
+                    "Ghostscript failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            if !out_file.exists() {
+                return Err(anyhow::anyhow!("No PNG file produced for page {}", page));
+            }
+            return Ok(std::fs::read(out_file)?);
+        }
+
+        Err(anyhow::anyhow!(
+            "Rendering PDF pages requires either pdftoppm (poppler-utils) or Ghostscript to be installed."
+        ))
+    })();
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    result
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

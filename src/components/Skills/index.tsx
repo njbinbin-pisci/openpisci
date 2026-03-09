@@ -175,7 +175,11 @@ export default function Skills() {
     setError(null);
     setSuccessMsg(null);
     try {
-      const installed = await clawHubApi.install(skill.slug, skill.version);
+      const version = skill.version?.trim();
+      const installed = await clawHubApi.install(
+        skill.slug,
+        version && version !== "latest" ? version : undefined,
+      );
       setSuccessMsg(t("skills.installSuccess", { name: installed.name }));
       loadSkills();
     } catch (e) {
@@ -451,7 +455,11 @@ export default function Skills() {
                           <span style={{ fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {skill.name}
                           </span>
-                          <span style={{ fontSize: 10, color: "var(--text-muted)", flexShrink: 0 }}>{/^\d/.test(skill.version) ? `v${skill.version}` : skill.version}</span>
+                          {skill.version && (
+                            <span style={{ fontSize: 10, color: "var(--text-muted)", flexShrink: 0 }}>
+                              {/^\d/.test(skill.version) ? `v${skill.version}` : skill.version}
+                            </span>
+                          )}
                           {/* Compat badge — shown once check completes */}
                           {skill.compatible === true && (
                             <span style={{ fontSize: 10, color: "#28a745", background: "rgba(40,167,69,0.12)", padding: "1px 6px", borderRadius: 8, flexShrink: 0 }}>

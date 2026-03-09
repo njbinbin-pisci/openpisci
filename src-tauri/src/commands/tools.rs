@@ -75,6 +75,12 @@ pub async fn list_builtin_tools(_state: State<'_, AppState>) -> Result<Vec<Built
             windows_only: false,
         },
         BuiltinToolInfo {
+            name: "vision_context".into(),
+            description: "管理可复用的视觉工件，并决定下一轮要送入多模态模型的图片".into(),
+            icon: "🖼️".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
             name: "uia".into(),
             description: "通过 Windows UI Automation 控制桌面应用程序界面元素".into(),
             icon: "🖱️".into(),

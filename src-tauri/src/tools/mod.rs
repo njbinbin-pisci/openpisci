@@ -17,6 +17,7 @@ pub mod email;
 pub mod memory_tool;
 pub mod user_tool;
 pub mod plan_todo;
+pub mod vision_context;
 pub mod call_fish;
 pub mod mcp;
 pub mod skill_search;
@@ -123,6 +124,10 @@ pub fn build_registry(
         if let Some(ref app) = app_handle {
             registry.register(Box::new(plan_todo::PlanTodoTool { app: app.clone() }));
         }
+    }
+
+    if is_enabled("vision_context") {
+        registry.register(Box::new(vision_context::VisionContextTool));
     }
 
     // call_fish tool — lets the main agent delegate sub-tasks to Fish agents

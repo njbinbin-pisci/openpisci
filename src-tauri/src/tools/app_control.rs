@@ -1395,6 +1395,7 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
         BuiltinToolInfo { name: "email".into(), description: "Send and read email.".into(), icon: "📧".into(), windows_only: false },
         BuiltinToolInfo { name: "memory_store".into(), description: "Persist long-term memory.".into(), icon: "🧠".into(), windows_only: false },
         BuiltinToolInfo { name: "plan_todo".into(), description: "Maintain a visible task plan for complex work.".into(), icon: "📋".into(), windows_only: false },
+        BuiltinToolInfo { name: "vision_context".into(), description: "Manage reusable vision artifacts for the next multimodal step.".into(), icon: "🖼️".into(), windows_only: false },
         BuiltinToolInfo { name: "call_fish".into(), description: "Delegate work to Fish sub-agents.".into(), icon: "🐠".into(), windows_only: false },
         BuiltinToolInfo { name: "app_control".into(), description: "Manage Pisci app settings and system state.".into(), icon: "🎛️".into(), windows_only: false },
         BuiltinToolInfo { name: "skill_search".into(), description: "Search installed skills and instructions.".into(), icon: "📦".into(), windows_only: false },

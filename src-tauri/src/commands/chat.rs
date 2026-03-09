@@ -220,6 +220,7 @@ pub async fn chat_send(
         let mut plans = state.plan_state.lock().await;
         plans.remove(&session_id);
     }
+    crate::agent::vision::clear_selection(&session_id).await;
 
     {
         let db = state.db.lock().await;
@@ -782,6 +783,7 @@ pub async fn run_agent_headless(
         let mut plans = state.plan_state.lock().await;
         plans.remove(session_id);
     }
+    crate::agent::vision::clear_selection(session_id).await;
 
     // vision_capable: user override OR auto-detection by provider/model name
     let vision_capable = vision_setting || model_supports_vision(&provider, &model);
@@ -1048,6 +1050,12 @@ pub fn build_system_prompt(memory_context: &str, skill_context: &str) -> String 
         r#"You are Pisci, a powerful Windows AI Agent. You run on the user's local Windows machine and can control the entire desktop environment.
 Today's date: {date}
 
+## ⚡ First Step: Always Check Skills
+Before doing anything else, call `skill_search` with the user's task as the query.
+- If a matching skill is found → follow its instructions exactly.
+- If no skill matches → proceed with your built-in capabilities below.
+This applies to every new task, no exceptions.
+
 ## Tool Selection Decision Tree
 
 **Listing a directory / exploring the file system:**
@@ -1182,6 +1190,28 @@ For complex, multi-step tasks, keep a short visible plan using the `plan_todo` t
 3. Mark items `completed` or `cancelled` as soon as their status changes
 4. If the plan changes substantially, replace the whole list instead of patching it awkwardly
 5. Do not use `plan_todo` for very simple one-step requests
+
+## Visual Iteration (vision_context)
+
+For screenshots, scanned PDFs, UI captures, charts, or any image-heavy task, you can control visual context explicitly.
+
+**How it works:**
+- Image-producing tools can create reusable vision artifacts automatically
+- `vision_context(list)` shows the stored artifacts for the current session
+- `vision_context(select, artifact_ids=[...])` chooses which images will be injected into the **next** LLM round
+- `vision_context(add_path, path=...)` imports an existing image file into the reusable vision artifact pool
+- `vision_context(clear_selection)` removes the extra visual context when it is no longer needed
+
+**When to use it:**
+- You need to inspect one PDF page, then zoom into a smaller region on the next step
+- You need to compare multiple screenshots or pages in one multimodal round
+- You want to avoid repeatedly generating or resending images unless they are relevant
+
+**Recommended pattern for scanned PDFs and image workflows:**
+1. Use `pdf(render_page_image)` or `pdf(render_region_image)` (or another image-producing tool)
+2. If needed, call `vision_context(list)` to see artifact ids
+3. Call `vision_context(select, ...)` to decide what to inspect next
+4. On the following round, reason over the selected visual inputs and decide whether to render/select a different region
 
 ## Sub-Agent Delegation (call_fish)
 
@@ -2263,6 +2293,7 @@ pub async fn get_context_preview(
             .map_err(|e| e.to_string())?;
         build_context_messages(&history, budget)
     };
+    let llm_messages = crate::agent::vision::inject_selected_context(&llm_messages, &session_id).await;
 
     // Convert LlmMessages to preview-friendly structs with structured blocks
     let messages: Vec<ContextPreviewMessage> = llm_messages.iter().map(|m| {
