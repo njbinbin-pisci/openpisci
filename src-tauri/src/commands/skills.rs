@@ -304,12 +304,41 @@ async fn install_skill_from_content(
     })
 }
 
+/// Strip ASCII whitespace AND Unicode invisible/directional characters that get
+/// silently inserted when copying paths from Windows Explorer, browsers, or
+/// certain chat UIs (e.g. U+202A LEFT-TO-RIGHT EMBEDDING, U+202C POP, U+200B
+/// ZERO WIDTH SPACE, U+FEFF BOM, U+00A0 NO-BREAK SPACE, etc.).
+fn sanitize_source(s: &str) -> String {
+    s.chars()
+        .filter(|c| {
+            !matches!(
+                *c,
+                '\u{200B}' // ZERO WIDTH SPACE
+                | '\u{200C}' // ZERO WIDTH NON-JOINER
+                | '\u{200D}' // ZERO WIDTH JOINER
+                | '\u{200E}' // LEFT-TO-RIGHT MARK
+                | '\u{200F}' // RIGHT-TO-LEFT MARK
+                | '\u{202A}' // LEFT-TO-RIGHT EMBEDDING
+                | '\u{202B}' // RIGHT-TO-LEFT EMBEDDING
+                | '\u{202C}' // POP DIRECTIONAL FORMATTING
+                | '\u{202D}' // LEFT-TO-RIGHT OVERRIDE
+                | '\u{202E}' // RIGHT-TO-LEFT OVERRIDE
+                | '\u{2060}' // WORD JOINER
+                | '\u{FEFF}' // BOM / ZERO WIDTH NO-BREAK SPACE
+                | '\u{00A0}' // NO-BREAK SPACE
+            )
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 #[tauri::command]
 pub async fn install_skill(
     state: State<'_, AppState>,
     source: String,
 ) -> Result<SkillCatalogItem, String> {
-    let source_trimmed = source.trim().to_string();
+    let source_trimmed = sanitize_source(&source);
 
     // ── Detect zip: local path ending in .zip, or URL ending in .zip ──────────
     let is_zip_url = (source_trimmed.starts_with("http://") || source_trimmed.starts_with("https://"))

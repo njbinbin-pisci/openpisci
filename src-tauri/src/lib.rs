@@ -434,6 +434,35 @@ pub fn run() {
                 });
             }
 
+            // ── Startup skill sync: scan disk → DB so installed skills survive restarts ──
+            // This runs before app.manage() so the DB is consistent before any command runs.
+            {
+                let app_dir = app_handle.path().app_data_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
+                let skills_dir = app_dir.join("skills");
+                let db_arc = state.db.clone();
+                tauri::async_runtime::block_on(async {
+                    let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+                    if let Err(e) = loader.load_all() {
+                        tracing::warn!("Startup skill scan failed: {}", e);
+                        return;
+                    }
+                    let db = db_arc.lock().await;
+                    for skill in loader.list_skills() {
+                        if skill.source == "builtin" { continue; }
+                        let safe_name: String = skill.name.chars()
+                            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                            .collect::<String>()
+                            .to_lowercase();
+                        if let Err(e) = db.upsert_skill(&safe_name, &skill.name, &skill.description, "📦") {
+                            tracing::warn!("Startup skill sync: failed to upsert '{}': {}", skill.name, e);
+                        } else {
+                            tracing::info!("Startup skill sync: registered '{}'", skill.name);
+                        }
+                    }
+                });
+            }
+
             app.manage(state);
 
             // Attach tray menu (Show / Quit) — tray is created from config with id "main"

@@ -39,7 +39,8 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 | `office` | 通过 COM 自动化 Word、Excel、PowerPoint、Outlook |
 | `email` | 发送/接收邮件（SMTP/IMAP） |
 | `ssh` | SSH 远程连接与命令执行 |
-| `pdf` | PDF 读写 |
+| `pdf` | PDF 读写、页面渲染为图像（`render_page_image` / `render_region_image`） |
+| `vision_context` | 视觉上下文管理：跨轮次保存/选择图像，供 Agent 主动决策下一步看什么 |
 | `memory_store` | 向长期记忆写入信息 |
 | `plan_todo` | 为复杂任务维护可视化执行计划与待办状态 |
 | 用户自定义工具 | TypeScript 插件，支持自定义配置接口 |
@@ -55,7 +56,10 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 ### ⚡ 技能系统（Skills）
 - 使用 `SKILL.md` 格式定义技能：YAML frontmatter（名称、描述、工具列表等）+ Markdown 正文（使用说明）
 - 技能内容在每次 Agent 调用时自动注入系统提示词，引导 Agent 使用特定工具和流程
-- 支持从 URL 或本地路径安装技能
+- **自动触发**：Agent 每次收到任务时优先调用 `skill_search` 查找匹配技能，找到则按技能指令执行
+- **zip 包安装**：支持将 `SKILL.md` + `reference.md` + `examples.md` 等打包为 `.zip` 一键安装
+- 支持从 URL 或本地路径安装技能（单文件或 zip 包）
+- 技能持久化：安装的技能写入磁盘并同步到数据库，重启后自动恢复
 - 内置技能：Office 自动化、文件管理、Web 自动化、系统管理、桌面控制
 
 > **注意**：SKILL.md 是 OpenPisci 自定义的技能格式，与 Anthropic MCP（Model Context Protocol）是两套不同的规范。
@@ -271,6 +275,14 @@ OpenPisci
 ---
 
 ## 📋 更新日志
+
+### v0.5.0
+- **多模态视觉迭代（Vision Artifact Store）**：新增 `vision_context` 工具，Agent 可跨轮次主动保存、选择图像；PDF 工具新增 `render_page_image` / `render_region_image` 动作，Agent 可自主决定"下一步看哪里"
+- **技能 zip 包安装**：安装技能支持 `.zip` 压缩包（本地路径或 URL），一次安装带上 `SKILL.md` + `reference.md` + `examples.md` + 辅助脚本等所有文件
+- **工具调用可中断**：停止按钮现在可在 200ms 内中断正在执行的工具调用（`tokio::select!` 取消监听），不再需要等待工具跑完
+- **技能自动触发**：系统提示词开头新增强制规则，Agent 每次收到任务优先调用 `skill_search` 查找匹配技能
+- **技能持久化修复**：启动时主动扫描磁盘技能目录同步到数据库，重启后已安装技能不再消失
+- **路径特殊字符清理**：安装技能时自动过滤从 Windows 资源管理器复制路径时插入的 Unicode 不可见字符（`U+202A` 等）
 
 ### v0.4.1
 - **新增 `plan_todo` 工具**：Agent 可像 Cursor 一样维护当前复杂任务的待办计划，支持 `pending / in_progress / completed / cancelled` 状态更新
