@@ -75,6 +75,10 @@ pub struct SkillList {
 pub async fn list_skills(state: State<'_, AppState>) -> Result<SkillList, String> {
     let db = state.db.lock().await;
     let skills = db.list_skills().map_err(|e| e.to_string())?;
+    // Filter out any stale "unnamed" entries left by failed skill parses
+    let skills: Vec<_> = skills.into_iter()
+        .filter(|s| s.name != "unnamed" && s.id != "unnamed")
+        .collect();
     let total = skills.len();
     Ok(SkillList { skills, total })
 }
@@ -135,6 +139,10 @@ pub async fn scan_skill_catalog(state: State<'_, AppState>) -> Result<Vec<SkillC
             if skill.source == "builtin" {
                 continue;
             }
+            // Skip skills that failed to parse (name defaults to "unnamed")
+            if skill.name.is_empty() || skill.name == "unnamed" {
+                continue;
+            }
             let safe_name: String = skill
                 .name
                 .chars()
@@ -157,6 +165,12 @@ pub async fn scan_skill_catalog(state: State<'_, AppState>) -> Result<Vec<SkillC
                 if seeded_ids.contains(&db_skill.id.as_str()) {
                     continue;
                 }
+                // Remove stale "unnamed" entries left by failed parses
+                if db_skill.name == "unnamed" || db_skill.id == "unnamed" {
+                    info!("scan_skill_catalog: removing stale 'unnamed' entry '{}'", db_skill.id);
+                    let _ = db.delete_skill(&db_skill.id);
+                    continue;
+                }
                 if !fs_safe_names.contains(&db_skill.id) {
                     info!("scan_skill_catalog: removing orphan DB entry '{}'", db_skill.id);
                     let _ = db.delete_skill(&db_skill.id);
@@ -167,6 +181,7 @@ pub async fn scan_skill_catalog(state: State<'_, AppState>) -> Result<Vec<SkillC
 
     let items = fs_skills
         .into_iter()
+        .filter(|s| !s.name.is_empty() && s.name != "unnamed")
         .map(|s| SkillCatalogItem {
             name: s.name.clone(),
             description: s.description.clone(),

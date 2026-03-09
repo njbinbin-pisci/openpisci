@@ -450,6 +450,8 @@ pub fn run() {
                     let db = db_arc.lock().await;
                     for skill in loader.list_skills() {
                         if skill.source == "builtin" { continue; }
+                        // Skip skills that failed to parse (name defaults to "unnamed")
+                        if skill.name.is_empty() || skill.name == "unnamed" { continue; }
                         let safe_name: String = skill.name.chars()
                             .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
                             .collect::<String>()
@@ -458,6 +460,15 @@ pub fn run() {
                             tracing::warn!("Startup skill sync: failed to upsert '{}': {}", skill.name, e);
                         } else {
                             tracing::info!("Startup skill sync: registered '{}'", skill.name);
+                        }
+                    }
+                    // Clean up any stale "unnamed" DB entries left from previous bad parses
+                    if let Ok(db_skills) = db.list_skills() {
+                        for s in db_skills {
+                            if s.name == "unnamed" || s.id == "unnamed" {
+                                let _ = db.delete_skill(&s.id);
+                                tracing::info!("Startup skill sync: removed stale 'unnamed' entry '{}'", s.id);
+                            }
                         }
                     }
                 });
