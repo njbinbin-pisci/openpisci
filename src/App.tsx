@@ -139,6 +139,21 @@ function AppContent() {
     return () => { unlisten.then((fn) => fn()); };
   }, [dispatch]);
 
+  // settings_changed: emitted by app_control tool when Agent modifies settings
+  // (SSH servers, API keys, tool toggles, etc.) — re-fetch and sync Redux store
+  // so the Settings page reflects changes without requiring a manual restart.
+  useEffect(() => {
+    const unlisten = listen("settings_changed", async () => {
+      try {
+        const updated = await settingsApi.get();
+        dispatch(settingsActions.setSettings(updated));
+      } catch (e) {
+        console.error("[settings_changed] failed to reload settings:", e);
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [dispatch]);
+
   if (!initialized) {
     return (
       <div className="loading-screen">

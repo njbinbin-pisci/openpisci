@@ -276,6 +276,10 @@ OpenPisci
 
 ## 📋 更新日志
 
+### v0.5.1
+- **设置实时刷新**：Agent 通过工具修改配置（SSH 服务器、API Key、工具开关等）后，设置页面立即自动刷新，无需重启
+- **MCP 配置入口说明**：MCP 工具配置入口在侧边栏 → 🔧 工具 → 🔗 MCP 标签页，支持 stdio / SSE 两种传输方式
+
 ### v0.5.0
 - **多模态视觉迭代（Vision Artifact Store）**：新增 `vision_context` 工具，Agent 可跨轮次主动保存、选择图像；PDF 工具新增 `render_page_image` / `render_region_image` 动作，Agent 可自主决定"下一步看哪里"
 - **技能 zip 包安装**：安装技能支持 `.zip` 压缩包（本地路径或 URL），一次安装带上 `SKILL.md` + `reference.md` + `examples.md` + 辅助脚本等所有文件

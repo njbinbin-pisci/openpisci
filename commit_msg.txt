@@ -1,0 +1,9 @@
+fix: v0.5.1 - settings live refresh when Agent modifies config
+
+- Emit settings_changed Tauri event from app_control tool after any
+  settings.save(): ssh_upsert, ssh_delete, settings_set, builtin_tool_toggle,
+  user_tool_config_set, runtime_path_set
+- Frontend App.tsx listens for settings_changed and re-fetches settings into
+  Redux store so Settings page refreshes automatically without restart
+- Import tauri::Emitter trait required for AppHandle::emit
+- Bump version to 0.5.1, update README changelog

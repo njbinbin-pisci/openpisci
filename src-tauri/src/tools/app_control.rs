@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
@@ -53,6 +53,16 @@ pub struct AppControlTool {
     pub settings: Arc<Mutex<Settings>>,
     pub app_data_dir: PathBuf,
     pub app_handle: Option<AppHandle>,
+}
+
+impl AppControlTool {
+    /// Notify the frontend that settings have changed so it can re-fetch and
+    /// refresh the Settings page without requiring a manual restart.
+    fn emit_settings_changed(&self) {
+        if let Some(app) = &self.app_handle {
+            let _ = app.emit("settings_changed", ());
+        }
+    }
 }
 
 #[async_trait]
@@ -605,10 +615,13 @@ impl AppControlTool {
         }
 
         match s.save() {
-            Ok(_) => Ok(ToolResult::ok(format!(
-                "Settings saved. Changed:\n{}",
-                changed.iter().map(|c| format!("  - {}", c)).collect::<Vec<_>>().join("\n")
-            ))),
+            Ok(_) => {
+                self.emit_settings_changed();
+                Ok(ToolResult::ok(format!(
+                    "Settings saved. Changed:\n{}",
+                    changed.iter().map(|c| format!("  - {}", c)).collect::<Vec<_>>().join("\n")
+                )))
+            }
             Err(e) => Ok(ToolResult::err(format!("Failed to save settings: {}", e))),
         }
     }
@@ -666,6 +679,7 @@ impl AppControlTool {
         settings.save()
             .map_err(|e| anyhow::anyhow!("Failed to save runtime path: {}", e))?;
         drop(settings);
+        self.emit_settings_changed();
 
         let probe = if exe_path.is_empty() {
             "(using PATH lookup)".to_string()
@@ -748,7 +762,8 @@ impl AppControlTool {
         }
         settings.save()
             .map_err(|e| anyhow::anyhow!("Failed to save SSH server: {}", e))?;
-
+        drop(settings);
+        self.emit_settings_changed();
         Ok(ToolResult::ok(format!("SSH server '{}' saved.", ssh_id)))
     }
 
@@ -765,6 +780,8 @@ impl AppControlTool {
         }
         settings.save()
             .map_err(|e| anyhow::anyhow!("Failed to save SSH settings: {}", e))?;
+        drop(settings);
+        self.emit_settings_changed();
         Ok(ToolResult::ok(format!("SSH server '{}' deleted.", ssh_id)))
     }
 
@@ -925,6 +942,8 @@ impl AppControlTool {
         settings.builtin_tool_enabled.insert(tool_name.clone(), enabled);
         settings.save()
             .map_err(|e| anyhow::anyhow!("Failed to save built-in tool settings: {}", e))?;
+        drop(settings);
+        self.emit_settings_changed();
         Ok(ToolResult::ok(format!(
             "Built-in tool '{}' is now {}.",
             tool_name,
@@ -1050,6 +1069,8 @@ impl AppControlTool {
             .insert(tool_name.clone(), Value::Object(merged));
         settings.save()
             .map_err(|e| anyhow::anyhow!("Failed to save user tool config: {}", e))?;
+        drop(settings);
+        self.emit_settings_changed();
         Ok(ToolResult::ok(format!("Config for user tool '{}' saved.", tool_name)))
     }
 
