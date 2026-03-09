@@ -427,15 +427,20 @@ async fn install_skill_from_zip(
     let mut archive = zip::ZipArchive::new(cursor)
         .map_err(|e| format!("Failed to open zip archive: {}", e))?;
 
-    // Find SKILL.md — accept root-level or one directory deep
+    // Find SKILL.md — accept root-level or one directory deep.
+    // Normalise path separators to '/' and do case-insensitive filename match
+    // so zips created on Windows (backslash paths) also work.
     let skill_md_path: Option<String> = {
         let mut found = None;
         for i in 0..archive.len() {
             let file = archive.by_index(i).map_err(|e| e.to_string())?;
-            let name = file.name().to_string();
+            // Normalise backslashes → forward slashes
+            let name = file.name().replace('\\', "/");
             let parts: Vec<&str> = name.trim_end_matches('/').split('/').collect();
-            // Accept: "SKILL.md" or "skill-name/SKILL.md"
-            if (parts.len() == 1 || parts.len() == 2) && parts.last() == Some(&"SKILL.md") {
+            // Accept: "SKILL.md" or "skill-name/SKILL.md" (case-insensitive)
+            if (parts.len() == 1 || parts.len() == 2)
+                && parts.last().map(|s| s.to_uppercase()) == Some("SKILL.MD".to_string())
+            {
                 found = Some(name);
                 break;
             }
@@ -452,14 +457,27 @@ async fn install_skill_from_zip(
         if parts.len() == 2 { format!("{}/", parts[0]) } else { String::new() }
     };
 
-    // ── 3. Read SKILL.md content ──────────────────────────────────────────────
+    // ── 3. Read SKILL.md content (find by index to handle backslash paths) ──────
     let skill_md_content = {
-        let mut file = archive.by_name(&skill_md_path)
+        // Re-scan to find the index of the SKILL.md entry (by_name may fail on
+        // backslash paths stored in the zip central directory on Windows)
+        let mut skill_idx: Option<usize> = None;
+        for i in 0..archive.len() {
+            let file = archive.by_index(i).map_err(|e| e.to_string())?;
+            let normalised = file.name().replace('\\', "/");
+            if normalised == skill_md_path {
+                skill_idx = Some(i);
+                break;
+            }
+        }
+        let idx = skill_idx.ok_or_else(|| "Could not re-locate SKILL.md in zip".to_string())?;
+        let mut file = archive.by_index(idx)
             .map_err(|e| format!("Failed to read SKILL.md from zip: {}", e))?;
         let mut content = String::new();
         std::io::Read::read_to_string(&mut file, &mut content)
             .map_err(|e| format!("Failed to decode SKILL.md: {}", e))?;
-        content
+        // Strip BOM if present
+        content.trim_start_matches('\u{FEFF}').to_string()
     };
 
     // ── 4. Parse, validate, register in DB ───────────────────────────────────
@@ -517,7 +535,8 @@ async fn install_skill_from_zip(
     let mut extracted_count = 0usize;
     for i in 0..archive2.len() {
         let mut file = archive2.by_index(i).map_err(|e| e.to_string())?;
-        let raw_name = file.name().to_string();
+        // Normalise separators for consistent prefix matching
+        let raw_name = file.name().replace('\\', "/");
 
         // Skip directories
         if raw_name.ends_with('/') {
