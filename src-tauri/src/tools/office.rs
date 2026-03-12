@@ -308,7 +308,7 @@ $info
                 let path = input["path"].as_str().unwrap_or("");
                 if path.is_empty() { return Err("write_cells requires 'path'".into()); }
                 let sheet = input["sheet"].as_str().unwrap_or("");
-                let visible = input["visible"].as_bool().unwrap_or(false);
+                let _visible = input["visible"].as_bool().unwrap_or(false);
                 let cells = match input["cells"].as_array() {
                     Some(c) if !c.is_empty() => c,
                     _ => return Err("write_cells requires non-empty 'cells' array".into()),

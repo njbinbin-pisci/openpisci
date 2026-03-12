@@ -820,7 +820,7 @@ impl PoolOrgTool {
         ctx.memory_owner_id == "pisci"
     }
 
-    fn resolve_todo_id<'a>(input: &'a Value) -> Option<&'a str> {
+    fn resolve_todo_id(input: &Value) -> Option<&str> {
         input["todo_id"]
             .as_str()
             .filter(|s| !s.trim().is_empty())

@@ -272,6 +272,7 @@ impl SkillLoader {
     }
 
     fn create_builtin_skills(&self) -> Result<()> {
+        #[allow(clippy::type_complexity)]
         let builtins: Vec<(&str, &str, &str, Vec<&str>, Vec<&str>, &str)> = vec![
             (
                 "office-automation",

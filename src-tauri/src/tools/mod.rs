@@ -53,6 +53,7 @@ use tokio::sync::Mutex;
 /// Build the default tool registry with all enabled tools.
 /// Pass the shared browser manager so BrowserTool can reuse the same Chrome instance.
 /// Also loads any user-installed tools from `user_tools_dir`.
+#[allow(clippy::too_many_arguments)]
 pub fn build_registry(
     browser: SharedBrowserManager,
     user_tools_dir: Option<&std::path::Path>,

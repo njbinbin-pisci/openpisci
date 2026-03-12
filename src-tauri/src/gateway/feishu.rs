@@ -639,9 +639,7 @@ impl Channel for FeishuChannel {
                         .unwrap_or("")
                         .split('&')
                         .find_map(|part| {
-                            let mut kv = part.splitn(2, '=');
-                            let k = kv.next()?;
-                            let v = kv.next()?;
+                            let (k, v) = part.split_once('=')?;
                             if k == "service_id" {
                                 v.parse::<i32>().ok()
                             } else {
@@ -1236,7 +1234,7 @@ fn write_length_delimited(buf: &mut Vec<u8>, field: u32, data: &[u8]) {
 }
 
 fn write_varint_field(buf: &mut Vec<u8>, field: u32, v: u64) {
-    write_varint(buf, ((field << 3) | 0) as u64);
+    write_varint(buf, (field << 3) as u64);
     write_varint(buf, v);
 }
 

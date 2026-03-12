@@ -917,6 +917,7 @@ impl Database {
     ///
     /// `project_scope_id`: for private memories, the pool_session_id where this memory was created.
     /// NULL means it is a cross-project skill or preference (visible in all projects as a fallback).
+    #[allow(clippy::too_many_arguments)]
     pub fn save_memory(
         &self,
         content: &str,
@@ -1867,6 +1868,7 @@ impl Database {
         Ok(None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_koi(
         &self,
         id: &str,
@@ -1991,6 +1993,7 @@ impl Database {
     // Koi Todos (Board)
     // ------------------------------------------------------------------
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_koi_todo(
         &self,
         owner_id: &str,
@@ -2496,6 +2499,7 @@ impl Database {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_pool_message_ext(
         &self,
         pool_session_id: &str,

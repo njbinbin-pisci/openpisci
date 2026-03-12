@@ -188,14 +188,14 @@ fn resolve(raw: &str, workspace: &Path) -> PathBuf {
     }
 }
 
-fn require_path<'a>(input: &'a Value, workspace: &Path) -> Result<PathBuf, ToolResult> {
+fn require_path(input: &Value, workspace: &Path) -> Result<PathBuf, ToolResult> {
     match input["path"].as_str() {
         Some(s) => Ok(resolve(s, workspace)),
         None => Err(ToolResult::err("Missing required parameter: path")),
     }
 }
 
-fn require_output<'a>(input: &'a Value, workspace: &Path) -> Result<PathBuf, ToolResult> {
+fn require_output(input: &Value, workspace: &Path) -> Result<PathBuf, ToolResult> {
     match input["output"].as_str() {
         Some(s) => Ok(resolve(s, workspace)),
         None => Err(ToolResult::err("Missing required parameter: output")),
@@ -672,9 +672,8 @@ fn add_watermark(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
         // Append the watermark stream to the page's content
         if let Ok(page_id) = doc.get_pages().get(page_num).copied().ok_or(()) {
-            if let Ok(page_dict) = doc.get_object_mut(page_id) {
-                if let Object::Dictionary(dict) = page_dict {
-                    match dict.get_mut(b"Contents") {
+            if let Ok(Object::Dictionary(dict)) = doc.get_object_mut(page_id) {
+                match dict.get_mut(b"Contents") {
                         Ok(contents) => {
                             let existing = contents.clone();
                             *contents = match existing {
@@ -693,7 +692,6 @@ fn add_watermark(input: &Value, workspace: &Path) -> Result<ToolResult> {
                             dict.set(b"Contents", Object::Reference(wm_id));
                         }
                     }
-                }
             }
         }
     }
@@ -839,14 +837,12 @@ fn fill_form(input: &Value, workspace: &Path) -> Result<ToolResult> {
         let matched = field_ids.iter().find(|(_, n)| n == field_name);
         match matched {
             Some((obj_id, _)) => {
-                if let Ok(obj) = doc.get_object_mut(*obj_id) {
-                    if let lopdf::Object::Dictionary(dict) = obj {
-                        dict.set(
-                            b"V",
-                            Object::String(value_str.as_bytes().to_vec(), StringFormat::Literal),
-                        );
-                        filled += 1;
-                    }
+                if let Ok(lopdf::Object::Dictionary(dict)) = doc.get_object_mut(*obj_id) {
+                    dict.set(
+                        b"V",
+                        Object::String(value_str.as_bytes().to_vec(), StringFormat::Literal),
+                    );
+                    filled += 1;
                 }
             }
             None => not_found.push(field_name.clone()),
@@ -937,17 +933,15 @@ fn add_annotation(input: &Value, workspace: &Path) -> Result<ToolResult> {
     let annot_id = doc.add_object(Object::Dictionary(annot));
 
     // Add annotation reference to the page's Annots array
-    if let Ok(page_obj) = doc.get_object_mut(page_id) {
-        if let Object::Dictionary(page_dict) = page_obj {
-            match page_dict.get_mut(b"Annots") {
-                Ok(annots) => {
-                    if let Object::Array(arr) = annots {
-                        arr.push(Object::Reference(annot_id));
-                    }
+    if let Ok(Object::Dictionary(page_dict)) = doc.get_object_mut(page_id) {
+        match page_dict.get_mut(b"Annots") {
+            Ok(annots) => {
+                if let Object::Array(arr) = annots {
+                    arr.push(Object::Reference(annot_id));
                 }
-                Err(_) => {
-                    page_dict.set(b"Annots", Object::Array(vec![Object::Reference(annot_id)]));
-                }
+            }
+            Err(_) => {
+                page_dict.set(b"Annots", Object::Array(vec![Object::Reference(annot_id)]));
             }
         }
     }

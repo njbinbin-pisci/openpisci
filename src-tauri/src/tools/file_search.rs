@@ -220,6 +220,7 @@ impl FileSearchTool {
         )))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn do_grep(
         &self,
         pattern: &str,
@@ -249,12 +250,10 @@ impl FileSearchTool {
         };
 
         // Build include filter regex if provided
-        let include_re = include
-            .map(|inc| {
-                let pat = glob_to_regex(inc);
-                regex::Regex::new(&pat).ok()
-            })
-            .flatten();
+        let include_re = include.and_then(|inc| {
+            let pat = glob_to_regex(inc);
+            regex::Regex::new(&pat).ok()
+        });
 
         let mut results: Vec<String> = Vec::new();
         let mut total_matches = 0usize;

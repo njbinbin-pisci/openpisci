@@ -205,6 +205,7 @@ impl SseTransport {
 
 // ─── MCP Client ───────────────────────────────────────────────────────────────
 
+#[allow(clippy::large_enum_variant)]
 enum Transport {
     Stdio(StdioTransport),
     Sse(SseTransport),

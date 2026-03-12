@@ -354,7 +354,7 @@ fn guard_tool_result_content(content: &str, max_chars: usize) -> String {
 fn dynamic_result_limit(context_window_tokens: usize) -> usize {
     let context_chars = context_window_tokens * 4; // ~4 chars per token
     let limit = (context_chars as f64 * CONTEXT_SINGLE_RESULT_SHARE) as usize;
-    limit.min(TOOL_RESULT_HARD_MAX_CHARS).max(4_000)
+    limit.clamp(4_000, TOOL_RESULT_HARD_MAX_CHARS)
 }
 
 // ── In-memory Message Compaction ─────────────────────────────────────────────
@@ -1260,14 +1260,15 @@ fn friendly_tool_error(tool_name: &str, raw_error: &str) -> String {
     }
 
     // WMI / COM errors
-    if tool_name == "wmi" || tool_name == "com" {
-        if raw_lower.contains("wmi") || raw_lower.contains("com") || raw_lower.contains("dispatch")
-        {
-            return format!(
-                "[{}] Windows 系统接口调用失败。请确认以管理员权限运行，或该功能在当前系统版本可用。\n详情：{}",
-                tool_name, raw_error
-            );
-        }
+    if (tool_name == "wmi" || tool_name == "com")
+        && (raw_lower.contains("wmi")
+            || raw_lower.contains("com")
+            || raw_lower.contains("dispatch"))
+    {
+        return format!(
+            "[{}] Windows 系统接口调用失败。请确认以管理员权限运行，或该功能在当前系统版本可用。\n详情：{}",
+            tool_name, raw_error
+        );
     }
 
     // com_invoke errors

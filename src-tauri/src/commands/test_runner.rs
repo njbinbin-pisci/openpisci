@@ -1218,7 +1218,7 @@ async fn test_pool_chat_conversation() -> TestResult {
                     "Developer reply not in pool",
                 ));
             }
-            let assessment = assess_trial_project_state(&msgs, &[], &vec![arch.id.clone(), dev.id.clone()]);
+            let assessment = assess_trial_project_state(&msgs, &[], &[arch.id.clone(), dev.id.clone()]);
             if assessment.decision != TrialDecision::ReadyForPisciReview {
                 return Err(fail_with_params(
                     "debug.multiAgentErrExpectedActual",
@@ -1352,7 +1352,7 @@ async fn test_full_e2e() -> TestResult {
             if msgs.len() < 6 {
                 return Err(fail_with_params("debug.multiAgentErrExpectedAtLeast", json!({"subject":"e2e messages","expected":6,"actual":msgs.len()}), format!("msgs: {} (expected ≥6)", msgs.len())));
             }
-            let assessment = assess_trial_project_state(&msgs, &todos, &vec![fe.id.clone(), be.id.clone(), qa.id.clone()]);
+            let assessment = assess_trial_project_state(&msgs, &todos, &[fe.id.clone(), be.id.clone(), qa.id.clone()]);
             if assessment.decision != TrialDecision::ReadyForPisciReview {
                 return Err(fail_with_params(
                     "debug.multiAgentErrExpectedActual",

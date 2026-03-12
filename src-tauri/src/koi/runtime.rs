@@ -567,6 +567,7 @@ impl KoiRuntime {
     /// Behavior depends on who is mentioning:
     /// - Pisci/user: direct task assignment (creates todo + executes)
     /// - Another Koi: peer request — no todo, just notification/activation
+    ///
     /// @all targets every non-offline Koi (excluding sender).
     pub async fn handle_mention(
         &self,

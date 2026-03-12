@@ -1172,6 +1172,7 @@ pub async fn run_debug_scenario(
     let tool_records_clone = tool_records.clone();
 
     // Track in-flight tool start times
+    #[allow(clippy::type_complexity)]
     let tool_starts: Arc<
         tokio::sync::Mutex<
             std::collections::HashMap<String, (String, std::time::Instant, serde_json::Value)>,
@@ -1694,6 +1695,7 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
         Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let tool_records_clone = tool_records.clone();
 
+    #[allow(clippy::type_complexity)]
     let tool_starts: Arc<
         tokio::sync::Mutex<
             std::collections::HashMap<String, (String, std::time::Instant, serde_json::Value)>,

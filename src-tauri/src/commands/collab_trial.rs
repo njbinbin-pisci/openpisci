@@ -281,15 +281,14 @@ pub async fn run_collaboration_trial_with_state(
     status.phase = "architect".into();
     emit("architect", "Pisci @Architect in pool chat...");
 
-    let task_message = format!(
-        "@Architect Design a small \"string utility\" module with 3 functions: \
+    let task_message = "@Architect Design a small \"string utility\" module with 3 functions: \
          1) reverse_words(s) - reverses word order in a sentence \
          2) count_vowels(s) - counts vowels in a string \
          3) to_title_case(s) - converts a string to title case. \
          Write a clear, concise specification with function signatures, \
          parameter descriptions, expected behavior, and edge cases. \
          Keep it practical. When you finish, share the spec in pool_chat, include `[ProjectStatus] follow_up_needed`, and @Coder to hand off implementation."
-    );
+        .to_string();
 
     // Post the message to pool chat (just like Pisci would via pool_chat tool)
     {

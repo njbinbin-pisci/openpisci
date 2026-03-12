@@ -1226,6 +1226,7 @@ impl UiaTool {
 
         // Fallback: partial match via EnumWindows (consistent with get_search_root)
         let title_lower = title.to_lowercase();
+        #[allow(clippy::arc_with_non_send_sync)]
         let result = std::sync::Arc::new(std::sync::Mutex::new(None::<HWND>));
         let result_clone = result.clone();
         let title_clone = title_lower.clone();
