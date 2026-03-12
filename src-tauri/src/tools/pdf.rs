@@ -147,11 +147,10 @@ impl Tool for PdfTool {
         let input_clone = input.clone();
         let workspace = ctx.workspace_root.clone();
 
-        let result = tokio::task::spawn_blocking(move || {
-            dispatch(&action, &input_clone, &workspace)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("PDF task panicked: {}", e))??;
+        let result =
+            tokio::task::spawn_blocking(move || dispatch(&action, &input_clone, &workspace))
+                .await
+                .map_err(|e| anyhow::anyhow!("PDF task panicked: {}", e))??;
 
         Ok(result)
     }
@@ -161,20 +160,20 @@ impl Tool for PdfTool {
 
 fn dispatch(action: &str, input: &Value, workspace: &Path) -> Result<ToolResult> {
     match action {
-        "read_text"      => read_text(input, workspace),
-        "get_info"       => get_info(input, workspace),
+        "read_text" => read_text(input, workspace),
+        "get_info" => get_info(input, workspace),
         "extract_images" => extract_images(input, workspace),
-        "merge"          => merge(input, workspace),
-        "split"          => split(input, workspace),
-        "add_watermark"  => add_watermark(input, workspace),
-        "encrypt"        => encrypt(input, workspace),
-        "decrypt"        => decrypt(input, workspace),
-        "fill_form"      => fill_form(input, workspace),
+        "merge" => merge(input, workspace),
+        "split" => split(input, workspace),
+        "add_watermark" => add_watermark(input, workspace),
+        "encrypt" => encrypt(input, workspace),
+        "decrypt" => decrypt(input, workspace),
+        "fill_form" => fill_form(input, workspace),
         "add_annotation" => add_annotation(input, workspace),
-        "to_images"      => to_images(input, workspace),
+        "to_images" => to_images(input, workspace),
         "render_page_image" => render_page_image(input, workspace),
         "render_region_image" => render_region_image(input, workspace),
-        other            => Ok(ToolResult::err(format!("Unknown action: {}", other))),
+        other => Ok(ToolResult::err(format!("Unknown action: {}", other))),
     }
 }
 
@@ -182,7 +181,11 @@ fn dispatch(action: &str, input: &Value, workspace: &Path) -> Result<ToolResult>
 
 fn resolve(raw: &str, workspace: &Path) -> PathBuf {
     let p = Path::new(raw);
-    if p.is_absolute() { p.to_path_buf() } else { workspace.join(p) }
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        workspace.join(p)
+    }
 }
 
 fn require_path<'a>(input: &'a Value, workspace: &Path) -> Result<PathBuf, ToolResult> {
@@ -214,7 +217,10 @@ macro_rules! try_tr {
 fn read_text(input: &Value, workspace: &Path) -> Result<ToolResult> {
     let path = try_tr!(require_path(input, workspace));
     if !path.exists() {
-        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+        return Ok(ToolResult::err(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
 
     let bytes = std::fs::read(&path)?;
@@ -222,7 +228,11 @@ fn read_text(input: &Value, workspace: &Path) -> Result<ToolResult> {
     // Collect requested page numbers (1-based); empty = all pages
     let page_filter: Vec<u32> = input["pages"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_u64().map(|n| n as u32))
+                .collect()
+        })
         .unwrap_or_default();
 
     let text = pdf_extract::extract_text_from_mem(&bytes)
@@ -255,7 +265,10 @@ fn read_text(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     Ok(ToolResult::ok(format!(
         "PDF: {} — extracted {} characters{}\n\n{}",
-        path.display(), char_count, note, output
+        path.display(),
+        char_count,
+        note,
+        output
     )))
 }
 
@@ -266,7 +279,10 @@ fn get_info(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     let path = try_tr!(require_path(input, workspace));
     if !path.exists() {
-        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+        return Ok(ToolResult::err(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
 
     let doc = match Document::load(&path) {
@@ -286,21 +302,25 @@ fn get_info(input: &Value, workspace: &Path) -> Result<ToolResult> {
     let mut creation_date = String::new();
 
     if let Ok(info_id) = doc.trailer.get(b"Info") {
-        if let Ok(lopdf::Object::Dictionary(info_dict)) = doc.get_object(info_id.as_reference().unwrap_or((0, 0))) {
+        if let Ok(lopdf::Object::Dictionary(info_dict)) =
+            doc.get_object(info_id.as_reference().unwrap_or((0, 0)))
+        {
             let get_str = |dict: &lopdf::Dictionary, key: &[u8]| -> String {
                 dict.get(key)
                     .ok()
                     .and_then(|obj| match obj {
-                        lopdf::Object::String(bytes, _) => String::from_utf8_lossy(bytes).into_owned().into(),
+                        lopdf::Object::String(bytes, _) => {
+                            String::from_utf8_lossy(bytes).into_owned().into()
+                        }
                         _ => None,
                     })
                     .unwrap_or_default()
             };
-            title        = get_str(info_dict, b"Title");
-            author       = get_str(info_dict, b"Author");
-            subject      = get_str(info_dict, b"Subject");
-            creator      = get_str(info_dict, b"Creator");
-            producer     = get_str(info_dict, b"Producer");
+            title = get_str(info_dict, b"Title");
+            author = get_str(info_dict, b"Author");
+            subject = get_str(info_dict, b"Subject");
+            creator = get_str(info_dict, b"Creator");
+            producer = get_str(info_dict, b"Producer");
             creation_date = get_str(info_dict, b"CreationDate");
         }
     }
@@ -324,10 +344,26 @@ fn get_info(input: &Value, workspace: &Path) -> Result<ToolResult> {
         encrypted,
         if title.is_empty() { "(none)" } else { &title },
         if author.is_empty() { "(none)" } else { &author },
-        if subject.is_empty() { "(none)" } else { &subject },
-        if creator.is_empty() { "(none)" } else { &creator },
-        if producer.is_empty() { "(none)" } else { &producer },
-        if creation_date.is_empty() { "(none)" } else { &creation_date },
+        if subject.is_empty() {
+            "(none)"
+        } else {
+            &subject
+        },
+        if creator.is_empty() {
+            "(none)"
+        } else {
+            &creator
+        },
+        if producer.is_empty() {
+            "(none)"
+        } else {
+            &producer
+        },
+        if creation_date.is_empty() {
+            "(none)"
+        } else {
+            &creation_date
+        },
     )))
 }
 
@@ -338,7 +374,10 @@ fn extract_images(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     let path = try_tr!(require_path(input, workspace));
     if !path.exists() {
-        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+        return Ok(ToolResult::err(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
     let out_dir = match input["output_dir"].as_str() {
         Some(s) => resolve(s, workspace),
@@ -356,7 +395,9 @@ fn extract_images(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     for (obj_id, obj) in doc.objects.iter() {
         if let Object::Stream(stream) = obj {
-            let subtype = stream.dict.get(b"Subtype")
+            let subtype = stream
+                .dict
+                .get(b"Subtype")
                 .ok()
                 .and_then(|o| o.as_name_str().ok())
                 .unwrap_or("");
@@ -364,16 +405,18 @@ fn extract_images(input: &Value, workspace: &Path) -> Result<ToolResult> {
                 continue;
             }
 
-            let filter = stream.dict.get(b"Filter")
+            let filter = stream
+                .dict
+                .get(b"Filter")
                 .ok()
                 .and_then(|o| o.as_name_str().ok())
                 .unwrap_or("");
 
             let ext = match filter {
-                "DCTDecode"  => "jpg",
-                "JPXDecode"  => "jp2",
+                "DCTDecode" => "jpg",
+                "JPXDecode" => "jp2",
                 "FlateDecode" => "png",
-                _            => "bin",
+                _ => "bin",
             };
 
             let data = match stream.decompressed_content() {
@@ -450,9 +493,7 @@ fn merge(input: &Value, workspace: &Path) -> Result<ToolResult> {
             args.push(p.to_str().unwrap_or("").to_string());
         }
 
-        let result = std::process::Command::new(&gs_path)
-            .args(&args)
-            .output();
+        let result = std::process::Command::new(&gs_path).args(&args).output();
 
         match result {
             Ok(out) if out.status.success() => {
@@ -464,7 +505,10 @@ fn merge(input: &Value, workspace: &Path) -> Result<ToolResult> {
             }
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                return Ok(ToolResult::err(format!("Ghostscript merge failed: {}", stderr)));
+                return Ok(ToolResult::err(format!(
+                    "Ghostscript merge failed: {}",
+                    stderr
+                )));
             }
             Err(e) => return Ok(ToolResult::err(format!("Failed to run Ghostscript: {}", e))),
         }
@@ -472,16 +516,15 @@ fn merge(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     // Try pdftk as fallback
     if let Some(pdftk) = which_tool("pdftk") {
-        let mut args: Vec<String> = paths.iter()
+        let mut args: Vec<String> = paths
+            .iter()
             .map(|p| p.to_str().unwrap_or("").to_string())
             .collect();
         args.push("cat".to_string());
         args.push("output".to_string());
         args.push(output.to_str().unwrap_or("").to_string());
 
-        let result = std::process::Command::new(&pdftk)
-            .args(&args)
-            .output();
+        let result = std::process::Command::new(&pdftk).args(&args).output();
 
         match result {
             Ok(out) if out.status.success() => {
@@ -504,7 +547,7 @@ fn merge(input: &Value, workspace: &Path) -> Result<ToolResult> {
          Install options:\n\
          - Windows: https://www.ghostscript.com/download.html  or  choco install pdftk-server\n\
          - Linux:   sudo apt install ghostscript  or  sudo apt install pdftk\n\
-         - macOS:   brew install ghostscript  or  brew install pdftk-java"
+         - macOS:   brew install ghostscript  or  brew install pdftk-java",
     ))
 }
 
@@ -515,7 +558,10 @@ fn split(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     let path = try_tr!(require_path(input, workspace));
     if !path.exists() {
-        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+        return Ok(ToolResult::err(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
     let out_dir = match input["output_dir"].as_str() {
         Some(s) => resolve(s, workspace),
@@ -539,10 +585,15 @@ fn split(input: &Value, workspace: &Path) -> Result<ToolResult> {
     for (i, range) in ranges.iter().enumerate() {
         let arr = match range.as_array() {
             Some(a) if a.len() == 2 => a,
-            _ => return Ok(ToolResult::err(format!("ranges[{}] must be [start, end]", i))),
+            _ => {
+                return Ok(ToolResult::err(format!(
+                    "ranges[{}] must be [start, end]",
+                    i
+                )))
+            }
         };
         let start = arr[0].as_u64().unwrap_or(1) as u32;
-        let end   = arr[1].as_u64().unwrap_or(1) as u32;
+        let end = arr[1].as_u64().unwrap_or(1) as u32;
 
         if start < 1 || end < start || end > total_pages {
             return Ok(ToolResult::err(format!(
@@ -577,11 +628,14 @@ fn split(input: &Value, workspace: &Path) -> Result<ToolResult> {
 // ─── add_watermark ────────────────────────────────────────────────────────────
 
 fn add_watermark(input: &Value, workspace: &Path) -> Result<ToolResult> {
-    use lopdf::{Document, Object, Stream, Dictionary};
+    use lopdf::{Dictionary, Document, Object, Stream};
 
     let path = try_tr!(require_path(input, workspace));
     if !path.exists() {
-        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+        return Ok(ToolResult::err(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
     let output = try_tr!(require_output(input, workspace));
     let text = match input["text"].as_str() {
@@ -613,10 +667,7 @@ fn add_watermark(input: &Value, workspace: &Path) -> Result<ToolResult> {
             text.replace('(', "\\(").replace(')', "\\)")
         );
 
-        let wm_stream = Stream::new(
-            Dictionary::new(),
-            content.into_bytes(),
-        );
+        let wm_stream = Stream::new(Dictionary::new(), content.into_bytes());
         let wm_id = doc.add_object(Object::Stream(wm_stream));
 
         // Append the watermark stream to the page's content
@@ -631,9 +682,10 @@ fn add_watermark(input: &Value, workspace: &Path) -> Result<ToolResult> {
                                     arr.push(Object::Reference(wm_id));
                                     Object::Array(arr)
                                 }
-                                Object::Reference(r) => {
-                                    Object::Array(vec![Object::Reference(r), Object::Reference(wm_id)])
-                                }
+                                Object::Reference(r) => Object::Array(vec![
+                                    Object::Reference(r),
+                                    Object::Reference(wm_id),
+                                ]),
                                 _ => Object::Array(vec![Object::Reference(wm_id)]),
                             };
                         }
@@ -654,7 +706,9 @@ fn add_watermark(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     Ok(ToolResult::ok(format!(
         "Added watermark \"{}\" to {} page(s), saved to {}",
-        text, page_count, output.display()
+        text,
+        page_count,
+        output.display()
     )))
 }
 
@@ -665,7 +719,10 @@ fn encrypt(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     let path = try_tr!(require_path(input, workspace));
     if !path.exists() {
-        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+        return Ok(ToolResult::err(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
     let output = try_tr!(require_output(input, workspace));
     let user_pw = input["user_password"].as_str().unwrap_or("");
@@ -698,7 +755,10 @@ fn decrypt(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     let path = try_tr!(require_path(input, workspace));
     if !path.exists() {
-        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+        return Ok(ToolResult::err(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
     let output = try_tr!(require_output(input, workspace));
     let password = input["password"].as_str().unwrap_or("");
@@ -732,7 +792,10 @@ fn fill_form(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     let path = try_tr!(require_path(input, workspace));
     if !path.exists() {
-        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+        return Ok(ToolResult::err(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
     let output = try_tr!(require_output(input, workspace));
     let fields = match input["fields"].as_object() {
@@ -780,10 +843,7 @@ fn fill_form(input: &Value, workspace: &Path) -> Result<ToolResult> {
                     if let lopdf::Object::Dictionary(dict) = obj {
                         dict.set(
                             b"V",
-                            Object::String(
-                                value_str.as_bytes().to_vec(),
-                                StringFormat::Literal,
-                            ),
+                            Object::String(value_str.as_bytes().to_vec(), StringFormat::Literal),
                         );
                         filled += 1;
                     }
@@ -809,11 +869,14 @@ fn fill_form(input: &Value, workspace: &Path) -> Result<ToolResult> {
 // ─── add_annotation ───────────────────────────────────────────────────────────
 
 fn add_annotation(input: &Value, workspace: &Path) -> Result<ToolResult> {
-    use lopdf::{Document, Object, Dictionary, StringFormat};
+    use lopdf::{Dictionary, Document, Object, StringFormat};
 
     let path = try_tr!(require_path(input, workspace));
     if !path.exists() {
-        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+        return Ok(ToolResult::err(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
     let output = try_tr!(require_output(input, workspace));
     let page_num = input["page"].as_u64().unwrap_or(1) as u32;
@@ -821,18 +884,21 @@ fn add_annotation(input: &Value, workspace: &Path) -> Result<ToolResult> {
         Some(t) => t,
         None => return Ok(ToolResult::err("Missing required parameter: text")),
     };
-    let rect = input["rect"].as_array().and_then(|arr| {
-        if arr.len() == 4 {
-            Some([
-                arr[0].as_f64().unwrap_or(50.0),
-                arr[1].as_f64().unwrap_or(700.0),
-                arr[2].as_f64().unwrap_or(300.0),
-                arr[3].as_f64().unwrap_or(750.0),
-            ])
-        } else {
-            None
-        }
-    }).unwrap_or([50.0, 700.0, 300.0, 750.0]);
+    let rect = input["rect"]
+        .as_array()
+        .and_then(|arr| {
+            if arr.len() == 4 {
+                Some([
+                    arr[0].as_f64().unwrap_or(50.0),
+                    arr[1].as_f64().unwrap_or(700.0),
+                    arr[2].as_f64().unwrap_or(300.0),
+                    arr[3].as_f64().unwrap_or(750.0),
+                ])
+            } else {
+                None
+            }
+        })
+        .unwrap_or([50.0, 700.0, 300.0, 750.0]);
 
     let mut doc = match Document::load(&path) {
         Ok(d) => d,
@@ -841,25 +907,31 @@ fn add_annotation(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     let page_id = match doc.get_pages().get(&page_num).copied() {
         Some(id) => id,
-        None => return Ok(ToolResult::err(format!(
-            "Page {} not found (PDF has {} pages)",
-            page_num, doc.get_pages().len()
-        ))),
+        None => {
+            return Ok(ToolResult::err(format!(
+                "Page {} not found (PDF has {} pages)",
+                page_num,
+                doc.get_pages().len()
+            )))
+        }
     };
 
     let mut annot = Dictionary::new();
-    annot.set(b"Type",    Object::Name(b"Annot".to_vec()));
+    annot.set(b"Type", Object::Name(b"Annot".to_vec()));
     annot.set(b"Subtype", Object::Name(b"Text".to_vec()));
-    annot.set(b"Rect",    Object::Array(vec![
-        Object::Real(rect[0] as f32),
-        Object::Real(rect[1] as f32),
-        Object::Real(rect[2] as f32),
-        Object::Real(rect[3] as f32),
-    ]));
-    annot.set(b"Contents", Object::String(
-        text.as_bytes().to_vec(),
-        StringFormat::Literal,
-    ));
+    annot.set(
+        b"Rect",
+        Object::Array(vec![
+            Object::Real(rect[0] as f32),
+            Object::Real(rect[1] as f32),
+            Object::Real(rect[2] as f32),
+            Object::Real(rect[3] as f32),
+        ]),
+    );
+    annot.set(
+        b"Contents",
+        Object::String(text.as_bytes().to_vec(), StringFormat::Literal),
+    );
     annot.set(b"Open", Object::Boolean(false));
 
     let annot_id = doc.add_object(Object::Dictionary(annot));
@@ -888,7 +960,8 @@ fn add_annotation(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     Ok(ToolResult::ok(format!(
         "Added annotation on page {}, saved to {}",
-        page_num, output.display()
+        page_num,
+        output.display()
     )))
 }
 
@@ -897,7 +970,10 @@ fn add_annotation(input: &Value, workspace: &Path) -> Result<ToolResult> {
 fn to_images(input: &Value, workspace: &Path) -> Result<ToolResult> {
     let path = try_tr!(require_path(input, workspace));
     if !path.exists() {
-        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+        return Ok(ToolResult::err(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
     let out_dir = match input["output_dir"].as_str() {
         Some(s) => resolve(s, workspace),
@@ -909,13 +985,16 @@ fn to_images(input: &Value, workspace: &Path) -> Result<ToolResult> {
 
     // Try pdftoppm (poppler) first, then Ghostscript
     let pdftoppm = which_tool("pdftoppm");
-    let gs = which_tool("gswin64c").or_else(|| which_tool("gswin32c")).or_else(|| which_tool("gs"));
+    let gs = which_tool("gswin64c")
+        .or_else(|| which_tool("gswin32c"))
+        .or_else(|| which_tool("gs"));
 
     if let Some(pdftoppm_path) = pdftoppm {
         let prefix = out_dir.join("page");
         let output = std::process::Command::new(&pdftoppm_path)
             .args([
-                "-r", &dpi.to_string(),
+                "-r",
+                &dpi.to_string(),
                 "-png",
                 path.to_str().unwrap_or(""),
                 prefix.to_str().unwrap_or("page"),
@@ -931,7 +1010,10 @@ fn to_images(input: &Value, workspace: &Path) -> Result<ToolResult> {
                     .collect();
                 return Ok(ToolResult::ok(format!(
                     "Rendered {} page image(s) to {} at {} DPI:\n{}",
-                    files.len(), out_dir.display(), dpi, files.join("\n")
+                    files.len(),
+                    out_dir.display(),
+                    dpi,
+                    files.join("\n")
                 )));
             }
             Ok(out) => {
@@ -946,7 +1028,9 @@ fn to_images(input: &Value, workspace: &Path) -> Result<ToolResult> {
         let out_pattern = out_dir.join("page-%04d.png");
         let output = std::process::Command::new(&gs_path)
             .args([
-                "-dNOPAUSE", "-dBATCH", "-dSAFER",
+                "-dNOPAUSE",
+                "-dBATCH",
+                "-dSAFER",
                 "-sDEVICE=png16m",
                 &format!("-r{}", dpi),
                 &format!("-sOutputFile={}", out_pattern.to_str().unwrap_or("")),
@@ -963,7 +1047,10 @@ fn to_images(input: &Value, workspace: &Path) -> Result<ToolResult> {
                     .collect();
                 return Ok(ToolResult::ok(format!(
                     "Rendered {} page image(s) to {} at {} DPI:\n{}",
-                    files.len(), out_dir.display(), dpi, files.join("\n")
+                    files.len(),
+                    out_dir.display(),
+                    dpi,
+                    files.join("\n")
                 )));
             }
             Ok(out) => {
@@ -979,14 +1066,17 @@ fn to_images(input: &Value, workspace: &Path) -> Result<ToolResult> {
          Install options:\n\
          - Windows: https://www.ghostscript.com/download.html  or  choco install poppler\n\
          - Linux:   sudo apt install poppler-utils\n\
-         - macOS:   brew install poppler"
+         - macOS:   brew install poppler",
     ))
 }
 
 fn render_page_image(input: &Value, workspace: &Path) -> Result<ToolResult> {
     let path = try_tr!(require_path(input, workspace));
     if !path.exists() {
-        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+        return Ok(ToolResult::err(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
     let page = input["page"].as_u64().unwrap_or(1) as u32;
     if page == 0 {
@@ -999,7 +1089,12 @@ fn render_page_image(input: &Value, workspace: &Path) -> Result<ToolResult> {
     };
     let img = match image::load_from_memory(&bytes) {
         Ok(v) => v,
-        Err(e) => return Ok(ToolResult::err(format!("Failed to decode rendered page image: {}", e))),
+        Err(e) => {
+            return Ok(ToolResult::err(format!(
+                "Failed to decode rendered page image: {}",
+                e
+            )))
+        }
     };
     let (width, height) = img.dimensions();
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
@@ -1017,7 +1112,10 @@ fn render_page_image(input: &Value, workspace: &Path) -> Result<ToolResult> {
 fn render_region_image(input: &Value, workspace: &Path) -> Result<ToolResult> {
     let path = try_tr!(require_path(input, workspace));
     if !path.exists() {
-        return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+        return Ok(ToolResult::err(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
     let page = input["page"].as_u64().unwrap_or(1) as u32;
     if page == 0 {
@@ -1029,10 +1127,16 @@ fn render_region_image(input: &Value, workspace: &Path) -> Result<ToolResult> {
             .iter()
             .filter_map(|v| v.as_u64().map(|n| n as u32))
             .collect(),
-        _ => return Ok(ToolResult::err("Missing required parameter: crop_rect [left, top, width, height]")),
+        _ => {
+            return Ok(ToolResult::err(
+                "Missing required parameter: crop_rect [left, top, width, height]",
+            ))
+        }
     };
     if rect_vals.len() != 4 || rect_vals[2] == 0 || rect_vals[3] == 0 {
-        return Ok(ToolResult::err("Invalid crop_rect. Expected [left, top, width, height] with width/height > 0"));
+        return Ok(ToolResult::err(
+            "Invalid crop_rect. Expected [left, top, width, height] with width/height > 0",
+        ));
     }
     let bytes = match render_pdf_page_png_bytes(&path, page, dpi) {
         Ok(v) => v,
@@ -1040,14 +1144,23 @@ fn render_region_image(input: &Value, workspace: &Path) -> Result<ToolResult> {
     };
     let img = match image::load_from_memory(&bytes) {
         Ok(v) => v,
-        Err(e) => return Ok(ToolResult::err(format!("Failed to decode rendered page image: {}", e))),
+        Err(e) => {
+            return Ok(ToolResult::err(format!(
+                "Failed to decode rendered page image: {}",
+                e
+            )))
+        }
     };
     let (img_w, img_h) = img.dimensions();
     let left = rect_vals[0];
     let top = rect_vals[1];
     let width = rect_vals[2];
     let height = rect_vals[3];
-    if left >= img_w || top >= img_h || left.saturating_add(width) > img_w || top.saturating_add(height) > img_h {
+    if left >= img_w
+        || top >= img_h
+        || left.saturating_add(width) > img_w
+        || top.saturating_add(height) > img_h
+    {
         return Ok(ToolResult::err(format!(
             "crop_rect exceeds rendered page bounds. Page size is {}x{} px.",
             img_w, img_h
@@ -1056,7 +1169,10 @@ fn render_region_image(input: &Value, workspace: &Path) -> Result<ToolResult> {
     let cropped = img.crop_imm(left, top, width, height);
     let mut out = Cursor::new(Vec::new());
     if let Err(e) = cropped.write_to(&mut out, image::ImageFormat::Png) {
-        return Ok(ToolResult::err(format!("Failed to encode cropped region: {}", e)));
+        return Ok(ToolResult::err(format!(
+            "Failed to encode cropped region: {}",
+            e
+        )));
     }
     let png_bytes = out.into_inner();
     let b64 = base64::engine::general_purpose::STANDARD.encode(png_bytes);
@@ -1074,7 +1190,8 @@ fn render_region_image(input: &Value, workspace: &Path) -> Result<ToolResult> {
 }
 
 fn render_pdf_page_png_bytes(path: &Path, page: u32, dpi: u32) -> anyhow::Result<Vec<u8>> {
-    let temp_dir = std::env::temp_dir().join(format!("pisci_pdf_{}", uuid::Uuid::new_v4().simple()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("pisci_pdf_{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&temp_dir)?;
 
     let result = (|| -> anyhow::Result<Vec<u8>> {
@@ -1152,10 +1269,7 @@ fn render_pdf_page_png_bytes(path: &Path, page: u32, dpi: u32) -> anyhow::Result
 
 fn which_tool(name: &str) -> Option<PathBuf> {
     // Check PATH for the tool
-    if let Ok(output) = std::process::Command::new("where")
-        .arg(name)
-        .output()
-    {
+    if let Ok(output) = std::process::Command::new("where").arg(name).output() {
         if output.status.success() {
             let path_str = String::from_utf8_lossy(&output.stdout);
             let first = path_str.lines().next()?.trim().to_string();
@@ -1163,10 +1277,7 @@ fn which_tool(name: &str) -> Option<PathBuf> {
         }
     }
     // Unix fallback
-    if let Ok(output) = std::process::Command::new("which")
-        .arg(name)
-        .output()
-    {
+    if let Ok(output) = std::process::Command::new("which").arg(name).output() {
         if output.status.success() {
             let path_str = String::from_utf8_lossy(&output.stdout);
             let first = path_str.lines().next()?.trim().to_string();

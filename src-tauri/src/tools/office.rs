@@ -21,7 +21,9 @@ pub struct OfficeTool;
 
 #[async_trait]
 impl Tool for OfficeTool {
-    fn name(&self) -> &str { "office" }
+    fn name(&self) -> &str {
+        "office"
+    }
 
     fn description(&self) -> &str {
         "Automate Microsoft Office (Excel, Word, PowerPoint, Outlook) via COM.\n\
@@ -189,11 +191,22 @@ impl Tool for OfficeTool {
     fn needs_confirmation(&self, input: &Value) -> bool {
         matches!(
             input["action"].as_str(),
-            Some("write_cells") | Some("set_formula") | Some("write_document") |
-            Some("add_paragraph") | Some("add_table") | Some("add_picture") |
-            Some("set_header_footer") | Some("find_replace") |
-            Some("add_slide") | Some("add_slides") | Some("set_slide_text") | Some("add_image") |
-            Some("send_email") | Some("save") | Some("save_as") | Some("run_macro")
+            Some("write_cells")
+                | Some("set_formula")
+                | Some("write_document")
+                | Some("add_paragraph")
+                | Some("add_table")
+                | Some("add_picture")
+                | Some("set_header_footer")
+                | Some("find_replace")
+                | Some("add_slide")
+                | Some("add_slides")
+                | Some("set_slide_text")
+                | Some("add_image")
+                | Some("send_email")
+                | Some("save")
+                | Some("save_as")
+                | Some("run_macro")
         )
     }
 
@@ -212,16 +225,36 @@ impl Tool for OfficeTool {
         let script = match self.build_script(app, action, &input) {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!("office build_script error: app={} action={} err={}", app, action, e);
+                tracing::warn!(
+                    "office build_script error: app={} action={} err={}",
+                    app,
+                    action,
+                    e
+                );
                 return Ok(ToolResult::err(e));
             }
         };
 
         let result = self.run_ps_script(&script, &ctx.workspace_root).await;
         match &result {
-            Ok(r) if r.is_error => tracing::warn!("office tool error: app={} action={} result={}", app, action, r.content),
-            Ok(r) => tracing::info!("office tool ok: app={} action={} result={}", app, action, &r.content.chars().take(120).collect::<String>()),
-            Err(e) => tracing::warn!("office tool failed: app={} action={} err={}", app, action, e),
+            Ok(r) if r.is_error => tracing::warn!(
+                "office tool error: app={} action={} result={}",
+                app,
+                action,
+                r.content
+            ),
+            Ok(r) => tracing::info!(
+                "office tool ok: app={} action={} result={}",
+                app,
+                action,
+                &r.content.chars().take(120).collect::<String>()
+            ),
+            Err(e) => tracing::warn!(
+                "office tool failed: app={} action={} err={}",
+                app,
+                action,
+                e
+            ),
         }
         result
     }
@@ -1144,7 +1177,11 @@ $result | ConvertTo-Json -Depth 3
                            $OutputEncoding=[System.Text.Encoding]::UTF8;\
                            chcp 65001 | Out-Null; ";
         let full_script = format!("{}{}", utf8_prefix, script);
-        let safe_cwd = if cwd.exists() { cwd.to_path_buf() } else { std::path::PathBuf::from("C:\\") };
+        let safe_cwd = if cwd.exists() {
+            cwd.to_path_buf()
+        } else {
+            std::path::PathBuf::from("C:\\")
+        };
 
         let mut cmd = Command::new("powershell");
         cmd.args(["-NoProfile", "-NonInteractive", "-Command", &full_script])
@@ -1155,22 +1192,38 @@ $result | ConvertTo-Json -Depth 3
         #[cfg(target_os = "windows")]
         cmd.creation_flags(0x0800_0000);
 
-        tracing::debug!("office PS script (first 200 chars): {}", &script.chars().take(200).collect::<String>());
+        tracing::debug!(
+            "office PS script (first 200 chars): {}",
+            &script.chars().take(200).collect::<String>()
+        );
         match timeout(Duration::from_secs(OFFICE_TIMEOUT_SECS), cmd.output()).await {
             Err(_) => {
                 tracing::warn!("office PS script timed out after {}s", OFFICE_TIMEOUT_SECS);
-                Ok(ToolResult::err(format!("Office operation timed out after {}s", OFFICE_TIMEOUT_SECS)))
+                Ok(ToolResult::err(format!(
+                    "Office operation timed out after {}s",
+                    OFFICE_TIMEOUT_SECS
+                )))
             }
             Ok(Err(e)) => {
                 tracing::warn!("office PS script spawn error: {}", e);
-                Ok(ToolResult::err(format!("Failed to run Office script: {}", e)))
+                Ok(ToolResult::err(format!(
+                    "Failed to run Office script: {}",
+                    e
+                )))
             }
             Ok(Ok(output)) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                tracing::debug!("office PS stdout: {} | stderr: {}", &stdout.chars().take(200).collect::<String>(), &stderr.chars().take(200).collect::<String>());
+                tracing::debug!(
+                    "office PS stdout: {} | stderr: {}",
+                    &stdout.chars().take(200).collect::<String>(),
+                    &stderr.chars().take(200).collect::<String>()
+                );
                 if !output.status.success() && stdout.is_empty() {
-                    return Ok(ToolResult::err(format!("Office operation failed:\n{}", stderr)));
+                    return Ok(ToolResult::err(format!(
+                        "Office operation failed:\n{}",
+                        stderr
+                    )));
                 }
                 if !stderr.is_empty() && stdout.is_empty() {
                     return Ok(ToolResult::err(stderr));

@@ -58,7 +58,11 @@ async fn clawhub_get_with_retry(
 
         warn!(
             "ClawHub {} for '{}', retrying in {}ms (attempt {}/{})",
-            status, url, backoff_ms, attempt + 1, max_retries
+            status,
+            url,
+            backoff_ms,
+            attempt + 1,
+            max_retries
         );
         tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
         attempt += 1;
@@ -76,7 +80,8 @@ pub async fn list_skills(state: State<'_, AppState>) -> Result<SkillList, String
     let db = state.db.lock().await;
     let skills = db.list_skills().map_err(|e| e.to_string())?;
     // Filter out any stale "unnamed" entries left by failed skill parses
-    let skills: Vec<_> = skills.into_iter()
+    let skills: Vec<_> = skills
+        .into_iter()
         .filter(|s| s.name != "unnamed" && s.id != "unnamed")
         .collect();
     let total = skills.len();
@@ -107,7 +112,9 @@ pub struct SkillCatalogItem {
 }
 
 #[tauri::command]
-pub async fn scan_skill_catalog(state: State<'_, AppState>) -> Result<Vec<SkillCatalogItem>, String> {
+pub async fn scan_skill_catalog(
+    state: State<'_, AppState>,
+) -> Result<Vec<SkillCatalogItem>, String> {
     let app_dir = state
         .app_handle
         .path()
@@ -184,7 +191,13 @@ async fn install_skill_from_content(
     let safe_name: String = skill
         .name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .to_lowercase();
 
@@ -220,12 +233,12 @@ async fn install_skill_from_content(
         let provider = settings.provider.clone();
         let api_key = match settings.provider.as_str() {
             "openai" | "custom" => settings.openai_api_key.clone(),
-            "deepseek"          => settings.deepseek_api_key.clone(),
-            "qwen" | "tongyi"   => settings.qwen_api_key.clone(),
-            "minimax"           => settings.minimax_api_key.clone(),
-            "zhipu"             => settings.zhipu_api_key.clone(),
+            "deepseek" => settings.deepseek_api_key.clone(),
+            "qwen" | "tongyi" => settings.qwen_api_key.clone(),
+            "minimax" => settings.minimax_api_key.clone(),
+            "zhipu" => settings.zhipu_api_key.clone(),
             "kimi" | "moonshot" => settings.kimi_api_key.clone(),
-            _                   => settings.anthropic_api_key.clone(),
+            _ => settings.anthropic_api_key.clone(),
         };
         let base_url = settings.custom_base_url.clone();
         let model = settings.model.clone();
@@ -238,9 +251,15 @@ async fn install_skill_from_content(
                 let client = crate::llm::build_client(
                     &provider,
                     &api_key,
-                    if base_url.is_empty() { None } else { Some(&base_url) },
+                    if base_url.is_empty() {
+                        None
+                    } else {
+                        Some(&base_url)
+                    },
                 );
-                if let Err(e) = enrich_triggers_with_llm(&*client, &model, &enrich_skill, &enrich_file).await {
+                if let Err(e) =
+                    enrich_triggers_with_llm(&*client, &model, &enrich_skill, &enrich_file).await
+                {
                     warn!("Trigger enrichment failed (non-fatal): {}", e);
                 }
             });
@@ -296,7 +315,8 @@ pub async fn install_skill(
     let source_trimmed = sanitize_source(&source);
 
     // ── Detect zip: local path ending in .zip, or URL ending in .zip ──────────
-    let is_zip_url = (source_trimmed.starts_with("http://") || source_trimmed.starts_with("https://"))
+    let is_zip_url = (source_trimmed.starts_with("http://")
+        || source_trimmed.starts_with("https://"))
         && source_trimmed.to_lowercase().ends_with(".zip");
     let is_zip_local = !source_trimmed.starts_with("http://")
         && !source_trimmed.starts_with("https://")
@@ -306,12 +326,23 @@ pub async fn install_skill(
         return install_skill_from_zip(&state, &source_trimmed).await;
     }
 
-    let content = if source_trimmed.starts_with("http://") || source_trimmed.starts_with("https://") {
+    let content = if source_trimmed.starts_with("http://") || source_trimmed.starts_with("https://")
+    {
         // Basic URL validation — reject internal/private addresses
-        let blocked = ["localhost", "127.0.0.1", "0.0.0.0", "192.168.", "10.", "172."];
+        let blocked = [
+            "localhost",
+            "127.0.0.1",
+            "0.0.0.0",
+            "192.168.",
+            "10.",
+            "172.",
+        ];
         for pat in blocked {
             if source_trimmed.contains(pat) {
-                return Err(format!("Blocked URL: '{}' points to a private/local address", source_trimmed));
+                return Err(format!(
+                    "Blocked URL: '{}' points to a private/local address",
+                    source_trimmed
+                ));
             }
         }
         info!("Downloading skill from URL: {}", source_trimmed);
@@ -326,9 +357,15 @@ pub async fn install_skill(
             .await
             .map_err(|e| format!("Download failed: {}", e))?;
         if !resp.status().is_success() {
-            return Err(format!("HTTP {} when downloading: {}", resp.status(), source_trimmed));
+            return Err(format!(
+                "HTTP {} when downloading: {}",
+                resp.status(),
+                source_trimmed
+            ));
         }
-        resp.text().await.map_err(|e| format!("Failed to read response: {}", e))?
+        resp.text()
+            .await
+            .map_err(|e| format!("Failed to read response: {}", e))?
     } else {
         // Local file path
         tokio::fs::read_to_string(&source_trimmed)
@@ -350,10 +387,20 @@ async fn install_skill_from_zip(
 ) -> Result<SkillCatalogItem, String> {
     // ── 1. Fetch zip bytes ────────────────────────────────────────────────────
     let zip_bytes: Vec<u8> = if source.starts_with("http://") || source.starts_with("https://") {
-        let blocked = ["localhost", "127.0.0.1", "0.0.0.0", "192.168.", "10.", "172."];
+        let blocked = [
+            "localhost",
+            "127.0.0.1",
+            "0.0.0.0",
+            "192.168.",
+            "10.",
+            "172.",
+        ];
         for pat in blocked {
             if source.contains(pat) {
-                return Err(format!("Blocked URL: '{}' points to a private/local address", source));
+                return Err(format!(
+                    "Blocked URL: '{}' points to a private/local address",
+                    source
+                ));
             }
         }
         info!("Downloading skill zip from URL: {}", source);
@@ -368,9 +415,16 @@ async fn install_skill_from_zip(
             .await
             .map_err(|e| format!("Download failed: {}", e))?;
         if !resp.status().is_success() {
-            return Err(format!("HTTP {} when downloading zip: {}", resp.status(), source));
+            return Err(format!(
+                "HTTP {} when downloading zip: {}",
+                resp.status(),
+                source
+            ));
         }
-        resp.bytes().await.map_err(|e| format!("Failed to read zip bytes: {}", e))?.to_vec()
+        resp.bytes()
+            .await
+            .map_err(|e| format!("Failed to read zip bytes: {}", e))?
+            .to_vec()
     } else {
         tokio::fs::read(source)
             .await
@@ -379,8 +433,8 @@ async fn install_skill_from_zip(
 
     // ── 2. Parse zip and locate SKILL.md ─────────────────────────────────────
     let cursor = std::io::Cursor::new(&zip_bytes);
-    let mut archive = zip::ZipArchive::new(cursor)
-        .map_err(|e| format!("Failed to open zip archive: {}", e))?;
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| format!("Failed to open zip archive: {}", e))?;
 
     // Find SKILL.md — accept root-level or one directory deep.
     // Normalise path separators to '/' and do case-insensitive filename match
@@ -403,13 +457,17 @@ async fn install_skill_from_zip(
         found
     };
 
-    let skill_md_path = skill_md_path
-        .ok_or_else(|| "Zip archive does not contain a SKILL.md file".to_string())?;
+    let skill_md_path =
+        skill_md_path.ok_or_else(|| "Zip archive does not contain a SKILL.md file".to_string())?;
 
     // Determine the prefix directory (empty string if SKILL.md is at root)
     let prefix: String = {
         let parts: Vec<&str> = skill_md_path.split('/').collect();
-        if parts.len() == 2 { format!("{}/", parts[0]) } else { String::new() }
+        if parts.len() == 2 {
+            format!("{}/", parts[0])
+        } else {
+            String::new()
+        }
     };
 
     // ── 3. Read SKILL.md content (find by index to handle backslash paths) ──────
@@ -426,7 +484,8 @@ async fn install_skill_from_zip(
             }
         }
         let idx = skill_idx.ok_or_else(|| "Could not re-locate SKILL.md in zip".to_string())?;
-        let mut file = archive.by_index(idx)
+        let mut file = archive
+            .by_index(idx)
             .map_err(|e| format!("Failed to read SKILL.md from zip: {}", e))?;
         let mut content = String::new();
         std::io::Read::read_to_string(&mut file, &mut content)
@@ -464,7 +523,13 @@ async fn install_skill_from_zip(
     let safe_name: String = skill
         .name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .to_lowercase();
 
@@ -556,10 +621,7 @@ async fn install_skill_from_zip(
 /// Remove an installed skill by name. Only skills whose source is "installed" or "workspace"
 /// can be removed this way; built-in skills are protected.
 #[tauri::command]
-pub async fn uninstall_skill(
-    state: State<'_, AppState>,
-    skill_name: String,
-) -> Result<(), String> {
+pub async fn uninstall_skill(state: State<'_, AppState>, skill_name: String) -> Result<(), String> {
     let app_dir = state
         .app_handle
         .path()
@@ -569,7 +631,13 @@ pub async fn uninstall_skill(
 
     let safe_name: String = skill_name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .to_lowercase();
 
@@ -586,12 +654,20 @@ pub async fn uninstall_skill(
         let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
         let _ = loader.load_all();
 
-        let mut candidate_dirs: std::collections::BTreeSet<std::path::PathBuf> = std::collections::BTreeSet::new();
+        let mut candidate_dirs: std::collections::BTreeSet<std::path::PathBuf> =
+            std::collections::BTreeSet::new();
         candidate_dirs.insert(skills_dir.join(&safe_name));
         for skill in loader.list_skills() {
-            let parsed_safe_name = skill.name
+            let parsed_safe_name = skill
+                .name
                 .chars()
-                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
                 .collect::<String>()
                 .to_lowercase();
             if skill.name.eq_ignore_ascii_case(&skill_name) || parsed_safe_name == safe_name {
@@ -609,9 +685,12 @@ pub async fn uninstall_skill(
             if !canonical_dir.starts_with(&canonical_skills) {
                 return Err("Path traversal attempt blocked".into());
             }
-            tokio::fs::remove_dir_all(&skill_dir)
-                .await
-                .map_err(|e| format!("Skill removed from database but failed to delete files: {}", e))?;
+            tokio::fs::remove_dir_all(&skill_dir).await.map_err(|e| {
+                format!(
+                    "Skill removed from database but failed to delete files: {}",
+                    e
+                )
+            })?;
         }
     }
 
@@ -662,7 +741,10 @@ pub struct ClawHubSearchResult {
 /// Uses vector search (`/api/v1/search?q=`) when a query is provided,
 /// or the list endpoint (`/api/v1/skills?sort=stars`) when the query is empty.
 #[tauri::command]
-pub async fn clawhub_search(query: String, limit: Option<u32>) -> Result<ClawHubSearchResult, String> {
+pub async fn clawhub_search(
+    query: String,
+    limit: Option<u32>,
+) -> Result<ClawHubSearchResult, String> {
     let limit = limit.unwrap_or(20).min(50);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -693,7 +775,12 @@ pub async fn clawhub_search(query: String, limit: Option<u32>) -> Result<ClawHub
 
     let resp = clawhub_get_with_retry(&client, &url, 3)
         .await
-        .map_err(|e| format!("无法连接到 ClawHub（{}）：{}。请检查网络连接。", CLAWHUB_API, e))?;
+        .map_err(|e| {
+            format!(
+                "无法连接到 ClawHub（{}）：{}。请检查网络连接。",
+                CLAWHUB_API, e
+            )
+        })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -710,9 +797,7 @@ pub async fn clawhub_search(query: String, limit: Option<u32>) -> Result<ClawHub
         };
         return Err(format!(
             "ClawHub 返回错误 HTTP {}{}：{}",
-            status,
-            hint,
-            body_preview
+            status, hint, body_preview
         ));
     }
 
@@ -726,75 +811,127 @@ pub async fn clawhub_search(query: String, limit: Option<u32>) -> Result<ClawHub
     // - /api/v1/skills  → { items:   [{ slug, displayName, summary, tags, stats, latestVersion, metadata }] }
     let items: Vec<ClawHubSkill> = if use_search_endpoint {
         let results = body["results"].as_array().cloned().unwrap_or_default();
-        results.iter().filter_map(|r| {
-            let slug = r["slug"].as_str().unwrap_or("").to_string();
-            if slug.is_empty() { return None; }
-            let name = r["displayName"].as_str().unwrap_or(&slug).to_string();
-            let description = r["summary"].as_str().unwrap_or("").to_string();
-            let version = r["version"].as_str().unwrap_or("").to_string();
-            let skill_url = Some(format!("{}/api/v1/skills/{}/file?path=SKILL.md", CLAWHUB_API, slug));
-            let zip_url = Some(format!("{}/api/v1/download?slug={}", CLAWHUB_API, slug));
-            Some(ClawHubSkill {
-                slug, name, description, version,
-                author: String::new(),
-                downloads: 0, stars: 0,
-                tags: vec![],
-                skill_url, zip_url,
-                platform: vec![], dependencies: vec![],
-                compatible: None, compat_issues: vec![],
+        results
+            .iter()
+            .filter_map(|r| {
+                let slug = r["slug"].as_str().unwrap_or("").to_string();
+                if slug.is_empty() {
+                    return None;
+                }
+                let name = r["displayName"].as_str().unwrap_or(&slug).to_string();
+                let description = r["summary"].as_str().unwrap_or("").to_string();
+                let version = r["version"].as_str().unwrap_or("").to_string();
+                let skill_url = Some(format!(
+                    "{}/api/v1/skills/{}/file?path=SKILL.md",
+                    CLAWHUB_API, slug
+                ));
+                let zip_url = Some(format!("{}/api/v1/download?slug={}", CLAWHUB_API, slug));
+                Some(ClawHubSkill {
+                    slug,
+                    name,
+                    description,
+                    version,
+                    author: String::new(),
+                    downloads: 0,
+                    stars: 0,
+                    tags: vec![],
+                    skill_url,
+                    zip_url,
+                    platform: vec![],
+                    dependencies: vec![],
+                    compatible: None,
+                    compat_issues: vec![],
+                })
             })
-        }).collect()
+            .collect()
     } else {
         let raw_items = body["items"].as_array().cloned().unwrap_or_default();
-        raw_items.iter().filter_map(|item| {
-            let slug = item["slug"].as_str().unwrap_or("").to_string();
-            if slug.is_empty() { return None; }
-            let name = item["displayName"].as_str().unwrap_or(&slug).to_string();
-            let description = item["summary"].as_str().unwrap_or("").to_string();
-            let version = item["latestVersion"]["version"].as_str().unwrap_or("latest").to_string();
+        raw_items
+            .iter()
+            .filter_map(|item| {
+                let slug = item["slug"].as_str().unwrap_or("").to_string();
+                if slug.is_empty() {
+                    return None;
+                }
+                let name = item["displayName"].as_str().unwrap_or(&slug).to_string();
+                let description = item["summary"].as_str().unwrap_or("").to_string();
+                let version = item["latestVersion"]["version"]
+                    .as_str()
+                    .unwrap_or("latest")
+                    .to_string();
 
-            // tags is an object { tag_name: versionId } in the list endpoint
-            let tags: Vec<String> = item["tags"]
-                .as_object()
-                .map(|obj| obj.keys().cloned().collect())
-                .unwrap_or_default();
+                // tags is an object { tag_name: versionId } in the list endpoint
+                let tags: Vec<String> = item["tags"]
+                    .as_object()
+                    .map(|obj| obj.keys().cloned().collect())
+                    .unwrap_or_default();
 
-            let stats = &item["stats"];
-            let downloads = stats["installsAllTime"].as_u64()
-                .or_else(|| stats["downloads"].as_u64())
-                .unwrap_or(0);
-            let stars = stats["stars"].as_u64().unwrap_or(0);
+                let stats = &item["stats"];
+                let downloads = stats["installsAllTime"]
+                    .as_u64()
+                    .or_else(|| stats["downloads"].as_u64())
+                    .unwrap_or(0);
+                let stars = stats["stars"].as_u64().unwrap_or(0);
 
-            // OS platform from metadata (clawdis.os field)
-            let platform: Vec<String> = item["metadata"]["os"]
-                .as_array()
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                .unwrap_or_default();
+                // OS platform from metadata (clawdis.os field)
+                let platform: Vec<String> = item["metadata"]["os"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
 
-            let skill_url = Some(format!("{}/api/v1/skills/{}/file?path=SKILL.md", CLAWHUB_API, slug));
-            let zip_url = Some(format!("{}/api/v1/download?slug={}", CLAWHUB_API, slug));
+                let skill_url = Some(format!(
+                    "{}/api/v1/skills/{}/file?path=SKILL.md",
+                    CLAWHUB_API, slug
+                ));
+                let zip_url = Some(format!("{}/api/v1/download?slug={}", CLAWHUB_API, slug));
 
-            Some(ClawHubSkill {
-                slug, name, description, version,
-                author: String::new(),
-                downloads, stars, tags,
-                skill_url, zip_url,
-                platform, dependencies: vec![],
-                compatible: None, compat_issues: vec![],
+                Some(ClawHubSkill {
+                    slug,
+                    name,
+                    description,
+                    version,
+                    author: String::new(),
+                    downloads,
+                    stars,
+                    tags,
+                    skill_url,
+                    zip_url,
+                    platform,
+                    dependencies: vec![],
+                    compatible: None,
+                    compat_issues: vec![],
+                })
             })
-        }).collect()
+            .collect()
     };
 
     let total = items.len();
-    Ok(ClawHubSearchResult { items, total, query })
+    Ok(ClawHubSearchResult {
+        items,
+        total,
+        query,
+    })
 }
 
 /// Pre-check whether a skill (from URL or local path) is compatible with the current system.
 /// Returns compatibility info without actually installing the skill.
 #[tauri::command]
-pub async fn check_skill_compat(source: String) -> Result<crate::skills::loader::CompatibilityCheck, String> {
+pub async fn check_skill_compat(
+    source: String,
+) -> Result<crate::skills::loader::CompatibilityCheck, String> {
     let content = if source.starts_with("http://") || source.starts_with("https://") {
-        let blocked = ["localhost", "127.0.0.1", "0.0.0.0", "192.168.", "10.", "172."];
+        let blocked = [
+            "localhost",
+            "127.0.0.1",
+            "0.0.0.0",
+            "192.168.",
+            "10.",
+            "172.",
+        ];
         for pat in blocked {
             if source.contains(pat) {
                 return Err(format!("Blocked URL: '{}'", source));
@@ -804,19 +941,25 @@ pub async fn check_skill_compat(source: String) -> Result<crate::skills::loader:
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .map_err(|e| e.to_string())?;
-        let resp = client.get(&source).header("User-Agent", "Pisci-Desktop/1.0")
-            .send().await.map_err(|e| format!("Download failed: {}", e))?;
+        let resp = client
+            .get(&source)
+            .header("User-Agent", "Pisci-Desktop/1.0")
+            .send()
+            .await
+            .map_err(|e| format!("Download failed: {}", e))?;
         if !resp.status().is_success() {
             return Err(format!("HTTP {} when fetching: {}", resp.status(), source));
         }
         resp.text().await.map_err(|e| e.to_string())?
     } else {
-        tokio::fs::read_to_string(&source).await
+        tokio::fs::read_to_string(&source)
+            .await
             .map_err(|e| format!("Failed to read '{}': {}", source, e))?
     };
 
     let loader = crate::skills::loader::SkillLoader::new(std::path::Path::new("."));
-    let skill = loader.parse_skill_from_content(&content)
+    let skill = loader
+        .parse_skill_from_content(&content)
         .map_err(|e| format!("Failed to parse SKILL.md: {}", e))?;
 
     Ok(check_skill_compatibility(&skill).await)
@@ -832,7 +975,10 @@ pub async fn clawhub_install(
     version: Option<String>,
 ) -> Result<SkillCatalogItem, String> {
     // Validate slug — only allow alphanumeric, hyphens, underscores, dots
-    if !slug.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+    if !slug
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
         return Err(format!("无效的技能 slug：'{}'", slug));
     }
 
@@ -849,27 +995,41 @@ pub async fn clawhub_install(
 
     // Build the file URL, optionally pinning a concrete version
     let file_url = if let Some(ver) = normalized_version {
-        format!("{}/api/v1/skills/{}/file?path=SKILL.md&version={}", CLAWHUB_API, slug, ver)
+        format!(
+            "{}/api/v1/skills/{}/file?path=SKILL.md&version={}",
+            CLAWHUB_API, slug, ver
+        )
     } else {
         format!("{}/api/v1/skills/{}/file?path=SKILL.md", CLAWHUB_API, slug)
     };
-    info!("ClawHub install: fetching SKILL.md for '{}' from {}", slug, file_url);
+    info!(
+        "ClawHub install: fetching SKILL.md for '{}' from {}",
+        slug, file_url
+    );
 
     let resp = clawhub_get_with_retry(&client, &file_url, 3)
         .await
         .map_err(|e| format!("下载失败：{}", e))?;
 
     let content = if resp.status().is_success() {
-        resp.text().await.map_err(|e| format!("读取 SKILL.md 失败：{}", e))?
+        resp.text()
+            .await
+            .map_err(|e| format!("读取 SKILL.md 失败：{}", e))?
     } else {
         let file_status = resp.status();
         // Fallback: download the zip bundle and extract SKILL.md
         let zip_url = if let Some(ver) = normalized_version {
-            format!("{}/api/v1/download?slug={}&version={}", CLAWHUB_API, slug, ver)
+            format!(
+                "{}/api/v1/download?slug={}&version={}",
+                CLAWHUB_API, slug, ver
+            )
         } else {
             format!("{}/api/v1/download?slug={}", CLAWHUB_API, slug)
         };
-        info!("ClawHub: file endpoint returned {}, trying zip: {}", file_status, zip_url);
+        info!(
+            "ClawHub: file endpoint returned {}, trying zip: {}",
+            file_status, zip_url
+        );
         let zip_resp = clawhub_get_with_retry(&client, &zip_url, 3)
             .await
             .map_err(|e| format!("Zip 下载失败：{}", e))?;
@@ -959,8 +1119,12 @@ async fn enrich_triggers_with_llm(
     let text = response.content;
 
     // Extract JSON array from response (may be wrapped in prose)
-    let json_start = text.find('[').ok_or_else(|| anyhow::anyhow!("No JSON array in response"))?;
-    let json_end = text.rfind(']').ok_or_else(|| anyhow::anyhow!("No closing ] in response"))?;
+    let json_start = text
+        .find('[')
+        .ok_or_else(|| anyhow::anyhow!("No JSON array in response"))?;
+    let json_end = text
+        .rfind(']')
+        .ok_or_else(|| anyhow::anyhow!("No closing ] in response"))?;
     let json_str = &text[json_start..=json_end];
 
     let new_triggers: Vec<String> = serde_json::from_str(json_str)
@@ -982,11 +1146,13 @@ async fn enrich_triggers_with_llm(
     }
 
     // Read current SKILL.md content
-    let current = tokio::fs::read_to_string(skill_file).await
+    let current = tokio::fs::read_to_string(skill_file)
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to read SKILL.md: {}", e))?;
 
     // Build the new triggers YAML block
-    let triggers_yaml = merged.iter()
+    let triggers_yaml = merged
+        .iter()
         .map(|t| format!("  - \"{}\"", t.replace('"', "\\\"")))
         .collect::<Vec<_>>()
         .join("\n");
@@ -1009,9 +1175,14 @@ async fn enrich_triggers_with_llm(
         }
     };
 
-    tokio::fs::write(skill_file, updated).await
+    tokio::fs::write(skill_file, updated)
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to write enriched SKILL.md: {}", e))?;
 
-    info!("Enriched triggers for skill '{}': {} keywords", skill.name, merged.len());
+    info!(
+        "Enriched triggers for skill '{}': {} keywords",
+        skill.name,
+        merged.len()
+    );
     Ok(())
 }

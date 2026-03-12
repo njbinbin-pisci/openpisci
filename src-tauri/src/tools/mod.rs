@@ -1,44 +1,44 @@
 pub mod app_control;
-pub mod file_read;
-pub mod file_write;
-pub mod file_search;
-pub mod file_list;
-pub mod code_run;
-pub mod file_diff;
-pub mod process_control;
-pub mod shell;
-pub mod web_search;
-pub mod powershell;
-pub mod wmi_tool;
-pub mod office;
 pub mod browser;
-pub mod dpi;
-pub mod email;
-pub mod memory_tool;
-pub mod user_tool;
-pub mod plan_todo;
-pub mod vision_context;
 pub mod call_fish;
 pub mod call_koi;
-pub mod pool_org;
-pub mod pool_chat;
 pub mod chat_ui;
+pub mod code_run;
+pub mod dpi;
+pub mod email;
+pub mod file_diff;
+pub mod file_list;
+pub mod file_read;
+pub mod file_search;
+pub mod file_write;
 pub mod mcp;
+pub mod memory_tool;
+pub mod office;
+pub mod pdf;
+pub mod plan_todo;
+pub mod pool_chat;
+pub mod pool_org;
+pub mod powershell;
+pub mod process_control;
+pub mod shell;
 pub mod skill_search;
 pub mod ssh;
-pub mod pdf;
+pub mod user_tool;
+pub mod vision_context;
+pub mod web_search;
+pub mod wmi_tool;
 
 #[cfg(target_os = "windows")]
 pub mod elevate;
 
 #[cfg(target_os = "windows")]
-pub mod uia;
-#[cfg(target_os = "windows")]
-pub mod screen;
+pub mod com_invoke;
 #[cfg(target_os = "windows")]
 pub mod com_tool;
 #[cfg(target_os = "windows")]
-pub mod com_invoke;
+pub mod screen;
+#[cfg(target_os = "windows")]
+pub mod uia;
 
 use crate::agent::tool::ToolRegistry;
 use crate::browser::SharedBrowserManager;
@@ -120,7 +120,9 @@ pub fn build_registry(
     // Memory tool — requires DB access
     if is_enabled("memory_store") {
         if let Some(ref db_arc) = db {
-            registry.register(Box::new(memory_tool::MemoryStoreTool { db: db_arc.clone() }));
+            registry.register(Box::new(memory_tool::MemoryStoreTool {
+                db: db_arc.clone(),
+            }));
         }
     }
 
@@ -157,9 +159,7 @@ pub fn build_registry(
     // chat_ui tool — lets Pisci show interactive UI cards in the chat
     if is_enabled("chat_ui") {
         if let Some(ref app) = app_handle {
-            registry.register(Box::new(chat_ui::ChatUiTool {
-                app: app.clone(),
-            }));
+            registry.register(Box::new(chat_ui::ChatUiTool { app: app.clone() }));
         }
     }
 
@@ -237,7 +237,11 @@ pub fn build_registry(
     // Dynamically loaded user tools
     if let Some(dir) = user_tools_dir {
         let user_tools = user_tool::load_user_tools(dir);
-        tracing::info!("Loaded {} user tool(s) from {}", user_tools.len(), dir.display());
+        tracing::info!(
+            "Loaded {} user tool(s) from {}",
+            user_tools.len(),
+            dir.display()
+        );
         for tool in user_tools {
             registry.register(Box::new(tool));
         }
@@ -248,10 +252,8 @@ pub fn build_registry(
 
 /// Load MCP tools from configured servers and register them into an existing registry.
 /// This is async because MCP connections require network/process I/O.
-pub async fn register_mcp_tools(
-    registry: &mut ToolRegistry,
-    mcp_servers: &[mcp::McpServerConfig],
-) {
+#[allow(dead_code)]
+pub async fn register_mcp_tools(registry: &mut ToolRegistry, mcp_servers: &[mcp::McpServerConfig]) {
     for server in mcp_servers {
         if !server.enabled {
             continue;

@@ -35,7 +35,8 @@ pub async fn create_session(
     title: Option<String>,
 ) -> Result<Session, String> {
     let db = state.db.lock().await;
-    db.create_session(title.as_deref()).map_err(|e| e.to_string())
+    db.create_session(title.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -53,10 +54,7 @@ pub async fn list_sessions(
 }
 
 #[tauri::command]
-pub async fn delete_session(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> Result<(), String> {
+pub async fn delete_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     let db = state.db.lock().await;
     db.delete_session(&session_id).map_err(|e| e.to_string())
 }
@@ -68,7 +66,8 @@ pub async fn rename_session(
     title: String,
 ) -> Result<(), String> {
     let db = state.db.lock().await;
-    db.rename_session(&session_id, &title).map_err(|e| e.to_string())
+    db.rename_session(&session_id, &title)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -104,10 +103,32 @@ pub async fn chat_send(
     content: String,
     attachment: Option<FrontendAttachment>,
 ) -> Result<(), String> {
-    tracing::info!("chat_send called: session={} content_len={} has_attachment={}", session_id, content.len(), attachment.is_some());
+    tracing::info!(
+        "chat_send called: session={} content_len={} has_attachment={}",
+        session_id,
+        content.len(),
+        attachment.is_some()
+    );
 
     // Load settings
-    let (provider, model, api_key, base_url, workspace_root, max_tokens, context_window, confirm_shell, confirm_file_write, policy_mode, tool_rate_limit_per_minute, tool_settings, max_iterations, builtin_tool_enabled, allow_outside_workspace, vision_enabled) = {
+    let (
+        provider,
+        model,
+        api_key,
+        base_url,
+        workspace_root,
+        max_tokens,
+        context_window,
+        confirm_shell,
+        confirm_file_write,
+        policy_mode,
+        tool_rate_limit_per_minute,
+        tool_settings,
+        max_iterations,
+        builtin_tool_enabled,
+        allow_outside_workspace,
+        vision_enabled,
+    ) = {
         let settings = state.settings.lock().await;
         (
             settings.provider.clone(),
@@ -129,26 +150,51 @@ pub async fn chat_send(
         )
     };
 
-    tracing::info!("chat_send: provider={} model={} api_key_empty={}", provider, model, api_key.is_empty());
+    tracing::info!(
+        "chat_send: provider={} model={} api_key_empty={}",
+        provider,
+        model,
+        api_key.is_empty()
+    );
 
     if api_key.is_empty() {
         tracing::warn!("chat_send: API key not configured");
-        return Err("API key not configured. Please open Settings to configure your API key.".into());
+        return Err(
+            "API key not configured. Please open Settings to configure your API key.".into(),
+        );
     }
 
     // Prompt injection detection on user input
     {
-        let gate = PolicyGate::with_profile_and_flags(&workspace_root, &policy_mode, tool_rate_limit_per_minute, allow_outside_workspace);
+        let gate = PolicyGate::with_profile_and_flags(
+            &workspace_root,
+            &policy_mode,
+            tool_rate_limit_per_minute,
+            allow_outside_workspace,
+        );
         let decision = gate.check_user_input(&content);
         match decision {
             crate::policy::PolicyDecision::Deny(reason) => {
-                tracing::warn!("chat_send: user input rejected by injection detection: {}", reason);
+                tracing::warn!(
+                    "chat_send: user input rejected by injection detection: {}",
+                    reason
+                );
                 return Err(format!("Input rejected: {}", reason));
             }
             crate::policy::PolicyDecision::Warn(reason) => {
-                tracing::warn!("chat_send: potential injection detected (proceeding): {}", reason);
+                tracing::warn!(
+                    "chat_send: potential injection detected (proceeding): {}",
+                    reason
+                );
                 let db = state.db.lock().await;
-                let _ = db.append_audit(&session_id, "injection_detection", "warn", Some(&reason), None, false);
+                let _ = db.append_audit(
+                    &session_id,
+                    "injection_detection",
+                    "warn",
+                    Some(&reason),
+                    None,
+                    false,
+                );
             }
             crate::policy::PolicyDecision::Allow => {}
         }
@@ -163,8 +209,9 @@ pub async fn chat_send(
             if att.media_type.starts_with("image/") {
                 if vision_capable {
                     // Vision model: pass raw bytes for inline base64 injection
-                    let data = att.data.as_deref()
-                        .and_then(|b64| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).ok());
+                    let data = att.data.as_deref().and_then(|b64| {
+                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).ok()
+                    });
                     let media = crate::gateway::MediaAttachment {
                         media_type: att.media_type.clone(),
                         url: None,
@@ -178,12 +225,17 @@ pub async fn chat_send(
                         p.clone()
                     } else if let Some(b64) = &att.data {
                         let ext = match att.media_type.as_str() {
-                            "image/png" => "png", "image/gif" => "gif", "image/webp" => "webp", _ => "jpg",
+                            "image/png" => "png",
+                            "image/gif" => "gif",
+                            "image/webp" => "webp",
+                            _ => "jpg",
                         };
                         let default_fname = format!("attachment.{}", ext);
                         let fname = att.filename.as_deref().unwrap_or(&default_fname);
                         let tmp = std::env::temp_dir().join(fname);
-                        if let Ok(bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64) {
+                        if let Ok(bytes) =
+                            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+                        {
                             let _ = std::fs::write(&tmp, &bytes);
                         }
                         tmp.to_string_lossy().to_string()
@@ -235,7 +287,8 @@ pub async fn chat_send(
 
     let mut llm_messages = {
         let db = state.db.lock().await;
-        let history = db.get_messages_latest(&session_id, 2000)
+        let history = db
+            .get_messages_latest(&session_id, 2000)
             .map_err(|e| e.to_string())?;
         build_context_messages(&history, budget)
     };
@@ -276,19 +329,22 @@ pub async fn chat_send(
     let client = build_client(
         &provider,
         &api_key,
-        if base_url.is_empty() { None } else { Some(&base_url) },
+        if base_url.is_empty() {
+            None
+        } else {
+            Some(&base_url)
+        },
     );
 
-    let user_tools_dir = app
-        .path()
-        .app_data_dir()
-        .map(|d| d.join("user-tools"))
-        .ok();
+    let user_tools_dir = app.path().app_data_dir().map(|d| d.join("user-tools")).ok();
     let app_data_dir = app.path().app_data_dir().ok();
 
     // Load skills: build lightweight directory for system prompt + shared loader for skill_search tool
     let (skill_context, skill_loader_arc) = {
-        let app_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
+        let app_dir = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
         let skills_dir = app_dir.join("skills");
         let mut loader = crate::skills::loader::SkillLoader::new(skills_dir);
         if let Err(e) = loader.load_all() {
@@ -319,7 +375,12 @@ pub async fn chat_send(
         Some(skill_loader_arc),
     ));
 
-    let policy = Arc::new(PolicyGate::with_profile_and_flags(&workspace_root, &policy_mode, tool_rate_limit_per_minute, allow_outside_workspace));
+    let policy = Arc::new(PolicyGate::with_profile_and_flags(
+        &workspace_root,
+        &policy_mode,
+        tool_rate_limit_per_minute,
+        allow_outside_workspace,
+    ));
 
     // Inject relevant memories into the system prompt (scoped to Pisci)
     let memory_context = {
@@ -342,7 +403,9 @@ pub async fn chat_send(
     let task_state_context = {
         let db = state.db.lock().await;
         match db.load_task_state("session", &session_id) {
-            Ok(Some(ts)) if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) => {
+            Ok(Some(ts))
+                if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) =>
+            {
                 let mut ctx = String::from("\n\n## Active Task State\n");
                 if !ts.goal.is_empty() {
                     ctx.push_str(&format!("**Goal:** {}\n", ts.goal));
@@ -370,7 +433,12 @@ pub async fn chat_send(
         client,
         registry,
         policy,
-        system_prompt: build_system_prompt_with_env(&full_memory_context, &skill_context, &workspace_root, allow_outside_workspace),
+        system_prompt: build_system_prompt_with_env(
+            &full_memory_context,
+            &skill_context,
+            &workspace_root,
+            allow_outside_workspace,
+        ),
         model: model.clone(),
         max_tokens,
         db: Some(state.db.clone()),
@@ -398,10 +466,16 @@ pub async fn chat_send(
     // Check if the request should be decomposed by HostAgent
     let sub_tasks = if crate::agent::host::HostAgent::should_decompose(&effective_content) {
         let host_client = build_client(
-            &provider, &api_key,
-            if base_url.is_empty() { None } else { Some(&base_url) },
+            &provider,
+            &api_key,
+            if base_url.is_empty() {
+                None
+            } else {
+                Some(&base_url)
+            },
         );
-        let host_agent = crate::agent::host::HostAgent::new(host_client, model_for_host.clone(), max_tokens);
+        let host_agent =
+            crate::agent::host::HostAgent::new(host_client, model_for_host.clone(), max_tokens);
         match host_agent.decompose_task(&effective_content).await {
             Ok(tasks) if tasks.len() > 1 => {
                 tracing::info!("HostAgent decomposed into {} sub-tasks", tasks.len());
@@ -435,7 +509,10 @@ pub async fn chat_send(
     let state_browser = state.browser.clone();
     let max_tokens_val = max_tokens;
 
-    tracing::info!("chat_send: spawning agent background task for session={}", session_id);
+    tracing::info!(
+        "chat_send: spawning agent background task for session={}",
+        session_id
+    );
 
     tokio::spawn(async move {
         tracing::info!("agent task started for session={}", session_id_clone);
@@ -447,7 +524,8 @@ pub async fn chat_send(
             while let Some(event) = event_rx.recv().await {
                 tracing::debug!("forwarding event to frontend: session={}", sid_fwd);
                 let payload = serde_json::to_value(&event).unwrap_or_default();
-                let emit_result = app_fwd.emit(&format!("agent_event_{}", sid_fwd), payload.clone());
+                let emit_result =
+                    app_fwd.emit(&format!("agent_event_{}", sid_fwd), payload.clone());
                 if let Err(e) = emit_result {
                     tracing::warn!("failed to emit event: {}", e);
                 }
@@ -460,12 +538,21 @@ pub async fn chat_send(
         // NOTE: agent.run() no longer emits Done — we do it here AFTER the DB write.
         let context_len = llm_messages.len();
         let result = if let Some(tasks) = sub_tasks {
-            let plan_text = tasks.iter().enumerate()
+            let plan_text = tasks
+                .iter()
+                .enumerate()
                 .map(|(i, t)| format!("{}. {}", i + 1, t.description))
-                .collect::<Vec<_>>().join("\n");
-            let _ = event_tx.send(AgentEvent::TextDelta {
-                delta: format!("📋 Task decomposed into {} sub-tasks:\n{}\n\n", tasks.len(), plan_text),
-            }).await;
+                .collect::<Vec<_>>()
+                .join("\n");
+            let _ = event_tx
+                .send(AgentEvent::TextDelta {
+                    delta: format!(
+                        "📋 Task decomposed into {} sub-tasks:\n{}\n\n",
+                        tasks.len(),
+                        plan_text
+                    ),
+                })
+                .await;
 
             let mut all_messages = llm_messages;
             let mut total_in = 0u32;
@@ -482,17 +569,23 @@ pub async fn chat_send(
             };
 
             for task in &tasks {
-                if cancel.load(std::sync::atomic::Ordering::Relaxed) { break; }
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
 
                 // Priority 1: Try to route to a persistent Koi agent
-                let koi_match = crate::agent::host::HostAgent::route_to_koi(
-                    &task.description, &available_kois,
-                );
+                let koi_match =
+                    crate::agent::host::HostAgent::route_to_koi(&task.description, &available_kois);
                 if let Some(ref koi_id) = koi_match {
                     if let Some(koi_def) = available_kois.iter().find(|k| &k.id == koi_id) {
-                        let _ = event_tx.send(AgentEvent::TextDelta {
-                            delta: format!("🐟 路由到 Koi「{} {}」: {}\n", koi_def.icon, koi_def.name, task.description),
-                        }).await;
+                        let _ = event_tx
+                            .send(AgentEvent::TextDelta {
+                                delta: format!(
+                                    "🐟 路由到 Koi「{} {}」: {}\n",
+                                    koi_def.icon, koi_def.name, task.description
+                                ),
+                            })
+                            .await;
 
                         let koi_input = serde_json::json!({
                             "action": "call",
@@ -512,12 +605,15 @@ pub async fn chat_send(
                                 all_messages.push(crate::llm::LlmMessage {
                                     role: "assistant".into(),
                                     content: crate::llm::MessageContent::text(format!(
-                                        "[Koi {} 完成子任务: {}]\n\n{}", koi_def.name, task.description, reply
+                                        "[Koi {} 完成子任务: {}]\n\n{}",
+                                        koi_def.name, task.description, reply
                                     )),
                                 });
-                                let _ = event_tx.send(AgentEvent::TextDelta {
-                                    delta: format!("✓ Koi「{}」已完成\n", koi_def.name),
-                                }).await;
+                                let _ = event_tx
+                                    .send(AgentEvent::TextDelta {
+                                        delta: format!("✓ Koi「{}」已完成\n", koi_def.name),
+                                    })
+                                    .await;
                             }
                             Ok(result) => {
                                 tracing::warn!(
@@ -526,12 +622,21 @@ pub async fn chat_send(
                                     task.description,
                                     result.content
                                 );
-                                let _ = event_tx.send(AgentEvent::TextDelta {
-                                    delta: format!("⚠ Koi「{}」执行失败，改由其他路径继续\n", koi_def.name),
-                                }).await;
+                                let _ = event_tx
+                                    .send(AgentEvent::TextDelta {
+                                        delta: format!(
+                                            "⚠ Koi「{}」执行失败，改由其他路径继续\n",
+                                            koi_def.name
+                                        ),
+                                    })
+                                    .await;
                             }
                             Err(e) => {
-                                tracing::warn!("Koi '{}' failed for sub-task, falling through: {}", koi_id, e);
+                                tracing::warn!(
+                                    "Koi '{}' failed for sub-task, falling through: {}",
+                                    koi_id,
+                                    e
+                                );
                             }
                         }
                         continue;
@@ -539,17 +644,25 @@ pub async fn chat_send(
                 }
 
                 // Priority 2: Try to route to a Fish agent based on app_hint
-                let fish_id_opt = task.app_hint.as_deref()
+                let fish_id_opt = task
+                    .app_hint
+                    .as_deref()
                     .and_then(crate::agent::host::HostAgent::route_to_fish);
 
                 if let Some(fish_id) = fish_id_opt {
-                    let registry = crate::fish::FishRegistry::load(app_data_dir_for_fish.as_deref());
+                    let registry =
+                        crate::fish::FishRegistry::load(app_data_dir_for_fish.as_deref());
                     if let Some(fish_def) = registry.get(fish_id) {
                         let fish_def = fish_def.clone();
 
-                        let _ = event_tx.send(AgentEvent::TextDelta {
-                            delta: format!("🐠 路由到「{}」: {}\n", fish_def.name, task.description),
-                        }).await;
+                        let _ = event_tx
+                            .send(AgentEvent::TextDelta {
+                                delta: format!(
+                                    "🐠 路由到「{}」: {}\n",
+                                    fish_def.name, task.description
+                                ),
+                            })
+                            .await;
 
                         // Stateless Fish call: build a fresh AgentLoop with only the task
                         let fish_msgs = vec![LlmMessage {
@@ -559,21 +672,36 @@ pub async fn chat_send(
 
                         let fish_cancel = Arc::new(AtomicBool::new(false));
                         let fish_client = build_client(
-                            &provider_clone, &api_key_clone,
-                            if base_url_clone.is_empty() { None } else { Some(&base_url_clone) },
+                            &provider_clone,
+                            &api_key_clone,
+                            if base_url_clone.is_empty() {
+                                None
+                            } else {
+                                Some(&base_url_clone)
+                            },
                         );
-                        let fish_user_tools_dir = app_clone.path().app_data_dir().map(|d| d.join("user-tools")).ok();
+                        let fish_user_tools_dir = app_clone
+                            .path()
+                            .app_data_dir()
+                            .map(|d| d.join("user-tools"))
+                            .ok();
                         let fish_registry_tools = Arc::new(tools::build_registry(
                             state_browser.clone(),
                             fish_user_tools_dir.as_deref(),
                             Some(db_arc.clone()),
                             Some(&builtin_tool_enabled_clone),
-                            None, None, None, None,
+                            None,
+                            None,
+                            None,
+                            None,
                         ));
-                        let fish_policy = Arc::new(crate::policy::PolicyGate::with_profile_and_flags(
-                            &workspace_root_clone, &policy_mode_clone,
-                            tool_rate_limit_clone, allow_outside_ws_clone,
-                        ));
+                        let fish_policy =
+                            Arc::new(crate::policy::PolicyGate::with_profile_and_flags(
+                                &workspace_root_clone,
+                                &policy_mode_clone,
+                                tool_rate_limit_clone,
+                                allow_outside_ws_clone,
+                            ));
                         let fish_agent = AgentLoop {
                             client: fish_client,
                             registry: fish_registry_tools,
@@ -584,7 +712,10 @@ pub async fn chat_send(
                             db: None,
                             app_handle: Some(app_clone.clone()),
                             confirmation_responses: None,
-                            confirm_flags: ConfirmFlags { confirm_shell: false, confirm_file_write: false },
+                            confirm_flags: ConfirmFlags {
+                                confirm_shell: false,
+                                confirm_file_write: false,
+                            },
                             vision_override: Some(vision_capable),
                             notification_rx: None,
                         };
@@ -609,26 +740,59 @@ pub async fn chat_send(
                                 let prog = match &ev {
                                     AgentEvent::TextSegmentStart { iteration } => {
                                         it = *iteration;
-                                        Some(AgentEvent::FishProgress { fish_id: fish_id_fwd.clone(), fish_name: fish_name_fwd.clone(), iteration: *iteration, tool_name: None, status: "thinking".into() })
+                                        Some(AgentEvent::FishProgress {
+                                            fish_id: fish_id_fwd.clone(),
+                                            fish_name: fish_name_fwd.clone(),
+                                            iteration: *iteration,
+                                            tool_name: None,
+                                            status: "thinking".into(),
+                                        })
                                     }
-                                    AgentEvent::ToolStart { name, .. } => Some(AgentEvent::FishProgress { fish_id: fish_id_fwd.clone(), fish_name: fish_name_fwd.clone(), iteration: it, tool_name: Some(name.clone()), status: "tool_call".into() }),
-                                    AgentEvent::ToolEnd { name, .. } => Some(AgentEvent::FishProgress { fish_id: fish_id_fwd.clone(), fish_name: fish_name_fwd.clone(), iteration: it, tool_name: Some(name.clone()), status: "tool_done".into() }),
-                                    AgentEvent::Done { .. } => Some(AgentEvent::FishProgress { fish_id: fish_id_fwd.clone(), fish_name: fish_name_fwd.clone(), iteration: it, tool_name: None, status: "done".into() }),
+                                    AgentEvent::ToolStart { name, .. } => {
+                                        Some(AgentEvent::FishProgress {
+                                            fish_id: fish_id_fwd.clone(),
+                                            fish_name: fish_name_fwd.clone(),
+                                            iteration: it,
+                                            tool_name: Some(name.clone()),
+                                            status: "tool_call".into(),
+                                        })
+                                    }
+                                    AgentEvent::ToolEnd { name, .. } => {
+                                        Some(AgentEvent::FishProgress {
+                                            fish_id: fish_id_fwd.clone(),
+                                            fish_name: fish_name_fwd.clone(),
+                                            iteration: it,
+                                            tool_name: Some(name.clone()),
+                                            status: "tool_done".into(),
+                                        })
+                                    }
+                                    AgentEvent::Done { .. } => Some(AgentEvent::FishProgress {
+                                        fish_id: fish_id_fwd.clone(),
+                                        fish_name: fish_name_fwd.clone(),
+                                        iteration: it,
+                                        tool_name: None,
+                                        status: "done".into(),
+                                    }),
                                     _ => None,
                                 };
                                 if let Some(p) = prog {
                                     let payload = serde_json::to_value(&p).unwrap_or_default();
-                                    let _ = app_fwd2.emit(&format!("agent_event_{}", parent_sid), payload);
+                                    let _ = app_fwd2
+                                        .emit(&format!("agent_event_{}", parent_sid), payload);
                                 }
                             }
                         });
 
-                        let fish_result = fish_agent.run(fish_msgs, fish_tx, fish_cancel, fish_ctx).await;
+                        let fish_result = fish_agent
+                            .run(fish_msgs, fish_tx, fish_cancel, fish_ctx)
+                            .await;
                         let _ = fish_fwd.await;
 
                         match fish_result {
                             Ok((final_fish_msgs, _, _)) => {
-                                let reply = final_fish_msgs.iter().rev()
+                                let reply = final_fish_msgs
+                                    .iter()
+                                    .rev()
                                     .find(|m| m.role == "assistant")
                                     .map(|m| m.content.as_text())
                                     .unwrap_or_default();
@@ -640,15 +804,22 @@ pub async fn chat_send(
                                     )),
                                 };
                                 all_messages.push(fish_result_msg);
-                                let _ = event_tx.send(AgentEvent::TextDelta {
-                                    delta: format!("✓ 「{}」已完成\n", fish_def.name),
-                                }).await;
+                                let _ = event_tx
+                                    .send(AgentEvent::TextDelta {
+                                        delta: format!("✓ 「{}」已完成\n", fish_def.name),
+                                    })
+                                    .await;
                             }
                             Err(e) => {
                                 tracing::warn!("Fish '{}' failed for sub-task: {}", fish_id, e);
-                                let _ = event_tx.send(AgentEvent::TextDelta {
-                                    delta: format!("⚠ 「{}」执行失败，由主 Agent 接管: {}\n", fish_def.name, e),
-                                }).await;
+                                let _ = event_tx
+                                    .send(AgentEvent::TextDelta {
+                                        delta: format!(
+                                            "⚠ 「{}」执行失败，由主 Agent 接管: {}\n",
+                                            fish_def.name, e
+                                        ),
+                                    })
+                                    .await;
                                 let sub_msgs = [LlmMessage {
                                     role: "user".into(),
                                     content: MessageContent::text(format!(
@@ -656,21 +827,32 @@ pub async fn chat_send(
                                         task.description
                                     )),
                                 }];
-                                let combined: Vec<LlmMessage> = all_messages.iter().chain(sub_msgs.iter()).cloned().collect();
-                                let (sub_tx, mut sub_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
+                                let combined: Vec<LlmMessage> = all_messages
+                                    .iter()
+                                    .chain(sub_msgs.iter())
+                                    .cloned()
+                                    .collect();
+                                let (sub_tx, mut sub_rx) =
+                                    tokio::sync::mpsc::channel::<AgentEvent>(256);
                                 let event_tx_c = event_tx.clone();
                                 let fwd = tokio::spawn(async move {
                                     while let Some(ev) = sub_rx.recv().await {
                                         let _ = event_tx_c.send(ev).await;
                                     }
                                 });
-                                match agent.run(combined, sub_tx, cancel.clone(), ctx.clone()).await {
+                                match agent
+                                    .run(combined, sub_tx, cancel.clone(), ctx.clone())
+                                    .await
+                                {
                                     Ok((msgs, ti, to)) => {
                                         all_messages = msgs;
                                         total_in += ti;
                                         total_out += to;
                                     }
-                                    Err(e2) => { last_err = Some(e2); break; }
+                                    Err(e2) => {
+                                        last_err = Some(e2);
+                                        break;
+                                    }
                                 }
                                 let _ = fwd.await;
                             }
@@ -680,9 +862,11 @@ pub async fn chat_send(
                 }
 
                 // No Fish match — execute with main Agent
-                let _ = event_tx.send(AgentEvent::TextDelta {
-                    delta: format!("▶ Sub-task: {}\n", task.description),
-                }).await;
+                let _ = event_tx
+                    .send(AgentEvent::TextDelta {
+                        delta: format!("▶ Sub-task: {}\n", task.description),
+                    })
+                    .await;
                 let sub_msgs = [LlmMessage {
                     role: "user".into(),
                     content: MessageContent::text(format!(
@@ -690,7 +874,11 @@ pub async fn chat_send(
                         task.description
                     )),
                 }];
-                let combined: Vec<LlmMessage> = all_messages.iter().chain(sub_msgs.iter()).cloned().collect();
+                let combined: Vec<LlmMessage> = all_messages
+                    .iter()
+                    .chain(sub_msgs.iter())
+                    .cloned()
+                    .collect();
                 let (sub_tx, mut sub_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
                 let event_tx_c = event_tx.clone();
                 let fwd = tokio::spawn(async move {
@@ -698,13 +886,19 @@ pub async fn chat_send(
                         let _ = event_tx_c.send(ev).await;
                     }
                 });
-                match agent.run(combined, sub_tx, cancel.clone(), ctx.clone()).await {
+                match agent
+                    .run(combined, sub_tx, cancel.clone(), ctx.clone())
+                    .await
+                {
                     Ok((msgs, ti, to)) => {
                         all_messages = msgs;
                         total_in += ti;
                         total_out += to;
                     }
-                    Err(e) => { last_err = Some(e); break; }
+                    Err(e) => {
+                        last_err = Some(e);
+                        break;
+                    }
                 }
                 let _ = fwd.await;
             }
@@ -714,10 +908,16 @@ pub async fn chat_send(
             }
         } else {
             tracing::info!("calling agent.run for session={}", session_id_clone);
-            agent.run(llm_messages, event_tx.clone(), cancel.clone(), ctx).await
+            agent
+                .run(llm_messages, event_tx.clone(), cancel.clone(), ctx)
+                .await
         };
 
-        tracing::info!("agent.run completed for session={} ok={}", session_id_clone, result.is_ok());
+        tracing::info!(
+            "agent.run completed for session={} ok={}",
+            session_id_clone,
+            result.is_ok()
+        );
 
         // ── Critical: persist to DB BEFORE emitting Done ───────────────────────────
         // The frontend calls getMessages() on the Done event. If we emit Done first,
@@ -740,18 +940,33 @@ pub async fn chat_send(
                     let mem_client = build_client(
                         &provider_clone,
                         &api_key_clone,
-                        if base_url_clone.is_empty() { None } else { Some(&base_url_clone) },
+                        if base_url_clone.is_empty() {
+                            None
+                        } else {
+                            Some(&base_url_clone)
+                        },
                     );
                     tokio::spawn(async move {
-                        auto_extract_memories(db_for_mem, sid_for_mem, msgs_for_mem, mem_client, model_for_mem, max_tokens_clone, "pisci".to_string()).await;
+                        auto_extract_memories(
+                            db_for_mem,
+                            sid_for_mem,
+                            msgs_for_mem,
+                            mem_client,
+                            model_for_mem,
+                            max_tokens_clone,
+                            "pisci".to_string(),
+                        )
+                        .await;
                     });
                 }
 
                 // NOW emit Done — frontend getMessages() will see the persisted data
-                let _ = event_tx.send(AgentEvent::Done {
-                    total_input_tokens: *total_in,
-                    total_output_tokens: *total_out,
-                }).await;
+                let _ = event_tx
+                    .send(AgentEvent::Done {
+                        total_input_tokens: *total_in,
+                        total_output_tokens: *total_out,
+                    })
+                    .await;
             }
             Err(e) => {
                 tracing::warn!("Agent loop error for session {}: {}", session_id_clone, e);
@@ -760,9 +975,11 @@ pub async fn chat_send(
                     let _ = db.update_session_status(&session_id_clone, "idle");
                 }
                 // Emit error event (Done is not sent on error)
-                let _ = event_tx.send(AgentEvent::Error {
-                    message: e.to_string(),
-                }).await;
+                let _ = event_tx
+                    .send(AgentEvent::Error {
+                        message: e.to_string(),
+                    })
+                    .await;
             }
         }
 
@@ -792,11 +1009,17 @@ pub fn model_supports_vision(provider: &str, model: &str) -> bool {
     let p = provider.to_lowercase();
     // OpenAI vision models
     if p == "openai" || p.contains("openai") {
-        return m.contains("gpt-4o") || m.contains("gpt-4-vision") || m.contains("gpt-4-turbo") || m.contains("o1");
+        return m.contains("gpt-4o")
+            || m.contains("gpt-4-vision")
+            || m.contains("gpt-4-turbo")
+            || m.contains("o1");
     }
     // Anthropic Claude 3+
     if p == "anthropic" || p.contains("claude") || m.contains("claude") {
-        return m.contains("claude-3") || m.contains("claude-opus") || m.contains("claude-sonnet") || m.contains("claude-haiku");
+        return m.contains("claude-3")
+            || m.contains("claude-opus")
+            || m.contains("claude-sonnet")
+            || m.contains("claude-haiku");
     }
     // Google Gemini
     if p == "google" || p.contains("gemini") || m.contains("gemini") {
@@ -900,7 +1123,22 @@ pub async fn run_agent_headless(
     channel: &str,
     options: Option<HeadlessRunOptions>,
 ) -> Result<(String, Option<Vec<u8>>, Option<String>), String> {
-    let (provider, model, api_key, base_url, workspace_root, max_tokens, context_window, policy_mode, tool_rate_limit_per_minute, tool_settings, max_iterations, builtin_tool_enabled, allow_outside_workspace, vision_setting) = {
+    let (
+        provider,
+        model,
+        api_key,
+        base_url,
+        workspace_root,
+        max_tokens,
+        context_window,
+        policy_mode,
+        tool_rate_limit_per_minute,
+        tool_settings,
+        max_iterations,
+        builtin_tool_enabled,
+        allow_outside_workspace,
+        vision_setting,
+    ) = {
         let settings = state.settings.lock().await;
         (
             settings.provider.clone(),
@@ -958,8 +1196,7 @@ pub async fn run_agent_headless(
                     _ => "jpg",
                 };
                 let default_filename = format!("im_image.{}", ext);
-                let filename = media.filename.as_deref()
-                    .unwrap_or(&default_filename);
+                let filename = media.filename.as_deref().unwrap_or(&default_filename);
                 let tmp_path = std::env::temp_dir().join(filename);
                 if let Ok(()) = std::fs::write(&tmp_path, data) {
                     let path_str = tmp_path.to_string_lossy();
@@ -992,28 +1229,44 @@ pub async fn run_agent_headless(
                 )?;
             }
             None => {
-                db.ensure_fixed_session(session_id, &desired_session_title, &desired_session_source)
-                    .map_err(|e| e.to_string())?;
+                db.ensure_fixed_session(
+                    session_id,
+                    &desired_session_title,
+                    &desired_session_source,
+                )
+                .map_err(|e| e.to_string())?;
             }
         }
         // Check if this user message was already pre-inserted by lib.rs (to ensure it's visible
         // in the frontend before the agent starts). Skip duplicate insertion if so.
-        let already_inserted = db.get_messages_latest(session_id, 1)
+        let already_inserted = db
+            .get_messages_latest(session_id, 1)
             .ok()
             .and_then(|msgs| msgs.into_iter().last())
             .map(|m| m.role == "user" && m.content == effective_user_message)
             .unwrap_or(false);
         if already_inserted {
-            tracing::info!("run_agent_headless: user message already pre-inserted for {}, skipping", session_id);
+            tracing::info!(
+                "run_agent_headless: user message already pre-inserted for {}, skipping",
+                session_id
+            );
         } else {
-            tracing::info!("run_agent_headless: inserting user message for {}", session_id);
+            tracing::info!(
+                "run_agent_headless: inserting user message for {}",
+                session_id
+            );
             let _ = db.append_message(session_id, "user", &effective_user_message);
         }
     }
 
     let client = build_client(
-        &provider, &api_key,
-        if base_url.is_empty() { None } else { Some(&base_url) },
+        &provider,
+        &api_key,
+        if base_url.is_empty() {
+            None
+        } else {
+            Some(&base_url)
+        },
     );
     let user_tools_dir_h = state
         .app_handle
@@ -1032,7 +1285,12 @@ pub async fn run_agent_headless(
         app_data_dir_h,
         None, // skill_search not used in IM headless sessions
     ));
-    let policy = Arc::new(PolicyGate::with_profile_and_flags(&workspace_root, &policy_mode, tool_rate_limit_per_minute, allow_outside_workspace));
+    let policy = Arc::new(PolicyGate::with_profile_and_flags(
+        &workspace_root,
+        &policy_mode,
+        tool_rate_limit_per_minute,
+        allow_outside_workspace,
+    ));
 
     let scoped_memory_context = {
         let keywords: Vec<&str> = effective_user_message.split_whitespace().take(10).collect();
@@ -1057,7 +1315,9 @@ pub async fn run_agent_headless(
     let pool_context = if let Some(pool_id) = pool_session_id.as_deref() {
         let db = state.db.lock().await;
         let pool = db.get_pool_session(pool_id).map_err(|e| e.to_string())?;
-        let recent_messages = db.get_pool_messages(pool_id, 12, 0).map_err(|e| e.to_string())?;
+        let recent_messages = db
+            .get_pool_messages(pool_id, 12, 0)
+            .map_err(|e| e.to_string())?;
         let todos = db.list_koi_todos(None).map_err(|e| e.to_string())?;
         let pool_todos: Vec<_> = todos
             .into_iter()
@@ -1093,7 +1353,13 @@ pub async fn run_agent_headless(
                     } else {
                         m.content.clone()
                     };
-                    format!("- #{} {} [{}]: {}", m.id, m.sender_id, m.msg_type, content.replace('\n', " "))
+                    format!(
+                        "- #{} {} [{}]: {}",
+                        m.id,
+                        m.sender_id,
+                        m.msg_type,
+                        content.replace('\n', " ")
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -1103,7 +1369,10 @@ pub async fn run_agent_headless(
         let mut ctx = String::new();
         if let Some(pool) = pool {
             ctx.push_str("\n\n## Pool Context\n");
-            ctx.push_str(&format!("Pool: {} ({})\nStatus: {}", pool.name, pool.id, pool.status));
+            ctx.push_str(&format!(
+                "Pool: {} ({})\nStatus: {}",
+                pool.name, pool.id, pool.status
+            ));
             if let Some(project_dir) = pool.project_dir {
                 ctx.push_str(&format!("\nProject dir: {}", project_dir));
             }
@@ -1135,9 +1404,12 @@ pub async fn run_agent_headless(
     }
 
     let agent = AgentLoop {
-        client, registry, policy,
+        client,
+        registry,
+        policy,
         system_prompt,
-        model, max_tokens,
+        model,
+        max_tokens,
         db: Some(state.db.clone()),
         app_handle: None,
         confirmation_responses: None,
@@ -1163,11 +1435,22 @@ pub async fn run_agent_headless(
     // Orphaned tool_use blocks cause API errors and confuse the LLM into re-executing old tasks.
     let mut llm_messages = {
         let db = state.db.lock().await;
-        let history = db.get_messages_latest(session_id, 2000).map_err(|e| e.to_string())?;
-        tracing::info!("run_agent_headless: loaded {} history messages for {}", history.len(), session_id);
-        let msgs = build_context_messages(&history, compute_context_budget(context_window, max_tokens));
+        let history = db
+            .get_messages_latest(session_id, 2000)
+            .map_err(|e| e.to_string())?;
+        tracing::info!(
+            "run_agent_headless: loaded {} history messages for {}",
+            history.len(),
+            session_id
+        );
+        let msgs =
+            build_context_messages(&history, compute_context_budget(context_window, max_tokens));
         let sanitized = sanitize_tool_use_result_pairing(msgs);
-        tracing::info!("run_agent_headless: context has {} LLM messages after sanitize for {}", sanitized.len(), session_id);
+        tracing::info!(
+            "run_agent_headless: context has {} LLM messages after sanitize for {}",
+            sanitized.len(),
+            session_id
+        );
         sanitized
     };
 
@@ -1246,23 +1529,28 @@ pub async fn run_agent_headless(
     };
 
     // Extract the last assistant message: text + optional image
-    let (response_text, image_data, image_mime) = final_msgs.iter().rev()
+    let (response_text, image_data, image_mime) = final_msgs
+        .iter()
+        .rev()
         .find(|m| m.role == "assistant")
         .map(|m| {
             let text = m.content.as_text();
             let img: Option<(Vec<u8>, String)> = match &m.content {
-                crate::llm::MessageContent::Blocks(blocks) => {
-                    blocks.iter().find_map(|b| {
-                        if let crate::llm::ContentBlock::Image { source } = b {
-                            if source.source_type == "base64" {
-                                use base64::Engine;
-                                let bytes = base64::engine::general_purpose::STANDARD
-                                    .decode(&source.data).ok();
-                                bytes.map(|b| (b, source.media_type.clone()))
-                            } else { None }
-                        } else { None }
-                    })
-                }
+                crate::llm::MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| {
+                    if let crate::llm::ContentBlock::Image { source } = b {
+                        if source.source_type == "base64" {
+                            use base64::Engine;
+                            let bytes = base64::engine::general_purpose::STANDARD
+                                .decode(&source.data)
+                                .ok();
+                            bytes.map(|b| (b, source.media_type.clone()))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }),
                 _ => None,
             };
             let (img_bytes, img_mime) = match img {
@@ -1276,7 +1564,10 @@ pub async fn run_agent_headless(
     // Persist new messages to DB, then emit im_session_done so the frontend reloads.
     // This ordering guarantees: DB write completes BEFORE frontend is told to refresh.
     {
-        tracing::info!("run_agent_headless: persisting agent turn for {}", session_id);
+        tracing::info!(
+            "run_agent_headless: persisting agent turn for {}",
+            session_id
+        );
         let db = state.db.lock().await;
         persist_agent_turn(&db, session_id, &final_msgs, context_len);
         tracing::info!("run_agent_headless: persist done for {}", session_id);
@@ -1286,12 +1577,18 @@ pub async fn run_agent_headless(
     let done_payload = serde_json::to_value(&AgentEvent::Done {
         total_input_tokens: 0,
         total_output_tokens: 0,
-    }).unwrap_or_default();
-    let _ = state.app_handle.emit(&format!("agent_event_{}", session_id), done_payload.clone());
+    })
+    .unwrap_or_default();
+    let _ = state
+        .app_handle
+        .emit(&format!("agent_event_{}", session_id), done_payload.clone());
     let _ = state.app_handle.emit("agent_broadcast", done_payload);
 
     // NOW emit im_session_done — DB is already written, frontend reload will see new messages.
-    tracing::info!("run_agent_headless: emitting im_session_done for {}", session_id);
+    tracing::info!(
+        "run_agent_headless: emitting im_session_done for {}",
+        session_id
+    );
     let _ = state.app_handle.emit("im_session_done", session_id);
 
     Ok((response_text, image_data, image_mime))
@@ -1299,10 +1596,7 @@ pub async fn run_agent_headless(
 
 /// Cancel an in-progress agent run
 #[tauri::command]
-pub async fn chat_cancel(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> Result<(), String> {
+pub async fn chat_cancel(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     let flags = state.cancel_flags.lock().await;
     if let Some(flag) = flags.get(&session_id) {
         flag.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1332,7 +1626,12 @@ pub fn build_system_prompt(memory_context: &str, skill_context: &str) -> String 
     build_system_prompt_with_env(memory_context, skill_context, "", false)
 }
 
-pub fn build_system_prompt_with_env(memory_context: &str, skill_context: &str, workspace_root: &str, allow_outside: bool) -> String {
+pub fn build_system_prompt_with_env(
+    memory_context: &str,
+    skill_context: &str,
+    workspace_root: &str,
+    allow_outside: bool,
+) -> String {
     let workspace_line = if workspace_root.trim().is_empty() {
         String::new()
     } else {
@@ -1811,7 +2110,8 @@ pub fn estimate_tokens(text: &str) -> usize {
             || (0x3400..=0x4DBF).contains(&cp) // CJK Extension A
             || (0xF900..=0xFAFF).contains(&cp) // CJK Compatibility
             || (0x3000..=0x303F).contains(&cp) // CJK Symbols
-            || (0xFF00..=0xFFEF).contains(&cp) // Fullwidth
+            || (0xFF00..=0xFFEF).contains(&cp)
+        // Fullwidth
         {
             cjk_count += 1;
         } else {
@@ -1882,13 +2182,11 @@ pub fn persist_agent_turn(
     let final_messages = &final_messages[context_len.min(final_messages.len())..];
     // Determine the turn index from the current message count.
     // We use the count BEFORE writing so all new rows share the same index.
-    let turn_index = db.get_messages_latest(session_id, 2000)
+    let turn_index = db
+        .get_messages_latest(session_id, 2000)
         .map(|msgs| {
             // Count distinct turn_index values already stored + 1
-            let max_turn = msgs.iter()
-                .filter_map(|m| m.turn_index)
-                .max()
-                .unwrap_or(0);
+            let max_turn = msgs.iter().filter_map(|m| m.turn_index).max().unwrap_or(0);
             max_turn + 1
         })
         .unwrap_or(1);
@@ -1902,10 +2200,12 @@ pub fn persist_agent_turn(
 
         match &msg.content {
             MessageContent::Blocks(blocks) => {
-                let tool_uses: Vec<&ContentBlock> = blocks.iter()
+                let tool_uses: Vec<&ContentBlock> = blocks
+                    .iter()
                     .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
                     .collect();
-                let tool_results: Vec<&ContentBlock> = blocks.iter()
+                let tool_results: Vec<&ContentBlock> = blocks
+                    .iter()
                     .filter(|b| matches!(b, ContentBlock::ToolResult { .. }))
                     .collect();
 
@@ -1952,7 +2252,8 @@ pub fn persist_agent_turn(
                     let logged = if text.len() > 10_000 {
                         tracing::info!(
                             "Saving large assistant message ({} chars) for session={}",
-                            text.len(), session_id
+                            text.len(),
+                            session_id
                         );
                         text.as_str()
                     } else {
@@ -1974,7 +2275,9 @@ pub fn persist_agent_turn(
 
     tracing::info!(
         "Persisted agent turn {} for session={} ({} messages)",
-        turn_index, session_id, final_messages.len()
+        turn_index,
+        session_id,
+        final_messages.len()
     );
 }
 
@@ -1996,10 +2299,19 @@ fn trim_tool_result(content: &str, head: usize, tail: usize) -> String {
         return content.to_string();
     }
     let head_str: String = content.chars().take(head).collect();
-    let tail_str: String = content.chars().rev().take(tail).collect::<String>()
-        .chars().rev().collect();
+    let tail_str: String = content
+        .chars()
+        .rev()
+        .take(tail)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
     let trimmed_chars = total.saturating_sub(head + tail);
-    format!("{}\n...[trimmed: {} chars]...\n{}", head_str, trimmed_chars, tail_str)
+    format!(
+        "{}\n...[trimmed: {} chars]...\n{}",
+        head_str, trimmed_chars, tail_str
+    )
 }
 
 /// Build a two-message summary of a conversation turn for use in compressed context.
@@ -2020,10 +2332,11 @@ fn summarize_turn(turn: &ConvTurn) -> (String, String) {
         if let Some(ref calls_json) = msg.tool_calls_json {
             if let Ok(calls) = serde_json::from_str::<Vec<serde_json::Value>>(calls_json) {
                 for call in &calls {
-                    let name = call.get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("tool");
-                    let input = call.get("input").cloned().unwrap_or(serde_json::Value::Null);
+                    let name = call.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
+                    let input = call
+                        .get("input")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
                     let artifact = extract_key_artifact(name, &input);
                     if let Some(a) = artifact {
                         key_artifacts.push(a);
@@ -2035,10 +2348,9 @@ fn summarize_turn(turn: &ConvTurn) -> (String, String) {
         if let Some(ref results_json) = msg.tool_results_json {
             if let Ok(results) = serde_json::from_str::<Vec<serde_json::Value>>(results_json) {
                 for (i, result) in results.iter().enumerate() {
-                    let content = result.get("content")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let is_error = result.get("is_error")
+                    let content = result.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    let is_error = result
+                        .get("is_error")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
                     if is_error {
@@ -2057,7 +2369,10 @@ fn summarize_turn(turn: &ConvTurn) -> (String, String) {
         }
     }
 
-    let final_answer = turn.agent_msgs.iter().rev()
+    let final_answer = turn
+        .agent_msgs
+        .iter()
+        .rev()
         .find(|m| m.role == "assistant" && !m.content.is_empty() && m.tool_calls_json.is_none())
         .map(|m| m.content.as_str())
         .unwrap_or("");
@@ -2073,9 +2388,19 @@ fn summarize_turn(turn: &ConvTurn) -> (String, String) {
     let artifacts_part = if key_artifacts.is_empty() {
         String::new()
     } else {
-        let deduped: Vec<_> = key_artifacts.iter().collect::<std::collections::HashSet<_>>()
-            .into_iter().collect();
-        format!(" [artifacts: {}]", deduped.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))
+        let deduped: Vec<_> = key_artifacts
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        format!(
+            " [artifacts: {}]",
+            deduped
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     };
 
     let user_summary = format!(
@@ -2085,10 +2410,7 @@ fn summarize_turn(turn: &ConvTurn) -> (String, String) {
     );
     let assistant_summary = format!(
         "[历史第{}轮回复]{}{} {}",
-        turn.index,
-        tools_part,
-        artifacts_part,
-        answer_snippet,
+        turn.index, tools_part, artifacts_part, answer_snippet,
     );
 
     (user_summary, assistant_summary)
@@ -2097,21 +2419,31 @@ fn summarize_turn(turn: &ConvTurn) -> (String, String) {
 /// Extract key identifiers (file paths, URLs, queries) from tool input for summary.
 fn extract_key_artifact(tool_name: &str, input: &serde_json::Value) -> Option<String> {
     match tool_name {
-        "file_read" | "file_write" | "file_edit" => {
-            input["path"].as_str().map(|p| {
-                let short: String = p.chars().rev().take(60).collect::<String>().chars().rev().collect();
-                if short.len() < p.len() { format!("...{}", short) } else { short }
-            })
-        }
-        "shell" | "powershell_query" => {
-            input["command"].as_str()
-                .or_else(|| input["query"].as_str())
-                .map(|c| {
-                    let s: String = c.chars().take(50).collect();
-                    format!("cmd:{}", s)
-                })
-        }
-        "web_search" => input["query"].as_str().map(|q| format!("search:{}", q.chars().take(40).collect::<String>())),
+        "file_read" | "file_write" | "file_edit" => input["path"].as_str().map(|p| {
+            let short: String = p
+                .chars()
+                .rev()
+                .take(60)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            if short.len() < p.len() {
+                format!("...{}", short)
+            } else {
+                short
+            }
+        }),
+        "shell" | "powershell_query" => input["command"]
+            .as_str()
+            .or_else(|| input["query"].as_str())
+            .map(|c| {
+                let s: String = c.chars().take(50).collect();
+                format!("cmd:{}", s)
+            }),
+        "web_search" => input["query"]
+            .as_str()
+            .map(|q| format!("search:{}", q.chars().take(40).collect::<String>())),
         "browser" => input["url"].as_str().map(|u| u.chars().take(60).collect()),
         _ => None,
     }
@@ -2195,7 +2527,9 @@ pub fn build_context_messages(history: &[ChatMessage], budget: usize) -> Vec<Llm
                     },
                 });
             }
-            if token_est + turn_tokens > budget && !turn_groups.is_empty() { break; }
+            if token_est + turn_tokens > budget && !turn_groups.is_empty() {
+                break;
+            }
             turn_groups.push(turn_msgs);
             token_est += turn_tokens;
         } else if turn_age < CTX_COMPACT_AFTER {
@@ -2208,9 +2542,17 @@ pub fn build_context_messages(history: &[ChatMessage], budget: usize) -> Vec<Llm
             for msg in &turn.agent_msgs {
                 if let Some(ref results_json) = msg.tool_results_json {
                     let trimmed_blocks = trim_tool_result_blocks(results_json);
-                    let text_for_tokens = trimmed_blocks.iter()
-                        .filter_map(|b| if let ContentBlock::ToolResult { content, .. } = b { Some(content.as_str()) } else { None })
-                        .collect::<Vec<_>>().join(" ");
+                    let text_for_tokens = trimmed_blocks
+                        .iter()
+                        .filter_map(|b| {
+                            if let ContentBlock::ToolResult { content, .. } = b {
+                                Some(content.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
                     turn_tokens += estimate_tokens(&text_for_tokens);
                     turn_msgs.push(LlmMessage {
                         role: "user".into(),
@@ -2230,14 +2572,18 @@ pub fn build_context_messages(history: &[ChatMessage], budget: usize) -> Vec<Llm
                     });
                 }
             }
-            if token_est + turn_tokens > budget && !turn_groups.is_empty() { break; }
+            if token_est + turn_tokens > budget && !turn_groups.is_empty() {
+                break;
+            }
             turn_groups.push(turn_msgs);
             token_est += turn_tokens;
         } else {
             // ── Compact: entire turn → user + assistant summary pair ───────
             let (user_summary, assistant_summary) = summarize_turn(turn);
             let t = estimate_tokens(&user_summary) + estimate_tokens(&assistant_summary);
-            if token_est + t > budget && !turn_groups.is_empty() { break; }
+            if token_est + t > budget && !turn_groups.is_empty() {
+                break;
+            }
             turn_groups.push(vec![
                 LlmMessage {
                     role: "user".into(),
@@ -2266,7 +2612,10 @@ pub fn build_context_messages(history: &[ChatMessage], budget: usize) -> Vec<Llm
 
     tracing::debug!(
         "build_context_messages: {} turns → {} LlmMessages, ~{} tokens (budget={})",
-        total_turns, result.len(), token_est, budget
+        total_turns,
+        result.len(),
+        token_est,
+        budget
     );
 
     result
@@ -2297,9 +2646,16 @@ fn sanitize_tool_call_pairs(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
 
         // Collect ToolUse ids in this message
         let tool_use_ids: Vec<String> = if let MessageContent::Blocks(blocks) = &m.content {
-            blocks.iter().filter_map(|b| {
-                if let ContentBlock::ToolUse { id, .. } = b { Some(id.clone()) } else { None }
-            }).collect()
+            blocks
+                .iter()
+                .filter_map(|b| {
+                    if let ContentBlock::ToolUse { id, .. } = b {
+                        Some(id.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
         } else {
             vec![]
         };
@@ -2308,7 +2664,9 @@ fn sanitize_tool_call_pairs(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
             // Not a tool_call message. Check if it's a tool_result (orphaned result after we
             // already removed its tool_call). If so, keep removing. Otherwise stop.
             let is_tool_result = if let MessageContent::Blocks(blocks) = &m.content {
-                blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+                blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
             } else {
                 false
             };
@@ -2327,7 +2685,9 @@ fn sanitize_tool_call_pairs(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
         let mut j = i + 1;
         while j < n {
             if let MessageContent::Blocks(blocks) = &messages[j].content {
-                let has_result = blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }));
+                let has_result = blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolResult { .. }));
                 if has_result {
                     for b in blocks {
                         if let ContentBlock::ToolResult { tool_use_id, .. } = b {
@@ -2360,7 +2720,9 @@ fn sanitize_tool_call_pairs(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
     if drop_from < n {
         tracing::warn!(
             "sanitize_tool_call_pairs: truncating {} trailing orphaned messages (kept {}/{})",
-            n - drop_from, drop_from, n
+            n - drop_from,
+            drop_from,
+            n
         );
         messages.into_iter().take(drop_from).collect()
     } else {
@@ -2374,7 +2736,9 @@ fn reconstruct_blocks(msg: &ChatMessage) -> Vec<ContentBlock> {
 
     // Text content
     if !msg.content.is_empty() {
-        blocks.push(ContentBlock::Text { text: msg.content.clone() });
+        blocks.push(ContentBlock::Text {
+            text: msg.content.clone(),
+        });
     }
 
     // Tool calls (for assistant messages)
@@ -2402,27 +2766,39 @@ fn reconstruct_blocks(msg: &ChatMessage) -> Vec<ContentBlock> {
 /// Build tool result blocks with trimmed content for middle-tier turns.
 fn trim_tool_result_blocks(results_json: &str) -> Vec<ContentBlock> {
     let blocks: Vec<ContentBlock> = serde_json::from_str(results_json).unwrap_or_default();
-    blocks.into_iter().map(|b| {
-        if let ContentBlock::ToolResult { tool_use_id, content, is_error } = b {
-            ContentBlock::ToolResult {
+    blocks
+        .into_iter()
+        .map(|b| {
+            if let ContentBlock::ToolResult {
                 tool_use_id,
-                content: trim_tool_result(&content, CTX_TRIM_HEAD, CTX_TRIM_TAIL),
+                content,
                 is_error,
+            } = b
+            {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content: trim_tool_result(&content, CTX_TRIM_HEAD, CTX_TRIM_TAIL),
+                    is_error,
+                }
+            } else {
+                b
             }
-        } else {
-            b
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 /// Extract a representative text string from blocks for token estimation.
 fn blocks_to_token_text(blocks: &[ContentBlock]) -> String {
-    blocks.iter().map(|b| match b {
-        ContentBlock::Text { text } => text.as_str(),
-        ContentBlock::ToolResult { content, .. } => content.as_str(),
-        ContentBlock::ToolUse { name, .. } => name.as_str(),
-        ContentBlock::Image { .. } => "[image]",
-    }).collect::<Vec<_>>().join(" ")
+    blocks
+        .iter()
+        .map(|b| match b {
+            ContentBlock::Text { text } => text.as_str(),
+            ContentBlock::ToolResult { content, .. } => content.as_str(),
+            ContentBlock::ToolUse { name, .. } => name.as_str(),
+            ContentBlock::Image { .. } => "[image]",
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Remove orphaned tool_use blocks from LLM messages.
@@ -2442,9 +2818,9 @@ fn sanitize_tool_use_result_pairing(mut msgs: Vec<LlmMessage>) -> Vec<LlmMessage
     while i < msgs.len() {
         let has_tool_use = if msgs[i].role == "assistant" {
             match &msgs[i].content {
-                crate::llm::MessageContent::Blocks(blocks) => {
-                    blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }))
-                }
+                crate::llm::MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolUse { .. })),
                 _ => false,
             }
         } else {
@@ -2458,18 +2834,25 @@ fn sanitize_tool_use_result_pairing(mut msgs: Vec<LlmMessage>) -> Vec<LlmMessage
         }
 
         // Check if the next message is a tool-result carrier
-        let next_is_tool_result = msgs.get(i + 1).map(|next| {
-            next.role == "user" && match &next.content {
-                crate::llm::MessageContent::Blocks(blocks) => {
-                    blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }))
-                }
-                _ => false,
-            }
-        }).unwrap_or(false);
+        let next_is_tool_result = msgs
+            .get(i + 1)
+            .map(|next| {
+                next.role == "user"
+                    && match &next.content {
+                        crate::llm::MessageContent::Blocks(blocks) => blocks
+                            .iter()
+                            .any(|b| matches!(b, ContentBlock::ToolResult { .. })),
+                        _ => false,
+                    }
+            })
+            .unwrap_or(false);
 
         if !next_is_tool_result {
             // Strip ToolUse blocks from this assistant message
-            tracing::warn!("sanitize_tool_use_result_pairing: stripping orphaned ToolUse at index {}", i);
+            tracing::warn!(
+                "sanitize_tool_use_result_pairing: stripping orphaned ToolUse at index {}",
+                i
+            );
             if let crate::llm::MessageContent::Blocks(ref mut blocks) = msgs[i].content {
                 blocks.retain(|b| !matches!(b, ContentBlock::ToolUse { .. }));
             }
@@ -2501,7 +2884,8 @@ pub async fn auto_extract_memories(
     owner_id: String,
 ) {
     // Only extract if there's meaningful assistant content
-    let assistant_chars: usize = messages.iter()
+    let assistant_chars: usize = messages
+        .iter()
         .filter(|m| m.role == "assistant")
         .map(|m| m.content.as_text().chars().count())
         .sum();
@@ -2513,11 +2897,13 @@ pub async fn auto_extract_memories(
     // Build a compact conversation summary for the extraction prompt.
     // Take the LAST messages (most recent) rather than the first, since recent
     // context is far more likely to contain extractable memories.
-    let relevant_msgs: Vec<_> = messages.iter()
+    let relevant_msgs: Vec<_> = messages
+        .iter()
         .filter(|m| m.role == "user" || m.role == "assistant")
         .collect();
     let start = relevant_msgs.len().saturating_sub(12);
-    let conv_summary: String = relevant_msgs[start..].iter()
+    let conv_summary: String = relevant_msgs[start..]
+        .iter()
         .map(|m| {
             let text = m.content.as_text();
             let truncated: String = text.chars().take(400).collect();
@@ -2555,12 +2941,14 @@ pub async fn auto_extract_memories(
             let db = db_arc.lock().await;
             for line in resp.content.lines() {
                 let line = line.trim();
-                if line.is_empty() || line == "NONE" { continue; }
+                if line.is_empty() || line == "NONE" {
+                    continue;
+                }
 
                 let (category, content) = if line.starts_with('[') {
                     if let Some(end) = line.find(']') {
                         let cat = &line[1..end];
-                        let cont = line[end+1..].trim();
+                        let cont = line[end + 1..].trim();
                         (cat, cont)
                     } else {
                         ("general", line)
@@ -2569,11 +2957,25 @@ pub async fn auto_extract_memories(
                     ("general", line)
                 };
 
-                let valid_categories = ["preference", "fact", "task", "person", "project", "general"];
-                let category = if valid_categories.contains(&category) { category } else { "general" };
+                let valid_categories =
+                    ["preference", "fact", "task", "person", "project", "general"];
+                let category = if valid_categories.contains(&category) {
+                    category
+                } else {
+                    "general"
+                };
 
                 if !content.is_empty() {
-                    let _ = db.save_memory(content, category, 0.75, Some(&session_id), &owner_id, "private", &owner_id, None);
+                    let _ = db.save_memory(
+                        content,
+                        category,
+                        0.75,
+                        Some(&session_id),
+                        &owner_id,
+                        "private",
+                        &owner_id,
+                        None,
+                    );
                     tracing::info!("Auto-extracted memory [{category}] for {owner_id}: {content}");
                 }
             }
@@ -2650,71 +3052,93 @@ pub async fn get_context_preview(
     let budget = compute_context_budget(context_window, max_tokens);
     let llm_messages = {
         let db = state.db.lock().await;
-        let history = db.get_messages_latest(&session_id, 2000)
+        let history = db
+            .get_messages_latest(&session_id, 2000)
             .map_err(|e| e.to_string())?;
         build_context_messages(&history, budget)
     };
-    let llm_messages = crate::agent::vision::inject_selected_context(&llm_messages, &session_id).await;
+    let llm_messages =
+        crate::agent::vision::inject_selected_context(&llm_messages, &session_id).await;
 
     // Convert LlmMessages to preview-friendly structs with structured blocks
-    let messages: Vec<ContextPreviewMessage> = llm_messages.iter().map(|m| {
-        let blocks: Vec<ContextPreviewBlock> = match &m.content {
-            crate::llm::MessageContent::Text(t) => {
-                if t.is_empty() {
-                    vec![]
-                } else {
-                    vec![ContextPreviewBlock::Text { text: t.clone() }]
+    let messages: Vec<ContextPreviewMessage> = llm_messages
+        .iter()
+        .map(|m| {
+            let blocks: Vec<ContextPreviewBlock> = match &m.content {
+                crate::llm::MessageContent::Text(t) => {
+                    if t.is_empty() {
+                        vec![]
+                    } else {
+                        vec![ContextPreviewBlock::Text { text: t.clone() }]
+                    }
                 }
-            }
-            crate::llm::MessageContent::Blocks(raw_blocks) => {
-                raw_blocks.iter().map(|b| match b {
-                    crate::llm::ContentBlock::Text { text } => {
-                        ContextPreviewBlock::Text { text: text.clone() }
-                    }
-                    crate::llm::ContentBlock::ToolUse { id, name, input } => {
-                        ContextPreviewBlock::ToolUse {
-                            id: id.clone(),
-                            name: name.clone(),
-                            input: serde_json::to_string_pretty(input).unwrap_or_default(),
+                crate::llm::MessageContent::Blocks(raw_blocks) => raw_blocks
+                    .iter()
+                    .map(|b| match b {
+                        crate::llm::ContentBlock::Text { text } => {
+                            ContextPreviewBlock::Text { text: text.clone() }
                         }
-                    }
-                    crate::llm::ContentBlock::ToolResult { tool_use_id, content, is_error } => {
-                        const PREVIEW_LIMIT: usize = 4000;
-                        let truncated = content.len() > PREVIEW_LIMIT;
-                        let display = if truncated {
-                            let head: String = content.chars().take(PREVIEW_LIMIT * 3 / 4).collect();
-                            let tail_start = content.char_indices()
-                                .rev()
-                                .nth(PREVIEW_LIMIT / 4)
-                                .map(|(i, _)| i)
-                                .unwrap_or(content.len());
-                            format!("{}\n\n… [truncated] …\n\n{}", head, &content[tail_start..])
-                        } else {
-                            content.clone()
-                        };
-                        ContextPreviewBlock::ToolResult {
-                            tool_use_id: tool_use_id.clone(),
-                            content: display,
-                            is_error: *is_error,
-                            truncated,
+                        crate::llm::ContentBlock::ToolUse { id, name, input } => {
+                            ContextPreviewBlock::ToolUse {
+                                id: id.clone(),
+                                name: name.clone(),
+                                input: serde_json::to_string_pretty(input).unwrap_or_default(),
+                            }
                         }
+                        crate::llm::ContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error,
+                        } => {
+                            const PREVIEW_LIMIT: usize = 4000;
+                            let truncated = content.len() > PREVIEW_LIMIT;
+                            let display = if truncated {
+                                let head: String =
+                                    content.chars().take(PREVIEW_LIMIT * 3 / 4).collect();
+                                let tail_start = content
+                                    .char_indices()
+                                    .rev()
+                                    .nth(PREVIEW_LIMIT / 4)
+                                    .map(|(i, _)| i)
+                                    .unwrap_or(content.len());
+                                format!("{}\n\n… [truncated] …\n\n{}", head, &content[tail_start..])
+                            } else {
+                                content.clone()
+                            };
+                            ContextPreviewBlock::ToolResult {
+                                tool_use_id: tool_use_id.clone(),
+                                content: display,
+                                is_error: *is_error,
+                                truncated,
+                            }
+                        }
+                        crate::llm::ContentBlock::Image { .. } => ContextPreviewBlock::Image {
+                            note: "[image attachment]".to_string(),
+                        },
+                    })
+                    .collect(),
+            };
+            // Estimate tokens from text representation
+            let token_text: String = blocks
+                .iter()
+                .map(|b| match b {
+                    ContextPreviewBlock::Text { text } => text.clone(),
+                    ContextPreviewBlock::ToolUse { name, input, .. } => {
+                        format!("{} {}", name, input)
                     }
-                    crate::llm::ContentBlock::Image { .. } => {
-                        ContextPreviewBlock::Image { note: "[image attachment]".to_string() }
-                    }
-                }).collect()
+                    ContextPreviewBlock::ToolResult { content, .. } => content.clone(),
+                    ContextPreviewBlock::Image { .. } => String::new(),
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let tokens = estimate_tokens(&token_text);
+            ContextPreviewMessage {
+                role: m.role.clone(),
+                blocks,
+                tokens,
             }
-        };
-        // Estimate tokens from text representation
-        let token_text: String = blocks.iter().map(|b| match b {
-            ContextPreviewBlock::Text { text } => text.clone(),
-            ContextPreviewBlock::ToolUse { name, input, .. } => format!("{} {}", name, input),
-            ContextPreviewBlock::ToolResult { content, .. } => content.clone(),
-            ContextPreviewBlock::Image { .. } => String::new(),
-        }).collect::<Vec<_>>().join(" ");
-        let tokens = estimate_tokens(&token_text);
-        ContextPreviewMessage { role: m.role.clone(), blocks, tokens }
-    }).collect();
+        })
+        .collect();
 
     let messages_tokens: usize = messages.iter().map(|m| m.tokens).sum();
 

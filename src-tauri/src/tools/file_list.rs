@@ -13,7 +13,9 @@ pub struct FileListTool;
 
 #[async_trait]
 impl Tool for FileListTool {
-    fn name(&self) -> &str { "file_list" }
+    fn name(&self) -> &str {
+        "file_list"
+    }
 
     fn description(&self) -> &str {
         "List directory contents as structured JSON. Returns file names, sizes, modification times, \
@@ -56,7 +58,9 @@ impl Tool for FileListTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
         let path_str = match input["path"].as_str() {
@@ -66,10 +70,16 @@ impl Tool for FileListTool {
 
         let path = std::path::PathBuf::from(path_str);
         if !path.exists() {
-            return Ok(ToolResult::err(format!("Path does not exist: {}", path.display())));
+            return Ok(ToolResult::err(format!(
+                "Path does not exist: {}",
+                path.display()
+            )));
         }
         if !path.is_dir() {
-            return Ok(ToolResult::err(format!("Not a directory: {}", path.display())));
+            return Ok(ToolResult::err(format!(
+                "Not a directory: {}",
+                path.display()
+            )));
         }
 
         let recursive = input["recursive"].as_bool().unwrap_or(false);
@@ -78,15 +88,30 @@ impl Tool for FileListTool {
         let dirs_only = input["dirs_only"].as_bool().unwrap_or(false);
 
         let mut entries: Vec<Value> = Vec::new();
-        collect_entries(&path, &path, 0, if recursive { max_depth } else { 0 }, include_hidden, dirs_only, &mut entries);
+        collect_entries(
+            &path,
+            &path,
+            0,
+            if recursive { max_depth } else { 0 },
+            include_hidden,
+            dirs_only,
+            &mut entries,
+        );
 
         if entries.is_empty() {
-            return Ok(ToolResult::ok(format!("Directory is empty: {}", path.display())));
+            return Ok(ToolResult::ok(format!(
+                "Directory is empty: {}",
+                path.display()
+            )));
         }
 
         let total = entries.len();
         let truncated = total >= MAX_ENTRIES;
-        let entries = if truncated { &entries[..MAX_ENTRIES] } else { &entries[..] };
+        let entries = if truncated {
+            &entries[..MAX_ENTRIES]
+        } else {
+            &entries[..]
+        };
 
         let result = json!({
             "path": path.display().to_string(),
@@ -95,7 +120,9 @@ impl Tool for FileListTool {
             "entries": entries
         });
 
-        Ok(ToolResult::ok(serde_json::to_string_pretty(&result).unwrap_or_default()))
+        Ok(ToolResult::ok(
+            serde_json::to_string_pretty(&result).unwrap_or_default(),
+        ))
     }
 }
 
@@ -150,8 +177,11 @@ fn collect_entries(
         }
 
         let meta = std::fs::metadata(&path).ok();
-        let size = meta.as_ref().and_then(|m| if is_dir { None } else { Some(m.len()) });
-        let modified = meta.as_ref()
+        let size = meta
+            .as_ref()
+            .and_then(|m| if is_dir { None } else { Some(m.len()) });
+        let modified = meta
+            .as_ref()
             .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| {
@@ -186,8 +216,19 @@ fn collect_entries(
         // Recurse into directories
         if is_dir && depth < max_depth {
             // Skip common noise dirs
-            if !matches!(name.as_str(), ".git" | "node_modules" | "target" | ".cache" | "__pycache__" | ".vs") {
-                collect_entries(root, &path, depth + 1, max_depth, include_hidden, dirs_only, out);
+            if !matches!(
+                name.as_str(),
+                ".git" | "node_modules" | "target" | ".cache" | "__pycache__" | ".vs"
+            ) {
+                collect_entries(
+                    root,
+                    &path,
+                    depth + 1,
+                    max_depth,
+                    include_hidden,
+                    dirs_only,
+                    out,
+                );
             }
         }
     }

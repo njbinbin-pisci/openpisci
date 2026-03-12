@@ -60,8 +60,12 @@ pub struct UserToolManifest {
     pub timeout_secs: u64,
 }
 
-fn default_version() -> String { "1.0".into() }
-fn default_timeout() -> u64 { 60 }
+fn default_version() -> String {
+    "1.0".into()
+}
+fn default_timeout() -> u64 {
+    60
+}
 
 impl UserToolManifest {
     pub fn load(dir: &Path) -> Result<Self> {
@@ -74,7 +78,9 @@ impl UserToolManifest {
     /// Returns `true` if the config_schema contains at least one password field.
     #[allow(dead_code)]
     pub fn has_secret_fields(&self) -> bool {
-        self.config_schema.values().any(|f| f.field_type == "password")
+        self.config_schema
+            .values()
+            .any(|f| f.field_type == "password")
     }
 }
 
@@ -84,19 +90,25 @@ impl UserToolManifest {
 fn runtime_command(runtime: &str, entrypoint: &Path) -> (String, Vec<String>) {
     let ep = entrypoint.to_string_lossy().to_string();
     match runtime {
-        "deno" => (
-            "deno".into(),
-            vec!["run".into(), "--allow-all".into(), ep],
-        ),
+        "deno" => ("deno".into(), vec!["run".into(), "--allow-all".into(), ep]),
         "node" => {
             // Try tsx (TypeScript runner) first, fall back to plain node
-            ("node".into(), vec!["-e".into(),
-                format!("require('tsx/cjs'); require('{}')", ep.replace('\\', "/")),
-            ])
+            (
+                "node".into(),
+                vec![
+                    "-e".into(),
+                    format!("require('tsx/cjs'); require('{}')", ep.replace('\\', "/")),
+                ],
+            )
         }
         "powershell" | "ps1" => (
             "powershell".into(),
-            vec!["-NoProfile".into(), "-NonInteractive".into(), "-File".into(), ep],
+            vec![
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-File".into(),
+                ep,
+            ],
         ),
         "python" | "python3" => ("python".into(), vec![ep]),
         "bun" => ("bun".into(), vec!["run".into(), ep]),
@@ -119,27 +131,35 @@ impl UserTool {
 
 #[async_trait]
 impl Tool for UserTool {
-    fn name(&self) -> &str { &self.manifest.name }
-    fn description(&self) -> &str { &self.manifest.description }
-    fn input_schema(&self) -> Value { self.manifest.input_schema.clone() }
+    fn name(&self) -> &str {
+        &self.manifest.name
+    }
+    fn description(&self) -> &str {
+        &self.manifest.description
+    }
+    fn input_schema(&self) -> Value {
+        self.manifest.input_schema.clone()
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let entrypoint = self.tool_dir.join(&self.manifest.entrypoint);
         if !entrypoint.exists() {
             return Ok(ToolResult::err(format!(
                 "User tool '{}': entrypoint '{}' not found",
-                self.manifest.name, entrypoint.display()
+                self.manifest.name,
+                entrypoint.display()
             )));
         }
 
         // Build config JSON from context (no secrets in audit log — handled upstream)
-        let config = ctx.settings
+        let config = ctx
+            .settings
             .user_tool_configs
             .get(&self.manifest.name)
             .cloned()
             .unwrap_or_else(|| json!({}));
 
-        let input_str  = serde_json::to_string(&input).unwrap_or_default();
+        let input_str = serde_json::to_string(&input).unwrap_or_default();
         let config_str = serde_json::to_string(&config).unwrap_or_default();
 
         let (program, mut args) = runtime_command(&self.manifest.runtime, &entrypoint);
@@ -206,7 +226,11 @@ impl Tool for UserTool {
                 "User tool '{}' failed (exit {}): {}",
                 self.manifest.name,
                 raw.status.code().unwrap_or(-1),
-                if stderr.is_empty() { "no stderr output".into() } else { stderr }
+                if stderr.is_empty() {
+                    "no stderr output".into()
+                } else {
+                    stderr
+                }
             )));
         }
 
@@ -215,10 +239,14 @@ impl Tool for UserTool {
         match serde_json::from_str::<Value>(stdout_trimmed) {
             Ok(resp) => {
                 if resp["ok"].as_bool() == Some(false) {
-                    let err_msg = resp["error"].as_str().unwrap_or("Unknown error").to_string();
+                    let err_msg = resp["error"]
+                        .as_str()
+                        .unwrap_or("Unknown error")
+                        .to_string();
                     Ok(ToolResult::err(err_msg))
                 } else {
-                    let content = resp["content"].as_str()
+                    let content = resp["content"]
+                        .as_str()
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| stdout_trimmed.to_string());
                     Ok(ToolResult::ok(content))
@@ -262,7 +290,10 @@ pub fn load_user_tools(user_tools_dir: &Path) -> Vec<UserTool> {
         }
         match UserToolManifest::load(&path) {
             Ok(manifest) => {
-                info!("Loaded user tool: {} (runtime={})", manifest.name, manifest.runtime);
+                info!(
+                    "Loaded user tool: {} (runtime={})",
+                    manifest.name, manifest.runtime
+                );
                 tools.push(UserTool::new(manifest, path));
             }
             Err(e) => {

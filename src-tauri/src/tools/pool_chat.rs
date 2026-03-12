@@ -8,7 +8,6 @@
 /// @mentions in sent messages trigger notifications:
 /// - Busy Koi: notification injected into their running AgentLoop
 /// - Idle Koi: spawned to check messages and respond autonomously
-
 use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use crate::koi::runtime::KOI_SESSIONS;
 use crate::store::Database;
@@ -27,7 +26,9 @@ pub struct PoolChatTool {
 
 #[async_trait]
 impl Tool for PoolChatTool {
-    fn name(&self) -> &str { "pool_chat" }
+    fn name(&self) -> &str {
+        "pool_chat"
+    }
 
     fn description(&self) -> &str {
         "Communicate in the project pool chat with your team members. \
@@ -68,7 +69,9 @@ impl Tool for PoolChatTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let action = input["action"].as_str().unwrap_or("read");
@@ -76,7 +79,10 @@ impl Tool for PoolChatTool {
             "send" => self.send_message(&input, ctx).await,
             "read" => self.read_messages(&input, ctx).await,
             "reply" => self.reply_message(&input, ctx).await,
-            _ => Ok(ToolResult::err(format!("Unknown action '{}'. Use: send, read, reply", action))),
+            _ => Ok(ToolResult::err(format!(
+                "Unknown action '{}'. Use: send, read, reply",
+                action
+            ))),
         }
     }
 }
@@ -87,14 +93,17 @@ impl PoolChatTool {
         input: &Value,
         ctx: &ToolContext,
     ) -> anyhow::Result<crate::koi::PoolSession> {
-        let requested = input["pool_id"].as_str()
+        let requested = input["pool_id"]
+            .as_str()
             .map(str::trim)
             .filter(|id| !id.is_empty() && *id != "current")
             .map(str::to_string)
             .or_else(|| ctx.pool_session_id.clone())
-            .ok_or_else(|| anyhow::anyhow!(
+            .ok_or_else(|| {
+                anyhow::anyhow!(
                 "No pool_id available. Provide pool_id or ensure you are working in a pool context."
-            ))?;
+            )
+            })?;
 
         let db = self.db.lock().await;
         match db.resolve_pool_session_identifier(&requested)? {
@@ -135,18 +144,19 @@ impl PoolChatTool {
 
         let msg = {
             let db = self.db.lock().await;
-            db.insert_pool_message(
-                &pool_id, &self.sender_id, content, "text", "{}",
-            )?
+            db.insert_pool_message(&pool_id, &self.sender_id, content, "text", "{}")?
         };
 
         let event_name = format!("pool_message_{}", pool_id);
-        let _ = self.app.emit(&event_name, serde_json::to_value(&msg).unwrap_or_default());
+        let _ = self
+            .app
+            .emit(&event_name, serde_json::to_value(&msg).unwrap_or_default());
 
         self.dispatch_mentions(&pool_id, content).await;
 
         Ok(ToolResult::ok(format!(
-            "Message sent to pool (id: {}).", msg.id
+            "Message sent to pool (id: {}).",
+            msg.id
         )))
     }
 
@@ -169,13 +179,15 @@ impl PoolChatTool {
             let db = self.db.lock().await;
             db.list_kois().unwrap_or_default()
         };
-        let koi_names: std::collections::HashMap<String, String> = kois.iter()
+        let koi_names: std::collections::HashMap<String, String> = kois
+            .iter()
             .map(|k| (k.id.clone(), format!("{} {}", k.icon, k.name)))
             .collect();
 
         let mut lines: Vec<String> = Vec::new();
         for m in &messages {
-            let sender_display = koi_names.get(&m.sender_id)
+            let sender_display = koi_names
+                .get(&m.sender_id)
                 .cloned()
                 .unwrap_or_else(|| m.sender_id.clone());
             let time = m.created_at.format("%m-%d %H:%M").to_string();
@@ -192,7 +204,8 @@ impl PoolChatTool {
 
         Ok(ToolResult::ok(format!(
             "Pool messages ({} shown):\n{}",
-            messages.len(), lines.join("\n")
+            messages.len(),
+            lines.join("\n")
         )))
     }
 
@@ -203,7 +216,11 @@ impl PoolChatTool {
         };
         let message_id = match input["message_id"].as_i64() {
             Some(id) => id,
-            None => return Ok(ToolResult::err("'message_id' is required for action 'reply'")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'message_id' is required for action 'reply'",
+                ))
+            }
         };
         let pool = match self.resolve_pool_session(input, ctx).await {
             Ok(pool) => pool,
@@ -217,18 +234,27 @@ impl PoolChatTool {
         let msg = {
             let db = self.db.lock().await;
             db.insert_pool_message_ext(
-                &pool_id, &self.sender_id, content, "text", "{}",
-                None, Some(message_id), None,
+                &pool_id,
+                &self.sender_id,
+                content,
+                "text",
+                "{}",
+                None,
+                Some(message_id),
+                None,
             )?
         };
 
         let event_name = format!("pool_message_{}", pool_id);
-        let _ = self.app.emit(&event_name, serde_json::to_value(&msg).unwrap_or_default());
+        let _ = self
+            .app
+            .emit(&event_name, serde_json::to_value(&msg).unwrap_or_default());
 
         self.dispatch_mentions(&pool_id, content).await;
 
         Ok(ToolResult::ok(format!(
-            "Reply sent (id: {}, replying to #{}).", msg.id, message_id
+            "Reply sent (id: {}, replying to #{}).",
+            msg.id, message_id
         )))
     }
 
@@ -277,7 +303,11 @@ impl PoolChatTool {
                 let pool_id = pool_id.to_string();
                 let sender_name = self.sender_name.clone();
                 tokio::spawn(async move {
-                    tracing::info!("Activating idle Koi '{}' for @mention from '{}'", koi_name, sender_name);
+                    tracing::info!(
+                        "Activating idle Koi '{}' for @mention from '{}'",
+                        koi_name,
+                        sender_name
+                    );
                     let runtime = crate::koi::runtime::KoiRuntime::from_tauri(app, db);
                     if let Err(e) = runtime.activate_for_messages(&koi_id, &pool_id).await {
                         tracing::warn!("Failed to activate Koi '{}' for messages: {}", koi_name, e);

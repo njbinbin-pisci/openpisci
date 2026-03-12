@@ -83,10 +83,20 @@ pub async fn install_user_tool(
 
     if source.starts_with("http://") || source.starts_with("https://") {
         // Block private/internal addresses
-        let blocked = ["localhost", "127.0.0.1", "0.0.0.0", "192.168.", "10.", "172."];
+        let blocked = [
+            "localhost",
+            "127.0.0.1",
+            "0.0.0.0",
+            "192.168.",
+            "10.",
+            "172.",
+        ];
         for pat in &blocked {
             if source.contains(pat) {
-                return Err(format!("Blocked URL: '{}' targets a private address", source));
+                return Err(format!(
+                    "Blocked URL: '{}' targets a private address",
+                    source
+                ));
             }
         }
 
@@ -108,12 +118,11 @@ pub async fn install_user_tool(
                 .map_err(|e| format!("Read error: {}", e))?;
 
             let tools_dir_cloned = tools_dir.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                extract_zip(&bytes, &tools_dir_cloned)
-            })
-            .await
-            .map_err(|e| format!("Spawn error: {}", e))?
-            .map_err(|e| format!("Zip extraction failed: {}", e))?;
+            let result =
+                tokio::task::spawn_blocking(move || extract_zip(&bytes, &tools_dir_cloned))
+                    .await
+                    .map_err(|e| format!("Spawn error: {}", e))?
+                    .map_err(|e| format!("Zip extraction failed: {}", e))?;
 
             return Ok(result);
         } else {
@@ -167,7 +176,10 @@ pub async fn install_user_tool(
     copy_dir_all(&local_path, &tool_dir)
         .map_err(|e| format!("Failed to copy tool files: {}", e))?;
 
-    info!("Installed user tool '{}' from local path: {}", manifest.name, source);
+    info!(
+        "Installed user tool '{}' from local path: {}",
+        manifest.name, source
+    );
 
     Ok(manifest_to_info(manifest, false))
 }
@@ -188,7 +200,9 @@ pub async fn uninstall_user_tool(
 
     // Safety: ensure the path is inside user-tools/
     let canonical = tool_dir.canonicalize().map_err(|e| e.to_string())?;
-    let canonical_base = tools_dir.canonicalize().unwrap_or_else(|_| tools_dir.clone());
+    let canonical_base = tools_dir
+        .canonicalize()
+        .unwrap_or_else(|_| tools_dir.clone());
     if !canonical.starts_with(&canonical_base) {
         return Err("Path traversal attempt blocked".into());
     }
@@ -201,7 +215,9 @@ pub async fn uninstall_user_tool(
     {
         let mut settings = state.settings.lock().await;
         settings.user_tool_configs.remove(&tool_name);
-        settings.save().map_err(|e| format!("Failed to save settings: {}", e))?;
+        settings
+            .save()
+            .map_err(|e| format!("Failed to save settings: {}", e))?;
     }
 
     info!("Uninstalled user tool '{}'", tool_name);
@@ -247,7 +263,9 @@ pub async fn save_user_tool_config(
         settings
             .user_tool_configs
             .insert(tool_name.clone(), Value::Object(config_value));
-        settings.save().map_err(|e| format!("Failed to save config: {}", e))?;
+        settings
+            .save()
+            .map_err(|e| format!("Failed to save config: {}", e))?;
     }
 
     info!("Saved config for user tool '{}'", tool_name);
@@ -314,7 +332,13 @@ pub async fn get_user_tool_config(
 
 fn safe_tool_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .to_lowercase()
 }
@@ -367,7 +391,11 @@ fn extract_zip(bytes: &[u8], target_dir: &std::path::Path) -> Result<UserToolInf
 
     // Find the top-level dir prefix (if any)
     let top_prefix = {
-        let name = archive.by_index(0).map_err(|e| e.to_string())?.name().to_string();
+        let name = archive
+            .by_index(0)
+            .map_err(|e| e.to_string())?
+            .name()
+            .to_string();
         if name.contains('/') {
             name.split('/').next().unwrap_or("").to_string()
         } else {
@@ -383,7 +411,8 @@ fn extract_zip(bytes: &[u8], target_dir: &std::path::Path) -> Result<UserToolInf
         let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
         let outpath = file.name().to_string();
         // Strip top-level prefix
-        let relative = if !top_prefix.is_empty() && outpath.starts_with(&format!("{}/", top_prefix)) {
+        let relative = if !top_prefix.is_empty() && outpath.starts_with(&format!("{}/", top_prefix))
+        {
             &outpath[top_prefix.len() + 1..]
         } else {
             &outpath

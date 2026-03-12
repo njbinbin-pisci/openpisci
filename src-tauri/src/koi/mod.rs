@@ -10,7 +10,6 @@ pub mod runtime;
 ///
 /// Hierarchy:
 ///   Pisci (main Agent) → Koi (persistent, independent) → Fish (ephemeral)
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -121,8 +120,7 @@ pub const KOI_COLORS: &[(&str, &str)] = &[
 
 /// Preset icons for Koi creation UI.
 pub const KOI_ICONS: &[&str] = &[
-    "🐙", "🦈", "🐬", "🦑", "🐳", "🐟", "🦐", "🦀",
-    "🤖", "📊", "🎨", "💻", "🔬", "📝", "🛡️", "🌐",
+    "🐙", "🦈", "🐬", "🦑", "🐳", "🐟", "🦐", "🦀", "🤖", "📊", "🎨", "💻", "🔬", "📝", "🛡️", "🌐",
     "🧠", "⚡", "🔧", "📁", "🎯", "🏗️", "🔍", "📡",
 ];
 

@@ -58,7 +58,8 @@ pub(crate) fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAt
     match assessment.decision {
         ProjectDecision::Continue => {
             lines.push(
-                "- The project is NOT ready for HEARTBEAT_OK. Do not summarize it as finished.".to_string(),
+                "- The project is NOT ready for HEARTBEAT_OK. Do not summarize it as finished."
+                    .to_string(),
             );
             if assessment.active_todo_count == 0 && assessment.follow_up_signal_count > 0 {
                 lines.push(
@@ -106,7 +107,10 @@ pub fn collect_pool_attention(
     koi_ids: &[String],
     last_seen_message_id: i64,
 ) -> Option<PoolAttention> {
-    let latest_message_id = messages.last().map(|m| m.id).unwrap_or(last_seen_message_id);
+    let latest_message_id = messages
+        .last()
+        .map(|m| m.id)
+        .unwrap_or(last_seen_message_id);
     let new_attention_messages: Vec<&PoolMessage> = messages
         .iter()
         .filter(|m| m.id > last_seen_message_id && is_attention_event(m, koi_ids))
@@ -172,7 +176,8 @@ pub async fn scan_attention_pools(state: &AppState) -> Result<Vec<PoolAttention>
     for pool in pools.into_iter().filter(|p| p.status != "archived") {
         let messages = {
             let db = state.db.lock().await;
-            db.get_pool_messages(&pool.id, 200, 0).map_err(|e| e.to_string())?
+            db.get_pool_messages(&pool.id, 200, 0)
+                .map_err(|e| e.to_string())?
         };
         let pool_todos: Vec<KoiTodo> = all_todos
             .iter()
@@ -182,7 +187,9 @@ pub async fn scan_attention_pools(state: &AppState) -> Result<Vec<PoolAttention>
         let last_seen = cursor_snapshot.get(&pool.id).copied().unwrap_or(0);
         let latest_message_id = messages.last().map(|m| m.id).unwrap_or(last_seen);
 
-        if let Some(attention) = collect_pool_attention(&pool, &messages, &pool_todos, &koi_ids, last_seen) {
+        if let Some(attention) =
+            collect_pool_attention(&pool, &messages, &pool_todos, &koi_ids, last_seen)
+        {
             attentions.push(attention);
         } else if latest_message_id > last_seen {
             advance_cursors.push((pool.id.clone(), latest_message_id));
@@ -219,7 +226,13 @@ pub async fn dispatch_heartbeat(
 ) -> Result<(), String> {
     let attentions = scan_attention_pools(state).await?;
     if attentions.is_empty() {
-        ensure_heartbeat_session(state, HEARTBEAT_GLOBAL_SESSION_ID, "Pisci Heartbeat", HEARTBEAT_SOURCE).await?;
+        ensure_heartbeat_session(
+            state,
+            HEARTBEAT_GLOBAL_SESSION_ID,
+            "Pisci Heartbeat",
+            HEARTBEAT_SOURCE,
+        )
+        .await?;
         run_agent_headless(
             state,
             HEARTBEAT_GLOBAL_SESSION_ID,

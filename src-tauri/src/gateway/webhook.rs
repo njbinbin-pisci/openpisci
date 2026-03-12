@@ -31,7 +31,9 @@ impl WebhookChannel {
 
 #[async_trait]
 impl Channel for WebhookChannel {
-    fn name(&self) -> &str { "webhook" }
+    fn name(&self) -> &str {
+        "webhook"
+    }
 
     async fn connect(&mut self) -> Result<()> {
         self.status = ChannelStatus::Connected;

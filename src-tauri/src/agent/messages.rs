@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
+use crate::agent::plan::PlanTodoItem;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use crate::agent::plan::PlanTodoItem;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -67,9 +67,18 @@ pub enum AgentEvent {
     /// Streaming text delta
     TextDelta { delta: String },
     /// Tool execution started
-    ToolStart { id: String, name: String, input: serde_json::Value },
+    ToolStart {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
     /// Tool execution finished
-    ToolEnd { id: String, name: String, result: String, is_error: bool },
+    ToolEnd {
+        id: String,
+        name: String,
+        result: String,
+        is_error: bool,
+    },
     /// Full message committed to DB
     MessageCommit { message: serde_json::Value },
     /// Permission required from user
@@ -80,7 +89,10 @@ pub enum AgentEvent {
         description: String,
     },
     /// Agent loop complete
-    Done { total_input_tokens: u32, total_output_tokens: u32 },
+    Done {
+        total_input_tokens: u32,
+        total_output_tokens: u32,
+    },
     /// Error occurred
     Error { message: String },
     /// Visible plan/todo list for the current task

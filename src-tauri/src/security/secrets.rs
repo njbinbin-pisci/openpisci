@@ -60,7 +60,9 @@ impl SecretStore {
             return Ok(String::new());
         }
         if ciphertext.len() < 12 + 16 {
-            return Err(anyhow::anyhow!("Ciphertext too short for ChaCha20-Poly1305"));
+            return Err(anyhow::anyhow!(
+                "Ciphertext too short for ChaCha20-Poly1305"
+            ));
         }
         let cipher = ChaCha20Poly1305::new((&self.key).into());
         let nonce = Nonce::from_slice(&ciphertext[..12]);

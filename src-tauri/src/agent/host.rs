@@ -27,7 +27,11 @@ pub struct HostAgent {
 
 impl HostAgent {
     pub fn new(client: Box<dyn LlmClient>, model: String, max_tokens: u32) -> Self {
-        Self { client, model, max_tokens }
+        Self {
+            client,
+            model,
+            max_tokens,
+        }
     }
 
     pub async fn decompose_task(&self, user_request: &str) -> Result<Vec<SubTask>> {
@@ -63,24 +67,23 @@ impl HostAgent {
         let json_str = &text[json_start..json_end];
 
         match serde_json::from_str::<Vec<SubTaskRaw>>(json_str) {
-            Ok(raw_tasks) => {
-                Ok(raw_tasks.into_iter().map(|t| SubTask {
+            Ok(raw_tasks) => Ok(raw_tasks
+                .into_iter()
+                .map(|t| SubTask {
                     id: t.id,
                     description: t.description,
                     app_hint: t.app_hint,
                     dependencies: t.dependencies.unwrap_or_default(),
                     status: SubTaskStatus::Pending,
-                }).collect())
-            }
-            Err(_) => {
-                Ok(vec![SubTask {
-                    id: "task_1".to_string(),
-                    description: user_request.to_string(),
-                    app_hint: None,
-                    dependencies: vec![],
-                    status: SubTaskStatus::Pending,
-                }])
-            }
+                })
+                .collect()),
+            Err(_) => Ok(vec![SubTask {
+                id: "task_1".to_string(),
+                description: user_request.to_string(),
+                app_hint: None,
+                dependencies: vec![],
+                status: SubTaskStatus::Pending,
+            }]),
         }
     }
 
@@ -99,7 +102,10 @@ impl HostAgent {
     /// Returns `Some(koi_id)` if the task description or hint suggests a role
     /// that matches an available Koi agent. Looks at the Koi's `role`,
     /// `description`, `name`, and `system_prompt`.
-    pub fn route_to_koi(task_description: &str, kois: &[crate::koi::KoiDefinition]) -> Option<String> {
+    pub fn route_to_koi(
+        task_description: &str,
+        kois: &[crate::koi::KoiDefinition],
+    ) -> Option<String> {
         if kois.is_empty() {
             return None;
         }
@@ -165,30 +171,51 @@ impl HostAgent {
     /// produced by `fish::skill_fish_id()` from the built-in skill names.
     pub fn route_to_fish(hint: &str) -> Option<&'static str> {
         let h = hint.to_lowercase();
-        if h.contains("file") || h.contains("文件") || h.contains("folder") || h.contains("目录") {
+        if h.contains("file") || h.contains("文件") || h.contains("folder") || h.contains("目录")
+        {
             return Some("skill-file-management");
         }
-        if h.contains("office") || h.contains("excel") || h.contains("word")
-            || h.contains("ppt") || h.contains("spreadsheet") || h.contains("表格")
-            || h.contains("文档") || h.contains("报告")
+        if h.contains("office")
+            || h.contains("excel")
+            || h.contains("word")
+            || h.contains("ppt")
+            || h.contains("spreadsheet")
+            || h.contains("表格")
+            || h.contains("文档")
+            || h.contains("报告")
         {
             return Some("skill-office-automation");
         }
-        if h.contains("web") || h.contains("browser") || h.contains("网页")
-            || h.contains("crawl") || h.contains("scrape") || h.contains("url")
-            || h.contains("浏览器") || h.contains("抓取")
+        if h.contains("web")
+            || h.contains("browser")
+            || h.contains("网页")
+            || h.contains("crawl")
+            || h.contains("scrape")
+            || h.contains("url")
+            || h.contains("浏览器")
+            || h.contains("抓取")
         {
             return Some("skill-web-automation");
         }
-        if h.contains("system") || h.contains("windows") || h.contains("powershell")
-            || h.contains("process") || h.contains("service") || h.contains("系统")
-            || h.contains("进程") || h.contains("服务")
+        if h.contains("system")
+            || h.contains("windows")
+            || h.contains("powershell")
+            || h.contains("process")
+            || h.contains("service")
+            || h.contains("系统")
+            || h.contains("进程")
+            || h.contains("服务")
         {
             return Some("skill-system-admin");
         }
-        if h.contains("desktop") || h.contains("uia") || h.contains("桌面")
-            || h.contains("click") || h.contains("window") || h.contains("窗口")
-            || h.contains("界面") || h.contains("自动化操作")
+        if h.contains("desktop")
+            || h.contains("uia")
+            || h.contains("桌面")
+            || h.contains("click")
+            || h.contains("window")
+            || h.contains("窗口")
+            || h.contains("界面")
+            || h.contains("自动化操作")
         {
             return Some("skill-desktop-control");
         }

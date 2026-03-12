@@ -131,10 +131,7 @@ impl FeishuChannel {
         let token = body["tenant_access_token"]
             .as_str()
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Missing tenant_access_token in Feishu response: {:?}",
-                    body
-                )
+                anyhow::anyhow!("Missing tenant_access_token in Feishu response: {:?}", body)
             })?
             .to_string();
         let expires_in = body["expire"].as_u64().unwrap_or(7200);
@@ -158,9 +155,13 @@ impl FeishuChannel {
         let url = format!("{}/open-apis/im/v1/images", self.config.base_url());
 
         // Detect content type from filename extension
-        let mime = if filename.ends_with(".png") { "image/png" }
-            else if filename.ends_with(".gif") { "image/gif" }
-            else { "image/jpeg" };
+        let mime = if filename.ends_with(".png") {
+            "image/png"
+        } else if filename.ends_with(".gif") {
+            "image/gif"
+        } else {
+            "image/jpeg"
+        };
 
         let part = reqwest::multipart::Part::bytes(data.to_vec())
             .file_name(filename.to_string())
@@ -169,7 +170,8 @@ impl FeishuChannel {
             .text("image_type", "message")
             .part("image", part);
 
-        let resp = self.http
+        let resp = self
+            .http
             .post(&url)
             .header("Authorization", format!("Bearer {}", token))
             .multipart(form)
@@ -198,13 +200,22 @@ impl FeishuChannel {
 
     // ── send_image ────────────────────────────────────────────────────────────
 
-    async fn send_image(&self, receive_id: &str, image_key: &str, reply_to: Option<&str>) -> Result<()> {
+    async fn send_image(
+        &self,
+        receive_id: &str,
+        image_key: &str,
+        reply_to: Option<&str>,
+    ) -> Result<()> {
         let token = self.get_tenant_access_token().await?;
         let url = format!("{}/open-apis/im/v1/messages", self.config.base_url());
 
-        let receive_id_type = if receive_id.starts_with("ou_") { "open_id" }
-            else if receive_id.starts_with("on_") { "union_id" }
-            else { "chat_id" };
+        let receive_id_type = if receive_id.starts_with("ou_") {
+            "open_id"
+        } else if receive_id.starts_with("on_") {
+            "union_id"
+        } else {
+            "chat_id"
+        };
 
         let mut body = json!({
             "receive_id": receive_id,
@@ -215,7 +226,8 @@ impl FeishuChannel {
             body["reply_in_thread"] = json!(true);
         }
 
-        let resp = self.http
+        let resp = self
+            .http
             .post(&url)
             .query(&[("receive_id_type", receive_id_type)])
             .header("Authorization", format!("Bearer {}", token))
@@ -234,7 +246,10 @@ impl FeishuChannel {
             );
         }
 
-        info!("Feishu: sent image to {} (type={})", receive_id, receive_id_type);
+        info!(
+            "Feishu: sent image to {} (type={})",
+            receive_id, receive_id_type
+        );
         Ok(())
     }
 
@@ -246,14 +261,14 @@ impl FeishuChannel {
         let token = self.get_tenant_access_token().await?;
         let url = format!("{}/open-apis/im/v1/files", self.config.base_url());
 
-        let part = reqwest::multipart::Part::bytes(data.to_vec())
-            .file_name(filename.to_string());
+        let part = reqwest::multipart::Part::bytes(data.to_vec()).file_name(filename.to_string());
         let form = reqwest::multipart::Form::new()
             .text("file_type", file_type.to_string())
             .text("file_name", filename.to_string())
             .part("file", part);
 
-        let resp = self.http
+        let resp = self
+            .http
             .post(&url)
             .header("Authorization", format!("Bearer {}", token))
             .multipart(form)
@@ -265,7 +280,8 @@ impl FeishuChannel {
         if !status.is_success() || body["code"].as_i64().unwrap_or(0) != 0 {
             anyhow::bail!(
                 "Feishu upload_file failed: HTTP {} code={} msg={}",
-                status, body["code"],
+                status,
+                body["code"],
                 body["msg"].as_str().unwrap_or("unknown")
             );
         }
@@ -275,19 +291,31 @@ impl FeishuChannel {
             .ok_or_else(|| anyhow::anyhow!("Missing file_key in Feishu upload response"))?
             .to_string();
 
-        info!("Feishu: uploaded file '{}' → file_key={}", filename, file_key);
+        info!(
+            "Feishu: uploaded file '{}' → file_key={}",
+            filename, file_key
+        );
         Ok(file_key)
     }
 
     // ── send_file ─────────────────────────────────────────────────────────────
 
-    async fn send_file(&self, receive_id: &str, file_key: &str, reply_to: Option<&str>) -> Result<()> {
+    async fn send_file(
+        &self,
+        receive_id: &str,
+        file_key: &str,
+        reply_to: Option<&str>,
+    ) -> Result<()> {
         let token = self.get_tenant_access_token().await?;
         let url = format!("{}/open-apis/im/v1/messages", self.config.base_url());
 
-        let receive_id_type = if receive_id.starts_with("ou_") { "open_id" }
-            else if receive_id.starts_with("on_") { "union_id" }
-            else { "chat_id" };
+        let receive_id_type = if receive_id.starts_with("ou_") {
+            "open_id"
+        } else if receive_id.starts_with("on_") {
+            "union_id"
+        } else {
+            "chat_id"
+        };
 
         let mut body = json!({
             "receive_id": receive_id,
@@ -298,7 +326,8 @@ impl FeishuChannel {
             body["reply_in_thread"] = json!(true);
         }
 
-        let resp = self.http
+        let resp = self
+            .http
             .post(&url)
             .query(&[("receive_id_type", receive_id_type)])
             .header("Authorization", format!("Bearer {}", token))
@@ -311,12 +340,16 @@ impl FeishuChannel {
         if !status.is_success() || resp_json["code"].as_i64().unwrap_or(0) != 0 {
             anyhow::bail!(
                 "Feishu send_file failed: HTTP {} code={} msg={}",
-                status, resp_json["code"],
+                status,
+                resp_json["code"],
                 resp_json["msg"].as_str().unwrap_or("unknown")
             );
         }
 
-        info!("Feishu: sent file to {} (type={})", receive_id, receive_id_type);
+        info!(
+            "Feishu: sent file to {} (type={})",
+            receive_id, receive_id_type
+        );
         Ok(())
     }
 
@@ -347,7 +380,8 @@ impl FeishuChannel {
         if reply_to.is_some() {
             body["reply_in_thread"] = json!(true);
         }
-        let resp = self.http
+        let resp = self
+            .http
             .post(&url)
             .query(&[("receive_id_type", receive_id_type)])
             .header("Authorization", format!("Bearer {}", token))
@@ -370,19 +404,37 @@ impl FeishuChannel {
             );
         }
 
-        info!("Feishu: sent message to {} (type={})", receive_id, receive_id_type);
+        info!(
+            "Feishu: sent message to {} (type={})",
+            receive_id, receive_id_type
+        );
         Ok(())
     }
 
     /// Map a MIME type (or filename extension) to a Feishu file_type string.
     /// Feishu supported file_type values: opus, mp4, pdf, doc, xls, ppt, stream
     fn mime_to_feishu_file_type<'a>(mime: &str, filename: &str) -> &'a str {
-        if mime.contains("pdf") { return "pdf"; }
-        if mime.contains("mp4") || mime.contains("video") { return "mp4"; }
-        if mime.contains("opus") || mime.contains("ogg") { return "opus"; }
-        if mime.contains("word") || mime.contains("msword") || mime.contains("officedocument.wordprocessingml") { return "doc"; }
-        if mime.contains("excel") || mime.contains("spreadsheetml") || mime.contains("ms-excel") { return "xls"; }
-        if mime.contains("powerpoint") || mime.contains("presentationml") { return "ppt"; }
+        if mime.contains("pdf") {
+            return "pdf";
+        }
+        if mime.contains("mp4") || mime.contains("video") {
+            return "mp4";
+        }
+        if mime.contains("opus") || mime.contains("ogg") {
+            return "opus";
+        }
+        if mime.contains("word")
+            || mime.contains("msword")
+            || mime.contains("officedocument.wordprocessingml")
+        {
+            return "doc";
+        }
+        if mime.contains("excel") || mime.contains("spreadsheetml") || mime.contains("ms-excel") {
+            return "xls";
+        }
+        if mime.contains("powerpoint") || mime.contains("presentationml") {
+            return "ppt";
+        }
         let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
         match ext.as_str() {
             "pdf" => "pdf",
@@ -442,13 +494,21 @@ impl Channel for FeishuChannel {
                     // ── Image ──────────────────────────────────────────────
                     match self.upload_image(data, filename).await {
                         Ok(image_key) => {
-                            self.send_image(&msg.recipient, &image_key, msg.reply_to.as_deref()).await?;
+                            self.send_image(&msg.recipient, &image_key, msg.reply_to.as_deref())
+                                .await?;
                             if !msg.content.is_empty() {
-                                self.send_text(&msg.recipient, &msg.content, msg.reply_to.as_deref()).await?;
+                                self.send_text(
+                                    &msg.recipient,
+                                    &msg.content,
+                                    msg.reply_to.as_deref(),
+                                )
+                                .await?;
                             }
                             return Ok(());
                         }
-                        Err(e) => warn!("Feishu: image upload failed ({}), falling back to text", e),
+                        Err(e) => {
+                            warn!("Feishu: image upload failed ({}), falling back to text", e)
+                        }
                     }
                 } else {
                     // ── File (PDF, Office docs, audio, video, binary, etc.) ─
@@ -456,9 +516,15 @@ impl Channel for FeishuChannel {
                     let file_type = Self::mime_to_feishu_file_type(mime, filename);
                     match self.upload_file(data, filename, file_type).await {
                         Ok(file_key) => {
-                            self.send_file(&msg.recipient, &file_key, msg.reply_to.as_deref()).await?;
+                            self.send_file(&msg.recipient, &file_key, msg.reply_to.as_deref())
+                                .await?;
                             if !msg.content.is_empty() {
-                                self.send_text(&msg.recipient, &msg.content, msg.reply_to.as_deref()).await?;
+                                self.send_text(
+                                    &msg.recipient,
+                                    &msg.content,
+                                    msg.reply_to.as_deref(),
+                                )
+                                .await?;
                             }
                             return Ok(());
                         }
@@ -468,7 +534,8 @@ impl Channel for FeishuChannel {
             }
         }
         // Default: send as text
-        self.send_text(&msg.recipient, &msg.content, msg.reply_to.as_deref()).await
+        self.send_text(&msg.recipient, &msg.content, msg.reply_to.as_deref())
+            .await
     }
 
     /// Feishu WebSocket long connection — implements the official SDK binary Protobuf protocol.
@@ -526,7 +593,10 @@ impl Channel for FeishuChannel {
                                 (u.to_string(), ping_secs)
                             }
                             None => {
-                                warn!("Feishu WS endpoint: missing data.URL in response: {:?}", body);
+                                warn!(
+                                    "Feishu WS endpoint: missing data.URL in response: {:?}",
+                                    body
+                                );
                                 tokio::time::sleep(backoff).await;
                                 backoff = (backoff * 2).min(MAX_BACKOFF);
                                 continue;
@@ -572,7 +642,11 @@ impl Channel for FeishuChannel {
                             let mut kv = part.splitn(2, '=');
                             let k = kv.next()?;
                             let v = kv.next()?;
-                            if k == "service_id" { v.parse::<i32>().ok() } else { None }
+                            if k == "service_id" {
+                                v.parse::<i32>().ok()
+                            } else {
+                                None
+                            }
                         })
                         .unwrap_or(0);
 
@@ -651,7 +725,9 @@ impl Channel for FeishuChannel {
                         // Check shutdown after every message too
                         if shutdown.load(Ordering::Relaxed) {
                             info!("Feishu: shutdown requested after message, closing WebSocket");
-                            let _ = ws_sink.send(tokio_tungstenite::tungstenite::Message::Close(None)).await;
+                            let _ = ws_sink
+                                .send(tokio_tungstenite::tungstenite::Message::Close(None))
+                                .await;
                             return Ok(());
                         }
                     }
@@ -697,11 +773,14 @@ impl Channel for FeishuChannel {
 #[derive(Debug)]
 struct FeishuFrame {
     seq_id: u64,
+    #[allow(dead_code)]
     log_id: u64,
     service: i32,
-    method: i32,  // 0 = Control, 1 = Data
+    method: i32, // 0 = Control, 1 = Data
     headers: Vec<(String, String)>,
+    #[allow(dead_code)]
     payload_encoding: String,
+    #[allow(dead_code)]
     payload_type: String,
     payload: Vec<u8>,
 }
@@ -714,8 +793,7 @@ async fn handle_feishu_frame<S>(
     seen_messages: &Arc<RwLock<HashMap<String, std::time::Instant>>>,
     http: &Client,
     config: &FeishuConfig,
-)
-where
+) where
     S: futures::Sink<tokio_tungstenite::tungstenite::Message> + Unpin,
     S::Error: std::fmt::Debug,
 {
@@ -915,15 +993,14 @@ async fn download_feishu_image(
 
     // Download image: GET /open-apis/im/v1/images/{image_key}
     let url = format!("{}/open-apis/im/v1/images/{}", config.base_url(), image_key);
-    let resp = http
-        .get(&url)
-        .bearer_auth(&token)
-        .send()
-        .await
-        .ok()?;
+    let resp = http.get(&url).bearer_auth(&token).send().await.ok()?;
 
     if !resp.status().is_success() {
-        warn!("Feishu: failed to download image {}: HTTP {}", image_key, resp.status());
+        warn!(
+            "Feishu: failed to download image {}: HTTP {}",
+            image_key,
+            resp.status()
+        );
         return None;
     }
 
@@ -944,7 +1021,12 @@ async fn download_feishu_image(
         return None;
     }
 
-    info!("Feishu: downloaded image {} ({} bytes, {})", image_key, bytes.len(), mime);
+    info!(
+        "Feishu: downloaded image {} ({} bytes, {})",
+        image_key,
+        bytes.len(),
+        mime
+    );
 
     // Determine extension from MIME
     let ext = match mime.as_str() {
@@ -998,15 +1080,33 @@ fn proto_decode_frame(buf: &[u8]) -> Result<FeishuFrame> {
         let wire_type = tag_wire & 0x7;
 
         match (field_num, wire_type) {
-            (1, 0) => { let (v, n) = read_varint(buf, pos)?; seq_id = v; pos += n; }
-            (2, 0) => { let (v, n) = read_varint(buf, pos)?; log_id = v; pos += n; }
-            (3, 0) => { let (v, n) = read_varint(buf, pos)?; service = v as i32; pos += n; }
-            (4, 0) => { let (v, n) = read_varint(buf, pos)?; method = v as i32; pos += n; }
+            (1, 0) => {
+                let (v, n) = read_varint(buf, pos)?;
+                seq_id = v;
+                pos += n;
+            }
+            (2, 0) => {
+                let (v, n) = read_varint(buf, pos)?;
+                log_id = v;
+                pos += n;
+            }
+            (3, 0) => {
+                let (v, n) = read_varint(buf, pos)?;
+                service = v as i32;
+                pos += n;
+            }
+            (4, 0) => {
+                let (v, n) = read_varint(buf, pos)?;
+                method = v as i32;
+                pos += n;
+            }
             (5, 2) => {
                 let (len, n) = read_varint(buf, pos)?;
                 pos += n;
                 let end = pos + len as usize;
-                if end > buf.len() { return Err(anyhow::anyhow!("buffer overflow reading header")); }
+                if end > buf.len() {
+                    return Err(anyhow::anyhow!("buffer overflow reading header"));
+                }
                 let h = decode_header(&buf[pos..end])?;
                 headers.push(h);
                 pos = end;
@@ -1029,7 +1129,9 @@ fn proto_decode_frame(buf: &[u8]) -> Result<FeishuFrame> {
                 let (len, n) = read_varint(buf, pos)?;
                 pos += n;
                 let end = pos + len as usize;
-                if end > buf.len() { return Err(anyhow::anyhow!("buffer overflow reading payload")); }
+                if end > buf.len() {
+                    return Err(anyhow::anyhow!("buffer overflow reading payload"));
+                }
                 payload = buf[pos..end].to_vec();
                 pos = end;
             }
@@ -1038,7 +1140,10 @@ fn proto_decode_frame(buf: &[u8]) -> Result<FeishuFrame> {
                 let (len, n) = read_varint(buf, pos)?;
                 pos += n + len as usize;
             }
-            (_, 0) => { let (_, n) = read_varint(buf, pos)?; pos += n; }
+            (_, 0) => {
+                let (_, n) = read_varint(buf, pos)?;
+                pos += n;
+            }
             (_, 2) => {
                 let (len, n) = read_varint(buf, pos)?;
                 pos += n + len as usize;
@@ -1047,7 +1152,16 @@ fn proto_decode_frame(buf: &[u8]) -> Result<FeishuFrame> {
         }
     }
 
-    Ok(FeishuFrame { seq_id, log_id, service, method, headers, payload_encoding, payload_type, payload })
+    Ok(FeishuFrame {
+        seq_id,
+        log_id,
+        service,
+        method,
+        headers,
+        payload_encoding,
+        payload_type,
+        payload,
+    })
 }
 
 fn decode_header(buf: &[u8]) -> Result<(String, String)> {
@@ -1189,15 +1303,18 @@ fn build_ack_frame(frame: &FeishuFrame) -> Vec<u8> {
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    proto_encode_frame(frame.seq_id, frame.service, frame.method, &headers, &payload)
+    proto_encode_frame(
+        frame.seq_id,
+        frame.service,
+        frame.method,
+        &headers,
+        &payload,
+    )
 }
 
 /// Build a Pong control frame in response to a server Ping.
 fn build_pong_frame(frame: &FeishuFrame) -> Vec<u8> {
-    let headers: Vec<(&str, &str)> = [("type", "pong")]
-        .iter()
-        .map(|(k, v)| (*k, *v))
-        .collect();
+    let headers: Vec<(&str, &str)> = [("type", "pong")].iter().map(|(k, v)| (*k, *v)).collect();
     proto_encode_frame(frame.seq_id, frame.service, 0, &headers, &[])
 }
 
@@ -1206,4 +1323,3 @@ static SEQ_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 fn next_seq_id() -> u64 {
     SEQ_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
-

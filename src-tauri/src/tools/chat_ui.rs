@@ -7,8 +7,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 
-pub type InteractiveResponseMap =
-    Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<Value>>>>;
+pub type InteractiveResponseMap = Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<Value>>>>;
 
 pub struct ChatUiTool {
     pub app: AppHandle,
@@ -138,10 +137,7 @@ impl Tool for ChatUiTool {
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
-        let ui_def = input
-            .get("ui_definition")
-            .cloned()
-            .unwrap_or(Value::Null);
+        let ui_def = input.get("ui_definition").cloned().unwrap_or(Value::Null);
 
         if ui_def.is_null() || ui_def.get("blocks").is_none() {
             return Ok(ToolResult::err(
@@ -187,11 +183,9 @@ impl Tool for ChatUiTool {
                     summary
                 )))
             }
-            Ok(Err(_)) => {
-                Ok(ToolResult::err(
-                    "Interactive UI response channel was dropped (user may have navigated away).",
-                ))
-            }
+            Ok(Err(_)) => Ok(ToolResult::err(
+                "Interactive UI response channel was dropped (user may have navigated away).",
+            )),
             Err(_) => {
                 // Clean up on timeout
                 let state = self.app.state::<crate::store::AppState>();

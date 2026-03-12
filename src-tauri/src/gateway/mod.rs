@@ -3,8 +3,8 @@ pub mod discord;
 pub mod feishu;
 pub mod matrix;
 pub mod slack;
-pub mod telegram;
 pub mod teams;
+pub mod telegram;
 pub mod webhook;
 pub mod wecom;
 
@@ -70,7 +70,9 @@ pub trait Channel: Send + Sync {
     async fn send(&self, msg: &OutboundMessage) -> Result<()>;
     async fn listen(&self, tx: mpsc::Sender<InboundMessage>) -> Result<()>;
     fn status(&self) -> ChannelStatus;
-    async fn health_check(&self) -> bool { true }
+    async fn health_check(&self) -> bool {
+        true
+    }
     /// Signal the listen() loop to stop without acquiring a write lock.
     /// Called by stop_all() to avoid deadlock (listen holds read lock indefinitely).
     fn request_shutdown(&self) {}
@@ -100,10 +102,10 @@ impl GatewayManager {
     pub async fn register_channel(&self, channel: Box<dyn Channel>) {
         let name = channel.name().to_string();
         info!("Registering gateway channel: {}", name);
-        self.channels.write().await.insert(
-            name,
-            Arc::new(RwLock::new(channel)),
-        );
+        self.channels
+            .write()
+            .await
+            .insert(name, Arc::new(RwLock::new(channel)));
     }
 
     pub async fn start_all(&self) -> Result<()> {
@@ -140,11 +142,17 @@ impl GatewayManager {
                     match result {
                         Ok(()) => {
                             // Normal exit means disconnect() was called — do NOT reconnect
-                            info!("Channel '{}' listener stopped (disconnect requested)", channel_name);
+                            info!(
+                                "Channel '{}' listener stopped (disconnect requested)",
+                                channel_name
+                            );
                             return;
                         }
                         Err(e) => {
-                            warn!("Channel '{}' listen error: {} — reconnecting in {}s", channel_name, e, backoff_secs);
+                            warn!(
+                                "Channel '{}' listen error: {} — reconnecting in {}s",
+                                channel_name, e, backoff_secs
+                            );
                         }
                     }
                     // Only reach here on error — reconnect with exponential backoff
@@ -153,7 +161,10 @@ impl GatewayManager {
                         let mut ch = ch_arc.write().await;
                         // Don't reconnect if disconnect was called during the sleep
                         if ch.status() == ChannelStatus::Disconnected {
-                            info!("Channel '{}' was disconnected during backoff, not reconnecting", channel_name);
+                            info!(
+                                "Channel '{}' was disconnected during backoff, not reconnecting",
+                                channel_name
+                            );
                             return;
                         }
                         match ch.connect().await {
@@ -181,7 +192,11 @@ impl GatewayManager {
                     let ch = ch_arc.read().await;
                     let healthy = ch.health_check().await;
                     if !healthy {
-                        warn!("Channel '{}' health check failed (status={:?})", name, ch.status());
+                        warn!(
+                            "Channel '{}' health check failed (status={:?})",
+                            name,
+                            ch.status()
+                        );
                     }
                 }
             }
@@ -201,17 +216,17 @@ impl GatewayManager {
             }
             // Step 2: update status via write lock — listen() will have exited within ~2s
             // Use a short timeout to avoid blocking forever if listen is stuck
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                channel.write(),
-            ).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), channel.write()).await {
                 Ok(mut ch) => {
                     if let Err(e) = ch.disconnect().await {
                         warn!("Failed to disconnect channel '{}': {}", name, e);
                     }
                 }
                 Err(_) => {
-                    warn!("Timeout waiting for write lock on channel '{}' during stop_all", name);
+                    warn!(
+                        "Timeout waiting for write lock on channel '{}' during stop_all",
+                        name
+                    );
                 }
             }
         }

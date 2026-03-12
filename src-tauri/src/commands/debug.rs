@@ -971,11 +971,25 @@ pub async fn run_debug_scenario(
         .ok_or_else(|| format!("Unknown scenario: {}", scenario_id))?
         .clone();
 
-    info!("Running debug scenario: {} ({})", scenario.id, scenario.name);
+    info!(
+        "Running debug scenario: {} ({})",
+        scenario.id, scenario.name
+    );
 
-    let (provider, model, api_key, base_url, workspace_root, max_tokens, policy_mode,
-         tool_rate_limit_per_minute, tool_settings, max_iterations, builtin_tool_enabled,
-         ssh_servers_count) = {
+    let (
+        provider,
+        model,
+        api_key,
+        base_url,
+        workspace_root,
+        max_tokens,
+        policy_mode,
+        tool_rate_limit_per_minute,
+        tool_settings,
+        max_iterations,
+        builtin_tool_enabled,
+        ssh_servers_count,
+    ) = {
         let settings = state.settings.lock().await;
         (
             settings.provider.clone(),
@@ -1044,7 +1058,11 @@ pub async fn run_debug_scenario(
     let client = build_client(
         &provider,
         &api_key,
-        if base_url.is_empty() { None } else { Some(&base_url) },
+        if base_url.is_empty() {
+            None
+        } else {
+            Some(&base_url)
+        },
     );
 
     let user_tools_dir = state
@@ -1154,8 +1172,11 @@ pub async fn run_debug_scenario(
     let tool_records_clone = tool_records.clone();
 
     // Track in-flight tool start times
-    let tool_starts: Arc<tokio::sync::Mutex<std::collections::HashMap<String, (String, std::time::Instant, serde_json::Value)>>> =
-        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let tool_starts: Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<String, (String, std::time::Instant, serde_json::Value)>,
+        >,
+    > = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let tool_starts_clone = tool_starts.clone();
 
     let event_collector = tokio::spawn(async move {
@@ -1163,16 +1184,22 @@ pub async fn run_debug_scenario(
             match event {
                 AgentEvent::ToolStart { id, name, input } => {
                     let summary = summarize_input(&name, &input);
-                    tool_starts_clone.lock().await.insert(
-                        id,
-                        (name, std::time::Instant::now(), input),
-                    );
+                    tool_starts_clone
+                        .lock()
+                        .await
+                        .insert(id, (name, std::time::Instant::now(), input));
                     let _ = summary; // suppress unused warning
                 }
-                AgentEvent::ToolEnd { id, name, result, is_error } => {
+                AgentEvent::ToolEnd {
+                    id,
+                    name,
+                    result,
+                    is_error,
+                } => {
                     let duration_ms = {
                         let mut starts = tool_starts_clone.lock().await;
-                        starts.remove(&id)
+                        starts
+                            .remove(&id)
                             .map(|(_, t, input)| {
                                 let dur = t.elapsed().as_millis() as u64;
                                 (dur, summarize_input(&name, &input))
@@ -1222,13 +1249,10 @@ pub async fn run_debug_scenario(
             let missing_keywords: Vec<String> = if scenario.expected_keywords.is_empty() {
                 vec![]
             } else {
-                let any_found = scenario
-                    .expected_keywords
-                    .iter()
-                    .any(|kw| {
-                        let kw_lower = kw.to_lowercase();
-                        response_lower.contains(&kw_lower) || tool_text_lower.contains(&kw_lower)
-                    });
+                let any_found = scenario.expected_keywords.iter().any(|kw| {
+                    let kw_lower = kw.to_lowercase();
+                    response_lower.contains(&kw_lower) || tool_text_lower.contains(&kw_lower)
+                });
                 if any_found {
                     vec![]
                 } else {
@@ -1237,7 +1261,8 @@ pub async fn run_debug_scenario(
             };
 
             // Check expected tools were called
-            let called_tools: Vec<String> = tool_calls.iter().map(|t| t.tool_name.clone()).collect();
+            let called_tools: Vec<String> =
+                tool_calls.iter().map(|t| t.tool_name.clone()).collect();
             let missing_tools: Vec<String> = scenario
                 .expected_tools
                 .iter()
@@ -1264,7 +1289,11 @@ pub async fn run_debug_scenario(
 
             info!(
                 "Debug scenario '{}' completed: passed={} duration={}ms tools={} errors={}",
-                scenario.id, passed, duration_ms, tool_calls.len(), unexpected_tool_errors.len()
+                scenario.id,
+                passed,
+                duration_ms,
+                tool_calls.len(),
+                unexpected_tool_errors.len()
             );
 
             Ok(ScenarioResult {
@@ -1381,14 +1410,17 @@ pub async fn get_debug_report(state: State<'_, AppState>) -> Result<DebugReport,
             None,
             None,
         );
-        registry.all().iter().map(|t| t.name().to_string()).collect()
+        registry
+            .all()
+            .iter()
+            .map(|t| t.name().to_string())
+            .collect()
     };
 
     // Recent audit log (last 20 entries)
     let recent_audit = {
         let db = state.db.lock().await;
-        db.get_audit_log(None, None, 20, 0)
-            .unwrap_or_default()
+        db.get_audit_log(None, None, 20, 0).unwrap_or_default()
     };
 
     // Recent errors from audit log
@@ -1430,13 +1462,24 @@ pub async fn get_log_tail(lines: Option<usize>) -> Result<Vec<String>, String> {
 
 fn summarize_input(tool_name: &str, input: &serde_json::Value) -> String {
     match tool_name {
-        "shell" | "powershell" | "powershell_query" => {
-            input["command"].as_str().unwrap_or("").chars().take(80).collect()
-        }
-        "file_read" | "file_write" => {
-            input["path"].as_str().unwrap_or("").chars().take(80).collect()
-        }
-        "web_search" => input["query"].as_str().unwrap_or("").chars().take(80).collect(),
+        "shell" | "powershell" | "powershell_query" => input["command"]
+            .as_str()
+            .unwrap_or("")
+            .chars()
+            .take(80)
+            .collect(),
+        "file_read" | "file_write" => input["path"]
+            .as_str()
+            .unwrap_or("")
+            .chars()
+            .take(80)
+            .collect(),
+        "web_search" => input["query"]
+            .as_str()
+            .unwrap_or("")
+            .chars()
+            .take(80)
+            .collect(),
         "browser" => {
             let action = input["action"].as_str().unwrap_or("?");
             let url = input["url"].as_str().unwrap_or("");
@@ -1491,7 +1534,6 @@ pub struct UiaDragTestResult {
     pub tool_calls: Vec<ToolCallRecord>,
 }
 
-
 /// Run the UIA drag precision test using the agent.
 ///
 /// The agent will:
@@ -1502,12 +1544,21 @@ pub struct UiaDragTestResult {
 ///
 /// Requires vision_enabled = true in settings.
 #[tauri::command]
-pub async fn run_uia_drag_test(
-    state: State<'_, AppState>,
-) -> Result<UiaDragTestResult, String> {
-    let (provider, model, api_key, base_url, workspace_root, max_tokens, policy_mode,
-         tool_rate_limit_per_minute, tool_settings, max_iterations, builtin_tool_enabled,
-         vision_enabled) = {
+pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTestResult, String> {
+    let (
+        provider,
+        model,
+        api_key,
+        base_url,
+        workspace_root,
+        max_tokens,
+        policy_mode,
+        tool_rate_limit_per_minute,
+        tool_settings,
+        max_iterations,
+        builtin_tool_enabled,
+        vision_enabled,
+    ) = {
         let settings = state.settings.lock().await;
         (
             settings.provider.clone(),
@@ -1541,7 +1592,11 @@ pub async fn run_uia_drag_test(
     let client = build_client(
         &provider,
         &api_key,
-        if base_url.is_empty() { None } else { Some(&base_url) },
+        if base_url.is_empty() {
+            None
+        } else {
+            Some(&base_url)
+        },
     );
 
     let user_tools_dir = state
@@ -1575,8 +1630,7 @@ pub async fn run_uia_drag_test(
         std::path::PathBuf::from(&workspace_root)
     };
 
-    let prompt =
-        "任务：将橙色小球拖拽到绿色目标区域。\n\
+    let prompt = "任务：将橙色小球拖拽到绿色目标区域。\n\
          \n\
          步骤：\n\
          1. 用 screen_capture 工具（action=list_monitors）查看显示器布局和各显示器上的窗口分布，\n\
@@ -1640,23 +1694,32 @@ pub async fn run_uia_drag_test(
         Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let tool_records_clone = tool_records.clone();
 
-    let tool_starts: Arc<tokio::sync::Mutex<std::collections::HashMap<String, (String, std::time::Instant, serde_json::Value)>>> =
-        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let tool_starts: Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<String, (String, std::time::Instant, serde_json::Value)>,
+        >,
+    > = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let tool_starts_clone = tool_starts.clone();
 
     let event_collector = tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
                 AgentEvent::ToolStart { id, name, input } => {
-                    tool_starts_clone.lock().await.insert(
-                        id,
-                        (name, std::time::Instant::now(), input),
-                    );
+                    tool_starts_clone
+                        .lock()
+                        .await
+                        .insert(id, (name, std::time::Instant::now(), input));
                 }
-                AgentEvent::ToolEnd { id, name, result, is_error } => {
+                AgentEvent::ToolEnd {
+                    id,
+                    name,
+                    result,
+                    is_error,
+                } => {
                     let duration_ms = {
                         let mut starts = tool_starts_clone.lock().await;
-                        starts.remove(&id)
+                        starts
+                            .remove(&id)
                             .map(|(_, t, input)| {
                                 let dur = t.elapsed().as_millis() as u64;
                                 (dur, summarize_input(&name, &input))
@@ -1698,7 +1761,8 @@ pub async fn run_uia_drag_test(
             // set dragState="success" if the ball is truly inside the target zone.
             info!(
                 "UIA drag test completed (frontend will verify): duration={}ms tools={}",
-                duration_ms, tool_calls.len()
+                duration_ms,
+                tool_calls.len()
             );
 
             Ok(UiaDragTestResult {

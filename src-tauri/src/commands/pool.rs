@@ -1,6 +1,6 @@
+use crate::koi::runtime::KoiRuntime;
 /// Chat Pool commands — Agent collaboration chat room.
 use crate::koi::{PoolMessage, PoolSession};
-use crate::koi::runtime::KoiRuntime;
 use crate::store::AppState;
 use serde::Deserialize;
 use serde_json::json;
@@ -13,7 +13,10 @@ pub async fn list_pool_sessions(state: State<'_, AppState>) -> Result<Vec<PoolSe
 }
 
 #[tauri::command]
-pub async fn create_pool_session(state: State<'_, AppState>, name: String) -> Result<PoolSession, String> {
+pub async fn create_pool_session(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<PoolSession, String> {
     let db = state.db.lock().await;
     db.create_pool_session(&name).map_err(|e| e.to_string())
 }
@@ -41,7 +44,8 @@ pub async fn get_pool_messages(
         &input.session_id,
         input.limit.unwrap_or(100),
         input.offset.unwrap_or(0),
-    ).map_err(|e| e.to_string())
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[derive(Deserialize)]
@@ -60,13 +64,15 @@ pub async fn send_pool_message(
     input: SendPoolMessageInput,
 ) -> Result<PoolMessage, String> {
     let db = state.db.lock().await;
-    let msg = db.insert_pool_message(
-        &input.session_id,
-        &input.sender_id,
-        &input.content,
-        input.msg_type.as_deref().unwrap_or("text"),
-        input.metadata.as_deref().unwrap_or("{}"),
-    ).map_err(|e| e.to_string())?;
+    let msg = db
+        .insert_pool_message(
+            &input.session_id,
+            &input.sender_id,
+            &input.content,
+            input.msg_type.as_deref().unwrap_or("text"),
+            input.metadata.as_deref().unwrap_or("{}"),
+        )
+        .map_err(|e| e.to_string())?;
     drop(db);
 
     let event_name = format!("pool_message_{}", input.session_id);
@@ -83,10 +89,7 @@ pub async fn send_pool_message(
             let runtime = KoiRuntime::from_tauri(app_clone, db_arc);
             match runtime.handle_mention(&sender, &pool_sid, &content).await {
                 Ok(results) if !results.is_empty() => {
-                    tracing::info!(
-                        "Auto @mention dispatch: {} Koi activated",
-                        results.len()
-                    );
+                    tracing::info!("Auto @mention dispatch: {} Koi activated", results.len());
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -100,10 +103,7 @@ pub async fn send_pool_message(
 }
 
 #[tauri::command]
-pub async fn get_pool_org_spec(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<String, String> {
+pub async fn get_pool_org_spec(state: State<'_, AppState>, id: String) -> Result<String, String> {
     let db = state.db.lock().await;
     let session = db.get_pool_session(&id).map_err(|e| e.to_string())?;
     Ok(session.map(|s| s.org_spec).unwrap_or_default())
@@ -116,7 +116,8 @@ pub async fn update_pool_org_spec(
     org_spec: String,
 ) -> Result<(), String> {
     let db = state.db.lock().await;
-    db.update_pool_org_spec(&id, &org_spec).map_err(|e| e.to_string())
+    db.update_pool_org_spec(&id, &org_spec)
+        .map_err(|e| e.to_string())
 }
 
 /// Dispatch a task to a Koi agent via the KoiRuntime.
@@ -131,13 +132,16 @@ pub async fn dispatch_koi_task(
     priority: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let runtime = KoiRuntime::from_tauri(app, state.db.clone());
-    let result = runtime.assign_and_execute(
-        &koi_id,
-        &task,
-        "user",
-        pool_session_id.as_deref(),
-        priority.as_deref().unwrap_or("medium"),
-    ).await.map_err(|e| e.to_string())?;
+    let result = runtime
+        .assign_and_execute(
+            &koi_id,
+            &task,
+            "user",
+            pool_session_id.as_deref(),
+            priority.as_deref().unwrap_or("medium"),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(json!({
         "success": result.success,
@@ -166,12 +170,16 @@ pub async fn cancel_koi_task(
             tracing::info!("Cancel flag set for Koi session '{}'", session_key);
             return Ok(());
         }
-        return Err(format!("No active task found for Koi '{}' in pool '{}'", koi_id, psid));
+        return Err(format!(
+            "No active task found for Koi '{}' in pool '{}'",
+            koi_id, psid
+        ));
     }
 
     // No pool_session_id provided: cancel all active tasks for this Koi across all projects
     let prefix = format!("koi_{}_", koi_id);
-    let matching: Vec<_> = flags.keys()
+    let matching: Vec<_> = flags
+        .keys()
         .filter(|k| k.starts_with(&prefix))
         .cloned()
         .collect();
@@ -197,13 +205,21 @@ pub async fn handle_pool_mention(
     content: String,
 ) -> Result<Option<serde_json::Value>, String> {
     let runtime = KoiRuntime::from_tauri(app, state.db.clone());
-    match runtime.handle_mention(&sender_id, &pool_session_id, &content).await {
+    match runtime
+        .handle_mention(&sender_id, &pool_session_id, &content)
+        .await
+    {
         Ok(results) if !results.is_empty() => {
-            let items: Vec<serde_json::Value> = results.iter().map(|r| json!({
-                "success": r.success,
-                "reply": r.reply,
-                "result_message_id": r.result_message_id,
-            })).collect();
+            let items: Vec<serde_json::Value> = results
+                .iter()
+                .map(|r| {
+                    json!({
+                        "success": r.success,
+                        "reply": r.reply,
+                        "result_message_id": r.result_message_id,
+                    })
+                })
+                .collect();
             Ok(Some(json!({ "results": items })))
         }
         Ok(_) => Ok(None),

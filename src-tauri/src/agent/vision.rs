@@ -58,7 +58,10 @@ fn prune_session(session: &mut SessionVisionState) {
     if session.artifacts.len() <= MAX_ARTIFACTS_PER_SESSION {
         return;
     }
-    let remove_count = session.artifacts.len().saturating_sub(MAX_ARTIFACTS_PER_SESSION);
+    let remove_count = session
+        .artifacts
+        .len()
+        .saturating_sub(MAX_ARTIFACTS_PER_SESSION);
     let removed_ids: HashSet<String> = session
         .artifacts
         .iter()

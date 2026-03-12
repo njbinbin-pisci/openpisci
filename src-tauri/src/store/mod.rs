@@ -14,9 +14,11 @@ pub struct AppState {
     pub db: Arc<Mutex<Database>>,
     pub settings: Arc<Mutex<Settings>>,
     /// Current visible execution plan per session
-    pub plan_state: Arc<Mutex<std::collections::HashMap<String, Vec<crate::agent::plan::PlanTodoItem>>>>,
+    pub plan_state:
+        Arc<Mutex<std::collections::HashMap<String, Vec<crate::agent::plan::PlanTodoItem>>>>,
     /// Active agent cancellation tokens: session_id -> cancel flag
-    pub cancel_flags: Arc<Mutex<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
+    pub cancel_flags:
+        Arc<Mutex<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
     /// Shared browser manager (Chrome for Testing)
     pub browser: crate::browser::SharedBrowserManager,
     /// Cron scheduler for recurring tasks
@@ -24,9 +26,12 @@ pub struct AppState {
     /// App handle for emitting events from scheduler tasks
     pub app_handle: AppHandle,
     /// Pending permission confirmation channels: request_id -> oneshot sender
-    pub confirmation_responses: Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+    pub confirmation_responses:
+        Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
     /// Pending interactive UI response channels: request_id -> oneshot sender
-    pub interactive_responses: Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
+    pub interactive_responses: Arc<
+        Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>,
+    >,
     /// IM gateway manager
     pub gateway: Arc<crate::gateway::GatewayManager>,
     /// Per-pool heartbeat cursor: pool_id -> last processed pool_message.id

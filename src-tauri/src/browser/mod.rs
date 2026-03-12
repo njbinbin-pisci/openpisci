@@ -114,7 +114,10 @@ impl BrowserManager {
         let chrome_path_str = chrome_path.display().to_string();
         let is_edge = chrome_path_str.to_lowercase().contains("msedge")
             || chrome_path_str.to_lowercase().contains("edge");
-        info!("Launching browser: headless={} edge={} path={}", self.options.headless, is_edge, chrome_path_str);
+        info!(
+            "Launching browser: headless={} edge={} path={}",
+            self.options.headless, is_edge, chrome_path_str
+        );
 
         let mut builder = BrowserConfig::builder()
             .chrome_executable(chrome_path)
@@ -166,10 +169,13 @@ impl BrowserManager {
             udd.clone()
         } else {
             // Unique temp profile per launch — avoids SingletonLock conflicts entirely
-            let unique = format!("pisci-chrome-{}", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis());
+            let unique = format!(
+                "pisci-chrome-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            );
             std::env::temp_dir().join(unique)
         };
         std::fs::create_dir_all(&udd).ok();
@@ -180,14 +186,14 @@ impl BrowserManager {
             .map_err(|e| anyhow::anyhow!("BrowserConfig error: {}", e))?;
 
         let udd_str = udd.display().to_string();
-        let (browser, handler) = Browser::launch(config)
-            .await
-            .map_err(|e| anyhow::anyhow!(
+        let (browser, handler) = Browser::launch(config).await.map_err(|e| {
+            anyhow::anyhow!(
                 "Failed to launch Chrome (path={}, udd={}): {}",
                 chrome_path_str,
                 udd_str,
                 e
-            ))?;
+            )
+        })?;
 
         // Spawn handler loop (required by chromiumoxide to process CDP events)
         let handle = tokio::spawn(async move {
@@ -209,8 +215,14 @@ impl BrowserManager {
             return Ok(page.clone());
         }
 
-        let browser = self.browser.as_ref().ok_or_else(|| anyhow::anyhow!("Browser not running"))?;
-        let page = browser.new_page("about:blank").await.context("Failed to create new page")?;
+        let browser = self
+            .browser
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Browser not running"))?;
+        let page = browser
+            .new_page("about:blank")
+            .await
+            .context("Failed to create new page")?;
         let page = Arc::new(page);
         self.pages.insert(tab_id.to_string(), page.clone());
         self.active_tab = Some(tab_id.to_string());
@@ -236,7 +248,10 @@ impl BrowserManager {
 
     /// Get the active page, creating one if needed.
     pub async fn active_page(&mut self) -> Result<Arc<Page>> {
-        let tab_id = self.active_tab.clone().unwrap_or_else(|| "default".to_string());
+        let tab_id = self
+            .active_tab
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
         self.get_or_create_page(&tab_id).await
     }
 
@@ -259,7 +274,8 @@ impl BrowserManager {
     pub async fn close_tab(&mut self, tab_id: &str) -> Result<()> {
         if let Some(page) = self.pages.remove(tab_id) {
             // Page::close consumes Page, so clone the inner page value first.
-            page.as_ref().clone()
+            page.as_ref()
+                .clone()
                 .close()
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to close tab '{}': {}", tab_id, e))?;

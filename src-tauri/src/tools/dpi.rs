@@ -3,8 +3,7 @@
 #[cfg(target_os = "windows")]
 pub fn get_dpi_scale() -> f64 {
     use windows::Win32::UI::HiDpi::{
-        GetDpiForSystem, SetProcessDpiAwarenessContext,
-        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        GetDpiForSystem, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
 
     unsafe {

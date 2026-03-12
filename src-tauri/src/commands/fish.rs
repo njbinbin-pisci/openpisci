@@ -15,9 +15,7 @@ pub async fn get_fish_dir(app: AppHandle) -> Result<String, String> {
 
 /// List all available Fish (built-in + skill-generated + user-installed).
 #[tauri::command]
-pub async fn list_fish(
-    app: AppHandle,
-) -> Result<Vec<FishDefinition>, String> {
+pub async fn list_fish(app: AppHandle) -> Result<Vec<FishDefinition>, String> {
     let app_data_dir = app.path().app_data_dir().ok();
     let registry = FishRegistry::load(app_data_dir.as_deref());
     Ok(registry.list().to_vec())

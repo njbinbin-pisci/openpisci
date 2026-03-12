@@ -17,7 +17,9 @@ pub struct ShellTool;
 
 #[async_trait]
 impl Tool for ShellTool {
-    fn name(&self) -> &str { "shell" }
+    fn name(&self) -> &str {
+        "shell"
+    }
 
     fn description(&self) -> &str {
         "Execute a shell command on Windows. By default uses 64-bit PowerShell. \
@@ -69,7 +71,9 @@ impl Tool for ShellTool {
         })
     }
 
-    fn needs_confirmation(&self, _input: &Value) -> bool { true }
+    fn needs_confirmation(&self, _input: &Value) -> bool {
+        true
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let command = match input["command"].as_str() {
@@ -87,9 +91,13 @@ impl Tool for ShellTool {
             }
         } else {
             #[cfg(target_os = "windows")]
-            { std::path::PathBuf::from("C:\\") }
+            {
+                std::path::PathBuf::from("C:\\")
+            }
             #[cfg(not(target_os = "windows"))]
-            { std::path::PathBuf::from("/") }
+            {
+                std::path::PathBuf::from("/")
+            }
         };
 
         if !cwd.exists() {
@@ -111,23 +119,26 @@ impl Tool for ShellTool {
             let elev_timeout = input["timeout"].as_u64().unwrap_or(180);
             return match elevate::run_elevated_powershell(command, arch, elev_timeout).await {
                 Ok(r) => {
-                    let mut parts = vec![
-                        format!("Exit code: {} (ran as Administrator)", r.exit_code),
-                    ];
+                    let mut parts =
+                        vec![format!("Exit code: {} (ran as Administrator)", r.exit_code)];
                     if !r.stdout.is_empty() {
-                        parts.push(format!("STDOUT:\n{}", truncate_output(&r.stdout, MAX_OUTPUT_BYTES * 3 / 4)));
+                        parts.push(format!(
+                            "STDOUT:\n{}",
+                            truncate_output(&r.stdout, MAX_OUTPUT_BYTES * 3 / 4)
+                        ));
                     }
                     if !r.stderr.is_empty() {
-                        parts.push(format!("STDERR:\n{}", truncate_output(&r.stderr, MAX_OUTPUT_BYTES / 4)));
+                        parts.push(format!(
+                            "STDERR:\n{}",
+                            truncate_output(&r.stderr, MAX_OUTPUT_BYTES / 4)
+                        ));
                     }
                     if r.stdout.is_empty() && r.stderr.is_empty() {
                         parts.push("(no output)".to_string());
                     }
                     Ok(ToolResult::ok(parts.join("\n\n")))
                 }
-                Err(e) => Ok(ToolResult::err(format!(
-                    "Elevated execution failed: {}", e
-                ))),
+                Err(e) => Ok(ToolResult::err(format!("Elevated execution failed: {}", e))),
             };
         }
 
@@ -204,7 +215,7 @@ fn build_windows_cmd(interpreter: &str, command: &str) -> Command {
             let full_cmd = format!("{}{}", utf8_preamble, command);
             let mut c = Command::new(ps32);
             c.args(["-NoProfile", "-NonInteractive", "-Command", &full_cmd])
-             .creation_flags(CREATE_NO_WINDOW);
+                .creation_flags(CREATE_NO_WINDOW);
             c
         }
         "cmd" => {
@@ -212,8 +223,7 @@ fn build_windows_cmd(interpreter: &str, command: &str) -> Command {
             // Wrap in chcp 65001 for UTF-8
             let full_cmd = format!("chcp 65001 >nul 2>&1 & {}", command);
             let mut c = Command::new("cmd");
-            c.args(["/C", &full_cmd])
-             .creation_flags(CREATE_NO_WINDOW);
+            c.args(["/C", &full_cmd]).creation_flags(CREATE_NO_WINDOW);
             c
         }
         _ => {
@@ -221,7 +231,7 @@ fn build_windows_cmd(interpreter: &str, command: &str) -> Command {
             let full_cmd = format!("{}{}", utf8_preamble, command);
             let mut c = Command::new("powershell");
             c.args(["-NoProfile", "-NonInteractive", "-Command", &full_cmd])
-             .creation_flags(CREATE_NO_WINDOW);
+                .creation_flags(CREATE_NO_WINDOW);
             c
         }
     }
@@ -235,5 +245,10 @@ fn truncate_output(s: &str, max_bytes: usize) -> String {
     let half = max_bytes / 2;
     let start = &s[..half];
     let end = &s[s.len() - half..];
-    format!("{}\n\n... [{} bytes truncated] ...\n\n{}", start, s.len() - max_bytes, end)
+    format!(
+        "{}\n\n... [{} bytes truncated] ...\n\n{}",
+        start,
+        s.len() - max_bytes,
+        end
+    )
 }

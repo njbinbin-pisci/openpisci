@@ -13,7 +13,9 @@ pub struct FileSearchTool;
 
 #[async_trait]
 impl Tool for FileSearchTool {
-    fn name(&self) -> &str { "file_search" }
+    fn name(&self) -> &str {
+        "file_search"
+    }
 
     fn description(&self) -> &str {
         "Search for files by name pattern (glob) or search file contents by regex (grep). \
@@ -78,7 +80,9 @@ impl Tool for FileSearchTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
         let action = match input["action"].as_str() {
@@ -90,17 +94,25 @@ impl Tool for FileSearchTool {
             None => return Ok(ToolResult::err("Missing required parameter: pattern")),
         };
 
-        let root = input["path"].as_str()
+        let root = input["path"]
+            .as_str()
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 #[cfg(target_os = "windows")]
-                { PathBuf::from("C:\\") }
+                {
+                    PathBuf::from("C:\\")
+                }
                 #[cfg(not(target_os = "windows"))]
-                { PathBuf::from("/") }
+                {
+                    PathBuf::from("/")
+                }
             });
 
         if !root.exists() {
-            return Ok(ToolResult::err(format!("Path does not exist: {}", root.display())));
+            return Ok(ToolResult::err(format!(
+                "Path does not exist: {}",
+                root.display()
+            )));
         }
 
         let max_results = (input["max_results"].as_u64().unwrap_or(50) as usize).min(MAX_RESULTS);
@@ -109,12 +121,18 @@ impl Tool for FileSearchTool {
         // Collect file_extensions filter (lowercase, no leading dot)
         let file_extensions: Vec<String> = input["file_extensions"]
             .as_array()
-            .map(|arr| arr.iter()
-                .filter_map(|v| v.as_str())
-                .map(|s| s.trim_start_matches('.').to_lowercase())
-                .collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.trim_start_matches('.').to_lowercase())
+                    .collect()
+            })
             .unwrap_or_default();
-        let ext_filter: Option<&[String]> = if file_extensions.is_empty() { None } else { Some(&file_extensions) };
+        let ext_filter: Option<&[String]> = if file_extensions.is_empty() {
+            None
+        } else {
+            Some(&file_extensions)
+        };
 
         match action {
             "glob" => self.do_glob(pattern, &root, max_results, max_depth, ext_filter),
@@ -122,7 +140,16 @@ impl Tool for FileSearchTool {
                 let include = input["include"].as_str();
                 let case_sensitive = input["case_sensitive"].as_bool().unwrap_or(false);
                 let context_lines = input["context_lines"].as_u64().unwrap_or(0) as usize;
-                self.do_grep(pattern, &root, include, ext_filter, max_results, max_depth, case_sensitive, context_lines)
+                self.do_grep(
+                    pattern,
+                    &root,
+                    include,
+                    ext_filter,
+                    max_results,
+                    max_depth,
+                    case_sensitive,
+                    context_lines,
+                )
             }
             _ => Ok(ToolResult::err(format!("Unknown action: {}", action))),
         }
@@ -141,7 +168,12 @@ impl FileSearchTool {
         let regex_pat = glob_to_regex(pattern);
         let re = match regex::Regex::new(&regex_pat) {
             Ok(r) => r,
-            Err(e) => return Ok(ToolResult::err(format!("Invalid glob pattern '{}': {}", pattern, e))),
+            Err(e) => {
+                return Ok(ToolResult::err(format!(
+                    "Invalid glob pattern '{}': {}",
+                    pattern, e
+                )))
+            }
         };
 
         let mut matches: Vec<String> = Vec::new();
@@ -152,7 +184,8 @@ impl FileSearchTool {
             if path.is_file() {
                 // Apply extension filter
                 if let Some(exts) = ext_filter {
-                    let file_ext = path.extension()
+                    let file_ext = path
+                        .extension()
                         .and_then(|e| e.to_str())
                         .map(|e| e.to_lowercase())
                         .unwrap_or_default();
@@ -173,7 +206,8 @@ impl FileSearchTool {
         if matches.is_empty() {
             return Ok(ToolResult::ok(format!(
                 "No files found matching '{}' under {}",
-                pattern, root.display()
+                pattern,
+                root.display()
             )));
         }
 
@@ -205,15 +239,22 @@ impl FileSearchTool {
             };
             match regex::Regex::new(&pat) {
                 Ok(r) => r,
-                Err(e) => return Ok(ToolResult::err(format!("Invalid regex '{}': {}", pattern, e))),
+                Err(e) => {
+                    return Ok(ToolResult::err(format!(
+                        "Invalid regex '{}': {}",
+                        pattern, e
+                    )))
+                }
             }
         };
 
         // Build include filter regex if provided
-        let include_re = include.map(|inc| {
-            let pat = glob_to_regex(inc);
-            regex::Regex::new(&pat).ok()
-        }).flatten();
+        let include_re = include
+            .map(|inc| {
+                let pat = glob_to_regex(inc);
+                regex::Regex::new(&pat).ok()
+            })
+            .flatten();
 
         let mut results: Vec<String> = Vec::new();
         let mut total_matches = 0usize;
@@ -230,7 +271,8 @@ impl FileSearchTool {
 
             // Apply extension filter (takes priority over include pattern)
             if let Some(exts) = ext_filter {
-                let file_ext = path.extension()
+                let file_ext = path
+                    .extension()
                     .and_then(|e| e.to_str())
                     .map(|e| e.to_lowercase())
                     .unwrap_or_default();
@@ -267,7 +309,12 @@ impl FileSearchTool {
                 if re.is_match(line) {
                     let line_num = i + 1;
                     if context_lines == 0 {
-                        file_matches.push(format!("  {}:{}: {}", path.display(), line_num, line.trim_end()));
+                        file_matches.push(format!(
+                            "  {}:{}: {}",
+                            path.display(),
+                            line_num,
+                            line.trim_end()
+                        ));
                     } else {
                         let start = i.saturating_sub(context_lines);
                         let end = (i + context_lines + 1).min(lines.len());
@@ -276,7 +323,10 @@ impl FileSearchTool {
                             let marker = if actual_line == line_num { ">" } else { " " };
                             file_matches.push(format!(
                                 "  {}:{}{}: {}",
-                                path.display(), marker, actual_line, ctx_line.trim_end()
+                                path.display(),
+                                marker,
+                                actual_line,
+                                ctx_line.trim_end()
                             ));
                         }
                         file_matches.push(String::new());
@@ -300,7 +350,9 @@ impl FileSearchTool {
             };
             return Ok(ToolResult::ok(format!(
                 "No matches found for '{}' under {}{}",
-                pattern, root.display(), filter_note
+                pattern,
+                root.display(),
+                filter_note
             )));
         }
 
@@ -332,7 +384,10 @@ fn walk_dir<F: FnMut(&Path) -> bool>(dir: &Path, depth: usize, max_depth: usize,
         if path.is_dir() {
             // Skip common noise directories
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if matches!(name, ".git" | "node_modules" | "target" | ".cache" | "__pycache__" | ".vs") {
+            if matches!(
+                name,
+                ".git" | "node_modules" | "target" | ".cache" | "__pycache__" | ".vs"
+            ) {
                 continue;
             }
             walk_dir(&path, depth + 1, max_depth, visitor);

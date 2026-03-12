@@ -13,7 +13,11 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         norm_b += b[i] * b[i];
     }
     let denom = norm_a.sqrt() * norm_b.sqrt();
-    if denom == 0.0 { 0.0 } else { dot / denom }
+    if denom == 0.0 {
+        0.0
+    } else {
+        dot / denom
+    }
 }
 
 pub fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
@@ -25,7 +29,8 @@ pub fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
 }
 
 pub fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
-    bytes.chunks_exact(4)
+    bytes
+        .chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
 }
@@ -47,13 +52,21 @@ pub fn hybrid_merge(
 ) -> Vec<ScoredResult> {
     let mut scores: HashMap<String, f32> = HashMap::new();
 
-    let v_max = vector_results.iter().map(|(_, s)| *s).fold(0.0f32, f32::max).max(1e-6);
+    let v_max = vector_results
+        .iter()
+        .map(|(_, s)| *s)
+        .fold(0.0f32, f32::max)
+        .max(1e-6);
     for (id, score) in vector_results {
         let normalized = score / v_max;
         *scores.entry(id.clone()).or_insert(0.0) += normalized * vector_weight;
     }
 
-    let k_max = keyword_results.iter().map(|(_, s)| s.abs()).fold(0.0f32, f32::max).max(1e-6);
+    let k_max = keyword_results
+        .iter()
+        .map(|(_, s)| s.abs())
+        .fold(0.0f32, f32::max)
+        .max(1e-6);
     for (id, score) in keyword_results {
         let normalized = score.abs() / k_max;
         *scores.entry(id.clone()).or_insert(0.0) += normalized * keyword_weight;
@@ -63,7 +76,11 @@ pub fn hybrid_merge(
         .into_iter()
         .map(|(id, score)| ScoredResult { id, score })
         .collect();
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(limit);
     results
 }
@@ -132,7 +149,7 @@ mod tests {
     #[test]
     fn hybrid_merge_combines_scores() {
         let vec_results = vec![("id1".to_string(), 0.9), ("id2".to_string(), 0.4)];
-        let kw_results  = vec![("id2".to_string(), 1.0), ("id3".to_string(), 0.6)];
+        let kw_results = vec![("id2".to_string(), 1.0), ("id3".to_string(), 0.6)];
         let results = hybrid_merge(&vec_results, &kw_results, 0.7, 0.3, 10);
         assert!(results.len() <= 3);
         // id2 appears in both — should rank highly

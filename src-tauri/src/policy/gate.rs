@@ -1,8 +1,8 @@
+use once_cell::sync::Lazy;
 /// Policy Gate — host-side security layer.
 /// Validates file paths, shell commands, browser URLs, UIA actions, and COM operations.
 use regex::Regex;
 use std::path::{Path, PathBuf};
-use once_cell::sync::Lazy;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PolicyDecision {
@@ -307,7 +307,7 @@ impl PolicyGate {
     pub fn check_com_action(&self, action: &str, input: &serde_json::Value) -> PolicyDecision {
         match action {
             "clipboard_write" => PolicyDecision::Warn(
-                "Writing to clipboard — this will replace current clipboard content".into()
+                "Writing to clipboard — this will replace current clipboard content".into(),
             ),
             "shell_run" => {
                 if let Some(cmd) = input["command"].as_str() {
@@ -323,12 +323,10 @@ impl PolicyGate {
     pub fn check_browser_js(&self, _js: &str) -> PolicyDecision {
         if self.mode == PolicyMode::Strict {
             return PolicyDecision::Deny(
-                "Executing JavaScript in browser is disabled in strict mode".into()
+                "Executing JavaScript in browser is disabled in strict mode".into(),
             );
         }
-        PolicyDecision::Warn(
-            "Executing JavaScript in browser — ensure the code is safe".into()
-        )
+        PolicyDecision::Warn("Executing JavaScript in browser — ensure the code is safe".into())
     }
 
     /// Check user input for prompt injection attempts
@@ -351,11 +349,7 @@ impl PolicyGate {
     }
 
     /// Unified tool call check — dispatches to appropriate checker
-    pub fn check_tool_call(
-        &self,
-        tool_name: &str,
-        input: &serde_json::Value,
-    ) -> PolicyDecision {
+    pub fn check_tool_call(&self, tool_name: &str, input: &serde_json::Value) -> PolicyDecision {
         match tool_name {
             "file_read" | "file_write" | "file_edit" => {
                 if let Some(path) = input["path"].as_str().or(input["file_path"].as_str()) {
@@ -363,7 +357,8 @@ impl PolicyGate {
                 }
             }
             "shell" | "bash" | "powershell" | "powershell_query" => {
-                if let Some(cmd) = input["command"].as_str()
+                if let Some(cmd) = input["command"]
+                    .as_str()
                     .or(input["cmd"].as_str())
                     .or(input["ps_command"].as_str())
                 {
@@ -385,7 +380,8 @@ impl PolicyGate {
                     }
                     "get_cookies" | "set_cookie" | "clear_cookies" => {
                         return PolicyDecision::Warn(
-                            "Cookie operation in browser — may affect authentication/session state".into()
+                            "Cookie operation in browser — may affect authentication/session state"
+                                .into(),
                         );
                     }
                     _ => {}
@@ -419,7 +415,10 @@ impl PolicyGate {
     pub fn redact_text(&self, text: &str) -> String {
         static SECRET_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
             vec![
-                Regex::new(r#"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*['"]?[A-Za-z0-9_\-\.]{8,}"#).unwrap(),
+                Regex::new(
+                    r#"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*['"]?[A-Za-z0-9_\-\.]{8,}"#,
+                )
+                .unwrap(),
                 Regex::new(r#"(?i)Bearer\s+[A-Za-z0-9_\-\.]+"#).unwrap(),
             ]
         });

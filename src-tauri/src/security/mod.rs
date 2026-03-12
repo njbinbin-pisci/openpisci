@@ -1,2 +1,2 @@
-pub mod secrets;
 pub mod injection;
+pub mod secrets;

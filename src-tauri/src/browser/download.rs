@@ -10,26 +10,40 @@ const API_URL: &str =
 /// Detect the current platform string used by Chrome for Testing API
 fn platform_str() -> &'static str {
     #[cfg(target_os = "windows")]
-    { "win64" }
+    {
+        "win64"
+    }
     #[cfg(target_os = "macos")]
     {
         #[cfg(target_arch = "aarch64")]
-        { "mac-arm64" }
+        {
+            "mac-arm64"
+        }
         #[cfg(not(target_arch = "aarch64"))]
-        { "mac-x64" }
+        {
+            "mac-x64"
+        }
     }
     #[cfg(target_os = "linux")]
-    { "linux64" }
+    {
+        "linux64"
+    }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    { "linux64" }
+    {
+        "linux64"
+    }
 }
 
 /// Returns the expected chrome-headless-shell executable name
 pub fn chrome_exe_name() -> &'static str {
     #[cfg(target_os = "windows")]
-    { "chrome-headless-shell.exe" }
+    {
+        "chrome-headless-shell.exe"
+    }
     #[cfg(not(target_os = "windows"))]
-    { "chrome-headless-shell" }
+    {
+        "chrome-headless-shell"
+    }
 }
 
 /// Check if a Chrome executable already exists at the given path
@@ -43,13 +57,17 @@ pub fn chrome_exists(chrome_dir: &Path) -> Option<PathBuf> {
     // Walk subdirs (Chrome for Testing extracts into a versioned subdirectory)
     fn find_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
         let direct = dir.join(name);
-        if direct.exists() { return Some(direct); }
+        if direct.exists() {
+            return Some(direct);
+        }
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let p = entry.path();
                 if p.is_dir() {
                     let candidate = p.join(name);
-                    if candidate.exists() { return Some(candidate); }
+                    if candidate.exists() {
+                        return Some(candidate);
+                    }
                 }
             }
         }
@@ -128,7 +146,14 @@ pub fn find_system_chrome() -> Option<PathBuf> {
     }
     #[cfg(target_os = "linux")]
     {
-        for name in &["microsoft-edge", "google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser"] {
+        for name in &[
+            "microsoft-edge",
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+            "brave-browser",
+        ] {
             if let Ok(output) = std::process::Command::new("which").arg(name).output() {
                 if output.status.success() {
                     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -168,27 +193,40 @@ pub async fn download_chrome_for_testing(dest_dir: &Path) -> Result<PathBuf> {
     // with chromiumoxide. Fall back to chrome-headless-shell only if chrome is unavailable.
     let download_url = resp["channels"]["Stable"]["downloads"]["chrome"]
         .as_array()
-        .and_then(|arr| arr.iter().find(|item| item["platform"].as_str() == Some(platform)))
+        .and_then(|arr| {
+            arr.iter()
+                .find(|item| item["platform"].as_str() == Some(platform))
+        })
         .and_then(|item| item["url"].as_str())
         .map(|s| s.to_string())
         .or_else(|| {
             resp["channels"]["Stable"]["downloads"]["chrome-headless-shell"]
                 .as_array()
-                .and_then(|arr| arr.iter().find(|item| item["platform"].as_str() == Some(platform)))
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|item| item["platform"].as_str() == Some(platform))
+                })
                 .and_then(|item| item["url"].as_str())
                 .map(|s| s.to_string())
         })
-        .ok_or_else(|| anyhow::anyhow!("Could not find chrome download URL for platform: {}", platform))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Could not find chrome download URL for platform: {}",
+                platform
+            )
+        })?;
 
     let version = resp["channels"]["Stable"]["version"]
         .as_str()
         .unwrap_or("unknown");
 
-    info!("Downloading Chrome for Testing {} ({})...", version, platform);
+    info!(
+        "Downloading Chrome for Testing {} ({})...",
+        version, platform
+    );
     info!("URL: {}", download_url);
 
-    std::fs::create_dir_all(dest_dir)
-        .context("Failed to create Chrome download directory")?;
+    std::fs::create_dir_all(dest_dir).context("Failed to create Chrome download directory")?;
 
     // Download the zip
     let zip_path = dest_dir.join("chrome-for-testing.zip");
@@ -207,7 +245,11 @@ pub async fn download_chrome_for_testing(dest_dir: &Path) -> Result<PathBuf> {
             file.write_all(&chunk).await?;
             downloaded += chunk.len() as u64;
             if total > 0 && downloaded % (5 * 1024 * 1024) == 0 {
-                info!("Downloaded {}/{} MB", downloaded / 1024 / 1024, total / 1024 / 1024);
+                info!(
+                    "Downloaded {}/{} MB",
+                    downloaded / 1024 / 1024,
+                    total / 1024 / 1024
+                );
             }
         }
         file.flush().await?;

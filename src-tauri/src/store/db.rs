@@ -137,8 +137,7 @@ impl Database {
     /// Open an in-memory database for testing.
     /// Uses the same schema migration as production.
     pub fn open_in_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory()
-            .context("Failed to open in-memory database")?;
+        let conn = Connection::open_in_memory().context("Failed to open in-memory database")?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         let db = Self { conn };
         db.migrate()?;
@@ -146,7 +145,8 @@ impl Database {
     }
 
     fn migrate(&self) -> Result<()> {
-        self.conn.execute_batch("
+        self.conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
                 title TEXT,
@@ -212,7 +212,8 @@ impl Database {
 
             CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log(session_id, timestamp);
             CREATE INDEX IF NOT EXISTS idx_audit_tool ON audit_log(tool_name, timestamp);
-        ")?;
+        ",
+        )?;
 
         // Add last_run_status to scheduled_tasks (ignore if already exists)
         let _ = self.conn.execute(
@@ -227,13 +228,24 @@ impl Database {
         );
 
         // Memory enhancement: add embedding and memory_type columns (ignore if already exist)
-        let _ = self.conn.execute("ALTER TABLE memories ADD COLUMN embedding BLOB", []);
-        let _ = self.conn.execute("ALTER TABLE memories ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'personal'", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE memories ADD COLUMN embedding BLOB", []);
+        let _ = self.conn.execute(
+            "ALTER TABLE memories ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'personal'",
+            [],
+        );
 
         // Context management: add tool call persistence columns to messages (ignore if already exist)
-        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN tool_calls_json TEXT", []);
-        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN tool_results_json TEXT", []);
-        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN turn_index INTEGER", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE messages ADD COLUMN tool_calls_json TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE messages ADD COLUMN tool_results_json TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE messages ADD COLUMN turn_index INTEGER", []);
 
         // Agent checkpoints for crash recovery
         self.conn.execute_batch("
@@ -278,7 +290,8 @@ impl Database {
         ")?;
 
         // Fish instances table (user-activated sub-Agents)
-        let _ = self.conn.execute_batch("
+        let _ = self.conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS fish_instances (
                 fish_id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
@@ -287,12 +300,14 @@ impl Database {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-        ");
+        ",
+        );
 
         // Task state table for structured task progress tracking.
         // scope_type: 'session' (chat) or 'scheduled_task' (scheduler).
         // state_json stores structured progress: goal, done_items, pending_items, etc.
-        let _ = self.conn.execute_batch("
+        let _ = self.conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS task_states (
                 id TEXT PRIMARY KEY,
                 scope_type TEXT NOT NULL DEFAULT 'session',
@@ -306,12 +321,14 @@ impl Database {
                 updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_task_states_scope ON task_states(scope_type, scope_id);
-        ");
+        ",
+        );
 
         // ---------- Koi system tables (v2) ----------
 
         // Koi: persistent independent Agents
-        let _ = self.conn.execute_batch("
+        let _ = self.conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS kois (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -324,10 +341,12 @@ impl Database {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-        ");
+        ",
+        );
 
         // Koi todo items (shared board)
-        let _ = self.conn.execute_batch("
+        let _ = self.conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS koi_todos (
                 id TEXT PRIMARY KEY,
                 owner_id TEXT NOT NULL,
@@ -351,7 +370,8 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_koi_todos_owner ON koi_todos(owner_id);
             CREATE INDEX IF NOT EXISTS idx_koi_todos_status ON koi_todos(status);
-        ");
+        ",
+        );
         // Migrate existing koi_todos table with new columns
         for col in &[
             "ALTER TABLE koi_todos ADD COLUMN claimed_by TEXT",
@@ -420,12 +440,16 @@ impl Database {
 
         if let Ok(normalized) = self.normalize_identifier_references() {
             if normalized > 0 {
-                tracing::info!("Database startup: normalized {} legacy identifier references", normalized);
+                tracing::info!(
+                    "Database startup: normalized {} legacy identifier references",
+                    normalized
+                );
             }
         }
 
         // Clean up orphaned Koi / pool records from older schemas that lacked FK constraints.
-        let _ = self.conn.execute_batch("
+        let _ = self.conn.execute_batch(
+            "
             DELETE FROM koi_todos
             WHERE owner_id NOT IN (SELECT id FROM kois);
 
@@ -450,10 +474,12 @@ impl Database {
             SET reply_to_message_id = NULL
             WHERE reply_to_message_id IS NOT NULL
               AND reply_to_message_id NOT IN (SELECT id FROM pool_messages);
-        ");
+        ",
+        );
 
         // Triggers provide cascade-like cleanup for existing databases created before FK support.
-        let _ = self.conn.execute_batch("
+        let _ = self.conn.execute_batch(
+            "
             CREATE TRIGGER IF NOT EXISTS trg_pool_sessions_delete_cleanup
             AFTER DELETE ON pool_sessions
             BEGIN
@@ -474,7 +500,8 @@ impl Database {
             BEGIN
                 UPDATE pool_messages SET todo_id = NULL WHERE todo_id = OLD.id;
             END;
-        ");
+        ",
+        );
 
         // Memory isolation: add owner_id, scope_type, scope_id to memories
         let _ = self.conn.execute(
@@ -491,13 +518,13 @@ impl Database {
         );
         let _ = self.conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories(owner_id);
-             CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope_type, scope_id);"
+             CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope_type, scope_id);",
         );
 
         // Memory project tagging: allows private memories to be tagged with the project they were
         // created in, enabling project-priority search while still falling back to cross-project skills.
         let _ = self.conn.execute(
-            "ALTER TABLE memories ADD COLUMN project_scope_id TEXT",  // NULL = cross-project skill/preference
+            "ALTER TABLE memories ADD COLUMN project_scope_id TEXT", // NULL = cross-project skill/preference
             [],
         );
         let _ = self.conn.execute_batch(
@@ -517,11 +544,9 @@ impl Database {
         ");
 
         // Seed default skills if empty
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM skills",
-            [],
-            |r| r.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM skills", [], |r| r.get(0))?;
         if count == 0 {
             self.seed_skills()?;
         }
@@ -531,14 +556,62 @@ impl Database {
 
     fn seed_skills(&self) -> Result<()> {
         let skills = vec![
-            ("web-search", "Web Search", "Search the web for information", true, "🔍"),
-            ("shell", "Shell / PowerShell", "Execute shell commands via PowerShell", true, "💻"),
-            ("file-ops", "File Operations", "Read, write and edit files", true, "📁"),
-            ("uia", "Windows UI Automation", "Control Windows desktop apps via UIA", true, "🖥️"),
-            ("screen-vision", "Screen Vision", "Screenshot + Vision AI fallback", true, "👁️"),
-            ("scheduled-tasks", "Scheduled Tasks", "Recurring automated tasks", true, "⏰"),
-            ("docx", "Word Document", "Generate .docx documents", true, "📄"),
-            ("xlsx", "Excel Spreadsheet", "Generate .xlsx spreadsheets", true, "📊"),
+            (
+                "web-search",
+                "Web Search",
+                "Search the web for information",
+                true,
+                "🔍",
+            ),
+            (
+                "shell",
+                "Shell / PowerShell",
+                "Execute shell commands via PowerShell",
+                true,
+                "💻",
+            ),
+            (
+                "file-ops",
+                "File Operations",
+                "Read, write and edit files",
+                true,
+                "📁",
+            ),
+            (
+                "uia",
+                "Windows UI Automation",
+                "Control Windows desktop apps via UIA",
+                true,
+                "🖥️",
+            ),
+            (
+                "screen-vision",
+                "Screen Vision",
+                "Screenshot + Vision AI fallback",
+                true,
+                "👁️",
+            ),
+            (
+                "scheduled-tasks",
+                "Scheduled Tasks",
+                "Recurring automated tasks",
+                true,
+                "⏰",
+            ),
+            (
+                "docx",
+                "Word Document",
+                "Generate .docx documents",
+                true,
+                "📄",
+            ),
+            (
+                "xlsx",
+                "Excel Spreadsheet",
+                "Generate .xlsx spreadsheets",
+                true,
+                "📊",
+            ),
         ];
         for (id, name, desc, enabled, icon) in skills {
             self.conn.execute(
@@ -586,15 +659,26 @@ impl Database {
                 title: r.get(1)?,
                 status: r.get(2)?,
                 source: r.get(3)?,
-                created_at: r.get::<_, String>(4)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(5)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                created_at: r
+                    .get::<_, String>(4)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
+                updated_at: r
+                    .get::<_, String>(5)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
                 message_count: r.get(6)?,
             })
         })?;
         Ok(rows.next().transpose()?)
     }
 
-    pub fn ensure_fixed_session(&self, session_id: &str, title: &str, source: &str) -> Result<Session> {
+    pub fn ensure_fixed_session(
+        &self,
+        session_id: &str,
+        title: &str,
+        source: &str,
+    ) -> Result<Session> {
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
@@ -608,7 +692,12 @@ impl Database {
     /// Idempotent: create a session with a fixed `id` for IM routing.
     /// If it already exists, return it as-is (updating `updated_at` is skipped
     /// to preserve chronological ordering in the session list).
-    pub fn ensure_im_session(&self, session_id: &str, title: &str, source: &str) -> Result<Session> {
+    pub fn ensure_im_session(
+        &self,
+        session_id: &str,
+        title: &str,
+        source: &str,
+    ) -> Result<Session> {
         self.ensure_fixed_session(session_id, title, source)
     }
 
@@ -622,16 +711,24 @@ impl Database {
                 title: r.get(1)?,
                 status: r.get(2)?,
                 source: r.get(3)?,
-                created_at: r.get::<_, String>(4)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(5)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                created_at: r
+                    .get::<_, String>(4)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
+                updated_at: r
+                    .get::<_, String>(5)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
                 message_count: r.get(6)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn delete_session(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -657,7 +754,12 @@ impl Database {
     // Messages
     // ------------------------------------------------------------------
 
-    pub fn append_message(&self, session_id: &str, role: &str, content: &str) -> Result<ChatMessage> {
+    pub fn append_message(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+    ) -> Result<ChatMessage> {
         self.append_message_full(session_id, role, content, None, None, None)
     }
 
@@ -699,7 +801,12 @@ impl Database {
         })
     }
 
-    pub fn get_messages(&self, session_id: &str, limit: i64, offset: i64) -> Result<Vec<ChatMessage>> {
+    pub fn get_messages(
+        &self,
+        session_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ChatMessage>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index \
              FROM messages WHERE session_id = ?1 ORDER BY created_at ASC, rowid ASC LIMIT ?2 OFFSET ?3"
@@ -710,13 +817,17 @@ impl Database {
                 session_id: r.get(1)?,
                 role: r.get(2)?,
                 content: r.get(3)?,
-                created_at: r.get::<_, String>(4)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                created_at: r
+                    .get::<_, String>(4)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
                 tool_calls_json: r.get(5)?,
                 tool_results_json: r.get(6)?,
                 turn_index: r.get(7)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     /// Fetch the latest `limit` messages for a session, ordered chronologically (oldest first).
@@ -733,7 +844,10 @@ impl Database {
                 session_id: r.get(1)?,
                 role: r.get(2)?,
                 content: r.get(3)?,
-                created_at: r.get::<_, String>(4)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                created_at: r
+                    .get::<_, String>(4)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
                 tool_calls_json: r.get(5)?,
                 tool_results_json: r.get(6)?,
                 turn_index: r.get(7)?,
@@ -754,7 +868,8 @@ impl Database {
              FROM memories ORDER BY confidence DESC, updated_at DESC"
         )?;
         let rows = stmt.query_map([], Self::map_memory)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     /// List memories filtered by owner_id.
@@ -764,7 +879,8 @@ impl Database {
              FROM memories WHERE owner_id = ?1 ORDER BY confidence DESC, updated_at DESC"
         )?;
         let rows = stmt.query_map(params![owner_id], Self::map_memory)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     fn map_memory(r: &rusqlite::Row) -> rusqlite::Result<Memory> {
@@ -775,12 +891,24 @@ impl Database {
             confidence: r.get(3)?,
             source_session_id: r.get(4)?,
             memory_type: "personal".to_string(),
-            owner_id: r.get::<_, String>(5).unwrap_or_else(|_| "pisci".to_string()),
-            scope_type: r.get::<_, String>(6).unwrap_or_else(|_| "private".to_string()),
-            scope_id: r.get::<_, String>(7).unwrap_or_else(|_| "pisci".to_string()),
+            owner_id: r
+                .get::<_, String>(5)
+                .unwrap_or_else(|_| "pisci".to_string()),
+            scope_type: r
+                .get::<_, String>(6)
+                .unwrap_or_else(|_| "private".to_string()),
+            scope_id: r
+                .get::<_, String>(7)
+                .unwrap_or_else(|_| "pisci".to_string()),
             project_scope_id: r.get::<_, Option<String>>(8).unwrap_or(None),
-            created_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-            updated_at: r.get::<_, String>(10)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            created_at: r
+                .get::<_, String>(9)?
+                .parse::<DateTime<Utc>>()
+                .unwrap_or_else(|_| Utc::now()),
+            updated_at: r
+                .get::<_, String>(10)?
+                .parse::<DateTime<Utc>>()
+                .unwrap_or_else(|_| Utc::now()),
         })
     }
 
@@ -807,7 +935,10 @@ impl Database {
                 "UPDATE memories SET content = ?1, confidence = ?2, updated_at = ?3 WHERE id = ?4",
                 params![content, new_confidence, now_str, existing.id],
             )?;
-            tracing::info!("Memory dedup: updated existing memory {} instead of creating duplicate", existing.id);
+            tracing::info!(
+                "Memory dedup: updated existing memory {} instead of creating duplicate",
+                existing.id
+            );
             return Ok(Memory {
                 id: existing.id,
                 content: content.to_string(),
@@ -850,7 +981,12 @@ impl Database {
 
     /// Find a memory in the same category+owner that has high content overlap with the given text.
     /// Uses word-level Jaccard similarity (threshold: 0.6).
-    fn find_similar_memory(&self, content: &str, category: &str, owner_id: &str) -> Result<Option<Memory>> {
+    fn find_similar_memory(
+        &self,
+        content: &str,
+        category: &str,
+        owner_id: &str,
+    ) -> Result<Option<Memory>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at \
              FROM memories WHERE category = ?1 AND owner_id = ?2 ORDER BY updated_at DESC LIMIT 50"
@@ -858,11 +994,16 @@ impl Database {
         let rows = stmt.query_map(params![category, owner_id], Self::map_memory)?;
 
         let new_words: std::collections::HashSet<&str> = content.split_whitespace().collect();
-        if new_words.is_empty() { return Ok(None); }
+        if new_words.is_empty() {
+            return Ok(None);
+        }
 
         for mem in rows.flatten() {
-            let existing_words: std::collections::HashSet<&str> = mem.content.split_whitespace().collect();
-            if existing_words.is_empty() { continue; }
+            let existing_words: std::collections::HashSet<&str> =
+                mem.content.split_whitespace().collect();
+            if existing_words.is_empty() {
+                continue;
+            }
             let intersection = new_words.intersection(&existing_words).count();
             let union = new_words.union(&existing_words).count();
             let jaccard = intersection as f64 / union as f64;
@@ -874,7 +1015,8 @@ impl Database {
     }
 
     pub fn delete_memory(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM memories WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -902,7 +1044,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, content, category, confidence, source_session_id, \
              owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at, embedding \
-             FROM memories WHERE embedding IS NOT NULL"
+             FROM memories WHERE embedding IS NOT NULL",
         )?;
         let rows = stmt.query_map([], |r| {
             let embedding_bytes: Vec<u8> = r.get(11)?;
@@ -914,14 +1056,22 @@ impl Database {
                     confidence: r.get(3)?,
                     source_session_id: r.get(4)?,
                     memory_type: "personal".to_string(),
-                    owner_id: r.get::<_, String>(5).unwrap_or_else(|_| "pisci".to_string()),
-                    scope_type: r.get::<_, String>(6).unwrap_or_else(|_| "private".to_string()),
-                    scope_id: r.get::<_, String>(7).unwrap_or_else(|_| "pisci".to_string()),
+                    owner_id: r
+                        .get::<_, String>(5)
+                        .unwrap_or_else(|_| "pisci".to_string()),
+                    scope_type: r
+                        .get::<_, String>(6)
+                        .unwrap_or_else(|_| "private".to_string()),
+                    scope_id: r
+                        .get::<_, String>(7)
+                        .unwrap_or_else(|_| "pisci".to_string()),
                     project_scope_id: r.get::<_, Option<String>>(8).unwrap_or(None),
-                    created_at: r.get::<_, String>(9)?
+                    created_at: r
+                        .get::<_, String>(9)?
                         .parse::<DateTime<Utc>>()
                         .unwrap_or_else(|_| Utc::now()),
-                    updated_at: r.get::<_, String>(10)?
+                    updated_at: r
+                        .get::<_, String>(10)?
                         .parse::<DateTime<Utc>>()
                         .unwrap_or_else(|_| Utc::now()),
                 },
@@ -941,7 +1091,11 @@ impl Database {
 
     /// Scan memories with vector similarity against a query embedding.
     /// Returns (Memory, cosine_score) pairs sorted by descending score.
-    pub fn search_by_embedding(&self, query_vec: &[f32], top_k: usize) -> Result<Vec<(Memory, f32)>> {
+    pub fn search_by_embedding(
+        &self,
+        query_vec: &[f32],
+        top_k: usize,
+    ) -> Result<Vec<(Memory, f32)>> {
         let all = self.list_memories_with_embeddings()?;
         let mut scored: Vec<(Memory, f32)> = all
             .into_iter()
@@ -958,9 +1112,7 @@ impl Database {
     /// Full-text search using FTS5. Returns (memory_id, bm25_score) pairs.
     pub fn fts_search(&self, query: &str, top_k: usize) -> Result<Vec<(String, f32)>> {
         // Sanitise query for FTS5: escape special chars
-        let safe_query = query
-            .replace('"', "\"\"")
-            .replace(['*', '^'], "");
+        let safe_query = query.replace('"', "\"\"").replace(['*', '^'], "");
         let fts_query = format!("\"{}\"", safe_query);
 
         let mut stmt = self.conn.prepare(
@@ -969,7 +1121,7 @@ impl Database {
              JOIN memories m ON m.rowid = memories_fts.rowid \
              WHERE memories_fts MATCH ?1 \
              ORDER BY score \
-             LIMIT ?2"
+             LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![fts_query, top_k as i64], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)? as f32))
@@ -985,7 +1137,7 @@ impl Database {
 
     pub fn list_skills(&self) -> Result<Vec<Skill>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, description, enabled, icon, config FROM skills ORDER BY name"
+            "SELECT id, name, description, enabled, icon, config FROM skills ORDER BY name",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(Skill {
@@ -997,7 +1149,8 @@ impl Database {
                 config: r.get(5)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn set_skill_enabled(&self, id: &str, enabled: bool) -> Result<()> {
@@ -1010,7 +1163,8 @@ impl Database {
 
     /// Remove a skill record from the DB by ID.
     pub fn delete_skill(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM skills WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM skills WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -1047,10 +1201,14 @@ impl Database {
                 run_count: r.get(7)?,
                 last_run_at: r.get::<_, Option<String>>(8)?.and_then(|s| s.parse().ok()),
                 next_run_at: r.get::<_, Option<String>>(9)?.and_then(|s| s.parse().ok()),
-                created_at: r.get::<_, String>(10)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                created_at: r
+                    .get::<_, String>(10)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn get_task(&self, id: &str) -> Result<Option<ScheduledTask>> {
@@ -1069,13 +1227,22 @@ impl Database {
                 run_count: r.get(7)?,
                 last_run_at: r.get::<_, Option<String>>(8)?.and_then(|s| s.parse().ok()),
                 next_run_at: r.get::<_, Option<String>>(9)?.and_then(|s| s.parse().ok()),
-                created_at: r.get::<_, String>(10)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                created_at: r
+                    .get::<_, String>(10)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
             })
         })?;
         Ok(rows.next().transpose()?)
     }
 
-    pub fn create_task(&self, name: &str, description: Option<&str>, cron_expression: &str, task_prompt: &str) -> Result<ScheduledTask> {
+    pub fn create_task(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        cron_expression: &str,
+        task_prompt: &str,
+    ) -> Result<ScheduledTask> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
@@ -1098,24 +1265,44 @@ impl Database {
         })
     }
 
-    pub fn update_task(&self, id: &str, name: Option<&str>, cron_expression: Option<&str>, task_prompt: Option<&str>, status: Option<&str>) -> Result<()> {
+    pub fn update_task(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        cron_expression: Option<&str>,
+        task_prompt: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<()> {
         if let Some(n) = name {
-            self.conn.execute("UPDATE scheduled_tasks SET name = ?1 WHERE id = ?2", params![n, id])?;
+            self.conn.execute(
+                "UPDATE scheduled_tasks SET name = ?1 WHERE id = ?2",
+                params![n, id],
+            )?;
         }
         if let Some(c) = cron_expression {
-            self.conn.execute("UPDATE scheduled_tasks SET cron_expression = ?1 WHERE id = ?2", params![c, id])?;
+            self.conn.execute(
+                "UPDATE scheduled_tasks SET cron_expression = ?1 WHERE id = ?2",
+                params![c, id],
+            )?;
         }
         if let Some(p) = task_prompt {
-            self.conn.execute("UPDATE scheduled_tasks SET task_prompt = ?1 WHERE id = ?2", params![p, id])?;
+            self.conn.execute(
+                "UPDATE scheduled_tasks SET task_prompt = ?1 WHERE id = ?2",
+                params![p, id],
+            )?;
         }
         if let Some(s) = status {
-            self.conn.execute("UPDATE scheduled_tasks SET status = ?1 WHERE id = ?2", params![s, id])?;
+            self.conn.execute(
+                "UPDATE scheduled_tasks SET status = ?1 WHERE id = ?2",
+                params![s, id],
+            )?;
         }
         Ok(())
     }
 
     pub fn delete_task(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM scheduled_tasks WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM scheduled_tasks WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -1191,7 +1378,10 @@ impl Database {
             Ok(AuditEntry {
                 id: r.get(0)?,
                 session_id: r.get(1)?,
-                timestamp: r.get::<_, String>(2)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                timestamp: r
+                    .get::<_, String>(2)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
                 tool_name: r.get(3)?,
                 action: r.get(4)?,
                 input_summary: r.get(5)?,
@@ -1199,12 +1389,14 @@ impl Database {
                 is_error: r.get::<_, i64>(7)? != 0,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn clear_audit_log(&self, session_id: Option<&str>) -> Result<()> {
         if let Some(sid) = session_id {
-            self.conn.execute("DELETE FROM audit_log WHERE session_id = ?1", params![sid])?;
+            self.conn
+                .execute("DELETE FROM audit_log WHERE session_id = ?1", params![sid])?;
         } else {
             self.conn.execute("DELETE FROM audit_log", [])?;
         }
@@ -1224,10 +1416,11 @@ impl Database {
              JOIN memories_fts f ON m.rowid = f.rowid \
              WHERE memories_fts MATCH ?1 \
              ORDER BY rank \
-             LIMIT ?2"
+             LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![query, limit], Self::map_memory)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     /// Scoped memory search: retrieves memories in priority order (4 layers) for the given owner.
@@ -1349,9 +1542,9 @@ impl Database {
     }
 
     pub fn get_embedding_cache(&self, content_hash: &str) -> Result<Option<Vec<u8>>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT embedding FROM embedding_cache WHERE content_hash = ?1"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT embedding FROM embedding_cache WHERE content_hash = ?1")?;
         let mut rows = stmt.query_map(params![content_hash], |r| r.get::<_, Vec<u8>>(0))?;
         Ok(rows.next().transpose()?)
     }
@@ -1369,7 +1562,12 @@ impl Database {
     // ------------------------------------------------------------------
 
     /// Upsert a checkpoint for the given session. Replaces any existing running checkpoint.
-    pub fn upsert_checkpoint(&self, session_id: &str, iteration: usize, messages_json: &str) -> Result<String> {
+    pub fn upsert_checkpoint(
+        &self,
+        session_id: &str,
+        iteration: usize,
+        messages_json: &str,
+    ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
         // Delete old running checkpoint for this session first
@@ -1401,7 +1599,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT iteration, messages_json FROM agent_checkpoints \
              WHERE session_id = ?1 AND status = 'running' \
-             ORDER BY updated_at DESC LIMIT 1"
+             ORDER BY updated_at DESC LIMIT 1",
         )?;
         let mut rows = stmt.query_map(params![session_id], |r| {
             Ok((r.get::<_, i64>(0)? as usize, r.get::<_, String>(1)?))
@@ -1444,8 +1642,14 @@ impl Database {
                 summary: r.get(5)?,
                 status: r.get(6)?,
                 version: r.get(7)?,
-                created_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                created_at: r
+                    .get::<_, String>(8)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
+                updated_at: r
+                    .get::<_, String>(9)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
             })
         })?;
 
@@ -1516,8 +1720,14 @@ impl Database {
                 summary: r.get(5)?,
                 status: r.get(6)?,
                 version: r.get(7)?,
-                created_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                created_at: r
+                    .get::<_, String>(8)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
+                updated_at: r
+                    .get::<_, String>(9)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
             })
         })?;
         Ok(rows.next().transpose()?)
@@ -1592,11 +1802,18 @@ impl Database {
                 system_prompt: r.get(5)?,
                 description: r.get(6)?,
                 status: r.get(7)?,
-                created_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                created_at: r
+                    .get::<_, String>(8)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
+                updated_at: r
+                    .get::<_, String>(9)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn get_koi(&self, id: &str) -> Result<Option<crate::koi::KoiDefinition>> {
@@ -1610,8 +1827,14 @@ impl Database {
                 system_prompt: r.get(5)?,
                 description: r.get(6)?,
                 status: r.get(7)?,
-                created_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                created_at: r
+                    .get::<_, String>(8)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
+                updated_at: r
+                    .get::<_, String>(9)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
             })
         };
 
@@ -1632,7 +1855,8 @@ impl Database {
                 "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at \
                  FROM kois WHERE id LIKE ?1"
             )?;
-            let matches: Vec<crate::koi::KoiDefinition> = stmt2.query_map(params![pattern], koi_row)?
+            let matches: Vec<crate::koi::KoiDefinition> = stmt2
+                .query_map(params![pattern], koi_row)?
                 .filter_map(|r| r.ok())
                 .collect();
             if matches.len() == 1 {
@@ -1693,8 +1917,14 @@ impl Database {
                 system_prompt: r.get(5)?,
                 description: r.get(6)?,
                 status: r.get(7)?,
-                created_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                created_at: r
+                    .get::<_, String>(8)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
+                updated_at: r
+                    .get::<_, String>(9)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
             })
         })?;
         Ok(rows.next().transpose()?)
@@ -1708,7 +1938,8 @@ impl Database {
         if let Some(koi) = self.get_koi(value)? {
             return Ok(Some(koi));
         }
-        let matches: Vec<crate::koi::KoiDefinition> = self.list_kois()?
+        let matches: Vec<crate::koi::KoiDefinition> = self
+            .list_kois()?
             .into_iter()
             .filter(|k| k.name == value)
             .collect();
@@ -1737,9 +1968,12 @@ impl Database {
     }
 
     pub fn delete_koi(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM kois WHERE id = ?1", params![id])?;
-        self.conn.execute("DELETE FROM koi_todos WHERE owner_id = ?1", params![id])?;
-        self.conn.execute("DELETE FROM memories WHERE owner_id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM kois WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM koi_todos WHERE owner_id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM memories WHERE owner_id = ?1", params![id])?;
         Ok(())
     }
 
@@ -1802,9 +2036,15 @@ impl Database {
 
     pub fn list_koi_todos(&self, owner_id: Option<&str>) -> Result<Vec<crate::koi::KoiTodo>> {
         let sql = if owner_id.is_some() {
-            format!("SELECT {} FROM koi_todos WHERE owner_id = ?1 ORDER BY created_at DESC", Self::KOI_TODO_COLS)
+            format!(
+                "SELECT {} FROM koi_todos WHERE owner_id = ?1 ORDER BY created_at DESC",
+                Self::KOI_TODO_COLS
+            )
         } else {
-            format!("SELECT {} FROM koi_todos ORDER BY created_at DESC", Self::KOI_TODO_COLS)
+            format!(
+                "SELECT {} FROM koi_todos ORDER BY created_at DESC",
+                Self::KOI_TODO_COLS
+            )
         };
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = if let Some(oid) = owner_id {
@@ -1812,11 +2052,15 @@ impl Database {
         } else {
             stmt.query_map([], Self::map_koi_todo)?
         };
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn get_koi_todo(&self, id: &str) -> Result<Option<crate::koi::KoiTodo>> {
-        let sql = format!("SELECT {} FROM koi_todos WHERE id = ?1", Self::KOI_TODO_COLS);
+        let sql = format!(
+            "SELECT {} FROM koi_todos WHERE id = ?1",
+            Self::KOI_TODO_COLS
+        );
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query_map(params![id], Self::map_koi_todo)?;
         Ok(rows.next().transpose()?)
@@ -1833,14 +2077,23 @@ impl Database {
             assigned_by: r.get(6)?,
             pool_session_id: r.get(7)?,
             claimed_by: r.get(8)?,
-            claimed_at: r.get::<_, Option<String>>(9)?
+            claimed_at: r
+                .get::<_, Option<String>>(9)?
                 .and_then(|s| s.parse::<DateTime<Utc>>().ok()),
             depends_on: r.get(10)?,
             blocked_reason: r.get(11)?,
             result_message_id: r.get(12)?,
-            source_type: r.get::<_, String>(13).unwrap_or_else(|_| "user".to_string()),
-            created_at: r.get::<_, String>(14)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-            updated_at: r.get::<_, String>(15)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            source_type: r
+                .get::<_, String>(13)
+                .unwrap_or_else(|_| "user".to_string()),
+            created_at: r
+                .get::<_, String>(14)?
+                .parse::<DateTime<Utc>>()
+                .unwrap_or_else(|_| Utc::now()),
+            updated_at: r
+                .get::<_, String>(15)?
+                .parse::<DateTime<Utc>>()
+                .unwrap_or_else(|_| Utc::now()),
         })
     }
 
@@ -1897,7 +2150,8 @@ impl Database {
     }
 
     pub fn delete_koi_todo(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM koi_todos WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM koi_todos WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -1917,7 +2171,11 @@ impl Database {
         self.create_pool_session_with_dir(name, None)
     }
 
-    pub fn create_pool_session_with_dir(&self, name: &str, project_dir: Option<&str>) -> Result<crate::koi::PoolSession> {
+    pub fn create_pool_session_with_dir(
+        &self,
+        name: &str,
+        project_dir: Option<&str>,
+    ) -> Result<crate::koi::PoolSession> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
@@ -1943,12 +2201,21 @@ impl Database {
             id: r.get(0)?,
             name: r.get(1)?,
             org_spec: r.get::<_, String>(2).unwrap_or_default(),
-            status: r.get::<_, String>(3).unwrap_or_else(|_| "active".to_string()),
+            status: r
+                .get::<_, String>(3)
+                .unwrap_or_else(|_| "active".to_string()),
             project_dir: r.get::<_, Option<String>>(4)?,
-            last_active_at: r.get::<_, Option<String>>(5)?
+            last_active_at: r
+                .get::<_, Option<String>>(5)?
                 .and_then(|s| s.parse::<DateTime<Utc>>().ok()),
-            created_at: r.get::<_, String>(6)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-            updated_at: r.get::<_, String>(7)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            created_at: r
+                .get::<_, String>(6)?
+                .parse::<DateTime<Utc>>()
+                .unwrap_or_else(|_| Utc::now()),
+            updated_at: r
+                .get::<_, String>(7)?
+                .parse::<DateTime<Utc>>()
+                .unwrap_or_else(|_| Utc::now()),
         })
     }
 
@@ -1958,7 +2225,8 @@ impl Database {
              FROM pool_sessions ORDER BY updated_at DESC"
         )?;
         let rows = stmt.query_map([], Self::map_pool_session)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn get_pool_session(&self, id: &str) -> Result<Option<crate::koi::PoolSession>> {
@@ -1970,7 +2238,10 @@ impl Database {
         Ok(rows.next().transpose()?)
     }
 
-    pub fn get_pool_session_by_prefix(&self, prefix: &str) -> Result<Option<crate::koi::PoolSession>> {
+    pub fn get_pool_session_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Option<crate::koi::PoolSession>> {
         if prefix.trim().is_empty() {
             return Ok(None);
         }
@@ -1991,7 +2262,10 @@ impl Database {
         }
     }
 
-    pub fn resolve_pool_session_identifier(&self, value: &str) -> Result<Option<crate::koi::PoolSession>> {
+    pub fn resolve_pool_session_identifier(
+        &self,
+        value: &str,
+    ) -> Result<Option<crate::koi::PoolSession>> {
         let value = value.trim();
         if value.is_empty() {
             return Ok(None);
@@ -1999,7 +2273,8 @@ impl Database {
         if let Some(session) = self.get_pool_session_by_prefix(value)? {
             return Ok(Some(session));
         }
-        let matches: Vec<crate::koi::PoolSession> = self.list_pool_sessions()?
+        let matches: Vec<crate::koi::PoolSession> = self
+            .list_pool_sessions()?
             .into_iter()
             .filter(|session| session.name == value)
             .collect();
@@ -2014,9 +2289,9 @@ impl Database {
         let mut updated = 0u32;
 
         {
-            let mut stmt = self.conn.prepare(
-                "SELECT id, owner_id, claimed_by, pool_session_id FROM koi_todos"
-            )?;
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, owner_id, claimed_by, pool_session_id FROM koi_todos")?;
             let rows = stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -2068,7 +2343,7 @@ impl Database {
 
         {
             let mut stmt = self.conn.prepare(
-                "SELECT id, owner_id, scope_type, scope_id, project_scope_id FROM memories"
+                "SELECT id, owner_id, scope_type, scope_id, project_scope_id FROM memories",
             )?;
             let rows = stmt.query_map([], |r| {
                 Ok((
@@ -2115,7 +2390,9 @@ impl Database {
                 }
 
                 if let Some(project_scope_id) = project_scope_id {
-                    if let Some(session) = self.resolve_pool_session_identifier(&project_scope_id)? {
+                    if let Some(session) =
+                        self.resolve_pool_session_identifier(&project_scope_id)?
+                    {
                         if session.id != project_scope_id {
                             self.conn.execute(
                                 "UPDATE memories SET project_scope_id = ?2 WHERE id = ?1",
@@ -2149,7 +2426,10 @@ impl Database {
         Ok(())
     }
 
-    pub fn find_related_pool_sessions(&self, keywords: &str) -> Result<Vec<crate::koi::PoolSession>> {
+    pub fn find_related_pool_sessions(
+        &self,
+        keywords: &str,
+    ) -> Result<Vec<crate::koi::PoolSession>> {
         let kw_lower = keywords.to_lowercase();
         let terms: Vec<&str> = kw_lower.split_whitespace().collect();
         if terms.is_empty() {
@@ -2183,9 +2463,16 @@ impl Database {
     }
 
     pub fn delete_pool_session(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM koi_todos WHERE pool_session_id = ?1", params![id])?;
-        self.conn.execute("DELETE FROM pool_messages WHERE pool_session_id = ?1", params![id])?;
-        self.conn.execute("DELETE FROM pool_sessions WHERE id = ?1", params![id])?;
+        self.conn.execute(
+            "DELETE FROM koi_todos WHERE pool_session_id = ?1",
+            params![id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM pool_messages WHERE pool_session_id = ?1",
+            params![id],
+        )?;
+        self.conn
+            .execute("DELETE FROM pool_sessions WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -2197,7 +2484,16 @@ impl Database {
         msg_type: &str,
         metadata: &str,
     ) -> Result<crate::koi::PoolMessage> {
-        self.insert_pool_message_ext(pool_session_id, sender_id, content, msg_type, metadata, None, None, None)
+        self.insert_pool_message_ext(
+            pool_session_id,
+            sender_id,
+            content,
+            msg_type,
+            metadata,
+            None,
+            None,
+            None,
+        )
     }
 
     pub fn insert_pool_message_ext(
@@ -2247,22 +2543,30 @@ impl Database {
             "SELECT id, pool_session_id, sender_id, content, msg_type, metadata, \
              todo_id, reply_to_message_id, event_type, created_at \
              FROM pool_messages WHERE pool_session_id = ?1 \
-             ORDER BY created_at ASC LIMIT ?2 OFFSET ?3"
+             ORDER BY created_at ASC LIMIT ?2 OFFSET ?3",
         )?;
-        let rows = stmt.query_map(params![pool_session_id, limit, offset], Self::map_pool_message)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        let rows = stmt.query_map(
+            params![pool_session_id, limit, offset],
+            Self::map_pool_message,
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     /// Get pool messages linked to a specific todo
-    pub fn get_pool_messages_for_todo(&self, todo_id: &str) -> Result<Vec<crate::koi::PoolMessage>> {
+    pub fn get_pool_messages_for_todo(
+        &self,
+        todo_id: &str,
+    ) -> Result<Vec<crate::koi::PoolMessage>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, pool_session_id, sender_id, content, msg_type, metadata, \
              todo_id, reply_to_message_id, event_type, created_at \
              FROM pool_messages WHERE todo_id = ?1 \
-             ORDER BY created_at ASC"
+             ORDER BY created_at ASC",
         )?;
         let rows = stmt.query_map(params![todo_id], Self::map_pool_message)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     fn map_pool_message(r: &rusqlite::Row) -> rusqlite::Result<crate::koi::PoolMessage> {
@@ -2276,7 +2580,10 @@ impl Database {
             todo_id: r.get(6)?,
             reply_to_message_id: r.get(7)?,
             event_type: r.get(8)?,
-            created_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            created_at: r
+                .get::<_, String>(9)?
+                .parse::<DateTime<Utc>>()
+                .unwrap_or_else(|_| Utc::now()),
         })
     }
 
@@ -2300,7 +2607,10 @@ impl Database {
             [],
         )?;
         if count > 0 {
-            tracing::info!("Startup recovery: reset {} stale in_progress todos to todo", count);
+            tracing::info!(
+                "Startup recovery: reset {} stale in_progress todos to todo",
+                count
+            );
         }
         Ok(count as u32)
     }

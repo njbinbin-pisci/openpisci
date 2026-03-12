@@ -11,7 +11,8 @@ pub async fn list_koi_todos(
     owner_id: Option<String>,
 ) -> Result<Vec<KoiTodo>, String> {
     let db = state.db.lock().await;
-    db.list_koi_todos(owner_id.as_deref()).map_err(|e| e.to_string())
+    db.list_koi_todos(owner_id.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Deserialize)]
@@ -32,16 +33,18 @@ pub async fn create_koi_todo(
     input: CreateKoiTodoInput,
 ) -> Result<KoiTodo, String> {
     let db = state.db.lock().await;
-    let todo = db.create_koi_todo(
-        &input.owner_id,
-        &input.title,
-        input.description.as_deref().unwrap_or(""),
-        input.priority.as_deref().unwrap_or("medium"),
-        input.assigned_by.as_deref().unwrap_or("user"),
-        input.pool_session_id.as_deref(),
-        input.source_type.as_deref().unwrap_or("user"),
-        input.depends_on.as_deref(),
-    ).map_err(|e| e.to_string())?;
+    let todo = db
+        .create_koi_todo(
+            &input.owner_id,
+            &input.title,
+            input.description.as_deref().unwrap_or(""),
+            input.priority.as_deref().unwrap_or("medium"),
+            input.assigned_by.as_deref().unwrap_or("user"),
+            input.pool_session_id.as_deref(),
+            input.source_type.as_deref().unwrap_or("user"),
+            input.depends_on.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
 
     let _ = state.app_handle.emit("koi_todo_updated", &todo);
     Ok(todo)
@@ -68,7 +71,8 @@ pub async fn update_koi_todo(
         input.description.as_deref(),
         input.status.as_deref(),
         input.priority.as_deref(),
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     let _ = state.app_handle.emit("koi_todo_updated", &input.id);
     Ok(())
@@ -81,8 +85,12 @@ pub async fn claim_koi_todo(
     claimed_by: String,
 ) -> Result<(), String> {
     let db = state.db.lock().await;
-    db.claim_koi_todo(&id, &claimed_by).map_err(|e| e.to_string())?;
-    let _ = state.app_handle.emit("koi_todo_updated", json!({ "id": id, "action": "claimed", "claimed_by": claimed_by }));
+    db.claim_koi_todo(&id, &claimed_by)
+        .map_err(|e| e.to_string())?;
+    let _ = state.app_handle.emit(
+        "koi_todo_updated",
+        json!({ "id": id, "action": "claimed", "claimed_by": claimed_by }),
+    );
     Ok(())
 }
 
@@ -93,16 +101,17 @@ pub async fn complete_koi_todo(
     result_message_id: Option<i64>,
 ) -> Result<(), String> {
     let db = state.db.lock().await;
-    db.complete_koi_todo(&id, result_message_id).map_err(|e| e.to_string())?;
-    let _ = state.app_handle.emit("koi_todo_updated", json!({ "id": id, "action": "completed" }));
+    db.complete_koi_todo(&id, result_message_id)
+        .map_err(|e| e.to_string())?;
+    let _ = state.app_handle.emit(
+        "koi_todo_updated",
+        json!({ "id": id, "action": "completed" }),
+    );
     Ok(())
 }
 
 #[tauri::command]
-pub async fn delete_koi_todo(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn delete_koi_todo(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let db = state.db.lock().await;
     db.delete_koi_todo(&id).map_err(|e| e.to_string())?;
 

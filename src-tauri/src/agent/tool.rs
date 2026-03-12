@@ -67,10 +67,16 @@ pub struct ImageData {
 
 impl ImageData {
     pub fn png(base64: impl Into<String>) -> Self {
-        Self { base64: base64.into(), media_type: "image/png".into() }
+        Self {
+            base64: base64.into(),
+            media_type: "image/png".into(),
+        }
     }
     pub fn jpeg(base64: impl Into<String>) -> Self {
-        Self { base64: base64.into(), media_type: "image/jpeg".into() }
+        Self {
+            base64: base64.into(),
+            media_type: "image/jpeg".into(),
+        }
     }
 }
 
@@ -87,10 +93,18 @@ pub struct ToolResult {
 
 impl ToolResult {
     pub fn ok(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_error: false, image: None }
+        Self {
+            content: content.into(),
+            is_error: false,
+            image: None,
+        }
     }
     pub fn err(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_error: true, image: None }
+        Self {
+            content: content.into(),
+            is_error: true,
+            image: None,
+        }
     }
     pub fn with_image(mut self, image: ImageData) -> Self {
         self.image = Some(image);
@@ -111,10 +125,14 @@ pub trait Tool: Send + Sync {
     fn input_schema(&self) -> Value;
 
     /// Whether this tool is read-only (can run concurrently)
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     /// Whether this tool requires user confirmation
-    fn needs_confirmation(&self, _input: &Value) -> bool { false }
+    fn needs_confirmation(&self, _input: &Value) -> bool {
+        false
+    }
 
     /// Execute the tool
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult>;
@@ -139,7 +157,10 @@ impl ToolRegistry {
     }
 
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools.iter().find(|t| t.name() == name).map(|t| t.as_ref())
+        self.tools
+            .iter()
+            .find(|t| t.name() == name)
+            .map(|t| t.as_ref())
     }
 
     pub fn all(&self) -> &[Box<dyn Tool>] {
@@ -148,11 +169,14 @@ impl ToolRegistry {
 
     /// Build tool definitions for the LLM
     pub fn to_tool_defs(&self) -> Vec<crate::llm::ToolDef> {
-        self.tools.iter().map(|t| crate::llm::ToolDef {
-            name: t.name().to_string(),
-            description: t.description().to_string(),
-            input_schema: t.input_schema(),
-        }).collect()
+        self.tools
+            .iter()
+            .map(|t| crate::llm::ToolDef {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                input_schema: t.input_schema(),
+            })
+            .collect()
     }
 }
 

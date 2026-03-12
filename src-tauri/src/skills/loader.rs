@@ -40,8 +40,13 @@ pub struct CompatibilityCheck {
 }
 
 impl CompatibilityCheck {
+    #[allow(dead_code)]
     pub fn ok() -> Self {
-        Self { compatible: true, issues: vec![], warnings: vec![] }
+        Self {
+            compatible: true,
+            issues: vec![],
+            warnings: vec![],
+        }
     }
 }
 
@@ -89,8 +94,8 @@ pub async fn check_skill_compatibility(skill: &SkillDefinition) -> Compatibility
 
         // Only check well-known runtimes; ignore vague entries like "office" or "windows"
         let known_runtimes = [
-            "python", "node", "npm", "npx", "ruby", "go", "java",
-            "dotnet", "git", "ffmpeg", "cargo", "pip", "pip3",
+            "python", "node", "npm", "npx", "ruby", "go", "java", "dotnet", "git", "ffmpeg",
+            "cargo", "pip", "pip3",
         ];
         if !known_runtimes.contains(&exe.as_str()) {
             continue;
@@ -104,10 +109,7 @@ pub async fn check_skill_compatibility(skill: &SkillDefinition) -> Compatibility
             .unwrap_or(false);
 
         if !found {
-            issues.push(format!(
-                "缺少依赖 `{}`：请先安装后再使用此技能",
-                dep
-            ));
+            issues.push(format!("缺少依赖 `{}`：请先安装后再使用此技能", dep));
         }
     }
 
@@ -120,7 +122,11 @@ pub async fn check_skill_compatibility(skill: &SkillDefinition) -> Compatibility
     }
 
     let compatible = issues.is_empty();
-    CompatibilityCheck { compatible, issues, warnings }
+    CompatibilityCheck {
+        compatible,
+        issues,
+        warnings,
+    }
 }
 
 pub struct SkillLoader {
@@ -182,10 +188,14 @@ impl SkillLoader {
             // Distinguish builtin skills (created by create_builtin_skills) from
             // user-installed skills that also live in the top-level skills dir.
             const BUILTIN_IDS: &[&str] = &[
-                "office-automation", "file-management", "web-automation",
-                "system-admin", "desktop-control",
+                "office-automation",
+                "file-management",
+                "web-automation",
+                "system-admin",
+                "desktop-control",
             ];
-            let dir_name = path.parent()
+            let dir_name = path
+                .parent()
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
                 .unwrap_or("");
@@ -221,7 +231,11 @@ impl SkillLoader {
             frontmatter
                 .get(key)
                 .and_then(|v| v.as_sequence())
-                .map(|seq| seq.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default()
         };
 
@@ -265,9 +279,27 @@ impl SkillLoader {
                 "Automate Microsoft Office tasks (Word, Excel, Outlook)",
                 vec!["office"],
                 vec![
-                    "office", "word", "excel", "outlook", "pptx", "PPT", "spreadsheet", "document",
-                    "Office自动化", "办公", "表格", "文档", "Word文档", "Excel表格", "幻灯片",
-                    "演示文稿", "邮件", "报表", "数据表", "写报告", "制作PPT",
+                    "office",
+                    "word",
+                    "excel",
+                    "outlook",
+                    "pptx",
+                    "PPT",
+                    "spreadsheet",
+                    "document",
+                    "Office自动化",
+                    "办公",
+                    "表格",
+                    "文档",
+                    "Word文档",
+                    "Excel表格",
+                    "幻灯片",
+                    "演示文稿",
+                    "邮件",
+                    "报表",
+                    "数据表",
+                    "写报告",
+                    "制作PPT",
                 ],
                 "Use the `office` tool to create, edit, and manage Office documents.\n\n\
                  ## Capabilities\n\
@@ -282,9 +314,25 @@ impl SkillLoader {
                 "Organize, search, and manage files on the system",
                 vec!["file_read", "file_write", "shell"],
                 vec![
-                    "file", "files", "folder", "directory", "rename", "move", "copy", "delete",
-                    "文件", "文件夹", "目录", "整理", "搜索文件", "批量重命名", "移动文件",
-                    "复制文件", "删除文件", "文件管理", "查找文件",
+                    "file",
+                    "files",
+                    "folder",
+                    "directory",
+                    "rename",
+                    "move",
+                    "copy",
+                    "delete",
+                    "文件",
+                    "文件夹",
+                    "目录",
+                    "整理",
+                    "搜索文件",
+                    "批量重命名",
+                    "移动文件",
+                    "复制文件",
+                    "删除文件",
+                    "文件管理",
+                    "查找文件",
                 ],
                 "Use file tools to manage the user's files.\n\n\
                  ## Capabilities\n\
@@ -299,9 +347,25 @@ impl SkillLoader {
                 "Automate web browsing tasks using Chrome",
                 vec!["browser", "web_search"],
                 vec![
-                    "browser", "web", "chrome", "crawl", "scrape", "search", "navigate", "url",
-                    "网页", "浏览器", "爬虫", "抓取", "网络", "搜索", "自动填表", "网页自动化",
-                    "打开网页", "浏览网页", "数据抓取",
+                    "browser",
+                    "web",
+                    "chrome",
+                    "crawl",
+                    "scrape",
+                    "search",
+                    "navigate",
+                    "url",
+                    "网页",
+                    "浏览器",
+                    "爬虫",
+                    "抓取",
+                    "网络",
+                    "搜索",
+                    "自动填表",
+                    "网页自动化",
+                    "打开网页",
+                    "浏览网页",
+                    "数据抓取",
                 ],
                 "Use the browser tool to automate web tasks.\n\n\
                  ## Capabilities\n\
@@ -316,9 +380,24 @@ impl SkillLoader {
                 "Manage Windows system settings and processes",
                 vec!["powershell", "wmi_tool", "shell"],
                 vec![
-                    "system", "windows", "powershell", "process", "service", "registry", "admin",
-                    "系统", "系统管理", "进程", "服务", "注册表", "系统设置", "系统信息",
-                    "系统监控", "系统维护", "Windows管理", "系统优化",
+                    "system",
+                    "windows",
+                    "powershell",
+                    "process",
+                    "service",
+                    "registry",
+                    "admin",
+                    "系统",
+                    "系统管理",
+                    "进程",
+                    "服务",
+                    "注册表",
+                    "系统设置",
+                    "系统信息",
+                    "系统监控",
+                    "系统维护",
+                    "Windows管理",
+                    "系统优化",
                 ],
                 "Use PowerShell and WMI to manage the Windows system.\n\n\
                  ## Capabilities\n\
@@ -333,9 +412,24 @@ impl SkillLoader {
                 "Control Windows desktop applications via UI Automation",
                 vec!["uia", "screen_capture"],
                 vec![
-                    "desktop", "uia", "automation", "click", "type", "screenshot", "window",
-                    "桌面", "桌面控制", "UI自动化", "点击", "输入", "截图", "窗口", "自动化操作",
-                    "界面操作", "桌面自动化", "应用控制",
+                    "desktop",
+                    "uia",
+                    "automation",
+                    "click",
+                    "type",
+                    "screenshot",
+                    "window",
+                    "桌面",
+                    "桌面控制",
+                    "UI自动化",
+                    "点击",
+                    "输入",
+                    "截图",
+                    "窗口",
+                    "自动化操作",
+                    "界面操作",
+                    "桌面自动化",
+                    "应用控制",
                 ],
                 "Use UIA and screen capture to control desktop applications.\n\n\
                  ## Capabilities\n\
@@ -350,7 +444,8 @@ impl SkillLoader {
             let skill_dir = self.skills_dir.join(id);
             std::fs::create_dir_all(&skill_dir)?;
             let tools_yaml: Vec<String> = tools.iter().map(|t| format!("  - {}", t)).collect();
-            let triggers_yaml: Vec<String> = triggers.iter().map(|t| format!("  - \"{}\"", t)).collect();
+            let triggers_yaml: Vec<String> =
+                triggers.iter().map(|t| format!("  - \"{}\"", t)).collect();
             let content = format!(
                 "---\nname: {}\ndescription: {}\nversion: \"1.0\"\ntools:\n{}\ntriggers:\n{}\n---\n\n# {}\n\n{}\n",
                 name,
@@ -394,7 +489,11 @@ impl SkillLoader {
             frontmatter
                 .get(key)
                 .and_then(|v| v.as_sequence())
-                .map(|seq| seq.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default()
         };
 
@@ -430,6 +529,7 @@ impl SkillLoader {
         })
     }
 
+    #[allow(dead_code)]
     pub fn generate_skill_prompt(&self, enabled_skills: &[String]) -> String {
         let mut prompt = String::new();
         for name in enabled_skills {
@@ -438,7 +538,11 @@ impl SkillLoader {
                     "\n## Skill: {}\nSource: {}\nPermissions: {}\n{}\n\n{}\n",
                     skill.name,
                     skill.source,
-                    if skill.permissions.is_empty() { "none".to_string() } else { skill.permissions.join(", ") },
+                    if skill.permissions.is_empty() {
+                        "none".to_string()
+                    } else {
+                        skill.permissions.join(", ")
+                    },
                     skill.description,
                     skill.instructions
                 ));
@@ -490,8 +594,15 @@ impl SkillLoader {
                     skill.description.to_lowercase(),
                     skill.triggers.join(" ").to_lowercase()
                 );
-                let hits = tokens.iter().filter(|t| haystack.contains(t.as_str())).count();
-                if hits > 0 { Some((hits, skill)) } else { None }
+                let hits = tokens
+                    .iter()
+                    .filter(|t| haystack.contains(t.as_str()))
+                    .count();
+                if hits > 0 {
+                    Some((hits, skill))
+                } else {
+                    None
+                }
             })
             .collect();
 
@@ -500,13 +611,18 @@ impl SkillLoader {
     }
 
     /// Get the full instructions for a skill by name.
+    #[allow(dead_code)]
     pub fn get_skill_instructions(&self, name: &str) -> Option<String> {
         self.skills.get(name).map(|s| {
             format!(
                 "## Skill: {}\n{}\n\nPermissions: {}\n\n{}",
                 s.name,
                 s.description,
-                if s.permissions.is_empty() { "none".to_string() } else { s.permissions.join(", ") },
+                if s.permissions.is_empty() {
+                    "none".to_string()
+                } else {
+                    s.permissions.join(", ")
+                },
                 s.instructions
             )
         })
@@ -537,8 +653,8 @@ fn parse_frontmatter(content: &str) -> Result<(serde_yaml::Value, String)> {
         if let Some(end) = stripped.find("---") {
             let yaml_str = &stripped[..end];
             let instructions = stripped[end + 3..].trim().to_string();
-            let frontmatter: serde_yaml::Value =
-                serde_yaml::from_str(yaml_str).with_context(|| "Failed to parse YAML frontmatter")?;
+            let frontmatter: serde_yaml::Value = serde_yaml::from_str(yaml_str)
+                .with_context(|| "Failed to parse YAML frontmatter")?;
             return Ok((frontmatter, instructions));
         }
     }

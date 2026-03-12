@@ -9,7 +9,9 @@ pub struct ComTool;
 
 #[async_trait]
 impl Tool for ComTool {
-    fn name(&self) -> &str { "com" }
+    fn name(&self) -> &str {
+        "com"
+    }
 
     fn description(&self) -> &str {
         "Windows COM/Shell operations: read/write clipboard (text, image, file list), \
@@ -61,7 +63,10 @@ impl Tool for ComTool {
     }
 
     fn needs_confirmation(&self, input: &Value) -> bool {
-        matches!(input["action"].as_str(), Some("clipboard_write") | Some("shell_run"))
+        matches!(
+            input["action"].as_str(),
+            Some("clipboard_write") | Some("shell_run")
+        )
     }
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
@@ -71,12 +76,12 @@ impl Tool for ComTool {
         };
 
         match action {
-            "clipboard_read"    => self.clipboard_read(),
-            "clipboard_write"   => self.clipboard_write(&input),
-            "clipboard_clear"   => self.clipboard_clear(),
-            "shell_open"        => self.shell_open(&input),
-            "shell_explore"     => self.shell_explore(&input),
-            "shell_run"         => self.shell_run(&input),
+            "clipboard_read" => self.clipboard_read(),
+            "clipboard_write" => self.clipboard_write(&input),
+            "clipboard_clear" => self.clipboard_clear(),
+            "shell_open" => self.shell_open(&input),
+            "shell_explore" => self.shell_explore(&input),
+            "shell_run" => self.shell_run(&input),
             "get_special_folder" => self.get_special_folder(&input),
             _ => Ok(ToolResult::err(format!("Unknown action: {}", action))),
         }
@@ -88,10 +93,10 @@ impl ComTool {
 
     fn clipboard_read(&self) -> Result<ToolResult> {
         use windows::Win32::System::DataExchange::{
-            OpenClipboard, CloseClipboard, GetClipboardData, IsClipboardFormatAvailable,
+            CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
         };
-        use windows::Win32::System::Ole::{CF_UNICODETEXT, CF_HDROP};
         use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+        use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
 
         unsafe {
             OpenClipboard(None).map_err(|e| anyhow::anyhow!("OpenClipboard: {}", e))?;
@@ -105,10 +110,16 @@ impl ComTool {
                     let ptr = GlobalLock(hglobal) as *const u16;
                     if !ptr.is_null() {
                         let mut len = 0;
-                        while *ptr.add(len) != 0 { len += 1; }
+                        while *ptr.add(len) != 0 {
+                            len += 1;
+                        }
                         let text = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
                         let _ = GlobalUnlock(hglobal);
-                        return Ok(ToolResult::ok(format!("Clipboard text ({} chars):\n{}", text.len(), text)));
+                        return Ok(ToolResult::ok(format!(
+                            "Clipboard text ({} chars):\n{}",
+                            text.len(),
+                            text
+                        )));
                     }
                 }
 
@@ -125,14 +136,18 @@ impl ComTool {
                         let len = DragQueryFileW(hdrop, i, None) as usize + 1;
                         let mut buf = vec![0u16; len];
                         DragQueryFileW(hdrop, i, Some(&mut buf));
-                        files.push(String::from_utf16_lossy(&buf[..len-1]).to_string());
+                        files.push(String::from_utf16_lossy(&buf[..len - 1]).to_string());
                     }
                     return Ok(ToolResult::ok(format!(
-                        "Clipboard files ({}):\n{}", files.len(), files.join("\n")
+                        "Clipboard files ({}):\n{}",
+                        files.len(),
+                        files.join("\n")
                     )));
                 }
 
-                Ok(ToolResult::ok("Clipboard is empty or contains unsupported format"))
+                Ok(ToolResult::ok(
+                    "Clipboard is empty or contains unsupported format",
+                ))
             })();
 
             CloseClipboard().ok();
@@ -142,10 +157,12 @@ impl ComTool {
 
     fn clipboard_write(&self, input: &Value) -> Result<ToolResult> {
         use windows::Win32::System::DataExchange::{
-            OpenClipboard, CloseClipboard, EmptyClipboard, SetClipboardData,
+            CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+        };
+        use windows::Win32::System::Memory::{
+            GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
         };
         use windows::Win32::System::Ole::CF_UNICODETEXT;
-        use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 
         let text = match input["text"].as_str() {
             Some(t) => t,
@@ -164,16 +181,22 @@ impl ComTool {
             std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
             let _ = GlobalUnlock(hmem);
 
-            SetClipboardData(CF_UNICODETEXT.0.into(), windows::Win32::Foundation::HANDLE(hmem.0 as *mut _))
-                .map_err(|e| anyhow::anyhow!("SetClipboardData: {}", e))?;
+            SetClipboardData(
+                CF_UNICODETEXT.0.into(),
+                windows::Win32::Foundation::HANDLE(hmem.0 as *mut _),
+            )
+            .map_err(|e| anyhow::anyhow!("SetClipboardData: {}", e))?;
             CloseClipboard().ok();
         }
 
-        Ok(ToolResult::ok(format!("Wrote {} chars to clipboard", text.len())))
+        Ok(ToolResult::ok(format!(
+            "Wrote {} chars to clipboard",
+            text.len()
+        )))
     }
 
     fn clipboard_clear(&self) -> Result<ToolResult> {
-        use windows::Win32::System::DataExchange::{OpenClipboard, CloseClipboard, EmptyClipboard};
+        use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard};
         unsafe {
             OpenClipboard(None).map_err(|e| anyhow::anyhow!("OpenClipboard: {}", e))?;
             let _ = EmptyClipboard();
@@ -211,20 +234,28 @@ impl ComTool {
     }
 
     fn shell_execute(&self, verb: &str, file: &str, params: Option<&str>) -> Result<ToolResult> {
+        use windows::core::PCWSTR;
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_SHOW;
-        use windows::core::PCWSTR;
 
         let verb_wide: Vec<u16> = verb.encode_utf16().chain(std::iter::once(0)).collect();
         let file_wide: Vec<u16> = file.encode_utf16().chain(std::iter::once(0)).collect();
-        let params_wide: Vec<u16> = params.unwrap_or("").encode_utf16().chain(std::iter::once(0)).collect();
+        let params_wide: Vec<u16> = params
+            .unwrap_or("")
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
 
         let result = unsafe {
             ShellExecuteW(
                 None,
                 PCWSTR(verb_wide.as_ptr()),
                 PCWSTR(file_wide.as_ptr()),
-                if params.is_some() { PCWSTR(params_wide.as_ptr()) } else { PCWSTR::null() },
+                if params.is_some() {
+                    PCWSTR(params_wide.as_ptr())
+                } else {
+                    PCWSTR::null()
+                },
                 PCWSTR::null(),
                 SW_SHOW,
             )
@@ -232,9 +263,15 @@ impl ComTool {
 
         // ShellExecuteW returns > 32 on success
         if result.0 as usize > 32 {
-            Ok(ToolResult::ok(format!("Shell {} '{}' launched", verb, file)))
+            Ok(ToolResult::ok(format!(
+                "Shell {} '{}' launched",
+                verb, file
+            )))
         } else {
-            Ok(ToolResult::err(format!("ShellExecute failed with code: {:?}", result.0)))
+            Ok(ToolResult::err(format!(
+                "ShellExecute failed with code: {:?}",
+                result.0
+            )))
         }
     }
 
@@ -247,31 +284,35 @@ impl ComTool {
         };
 
         let path = match folder {
-            "desktop"    => dirs::desktop_dir(),
-            "documents"  => dirs::document_dir(),
-            "downloads"  => dirs::download_dir(),
-            "pictures"   => dirs::picture_dir(),
-            "music"      => dirs::audio_dir(),
-            "videos"     => dirs::video_dir(),
-            "appdata"    => dirs::config_dir(),
+            "desktop" => dirs::desktop_dir(),
+            "documents" => dirs::document_dir(),
+            "downloads" => dirs::download_dir(),
+            "pictures" => dirs::picture_dir(),
+            "music" => dirs::audio_dir(),
+            "videos" => dirs::video_dir(),
+            "appdata" => dirs::config_dir(),
             "localappdata" => dirs::data_local_dir(),
-            "temp"       => Some(std::env::temp_dir()),
-            "home"       => dirs::home_dir(),
-            "startup"    => {
+            "temp" => Some(std::env::temp_dir()),
+            "home" => dirs::home_dir(),
+            "startup" => {
                 // Windows Startup folder
-                dirs::data_dir().map(|d| d.join("Microsoft\\Windows\\Start Menu\\Programs\\Startup"))
+                dirs::data_dir()
+                    .map(|d| d.join("Microsoft\\Windows\\Start Menu\\Programs\\Startup"))
             }
-            "programs"   => {
+            "programs" => {
                 dirs::data_dir().map(|d| d.join("Microsoft\\Windows\\Start Menu\\Programs"))
             }
-            "system"     => Some(std::path::PathBuf::from(r"C:\Windows\System32")),
-            "windows"    => Some(std::path::PathBuf::from(r"C:\Windows")),
+            "system" => Some(std::path::PathBuf::from(r"C:\Windows\System32")),
+            "windows" => Some(std::path::PathBuf::from(r"C:\Windows")),
             _ => return Ok(ToolResult::err(format!("Unknown folder: {}", folder))),
         };
 
         match path {
             Some(p) => Ok(ToolResult::ok(format!("{}: {}", folder, p.display()))),
-            None => Ok(ToolResult::err(format!("Could not determine path for: {}", folder))),
+            None => Ok(ToolResult::err(format!(
+                "Could not determine path for: {}",
+                folder
+            ))),
         }
     }
 }

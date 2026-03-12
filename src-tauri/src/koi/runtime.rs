@@ -9,7 +9,6 @@
 /// This module does NOT contain UI logic; it is purely a backend orchestrator.
 /// It depends on the `EventBus` trait (not on tauri::AppHandle directly),
 /// so it can run in both the real app and headless test environments.
-
 use crate::koi::event_bus::EventBus;
 use crate::koi::{KoiDefinition, KoiTodo};
 use crate::store::Database;
@@ -44,10 +43,7 @@ impl KoiRuntime {
 
     /// Convenience: build from a Tauri AppHandle (backward compat for commands).
     pub fn from_tauri(app: tauri::AppHandle, db: Arc<Mutex<Database>>) -> Self {
-        let bus = Arc::new(crate::koi::event_bus::TauriEventBus {
-            app,
-            db_ref: db,
-        });
+        let bus = Arc::new(crate::koi::event_bus::TauriEventBus { app, db_ref: db });
         Self { bus }
     }
 
@@ -96,11 +92,13 @@ impl KoiRuntime {
     ) -> anyhow::Result<(crate::koi::KoiTodo, Option<i64>)> {
         let (koi_def, pool_session_id) = {
             let db = self.db().lock().await;
-            let koi_def = db.resolve_koi_identifier(koi_id)?
+            let koi_def = db
+                .resolve_koi_identifier(koi_id)?
                 .ok_or_else(|| anyhow::anyhow!("Koi '{}' not found", koi_id))?;
             let pool_session_id = match pool_session_id {
                 Some(value) => Some({
-                    let pool = db.resolve_pool_session_identifier(value)?
+                    let pool = db
+                        .resolve_pool_session_identifier(value)?
                         .ok_or_else(|| anyhow::anyhow!("Pool '{}' not found", value))?;
                     Self::ensure_pool_allows_runtime_work(&pool, "accept new task assignments")?;
                     pool.id
@@ -113,19 +111,28 @@ impl KoiRuntime {
         let todo = {
             let db = self.db().lock().await;
             db.create_koi_todo(
-                &koi_def.id, task, "", priority, assigned_by,
-                pool_session_id.as_deref(), assigned_by, None,
+                &koi_def.id,
+                task,
+                "",
+                priority,
+                assigned_by,
+                pool_session_id.as_deref(),
+                assigned_by,
+                None,
             )?
         };
 
         let assign_msg_id = if let Some(psid) = pool_session_id.as_deref() {
             let db = self.db().lock().await;
             let msg = db.insert_pool_message_ext(
-                psid, assigned_by,
+                psid,
+                assigned_by,
                 &format!("@{} {}", koi_def.name, task),
                 "task_assign",
                 &json!({ "koi_id": &koi_def.id, "priority": priority }).to_string(),
-                Some(&todo.id), None, Some("task_assigned"),
+                Some(&todo.id),
+                None,
+                Some("task_assigned"),
             )?;
             self.bus.emit_event(
                 &format!("pool_message_{}", psid),
@@ -151,13 +158,15 @@ impl KoiRuntime {
             let db = self.db().lock().await;
             let koi_def = match db.resolve_koi_identifier(koi_id)? {
                 Some(koi) => koi,
-                None => db.resolve_koi_identifier(&todo.owner_id)?
+                None => db
+                    .resolve_koi_identifier(&todo.owner_id)?
                     .ok_or_else(|| anyhow::anyhow!("Koi '{}' not found", koi_id))?,
             };
             let pool_value = pool_session_id.or(todo.pool_session_id.as_deref());
             let pool_session_id = match pool_value {
                 Some(value) => Some({
-                    let pool = db.resolve_pool_session_identifier(value)?
+                    let pool = db
+                        .resolve_pool_session_identifier(value)?
                         .ok_or_else(|| anyhow::anyhow!("Pool '{}' not found", value))?;
                     Self::ensure_pool_allows_runtime_work(&pool, "run Koi work")?;
                     pool.id
@@ -182,11 +191,14 @@ impl KoiRuntime {
         if let Some(psid) = canonical_pool_session_id.as_deref() {
             let db = self.db().lock().await;
             let msg = db.insert_pool_message_ext(
-                psid, koi_id,
+                psid,
+                koi_id,
                 &format!("{} 接受了任务: {}", koi_def.name, task),
                 "task_claimed",
                 "{}",
-                Some(&todo.id), assign_msg_id, Some("task_claimed"),
+                Some(&todo.id),
+                assign_msg_id,
+                Some("task_claimed"),
             )?;
             self.bus.emit_event(
                 &format!("pool_message_{}", psid),
@@ -197,7 +209,9 @@ impl KoiRuntime {
         // Set up Git worktree if the pool has a project_dir
         let worktree_path = if let Some(psid) = canonical_pool_session_id.as_deref() {
             let db = self.db().lock().await;
-            db.get_pool_session(psid).ok().flatten()
+            db.get_pool_session(psid)
+                .ok()
+                .flatten()
                 .and_then(|s| s.project_dir)
                 .and_then(|dir| self.setup_worktree(&dir, &koi_def.name, &todo.id))
         } else {
@@ -214,12 +228,20 @@ impl KoiRuntime {
         // Execute via CallKoiTool with timeout protection (10 min default)
         let exec_result = match tokio::time::timeout(
             std::time::Duration::from_secs(600),
-            self.execute_koi_agent(&koi_def, &task_with_meta, canonical_pool_session_id.as_deref(), worktree_path.as_deref()),
-        ).await {
+            self.execute_koi_agent(
+                &koi_def,
+                &task_with_meta,
+                canonical_pool_session_id.as_deref(),
+                worktree_path.as_deref(),
+            ),
+        )
+        .await
+        {
             Ok(result) => result,
             Err(_) => Err(anyhow::anyhow!(
                 "Koi '{}' timed out after 10 minutes on task: {}",
-                koi_def.name, task
+                koi_def.name,
+                task
             )),
         };
 
@@ -236,12 +258,20 @@ impl KoiRuntime {
             } else {
                 reply.clone()
             };
-            let event_type = if success { "task_completed" } else { "task_failed" };
+            let event_type = if success {
+                "task_completed"
+            } else {
+                "task_failed"
+            };
             let msg = db.insert_pool_message_ext(
-                psid, koi_id, &summary,
+                psid,
+                koi_id,
+                &summary,
                 if success { "result" } else { "status_update" },
                 &json!({ "todo_id": todo.id, "success": success }).to_string(),
-                Some(&todo.id), assign_msg_id, Some(event_type),
+                Some(&todo.id),
+                assign_msg_id,
+                Some(event_type),
             )?;
             self.bus.emit_event(
                 &format!("pool_message_{}", psid),
@@ -262,9 +292,12 @@ impl KoiRuntime {
                 db.block_koi_todo(&todo.id, &reply)?;
             }
         }
-        self.bus.emit_event("koi_todo_updated", json!({
-            "id": todo.id, "action": if success { "completed" } else { "blocked" }
-        }));
+        self.bus.emit_event(
+            "koi_todo_updated",
+            json!({
+                "id": todo.id, "action": if success { "completed" } else { "blocked" }
+            }),
+        );
 
         // Clean up Git worktree if one was created
         if let Some(ref wt) = worktree_path {
@@ -290,10 +323,11 @@ impl KoiRuntime {
         pool_session_id: Option<&str>,
         priority: &str,
     ) -> anyhow::Result<KoiExecResult> {
-        let (todo, assign_msg_id) = self.assign_task(
-            koi_id, task, assigned_by, pool_session_id, priority,
-        ).await?;
-        self.execute_todo(koi_id, &todo, assign_msg_id, pool_session_id).await
+        let (todo, assign_msg_id) = self
+            .assign_task(koi_id, task, assigned_by, pool_session_id, priority)
+            .await?;
+        self.execute_todo(koi_id, &todo, assign_msg_id, pool_session_id)
+            .await
     }
 
     /// Activate a Koi to check pool messages and respond autonomously.
@@ -306,9 +340,11 @@ impl KoiRuntime {
     ) -> anyhow::Result<KoiExecResult> {
         let (koi_def, pool_session_id) = {
             let db = self.db().lock().await;
-            let koi_def = db.resolve_koi_identifier(koi_id)?
+            let koi_def = db
+                .resolve_koi_identifier(koi_id)?
                 .ok_or_else(|| anyhow::anyhow!("Koi '{}' not found", koi_id))?;
-            let pool_session = db.resolve_pool_session_identifier(pool_session_id)?
+            let pool_session = db
+                .resolve_pool_session_identifier(pool_session_id)?
                 .ok_or_else(|| anyhow::anyhow!("Pool '{}' not found", pool_session_id))?;
             Self::ensure_pool_allows_runtime_work(&pool_session, "activate Koi message handling")?;
             (koi_def, pool_session.id)
@@ -318,7 +354,10 @@ impl KoiRuntime {
         if koi_def.status != "idle" {
             return Ok(KoiExecResult {
                 success: true,
-                reply: format!("{} is busy, notification was injected instead", koi_def.name),
+                reply: format!(
+                    "{} is busy, notification was injected instead",
+                    koi_def.name
+                ),
                 result_message_id: None,
             });
         }
@@ -334,9 +373,14 @@ impl KoiRuntime {
         let exec_result = match tokio::time::timeout(
             std::time::Duration::from_secs(600),
             self.execute_koi_agent(&koi_def, task, Some(&pool_session_id), None),
-        ).await {
+        )
+        .await
+        {
             Ok(result) => result,
-            Err(_) => Err(anyhow::anyhow!("Koi '{}' timed out checking messages", koi_def.name)),
+            Err(_) => Err(anyhow::anyhow!(
+                "Koi '{}' timed out checking messages",
+                koi_def.name
+            )),
         };
 
         let (success, reply) = match &exec_result {
@@ -353,12 +397,20 @@ impl KoiRuntime {
             } else {
                 reply.clone()
             };
-            let event_type = if success { "task_completed" } else { "task_failed" };
+            let event_type = if success {
+                "task_completed"
+            } else {
+                "task_failed"
+            };
             match db.insert_pool_message_ext(
-                &pool_session_id, koi_id, &summary,
+                &pool_session_id,
+                koi_id,
+                &summary,
                 if success { "result" } else { "status_update" },
                 "{}",
-                None, None, Some(event_type),
+                None,
+                None,
+                Some(event_type),
             ) {
                 Ok(msg) => {
                     self.bus.emit_event(
@@ -390,7 +442,7 @@ impl KoiRuntime {
         pool_session_id: Option<&str>,
         workspace_override: Option<&str>,
     ) -> anyhow::Result<String> {
-        use crate::agent::tool::{ToolContext, ToolSettings, Tool};
+        use crate::agent::tool::{Tool, ToolContext, ToolSettings};
         use tauri::Manager;
 
         if let Some(app) = self.try_get_app_handle() {
@@ -398,7 +450,9 @@ impl KoiRuntime {
             let (workspace_root, allow_outside, tool_settings_data) = {
                 let settings = state.settings.lock().await;
                 (
-                    workspace_override.map(String::from).unwrap_or_else(|| settings.workspace_root.clone()),
+                    workspace_override
+                        .map(String::from)
+                        .unwrap_or_else(|| settings.workspace_root.clone()),
                     settings.allow_outside_workspace,
                     Arc::new(ToolSettings::from_settings(&settings)),
                 )
@@ -423,7 +477,11 @@ impl KoiRuntime {
 
             let ctx = ToolContext {
                 // Include pool_session_id in session_id so each project gets an isolated AgentLoop context
-                session_id: format!("koi_runtime_{}_{}", koi_def.id, pool_session_id.unwrap_or("default")),
+                session_id: format!(
+                    "koi_runtime_{}_{}",
+                    koi_def.id,
+                    pool_session_id.unwrap_or("default")
+                ),
                 workspace_root: std::path::PathBuf::from(&workspace_root),
                 bypass_permissions: false,
                 settings: tool_settings_data,
@@ -541,7 +599,8 @@ impl KoiRuntime {
                 let koi_session_key = format!("{}:{}", koi.id, pool_session_id);
                 let sessions = KOI_SESSIONS.lock().await;
                 if let Some(tx) = sessions.get(&koi_session_key) {
-                    let sender_name = kois.iter()
+                    let sender_name = kois
+                        .iter()
                         .find(|k| k.id == sender_id)
                         .map(|k| k.name.as_str())
                         .unwrap_or(sender_id);
@@ -574,9 +633,9 @@ impl KoiRuntime {
                     .filter(|s| !s.is_empty())
                     .unwrap_or(content);
 
-                let result = self.assign_and_execute(
-                    &koi.id, task, sender_id, Some(pool_session_id), "medium",
-                ).await?;
+                let result = self
+                    .assign_and_execute(&koi.id, task, sender_id, Some(pool_session_id), "medium")
+                    .await?;
                 self.spawn_cascade(&koi.id, pool_session_id, &result.reply);
                 results.push(result);
             }
@@ -586,17 +645,22 @@ impl KoiRuntime {
     }
 
     /// Activate pending todos that haven't been claimed yet.
-    pub async fn activate_pending_todos(&self, pool_session_id: Option<&str>) -> anyhow::Result<u32> {
+    pub async fn activate_pending_todos(
+        &self,
+        pool_session_id: Option<&str>,
+    ) -> anyhow::Result<u32> {
         let todos = {
             let db = self.db().lock().await;
             db.list_koi_todos(None)?
         };
 
-        let pending: Vec<&KoiTodo> = todos.iter()
+        let pending: Vec<&KoiTodo> = todos
+            .iter()
             .filter(|t| {
                 t.status == "todo"
                     && t.claimed_by.is_none()
-                    && pool_session_id.map_or(true, |psid| t.pool_session_id.as_deref() == Some(psid))
+                    && pool_session_id
+                        .map_or(true, |psid| t.pool_session_id.as_deref() == Some(psid))
             })
             .collect();
 
@@ -614,12 +678,9 @@ impl KoiRuntime {
             }
 
             // This patrol path should resume the existing todo, not create a fresh duplicate.
-            let result = self.execute_todo(
-                &todo.owner_id,
-                todo,
-                None,
-                todo.pool_session_id.as_deref(),
-            ).await;
+            let result = self
+                .execute_todo(&todo.owner_id, todo, None, todo.pool_session_id.as_deref())
+                .await;
 
             if result.is_ok() {
                 activated += 1;
@@ -636,9 +697,11 @@ impl KoiRuntime {
             return None;
         }
         let short_id = &todo_id[..8.min(todo_id.len())];
-        let safe_name = koi_name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+        let safe_name =
+            koi_name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
         let branch_name = format!("koi/{}-{}", safe_name, short_id);
-        let wt_dir = dir.parent()
+        let wt_dir = dir
+            .parent()
             .unwrap_or(dir)
             .join(".koi-worktrees")
             .join(format!("{}-{}", safe_name, short_id));
@@ -712,7 +775,10 @@ impl KoiRuntime {
         let db = self.db().lock().await;
         let _ = db.update_koi_status(koi_id, status);
         drop(db);
-        self.bus.emit_event("koi_status_changed", json!({ "id": koi_id, "status": status }));
+        self.bus.emit_event(
+            "koi_status_changed",
+            json!({ "id": koi_id, "status": status }),
+        );
     }
 
     /// Recover Koi that appear "busy" in the DB but have neither an active todo
@@ -725,7 +791,8 @@ impl KoiRuntime {
 
         let active_session_owners: HashSet<String> = {
             let sessions = KOI_SESSIONS.lock().await;
-            sessions.keys()
+            sessions
+                .keys()
                 .filter_map(|key| key.split(':').next().map(str::to_string))
                 .collect()
         };
@@ -734,7 +801,8 @@ impl KoiRuntime {
             let db = self.db().lock().await;
             let kois = db.list_kois().unwrap_or_default();
             let todos = db.list_koi_todos(None).unwrap_or_default();
-            let active_todo_owners: HashSet<String> = todos.into_iter()
+            let active_todo_owners: HashSet<String> = todos
+                .into_iter()
                 .filter(|todo| !matches!(todo.status.as_str(), "done" | "cancelled"))
                 .map(|todo| todo.owner_id)
                 .collect();
@@ -762,7 +830,10 @@ impl KoiRuntime {
         drop(db);
 
         for koi_id in &stale_ids {
-            self.bus.emit_event("koi_status_changed", json!({ "id": koi_id, "status": "idle" }));
+            self.bus.emit_event(
+                "koi_status_changed",
+                json!({ "id": koi_id, "status": "idle" }),
+            );
         }
 
         stale_ids.len() as u32
@@ -785,9 +856,13 @@ impl KoiRuntime {
     pub async fn watchdog_recover(&self, max_busy_secs: i64) -> (u32, u32) {
         let db = self.db().lock().await;
         let stale_koi_count = db.recover_stale_busy_kois(max_busy_secs).unwrap_or(0);
-        let stale_todo_count = db.recover_stale_in_progress_todos(max_busy_secs).unwrap_or(0);
+        let stale_todo_count = db
+            .recover_stale_in_progress_todos(max_busy_secs)
+            .unwrap_or(0);
         drop(db);
-        let detached_koi_count = self.recover_detached_busy_kois(max_busy_secs.min(120)).await;
+        let detached_koi_count = self
+            .recover_detached_busy_kois(max_busy_secs.min(120))
+            .await;
         let total_koi_count = stale_koi_count + detached_koi_count;
         if total_koi_count > 0 || stale_todo_count > 0 {
             tracing::warn!(

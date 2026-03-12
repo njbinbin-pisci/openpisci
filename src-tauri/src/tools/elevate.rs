@@ -13,18 +13,17 @@
 /// - If the user clicks "No" in UAC, ShellExecuteW returns error code 5 (ERROR_ACCESS_DENIED).
 /// - Elevated process runs in a separate session; it cannot interact with our process directly.
 /// - Timeout applies to the entire operation including UAC wait time.
-
 use anyhow::Result;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
 
 #[cfg(target_os = "windows")]
+use windows::core::PCWSTR;
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::Shell::ShellExecuteW;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
-#[cfg(target_os = "windows")]
-use windows::core::PCWSTR;
 
 pub struct ElevatedResult {
     pub exit_code: i32,
@@ -95,14 +94,19 @@ $output = @{{
 
     // Build the arguments: -File <script_path>
     let script_path_str = script_path.to_string_lossy().to_string();
-    let ps_args = format!("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\"", script_path_str);
+    let ps_args = format!(
+        "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\"",
+        script_path_str
+    );
 
     // Launch elevated via ShellExecuteW runas
     #[cfg(target_os = "windows")]
     let launch_result = launch_elevated_windows(&ps_exe, &ps_args);
 
     #[cfg(not(target_os = "windows"))]
-    let launch_result: Result<()> = Err(anyhow::anyhow!("UAC elevation is only supported on Windows"));
+    let launch_result: Result<()> = Err(anyhow::anyhow!(
+        "UAC elevation is only supported on Windows"
+    ));
 
     if let Err(e) = launch_result {
         let _ = std::fs::remove_file(&script_path);
@@ -113,7 +117,8 @@ $output = @{{
     let poll_result = timeout(
         Duration::from_secs(timeout_secs),
         poll_for_result(&result_path),
-    ).await;
+    )
+    .await;
 
     // Clean up script file
     let _ = std::fs::remove_file(&script_path);
@@ -154,8 +159,9 @@ async fn poll_for_result(result_path: &PathBuf) -> Result<String> {
 }
 
 fn parse_result(json_str: &str) -> Result<ElevatedResult> {
-    let v: serde_json::Value = serde_json::from_str(json_str.trim())
-        .map_err(|e| anyhow::anyhow!("Failed to parse elevated result: {} | raw: {}", e, json_str))?;
+    let v: serde_json::Value = serde_json::from_str(json_str.trim()).map_err(|e| {
+        anyhow::anyhow!("Failed to parse elevated result: {} | raw: {}", e, json_str)
+    })?;
 
     Ok(ElevatedResult {
         exit_code: v["exit_code"].as_i64().unwrap_or(-1) as i32,

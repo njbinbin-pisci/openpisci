@@ -101,7 +101,9 @@ impl WecomChannel {
 
 #[async_trait]
 impl Channel for WecomChannel {
-    fn name(&self) -> &str { "wecom" }
+    fn name(&self) -> &str {
+        "wecom"
+    }
 
     async fn connect(&mut self) -> Result<()> {
         self.status = ChannelStatus::Connecting;
@@ -148,7 +150,10 @@ impl Channel for WecomChannel {
                                     sender: v["sender"].as_str().unwrap_or_default().to_string(),
                                     sender_name: v["sender_name"].as_str().map(String::from),
                                     content: v["content"].as_str().unwrap_or_default().to_string(),
-                                    reply_target: v["reply_target"].as_str().unwrap_or_default().to_string(),
+                                    reply_target: v["reply_target"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_string(),
                                     is_group: v["is_group"].as_bool().unwrap_or(false),
                                     group_name: v["group_name"].as_str().map(String::from),
                                     timestamp: v["timestamp"].as_u64().unwrap_or(0),

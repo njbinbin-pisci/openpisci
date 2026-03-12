@@ -47,18 +47,31 @@ impl MessageContent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
-    Text { text: String },
-    Image { source: ImageSource },
-    ToolUse { id: String, name: String, input: serde_json::Value },
-    ToolResult { tool_use_id: String, content: String, #[serde(default)] is_error: bool },
+    Text {
+        text: String,
+    },
+    Image {
+        source: ImageSource,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        #[serde(default)]
+        is_error: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageSource {
     #[serde(rename = "type")]
     pub source_type: String, // "base64"
-    pub media_type: String,  // "image/png"
-    pub data: String,        // base64 encoded
+    pub media_type: String, // "image/png"
+    pub data: String,       // base64 encoded
 }
 
 /// Tool definition sent to the LLM
@@ -125,22 +138,14 @@ pub struct ToolCall {
 pub trait LlmClient: Send + Sync {
     /// Send a request and return a stream of chunks
     #[allow(dead_code)]
-    async fn stream(
-        &self,
-        req: LlmRequest,
-        tx: tokio::sync::mpsc::Sender<LlmChunk>,
-    ) -> Result<()>;
+    async fn stream(&self, req: LlmRequest, tx: tokio::sync::mpsc::Sender<LlmChunk>) -> Result<()>;
 
     /// Send a request and return a complete response (non-streaming)
     async fn complete(&self, req: LlmRequest) -> Result<LlmResponse>;
 }
 
 /// Build the appropriate client based on provider name
-pub fn build_client(
-    provider: &str,
-    api_key: &str,
-    base_url: Option<&str>,
-) -> Box<dyn LlmClient> {
+pub fn build_client(provider: &str, api_key: &str, base_url: Option<&str>) -> Box<dyn LlmClient> {
     match provider {
         "openai" | "custom" => Box::new(openai::OpenAiClient::new(
             api_key,

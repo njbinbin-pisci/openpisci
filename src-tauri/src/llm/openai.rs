@@ -1,5 +1,8 @@
 /// OpenAI-compatible API client (Chat Completions, streaming SSE)
-use super::{ContentBlock, LlmChunk, LlmClient, LlmMessage, LlmRequest, LlmResponse, MessageContent, ToolCall};
+use super::{
+    ContentBlock, LlmChunk, LlmClient, LlmMessage, LlmRequest, LlmResponse, MessageContent,
+    ToolCall,
+};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -67,54 +70,75 @@ impl OpenAiClient {
     fn strip_images(&self, messages: &[LlmMessage], vision: bool) -> Vec<LlmMessage> {
         if !vision {
             // Strip all images
-            return messages.iter().map(|m| {
-                let content = match &m.content {
-                    MessageContent::Blocks(blocks) => {
-                        let new_blocks: Vec<ContentBlock> = blocks.iter().map(|b| {
-                            if matches!(b, ContentBlock::Image { .. }) {
-                                Self::image_placeholder(false)
-                            } else {
-                                b.clone()
-                            }
-                        }).collect();
-                        MessageContent::Blocks(new_blocks)
+            return messages
+                .iter()
+                .map(|m| {
+                    let content = match &m.content {
+                        MessageContent::Blocks(blocks) => {
+                            let new_blocks: Vec<ContentBlock> = blocks
+                                .iter()
+                                .map(|b| {
+                                    if matches!(b, ContentBlock::Image { .. }) {
+                                        Self::image_placeholder(false)
+                                    } else {
+                                        b.clone()
+                                    }
+                                })
+                                .collect();
+                            MessageContent::Blocks(new_blocks)
+                        }
+                        other => other.clone(),
+                    };
+                    LlmMessage {
+                        role: m.role.clone(),
+                        content,
                     }
-                    other => other.clone(),
-                };
-                LlmMessage { role: m.role.clone(), content }
-            }).collect();
+                })
+                .collect();
         }
 
         // Vision model: find index of the LAST message containing an Image block
         let last_image_msg = messages.iter().rposition(|m| {
             if let MessageContent::Blocks(blocks) = &m.content {
-                blocks.iter().any(|b| matches!(b, ContentBlock::Image { .. }))
+                blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::Image { .. }))
             } else {
                 false
             }
         });
 
-        messages.iter().enumerate().map(|(i, m)| {
-            let is_latest_image_msg = last_image_msg == Some(i);
-            let content = match &m.content {
-                MessageContent::Blocks(blocks) => {
-                    let new_blocks: Vec<ContentBlock> = blocks.iter().map(|b| {
-                        if matches!(b, ContentBlock::Image { .. }) {
-                            if is_latest_image_msg {
-                                b.clone() // Keep the latest image for vision models
-                            } else {
-                                Self::image_placeholder(false) // Replace older images
-                            }
-                        } else {
-                            b.clone()
-                        }
-                    }).collect();
-                    MessageContent::Blocks(new_blocks)
+        messages
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let is_latest_image_msg = last_image_msg == Some(i);
+                let content = match &m.content {
+                    MessageContent::Blocks(blocks) => {
+                        let new_blocks: Vec<ContentBlock> = blocks
+                            .iter()
+                            .map(|b| {
+                                if matches!(b, ContentBlock::Image { .. }) {
+                                    if is_latest_image_msg {
+                                        b.clone() // Keep the latest image for vision models
+                                    } else {
+                                        Self::image_placeholder(false) // Replace older images
+                                    }
+                                } else {
+                                    b.clone()
+                                }
+                            })
+                            .collect();
+                        MessageContent::Blocks(new_blocks)
+                    }
+                    other => other.clone(),
+                };
+                LlmMessage {
+                    role: m.role.clone(),
+                    content,
                 }
-                other => other.clone(),
-            };
-            LlmMessage { role: m.role.clone(), content }
-        }).collect()
+            })
+            .collect()
     }
 
     fn convert_messages(&self, messages: &[LlmMessage], vision: bool) -> Vec<Value> {
@@ -131,20 +155,30 @@ impl OpenAiClient {
             let m = &messages[i];
             // Check if this is an assistant message with tool_calls
             let tool_call_ids: Vec<String> = if let MessageContent::Blocks(blocks) = &m.content {
-                blocks.iter().filter_map(|b| {
-                    if let ContentBlock::ToolUse { id, .. } = b { Some(id.clone()) } else { None }
-                }).collect()
+                blocks
+                    .iter()
+                    .filter_map(|b| {
+                        if let ContentBlock::ToolUse { id, .. } = b {
+                            Some(id.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
             } else {
                 vec![]
             };
 
             if !tool_call_ids.is_empty() {
                 // Collect the tool_call_ids that are satisfied by immediately following messages
-                let mut satisfied: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut satisfied: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
                 let mut j = i + 1;
                 while j < n {
                     if let MessageContent::Blocks(blocks) = &messages[j].content {
-                        let has_result = blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }));
+                        let has_result = blocks
+                            .iter()
+                            .any(|b| matches!(b, ContentBlock::ToolResult { .. }));
                         if has_result {
                             for b in blocks {
                                 if let ContentBlock::ToolResult { tool_use_id, .. } = b {
@@ -164,14 +198,18 @@ impl OpenAiClient {
                 if !all_satisfied {
                     tracing::warn!(
                         "Skipping tool_calls message with unsatisfied ids {:?} (satisfied: {:?})",
-                        tool_call_ids, satisfied
+                        tool_call_ids,
+                        satisfied
                     );
                     skip[i] = true;
                     // Also skip the immediately following tool-result messages for this block
                     let mut k = i + 1;
                     while k < n {
                         if let MessageContent::Blocks(blocks) = &messages[k].content {
-                            if blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })) {
+                            if blocks
+                                .iter()
+                                .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+                            {
                                 skip[k] = true;
                                 k += 1;
                                 continue;
@@ -189,19 +227,38 @@ impl OpenAiClient {
             let summary = match &m.content {
                 MessageContent::Text(t) => format!("text({} chars)", t.len()),
                 MessageContent::Blocks(blocks) => {
-                    let uses: Vec<_> = blocks.iter().filter_map(|b| {
-                        if let ContentBlock::ToolUse { id, name, .. } = b { Some(format!("use({name}/{id})")) } else { None }
-                    }).collect();
-                    let results: Vec<_> = blocks.iter().filter_map(|b| {
-                        if let ContentBlock::ToolResult { tool_use_id, .. } = b { Some(format!("result({tool_use_id})")) } else { None }
-                    }).collect();
-                    let texts: usize = blocks.iter().filter(|b| matches!(b, ContentBlock::Text { .. })).count();
+                    let uses: Vec<_> = blocks
+                        .iter()
+                        .filter_map(|b| {
+                            if let ContentBlock::ToolUse { id, name, .. } = b {
+                                Some(format!("use({name}/{id})"))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    let results: Vec<_> = blocks
+                        .iter()
+                        .filter_map(|b| {
+                            if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                                Some(format!("result({tool_use_id})"))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    let texts: usize = blocks
+                        .iter()
+                        .filter(|b| matches!(b, ContentBlock::Text { .. }))
+                        .count();
                     format!("blocks[uses={uses:?} results={results:?} texts={texts}]")
                 }
             };
             tracing::debug!(
                 "convert_messages pre-pass [{idx}] role={} skip={} content={}",
-                m.role, skip[idx], summary
+                m.role,
+                skip[idx],
+                summary
             );
         }
 
@@ -219,7 +276,11 @@ impl OpenAiClient {
             // Flush any pending vision images before starting a new non-tool message
             // (so they appear immediately after the last tool message).
             if !pending_vision.is_empty() && m.role != "tool" {
-                tracing::debug!("convert_messages [{idx}] flushing {} pending_vision images before role={}", pending_vision.len(), m.role);
+                tracing::debug!(
+                    "convert_messages [{idx}] flushing {} pending_vision images before role={}",
+                    pending_vision.len(),
+                    m.role
+                );
                 result.push(json!({
                     "role": "user",
                     "content": std::mem::take(&mut pending_vision)
@@ -229,10 +290,16 @@ impl OpenAiClient {
             // Defense: skip orphaned tool-result messages that have no preceding tool_calls.
             // These can appear when context is truncated mid-turn.
             if let MessageContent::Blocks(blocks) = &m.content {
-                let has_tool_result = blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }));
+                let has_tool_result = blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolResult { .. }));
                 if has_tool_result {
-                    let last_role = result.last().and_then(|v| v["role"].as_str()).unwrap_or("none");
-                    let last_has_tool_calls = result.last()
+                    let last_role = result
+                        .last()
+                        .and_then(|v| v["role"].as_str())
+                        .unwrap_or("none");
+                    let last_has_tool_calls = result
+                        .last()
                         .and_then(|v| v["tool_calls"].as_array())
                         .map(|a| !a.is_empty())
                         .unwrap_or(false);
@@ -250,15 +317,23 @@ impl OpenAiClient {
                     result.push(json!({"role": m.role, "content": t}));
                 }
                 MessageContent::Blocks(blocks) => {
-                    let has_tool_use    = blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }));
-                    let has_tool_result = blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }));
+                    let has_tool_use = blocks
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+                    let has_tool_result = blocks
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::ToolResult { .. }));
 
                     if has_tool_result {
                         // OpenAI: each ToolResult → separate "tool" role message (content must be string).
                         // Image blocks are collected and will become a "user" message right after.
                         for block in blocks {
                             match block {
-                                ContentBlock::ToolResult { tool_use_id, content, .. } => {
+                                ContentBlock::ToolResult {
+                                    tool_use_id,
+                                    content,
+                                    ..
+                                } => {
                                     result.push(json!({
                                         "role": "tool",
                                         "tool_call_id": tool_use_id,
@@ -342,7 +417,9 @@ impl OpenAiClient {
                             }
                         }
 
-                        if parts.is_empty() { continue; }
+                        if parts.is_empty() {
+                            continue;
+                        }
 
                         // Collapse single-text to plain string (cleaner API payload)
                         if parts.len() == 1 {
@@ -366,29 +443,38 @@ impl OpenAiClient {
         }
 
         // Debug: log the final message sequence sent to the API
-        let seq: Vec<String> = result.iter().enumerate().map(|(i, v)| {
-            let role = v["role"].as_str().unwrap_or("?");
-            let detail = if let Some(tcs) = v["tool_calls"].as_array() {
-                let ids: Vec<_> = tcs.iter()
-                    .filter_map(|tc| tc["id"].as_str())
-                    .collect();
-                format!("tool_calls{ids:?}")
-            } else if v["tool_call_id"].is_string() {
-                format!("tool_call_id={}", v["tool_call_id"].as_str().unwrap_or("?"))
-            } else {
-                let content_len = v["content"].as_str().map(|s| s.len()).unwrap_or(0);
-                format!("content({content_len} chars)")
-            };
-            format!("[{i}]{role}:{detail}")
-        }).collect();
+        let seq: Vec<String> = result
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let role = v["role"].as_str().unwrap_or("?");
+                let detail = if let Some(tcs) = v["tool_calls"].as_array() {
+                    let ids: Vec<_> = tcs.iter().filter_map(|tc| tc["id"].as_str()).collect();
+                    format!("tool_calls{ids:?}")
+                } else if v["tool_call_id"].is_string() {
+                    format!("tool_call_id={}", v["tool_call_id"].as_str().unwrap_or("?"))
+                } else {
+                    let content_len = v["content"].as_str().map(|s| s.len()).unwrap_or(0);
+                    format!("content({content_len} chars)")
+                };
+                format!("[{i}]{role}:{detail}")
+            })
+            .collect();
         tracing::debug!("convert_messages final sequence: {}", seq.join(" → "));
 
         result
     }
 
     fn build_body(&self, req: &LlmRequest) -> Value {
-        let vision = req.vision_override.unwrap_or_else(|| model_supports_vision(&req.model));
-        tracing::info!("build_body: model={} vision_override={:?} vision={}", req.model, req.vision_override, vision);
+        let vision = req
+            .vision_override
+            .unwrap_or_else(|| model_supports_vision(&req.model));
+        tracing::info!(
+            "build_body: model={} vision_override={:?} vision={}",
+            req.model,
+            req.vision_override,
+            vision
+        );
         let stripped = self.strip_images(&req.messages, vision);
         let messages = self.convert_messages(&stripped, vision);
         let mut body = json!({
@@ -406,14 +492,20 @@ impl OpenAiClient {
         }
 
         if !req.tools.is_empty() {
-            let tools: Vec<Value> = req.tools.iter().map(|t| json!({
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.input_schema,
-                }
-            })).collect();
+            let tools: Vec<Value> = req
+                .tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.input_schema,
+                        }
+                    })
+                })
+                .collect();
             body["tools"] = json!(tools);
             body["tool_choice"] = json!("auto");
         }
@@ -430,7 +522,8 @@ impl LlmClient for OpenAiClient {
         let body = self.build_body(&req_stream);
 
         let url = format!("{}/chat/completions", self.base_url);
-        let response = self.http
+        let response = self
+            .http
             .post(&url)
             .bearer_auth(&self.api_key)
             .json(&body)
@@ -446,7 +539,8 @@ impl LlmClient for OpenAiClient {
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
         // tool call accumulation: index -> (id, name, args_buf)
-        let mut tool_bufs: std::collections::HashMap<usize, (String, String, String)> = std::collections::HashMap::new();
+        let mut tool_bufs: std::collections::HashMap<usize, (String, String, String)> =
+            std::collections::HashMap::new();
         let mut input_tokens = 0u32;
         let mut output_tokens = 0u32;
 
@@ -458,7 +552,7 @@ impl LlmClient for OpenAiClient {
                 let line = buffer[..pos].trim().to_string();
                 buffer = buffer[pos + 1..].to_string();
 
-                    if let Some(data) = line.strip_prefix("data: ") {
+                if let Some(data) = line.strip_prefix("data: ") {
                     if data == "[DONE]" {
                         // Drain any tool calls that arrived before [DONE]
                         for (_, (id, name, args_buf)) in tool_bufs.drain() {
@@ -466,7 +560,12 @@ impl LlmClient for OpenAiClient {
                                 .unwrap_or(Value::Object(serde_json::Map::new()));
                             let _ = tx.send(LlmChunk::ToolUse { id, name, input }).await;
                         }
-                        let _ = tx.send(LlmChunk::Done { input_tokens, output_tokens }).await;
+                        let _ = tx
+                            .send(LlmChunk::Done {
+                                input_tokens,
+                                output_tokens,
+                            })
+                            .await;
                         return Ok(());
                     }
                     if let Ok(val) = serde_json::from_str::<Value>(data) {
@@ -483,7 +582,8 @@ impl LlmClient for OpenAiClient {
                                 // Text delta
                                 if let Some(text) = delta["content"].as_str() {
                                     if !text.is_empty() {
-                                        let _ = tx.send(LlmChunk::TextDelta(text.to_string())).await;
+                                        let _ =
+                                            tx.send(LlmChunk::TextDelta(text.to_string())).await;
                                     }
                                 }
 
@@ -493,7 +593,10 @@ impl LlmClient for OpenAiClient {
                                         let idx = tc["index"].as_u64().unwrap_or(0) as usize;
                                         let entry = tool_bufs.entry(idx).or_insert_with(|| {
                                             let id = tc["id"].as_str().unwrap_or("").to_string();
-                                            let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+                                            let name = tc["function"]["name"]
+                                                .as_str()
+                                                .unwrap_or("")
+                                                .to_string();
                                             (id, name, String::new())
                                         });
                                         if let Some(args) = tc["function"]["arguments"].as_str() {
@@ -507,7 +610,8 @@ impl LlmClient for OpenAiClient {
                                     for (_, (id, name, args_buf)) in tool_bufs.drain() {
                                         let input = serde_json::from_str(&args_buf)
                                             .unwrap_or(Value::Object(serde_json::Map::new()));
-                                        let _ = tx.send(LlmChunk::ToolUse { id, name, input }).await;
+                                        let _ =
+                                            tx.send(LlmChunk::ToolUse { id, name, input }).await;
                                     }
                                 }
                             }
@@ -526,7 +630,8 @@ impl LlmClient for OpenAiClient {
         let body = self.build_body(&req_no_stream);
 
         let url = format!("{}/chat/completions", self.base_url);
-        let response = self.http
+        let response = self
+            .http
             .post(&url)
             .bearer_auth(&self.api_key)
             .json(&body)
@@ -553,8 +658,8 @@ impl LlmClient for OpenAiClient {
         if let Some(tcs) = message["tool_calls"].as_array() {
             for tc in tcs {
                 let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
-                let input = serde_json::from_str(args_str)
-                    .unwrap_or(Value::Object(serde_json::Map::new()));
+                let input =
+                    serde_json::from_str(args_str).unwrap_or(Value::Object(serde_json::Map::new()));
                 tool_calls.push(ToolCall {
                     id: tc["id"].as_str().unwrap_or("").to_string(),
                     name: tc["function"]["name"].as_str().unwrap_or("").to_string(),

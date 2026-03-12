@@ -11,8 +11,8 @@ mod gateway;
 pub mod koi;
 mod llm;
 mod memory;
-mod policy;
 mod pisci;
+mod policy;
 mod scheduler;
 mod security;
 mod skills;
@@ -32,16 +32,25 @@ fn extract_send_marker(text: &str) -> (String, Option<String>) {
     let lines: Vec<&str> = text.lines().collect();
     for (i, line) in lines.iter().enumerate().rev() {
         let trimmed = line.trim();
-        if let Some(path) = trimmed.strip_prefix("SEND_IMAGE:").or_else(|| trimmed.strip_prefix("SEND_FILE:")) {
+        if let Some(path) = trimmed
+            .strip_prefix("SEND_IMAGE:")
+            .or_else(|| trimmed.strip_prefix("SEND_FILE:"))
+        {
             let path = path.trim().to_string();
             if !path.is_empty() {
                 // Keep all lines except the marker line itself
-                let clean_parts: Vec<&str> = lines.iter().enumerate()
+                let clean_parts: Vec<&str> = lines
+                    .iter()
+                    .enumerate()
                     .filter(|(j, _)| *j != i)
                     .map(|(_, l)| *l)
                     .collect();
                 let clean = clean_parts.join("\n").trim().to_string();
-                tracing::info!("extract_send_marker: found marker at line {}, path={}", i, path);
+                tracing::info!(
+                    "extract_send_marker: found marker at line {}, path={}",
+                    i,
+                    path
+                );
                 return (clean, Some(path));
             }
         }
@@ -52,13 +61,21 @@ fn extract_send_marker(text: &str) -> (String, Option<String>) {
 /// Guess MIME type from file path extension.
 fn guess_mime_from_path(path: &str) -> String {
     let lower = path.to_lowercase();
-    if lower.ends_with(".png") { "image/png".to_string() }
-    else if lower.ends_with(".gif") { "image/gif".to_string() }
-    else if lower.ends_with(".webp") { "image/webp".to_string() }
-    else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") { "image/jpeg".to_string() }
-    else if lower.ends_with(".pdf") { "application/pdf".to_string() }
-    else if lower.ends_with(".mp4") { "video/mp4".to_string() }
-    else { "application/octet-stream".to_string() }
+    if lower.ends_with(".png") {
+        "image/png".to_string()
+    } else if lower.ends_with(".gif") {
+        "image/gif".to_string()
+    } else if lower.ends_with(".webp") {
+        "image/webp".to_string()
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg".to_string()
+    } else if lower.ends_with(".pdf") {
+        "application/pdf".to_string()
+    } else if lower.ends_with(".mp4") {
+        "video/mp4".to_string()
+    } else {
+        "application/octet-stream".to_string()
+    }
 }
 
 /// Returns the platform log directory: `<data_dir>/pisci/logs`.

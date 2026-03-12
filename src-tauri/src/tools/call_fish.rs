@@ -11,10 +11,7 @@ use crate::llm::{LlmMessage, MessageContent};
 use crate::store::AppState;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::sync::{
-    atomic::AtomicBool,
-    Arc,
-};
+use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub struct CallFishTool {
@@ -23,7 +20,9 @@ pub struct CallFishTool {
 
 #[async_trait]
 impl Tool for CallFishTool {
-    fn name(&self) -> &str { "call_fish" }
+    fn name(&self) -> &str {
+        "call_fish"
+    }
 
     fn description(&self) -> &str {
         "Delegate a sub-task to a specialized Fish sub-agent. \
@@ -61,14 +60,19 @@ impl Tool for CallFishTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let action = input["action"].as_str().unwrap_or("list");
         match action {
             "list" => self.list_fish().await,
             "call" => self.call_fish(&input, ctx).await,
-            _ => Ok(ToolResult::err(format!("Unknown action '{}'. Use: list, call", action))),
+            _ => Ok(ToolResult::err(format!(
+                "Unknown action '{}'. Use: list, call",
+                action
+            ))),
         }
     }
 }
@@ -79,19 +83,24 @@ impl CallFishTool {
     }
 
     async fn list_fish(&self) -> anyhow::Result<ToolResult> {
-        let registry = crate::fish::FishRegistry::load(
-            self.app.path().app_data_dir().ok().as_deref(),
-        );
+        let registry =
+            crate::fish::FishRegistry::load(self.app.path().app_data_dir().ok().as_deref());
         let fish_list: Vec<String> = registry
             .list()
             .iter()
-            .map(|f| format!(
-                "- {} (id: {}): {}{}",
-                f.name,
-                f.id,
-                f.description,
-                if f.agent.model.is_empty() { String::new() } else { format!(" [model: {}]", f.agent.model) }
-            ))
+            .map(|f| {
+                format!(
+                    "- {} (id: {}): {}{}",
+                    f.name,
+                    f.id,
+                    f.description,
+                    if f.agent.model.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [model: {}]", f.agent.model)
+                    }
+                )
+            })
             .collect();
 
         if fish_list.is_empty() {
@@ -120,24 +129,40 @@ impl CallFishTool {
         let registry = crate::fish::FishRegistry::load(app_data_dir.as_deref());
         let fish_def = match registry.get(&fish_id) {
             Some(f) => f.clone(),
-            None => return Ok(ToolResult::err(format!(
-                "Fish '{}' not found. Use action 'list' to see available Fish agents.", fish_id
-            ))),
+            None => {
+                return Ok(ToolResult::err(format!(
+                    "Fish '{}' not found. Use action 'list' to see available Fish agents.",
+                    fish_id
+                )))
+            }
         };
 
         let parent_session_id = ctx.session_id.clone();
 
         tracing::info!(
             "call_fish: stateless delegation to fish='{}' parent_session='{}'",
-            fish_id, parent_session_id
+            fish_id,
+            parent_session_id
         );
 
         let fish_system_prompt = fish_def.agent.system_prompt.clone();
 
         // Read settings snapshot
-        let (provider, model, api_key, base_url, workspace_root, max_tokens, _context_window,
-             policy_mode, tool_rate_limit_per_minute, tool_settings, builtin_tool_enabled,
-             allow_outside_workspace, vision_enabled) = {
+        let (
+            provider,
+            model,
+            api_key,
+            base_url,
+            workspace_root,
+            max_tokens,
+            _context_window,
+            policy_mode,
+            tool_rate_limit_per_minute,
+            tool_settings,
+            builtin_tool_enabled,
+            allow_outside_workspace,
+            vision_enabled,
+        ) = {
             let settings = state.settings.lock().await;
             (
                 settings.provider.clone(),
@@ -159,8 +184,8 @@ impl CallFishTool {
             return Ok(ToolResult::err("API key not configured"));
         }
 
-        let vision_capable = vision_enabled
-            || crate::commands::chat::model_supports_vision(&provider, &model);
+        let vision_capable =
+            vision_enabled || crate::commands::chat::model_supports_vision(&provider, &model);
 
         // Build a fresh message list: only the task as a single user message
         let llm_messages = vec![LlmMessage {
@@ -173,10 +198,19 @@ impl CallFishTool {
         let client = crate::llm::build_client(
             &provider,
             &api_key,
-            if base_url.is_empty() { None } else { Some(&base_url) },
+            if base_url.is_empty() {
+                None
+            } else {
+                Some(&base_url)
+            },
         );
 
-        let user_tools_dir = self.app.path().app_data_dir().map(|d| d.join("user-tools")).ok();
+        let user_tools_dir = self
+            .app
+            .path()
+            .app_data_dir()
+            .map(|d| d.join("user-tools"))
+            .ok();
         let registry_tools = Arc::new(crate::tools::build_registry(
             state.browser.clone(),
             user_tools_dir.as_deref(),
@@ -189,7 +223,10 @@ impl CallFishTool {
         ));
 
         let policy = Arc::new(crate::policy::PolicyGate::with_profile_and_flags(
-            &workspace_root, &policy_mode, tool_rate_limit_per_minute, allow_outside_workspace,
+            &workspace_root,
+            &policy_mode,
+            tool_rate_limit_per_minute,
+            allow_outside_workspace,
         ));
 
         let agent = AgentLoop {
@@ -241,33 +278,27 @@ impl CallFishTool {
                             status: "thinking".to_string(),
                         })
                     }
-                    AgentEvent::ToolStart { name, .. } => {
-                        Some(AgentEvent::FishProgress {
-                            fish_id: fish_id_fwd.clone(),
-                            fish_name: fish_name_fwd.clone(),
-                            iteration,
-                            tool_name: Some(name.clone()),
-                            status: "tool_call".to_string(),
-                        })
-                    }
-                    AgentEvent::ToolEnd { name, .. } => {
-                        Some(AgentEvent::FishProgress {
-                            fish_id: fish_id_fwd.clone(),
-                            fish_name: fish_name_fwd.clone(),
-                            iteration,
-                            tool_name: Some(name.clone()),
-                            status: "tool_done".to_string(),
-                        })
-                    }
-                    AgentEvent::Done { .. } => {
-                        Some(AgentEvent::FishProgress {
-                            fish_id: fish_id_fwd.clone(),
-                            fish_name: fish_name_fwd.clone(),
-                            iteration,
-                            tool_name: None,
-                            status: "done".to_string(),
-                        })
-                    }
+                    AgentEvent::ToolStart { name, .. } => Some(AgentEvent::FishProgress {
+                        fish_id: fish_id_fwd.clone(),
+                        fish_name: fish_name_fwd.clone(),
+                        iteration,
+                        tool_name: Some(name.clone()),
+                        status: "tool_call".to_string(),
+                    }),
+                    AgentEvent::ToolEnd { name, .. } => Some(AgentEvent::FishProgress {
+                        fish_id: fish_id_fwd.clone(),
+                        fish_name: fish_name_fwd.clone(),
+                        iteration,
+                        tool_name: Some(name.clone()),
+                        status: "tool_done".to_string(),
+                    }),
+                    AgentEvent::Done { .. } => Some(AgentEvent::FishProgress {
+                        fish_id: fish_id_fwd.clone(),
+                        fish_name: fish_name_fwd.clone(),
+                        iteration,
+                        tool_name: None,
+                        status: "done".to_string(),
+                    }),
                     _ => None,
                 };
                 if let Some(prog) = progress {
@@ -282,7 +313,9 @@ impl CallFishTool {
 
         match run_result {
             Ok((final_msgs, _, _)) => {
-                let reply = final_msgs.iter().rev()
+                let reply = final_msgs
+                    .iter()
+                    .rev()
                     .find(|m| m.role == "assistant")
                     .map(|m| m.content.as_text())
                     .unwrap_or_default();
@@ -302,7 +335,8 @@ impl CallFishTool {
                 )))
             }
             Err(e) => Ok(ToolResult::err(format!(
-                "Fish '{}' failed: {}", fish_def.name, e
+                "Fish '{}' failed: {}",
+                fish_def.name, e
             ))),
         }
     }

@@ -15,9 +15,7 @@ pub struct McpTestResult {
 
 /// Return the current list of configured MCP servers.
 #[tauri::command]
-pub async fn list_mcp_servers(
-    state: State<'_, AppState>,
-) -> Result<Vec<McpServerConfig>, String> {
+pub async fn list_mcp_servers(state: State<'_, AppState>) -> Result<Vec<McpServerConfig>, String> {
     let settings = state.settings.lock().await;
     Ok(settings.mcp_servers.clone())
 }
@@ -36,9 +34,7 @@ pub async fn save_mcp_servers(
 
 /// Test a single MCP server configuration by connecting and listing its tools.
 #[tauri::command]
-pub async fn test_mcp_server(
-    config: McpServerConfig,
-) -> Result<McpTestResult, String> {
+pub async fn test_mcp_server(config: McpServerConfig) -> Result<McpTestResult, String> {
     info!(
         "Testing MCP server '{}' (transport={})",
         config.name, config.transport

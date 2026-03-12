@@ -2,7 +2,7 @@ use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use crate::store::Settings;
 use async_trait::async_trait;
 use russh::client::{self, AuthResult, Handle};
-use russh::keys::{PrivateKeyWithHashAlg, decode_secret_key};
+use russh::keys::{decode_secret_key, PrivateKeyWithHashAlg};
 use russh::{ChannelMsg, Disconnect};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -124,12 +124,13 @@ impl Tool for SshTool {
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         match input["action"].as_str() {
-            Some("connect")          => self.connect(&input).await,
-            Some("exec")             => self.exec(&input).await,
-            Some("disconnect")       => self.disconnect(&input).await,
+            Some("connect") => self.connect(&input).await,
+            Some("exec") => self.exec(&input).await,
+            Some("disconnect") => self.disconnect(&input).await,
             Some("list_connections") => self.list_connections().await,
             Some(other) => Ok(ToolResult::err(format!(
-                "Unknown action '{}'. Valid: connect, exec, disconnect, list_connections", other
+                "Unknown action '{}'. Valid: connect, exec, disconnect, list_connections",
+                other
             ))),
             None => Ok(ToolResult::err("'action' is required")),
         }
@@ -138,18 +139,24 @@ impl Tool for SshTool {
 
 impl SshTool {
     async fn connect(&self, input: &Value) -> anyhow::Result<ToolResult> {
-        let conn_id_input = input["connection_id"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        let conn_id_input = input["connection_id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
 
         // Try to look up a pre-configured server by connection_id
-        let preset = if let (Some(ref id), Some(ref settings_arc)) = (&conn_id_input, &self.settings) {
-            let s = settings_arc.lock().await;
-            s.ssh_servers.iter().find(|srv| srv.id == *id).cloned()
-        } else {
-            None
-        };
+        let preset =
+            if let (Some(ref id), Some(ref settings_arc)) = (&conn_id_input, &self.settings) {
+                let s = settings_arc.lock().await;
+                s.ssh_servers.iter().find(|srv| srv.id == *id).cloned()
+            } else {
+                None
+            };
 
         // Merge: preset values are defaults, input values override
-        let host = input["host"].as_str().filter(|s| !s.is_empty())
+        let host = input["host"]
+            .as_str()
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .or_else(|| preset.as_ref().map(|p| p.host.clone()))
             .unwrap_or_default();
@@ -158,10 +165,15 @@ impl SshTool {
             let available = if let Some(ref settings_arc) = self.settings {
                 let s = settings_arc.lock().await;
                 if s.ssh_servers.is_empty() {
-                    "No pre-configured servers. Go to Settings > SSH Servers to add one.".to_string()
+                    "No pre-configured servers. Go to Settings > SSH Servers to add one."
+                        .to_string()
                 } else {
-                    let names: Vec<String> = s.ssh_servers.iter()
-                        .map(|srv| format!("'{}' ({}@{}:{})", srv.id, srv.username, srv.host, srv.port))
+                    let names: Vec<String> = s
+                        .ssh_servers
+                        .iter()
+                        .map(|srv| {
+                            format!("'{}' ({}@{}:{})", srv.id, srv.username, srv.host, srv.port)
+                        })
                         .collect();
                     format!("Available pre-configured servers: {}", names.join(", "))
                 }
@@ -174,7 +186,9 @@ impl SshTool {
             )));
         }
 
-        let username = input["username"].as_str().filter(|s| !s.is_empty())
+        let username = input["username"]
+            .as_str()
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .or_else(|| preset.as_ref().map(|p| p.username.clone()))
             .unwrap_or_default();
@@ -182,7 +196,8 @@ impl SshTool {
             return Ok(ToolResult::err("'username' is required for connect"));
         }
 
-        let port = input["port"].as_u64()
+        let port = input["port"]
+            .as_u64()
             .map(|p| p as u16)
             .or_else(|| preset.as_ref().map(|p| p.port))
             .unwrap_or(22);
@@ -190,19 +205,34 @@ impl SshTool {
         let conn_id = conn_id_input.unwrap_or_else(|| host.clone());
 
         // Credential resolution: input > preset
-        let password_opt = input["password"].as_str().filter(|s| !s.is_empty())
+        let password_opt = input["password"]
+            .as_str()
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-            .or_else(|| preset.as_ref().filter(|p| !p.password.is_empty()).map(|p| p.password.clone()));
-        let key_opt = input["private_key"].as_str().filter(|s| !s.is_empty())
+            .or_else(|| {
+                preset
+                    .as_ref()
+                    .filter(|p| !p.password.is_empty())
+                    .map(|p| p.password.clone())
+            });
+        let key_opt = input["private_key"]
+            .as_str()
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-            .or_else(|| preset.as_ref().filter(|p| !p.private_key.is_empty()).map(|p| p.private_key.clone()));
+            .or_else(|| {
+                preset
+                    .as_ref()
+                    .filter(|p| !p.private_key.is_empty())
+                    .map(|p| p.private_key.clone())
+            });
 
         // Block loopback connections
         let blocked = ["localhost", "127.0.0.1", "::1", "0.0.0.0"];
         for b in blocked {
             if host == b {
                 return Ok(ToolResult::err(format!(
-                    "Blocked: cannot SSH to '{}' (loopback address)", host
+                    "Blocked: cannot SSH to '{}' (loopback address)",
+                    host
                 )));
             }
         }
@@ -242,11 +272,16 @@ impl SshTool {
             let private_key = match decode_secret_key(&key_pem, None) {
                 Ok(k) => Arc::new(k),
                 Err(e) => {
-                    return Ok(ToolResult::err(format!("Failed to parse private key: {}", e)))
+                    return Ok(ToolResult::err(format!(
+                        "Failed to parse private key: {}",
+                        e
+                    )))
                 }
             };
             // best_supported_rsa_hash returns Result<Option<Option<HashAlg>>, _>
-            let hash_alg: Option<russh::keys::HashAlg> = handle.best_supported_rsa_hash().await
+            let hash_alg: Option<russh::keys::HashAlg> = handle
+                .best_supported_rsa_hash()
+                .await
                 .ok()
                 .flatten()
                 .flatten();
@@ -276,10 +311,17 @@ impl SshTool {
         let mut pool = self.connections.lock().await;
         pool.insert(
             conn_id.clone(),
-            SshConnection { handle, host: host.clone(), username: username.clone() },
+            SshConnection {
+                handle,
+                host: host.clone(),
+                username: username.clone(),
+            },
         );
 
-        info!("SSH connected: id={} host={} user={}", conn_id, host, username);
+        info!(
+            "SSH connected: id={} host={} user={}",
+            conn_id, host, username
+        );
         Ok(ToolResult::ok(format!(
             "Connected to {}@{} (connection_id: '{}'). Use exec to run commands.",
             username, addr, conn_id
@@ -353,7 +395,8 @@ impl SshTool {
 
         match result {
             Err(_) => Ok(ToolResult::err(format!(
-                "Command timed out after {}s: {}", timeout_secs, command
+                "Command timed out after {}s: {}",
+                timeout_secs, command
             ))),
             Ok((stdout, stderr, exit_code)) => {
                 let stdout_str = String::from_utf8_lossy(&stdout).into_owned();
@@ -383,7 +426,11 @@ impl SshTool {
     async fn disconnect(&self, input: &Value) -> anyhow::Result<ToolResult> {
         let conn_id = match input["connection_id"].as_str().filter(|s| !s.is_empty()) {
             Some(id) => id.to_string(),
-            None => return Ok(ToolResult::err("'connection_id' is required for disconnect")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'connection_id' is required for disconnect",
+                ))
+            }
         };
 
         let mut pool = self.connections.lock().await;

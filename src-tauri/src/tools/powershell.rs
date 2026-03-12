@@ -15,7 +15,9 @@ pub struct PowerShellTool;
 
 #[async_trait]
 impl Tool for PowerShellTool {
-    fn name(&self) -> &str { "powershell_query" }
+    fn name(&self) -> &str {
+        "powershell_query"
+    }
 
     fn description(&self) -> &str {
         "Query Windows system information via PowerShell, returning structured JSON. \
@@ -72,7 +74,9 @@ impl Tool for PowerShellTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
         let query = match input["query"].as_str() {
@@ -244,14 +248,21 @@ impl PowerShellTool {
         let result = timeout(Duration::from_secs(QUERY_TIMEOUT_SECS), cmd.output()).await;
 
         match result {
-            Err(_) => Ok(ToolResult::err(format!("Query timed out after {}s", QUERY_TIMEOUT_SECS))),
+            Err(_) => Ok(ToolResult::err(format!(
+                "Query timed out after {}s",
+                QUERY_TIMEOUT_SECS
+            ))),
             Ok(Err(e)) => Ok(ToolResult::err(format!("Failed to run PowerShell: {}", e))),
             Ok(Ok(output)) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
                 if !output.status.success() {
-                    let msg = if stderr.is_empty() { stdout.clone() } else { stderr.clone() };
+                    let msg = if stderr.is_empty() {
+                        stdout.clone()
+                    } else {
+                        stderr.clone()
+                    };
                     if msg.is_empty() {
                         return Ok(ToolResult::err("Query failed: no output"));
                     }
@@ -268,9 +279,9 @@ impl PowerShellTool {
                 }
 
                 match serde_json::from_str::<Value>(&stdout) {
-                    Ok(json_val) => {
-                        Ok(ToolResult::ok(serde_json::to_string_pretty(&json_val).unwrap_or(stdout)))
-                    }
+                    Ok(json_val) => Ok(ToolResult::ok(
+                        serde_json::to_string_pretty(&json_val).unwrap_or(stdout),
+                    )),
                     Err(_) => Ok(ToolResult::ok(stdout)),
                 }
             }

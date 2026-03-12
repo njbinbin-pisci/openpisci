@@ -9,7 +9,8 @@ fn summarize(items: &[vision::VisionArtifactSummary]) -> String {
     if items.is_empty() {
         return "No vision artifacts stored for this session.".to_string();
     }
-    items.iter()
+    items
+        .iter()
         .map(|item| {
             format!(
                 "- {} [{}] {} ({}){}",
@@ -145,7 +146,9 @@ impl Tool for VisionContextTool {
             }
             "clear_all" => {
                 vision::clear_session(&ctx.session_id).await;
-                Ok(ToolResult::ok("Cleared all stored vision artifacts for this session."))
+                Ok(ToolResult::ok(
+                    "Cleared all stored vision artifacts for this session.",
+                ))
             }
             _ => Ok(ToolResult::err(format!("Unknown action: {}", action))),
         }

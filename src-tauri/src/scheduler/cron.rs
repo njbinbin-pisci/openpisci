@@ -28,7 +28,10 @@ impl CronScheduler {
     /// cron format: "sec min hour day month weekday"
     pub async fn add_job<F>(&self, cron_expr: &str, task_id: String, f: F) -> Result<uuid::Uuid>
     where
-        F: Fn(uuid::Uuid, JobScheduler) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        F: Fn(
+                uuid::Uuid,
+                JobScheduler,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
             + Send
             + Sync
             + 'static,

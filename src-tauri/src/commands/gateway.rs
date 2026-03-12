@@ -4,8 +4,8 @@ use crate::gateway::{
     feishu::{FeishuChannel, FeishuConfig},
     matrix::{MatrixChannel, MatrixConfig},
     slack::{SlackChannel, SlackConfig},
-    telegram::{TelegramChannel, TelegramConfig},
     teams::{TeamsChannel, TeamsConfig},
+    telegram::{TelegramChannel, TelegramConfig},
     webhook::{WebhookChannel, WebhookConfig},
     ChannelInfo,
 };
@@ -66,7 +66,9 @@ pub async fn connect_gateway_channels(state: State<'_, AppState>) -> Result<Gate
 
     // Telegram
     if settings.telegram_enabled && !settings.telegram_bot_token.is_empty() {
-        let config = TelegramConfig { bot_token: settings.telegram_bot_token.clone() };
+        let config = TelegramConfig {
+            bot_token: settings.telegram_bot_token.clone(),
+        };
         let ch = Box::new(TelegramChannel::new(config));
         state.gateway.register_channel(ch).await;
     }
@@ -158,62 +160,110 @@ pub async fn disconnect_gateway_channels(state: State<'_, AppState>) -> Result<(
 
 /// Return per-channel config diagnostics before connect.
 #[tauri::command]
-pub async fn diagnose_gateway_channels(state: State<'_, AppState>) -> Result<Vec<GatewayDiagnosticItem>, String> {
+pub async fn diagnose_gateway_channels(
+    state: State<'_, AppState>,
+) -> Result<Vec<GatewayDiagnosticItem>, String> {
     let s = state.settings.lock().await.clone();
     let items = vec![
         GatewayDiagnosticItem {
             channel: "telegram".into(),
             enabled: s.telegram_enabled,
             configured: !s.telegram_bot_token.is_empty(),
-            message: if s.telegram_bot_token.is_empty() { "missing telegram_bot_token".into() } else { "ok".into() },
+            message: if s.telegram_bot_token.is_empty() {
+                "missing telegram_bot_token".into()
+            } else {
+                "ok".into()
+            },
         },
         GatewayDiagnosticItem {
             channel: "feishu".into(),
             enabled: s.feishu_enabled,
             configured: !s.feishu_app_id.is_empty() && !s.feishu_app_secret.is_empty(),
-            message: if s.feishu_app_id.is_empty() || s.feishu_app_secret.is_empty() { "missing feishu app credentials".into() } else { "ok".into() },
+            message: if s.feishu_app_id.is_empty() || s.feishu_app_secret.is_empty() {
+                "missing feishu app credentials".into()
+            } else {
+                "ok".into()
+            },
         },
         GatewayDiagnosticItem {
             channel: "dingtalk".into(),
             enabled: s.dingtalk_enabled,
             configured: !s.dingtalk_app_key.is_empty() && !s.dingtalk_app_secret.is_empty(),
-            message: if s.dingtalk_app_key.is_empty() || s.dingtalk_app_secret.is_empty() { "missing dingtalk app credentials".into() } else { "ok".into() },
+            message: if s.dingtalk_app_key.is_empty() || s.dingtalk_app_secret.is_empty() {
+                "missing dingtalk app credentials".into()
+            } else {
+                "ok".into()
+            },
         },
         GatewayDiagnosticItem {
             channel: "wecom".into(),
             enabled: s.wecom_enabled,
-            configured: !s.wecom_corp_id.is_empty() && !s.wecom_agent_secret.is_empty() && !s.wecom_agent_id.is_empty(),
-            message: if s.wecom_corp_id.is_empty() || s.wecom_agent_secret.is_empty() || s.wecom_agent_id.is_empty() { "missing wecom app credentials".into() } else { "ok".into() },
+            configured: !s.wecom_corp_id.is_empty()
+                && !s.wecom_agent_secret.is_empty()
+                && !s.wecom_agent_id.is_empty(),
+            message: if s.wecom_corp_id.is_empty()
+                || s.wecom_agent_secret.is_empty()
+                || s.wecom_agent_id.is_empty()
+            {
+                "missing wecom app credentials".into()
+            } else {
+                "ok".into()
+            },
         },
         GatewayDiagnosticItem {
             channel: "slack".into(),
             enabled: s.slack_enabled,
             configured: !s.slack_webhook_url.is_empty(),
-            message: if s.slack_webhook_url.is_empty() { "missing slack_webhook_url".into() } else { "ok".into() },
+            message: if s.slack_webhook_url.is_empty() {
+                "missing slack_webhook_url".into()
+            } else {
+                "ok".into()
+            },
         },
         GatewayDiagnosticItem {
             channel: "discord".into(),
             enabled: s.discord_enabled,
             configured: !s.discord_webhook_url.is_empty(),
-            message: if s.discord_webhook_url.is_empty() { "missing discord_webhook_url".into() } else { "ok".into() },
+            message: if s.discord_webhook_url.is_empty() {
+                "missing discord_webhook_url".into()
+            } else {
+                "ok".into()
+            },
         },
         GatewayDiagnosticItem {
             channel: "teams".into(),
             enabled: s.teams_enabled,
             configured: !s.teams_webhook_url.is_empty(),
-            message: if s.teams_webhook_url.is_empty() { "missing teams_webhook_url".into() } else { "ok".into() },
+            message: if s.teams_webhook_url.is_empty() {
+                "missing teams_webhook_url".into()
+            } else {
+                "ok".into()
+            },
         },
         GatewayDiagnosticItem {
             channel: "matrix".into(),
             enabled: s.matrix_enabled,
-            configured: !s.matrix_homeserver.is_empty() && !s.matrix_access_token.is_empty() && !s.matrix_room_id.is_empty(),
-            message: if s.matrix_homeserver.is_empty() || s.matrix_access_token.is_empty() || s.matrix_room_id.is_empty() { "missing matrix configuration".into() } else { "ok".into() },
+            configured: !s.matrix_homeserver.is_empty()
+                && !s.matrix_access_token.is_empty()
+                && !s.matrix_room_id.is_empty(),
+            message: if s.matrix_homeserver.is_empty()
+                || s.matrix_access_token.is_empty()
+                || s.matrix_room_id.is_empty()
+            {
+                "missing matrix configuration".into()
+            } else {
+                "ok".into()
+            },
         },
         GatewayDiagnosticItem {
             channel: "webhook".into(),
             enabled: s.webhook_enabled,
             configured: !s.webhook_outbound_url.is_empty(),
-            message: if s.webhook_outbound_url.is_empty() { "missing webhook_outbound_url".into() } else { "ok".into() },
+            message: if s.webhook_outbound_url.is_empty() {
+                "missing webhook_outbound_url".into()
+            } else {
+                "ok".into()
+            },
         },
     ];
     Ok(items)

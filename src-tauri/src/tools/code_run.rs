@@ -16,7 +16,9 @@ pub struct CodeRunTool;
 
 #[async_trait]
 impl Tool for CodeRunTool {
-    fn name(&self) -> &str { "code_run" }
+    fn name(&self) -> &str {
+        "code_run"
+    }
 
     fn description(&self) -> &str {
         "Run a shell command in a project directory and capture its output. \
@@ -58,7 +60,9 @@ impl Tool for CodeRunTool {
         })
     }
 
-    fn needs_confirmation(&self, _input: &Value) -> bool { true }
+    fn needs_confirmation(&self, _input: &Value) -> bool {
+        true
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let command = match input["command"].as_str() {
@@ -107,14 +111,12 @@ impl Tool for CodeRunTool {
         let duration_ms = start.elapsed().as_millis() as u64;
 
         match run_result {
-            Err(_) => {
-                Ok(ToolResult::err(format!(
-                    "Command timed out after {}s.\n\
+            Err(_) => Ok(ToolResult::err(format!(
+                "Command timed out after {}s.\n\
                      Consider: breaking into smaller steps, increasing timeout_secs, \
                      or checking if the process is hanging waiting for input.",
-                    timeout_secs
-                )))
-            }
+                timeout_secs
+            ))),
             Ok(Err(e)) => Ok(ToolResult::err(format!("Failed to spawn process: {}", e))),
             Ok(Ok(output)) => {
                 let exit_code = output.status.code().unwrap_or(-1);
@@ -126,10 +128,13 @@ impl Tool for CodeRunTool {
 
                 let status_label = if exit_code == 0 { "SUCCESS" } else { "FAILED" };
 
-                let mut parts = vec![
-                    format!("exit_code: {} ({})  duration: {}ms  cwd: {}",
-                        exit_code, status_label, duration_ms, cwd.display()),
-                ];
+                let mut parts = vec![format!(
+                    "exit_code: {} ({})  duration: {}ms  cwd: {}",
+                    exit_code,
+                    status_label,
+                    duration_ms,
+                    cwd.display()
+                )];
 
                 if !stdout.is_empty() {
                     parts.push(format!("--- stdout ---\n{}", stdout));
@@ -164,12 +169,14 @@ fn trim_stream(s: &str, max_bytes: usize) -> String {
     let head_bytes = max_bytes * 3 / 4;
     let tail_bytes = max_bytes - head_bytes;
     // Find valid char boundaries
-    let head_end = s.char_indices()
+    let head_end = s
+        .char_indices()
         .map(|(i, _)| i)
         .take_while(|&i| i <= head_bytes)
         .last()
         .unwrap_or(0);
-    let tail_start = s.char_indices()
+    let tail_start = s
+        .char_indices()
         .rev()
         .map(|(i, _)| i)
         .take_while(|&i| s.len() - i <= tail_bytes)
@@ -199,7 +206,8 @@ fn diagnose(output: &str, command: &str) -> Option<String> {
             ));
         }
         if out_lower.contains("test failed") || out_lower.contains("failures:") {
-            let failed = output.lines()
+            let failed = output
+                .lines()
                 .filter(|l| l.trim_start().starts_with("FAILED"))
                 .count();
             return Some(format!(
@@ -208,20 +216,29 @@ fn diagnose(output: &str, command: &str) -> Option<String> {
             ));
         }
         if out_lower.contains("warning:") && !out_lower.contains("error") {
-            return Some("Build succeeded with warnings. Run `cargo clippy` for detailed lint suggestions.".to_string());
+            return Some(
+                "Build succeeded with warnings. Run `cargo clippy` for detailed lint suggestions."
+                    .to_string(),
+            );
         }
     }
 
     // Python
     if cmd_lower.contains("python") || cmd_lower.contains("pytest") || cmd_lower.contains("pip") {
         if out_lower.contains("syntaxerror") {
-            return Some("Python SyntaxError detected. Check the file and line number shown above.".to_string());
+            return Some(
+                "Python SyntaxError detected. Check the file and line number shown above."
+                    .to_string(),
+            );
         }
         if out_lower.contains("modulenotfounderror") || out_lower.contains("importerror") {
             return Some("Missing Python module. Run `pip install <module>` or check your virtual environment is activated.".to_string());
         }
         if out_lower.contains("failed") && cmd_lower.contains("pytest") {
-            return Some("pytest failures detected. Check the FAILED lines and assertion errors above.".to_string());
+            return Some(
+                "pytest failures detected. Check the FAILED lines and assertion errors above."
+                    .to_string(),
+            );
         }
     }
 
@@ -231,16 +248,25 @@ fn diagnose(output: &str, command: &str) -> Option<String> {
             return Some("npm error detected. Check for missing dependencies (`npm install`) or script errors above.".to_string());
         }
         if out_lower.contains("typeerror") || out_lower.contains("syntaxerror") {
-            return Some("JavaScript/TypeScript error detected. Check the file and line shown above.".to_string());
+            return Some(
+                "JavaScript/TypeScript error detected. Check the file and line shown above."
+                    .to_string(),
+            );
         }
     }
 
     // Generic
     if out_lower.contains("permission denied") || out_lower.contains("access is denied") {
-        return Some("Permission denied. Try running with elevated privileges or check file ownership.".to_string());
+        return Some(
+            "Permission denied. Try running with elevated privileges or check file ownership."
+                .to_string(),
+        );
     }
     if out_lower.contains("command not found") || out_lower.contains("is not recognized") {
-        return Some("Command not found. Ensure the tool is installed and on PATH, or use an absolute path.".to_string());
+        return Some(
+            "Command not found. Ensure the tool is installed and on PATH, or use an absolute path."
+                .to_string(),
+        );
     }
 
     None
@@ -253,8 +279,7 @@ fn build_cmd(command: &str) -> Command {
     // without needing PowerShell profile overhead.
     let full = format!("chcp 65001 >nul 2>&1 & {}", command);
     let mut c = Command::new("cmd");
-    c.args(["/C", &full])
-     .creation_flags(CREATE_NO_WINDOW);
+    c.args(["/C", &full]).creation_flags(CREATE_NO_WINDOW);
     c
 }
 

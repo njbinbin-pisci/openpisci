@@ -15,8 +15,8 @@ use crate::store::Database;
 use anyhow::Result;
 use futures::future::join_all;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -46,9 +46,7 @@ const MSG_COMPACT_AFTER_ITERATIONS: usize = 6;
 
 /// Tools that are known polling/status-checking tools. These get stricter
 /// no-progress detection (inspired by OpenClaw's known_poll_no_progress).
-const KNOWN_POLL_TOOLS: &[&str] = &[
-    "process_control", "shell", "powershell_query",
-];
+const KNOWN_POLL_TOOLS: &[&str] = &["process_control", "shell", "powershell_query"];
 
 static TOOL_RATE_STATE: Lazy<Mutex<HashMap<String, Vec<std::time::Instant>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -92,7 +90,12 @@ struct LoopDetectionResult {
 
 impl LoopDetectionResult {
     fn ok() -> Self {
-        Self { level: LoopLevel::Ok, detector: None, count: 0, message: String::new() }
+        Self {
+            level: LoopLevel::Ok,
+            detector: None,
+            count: 0,
+            message: String::new(),
+        }
     }
 }
 
@@ -112,7 +115,9 @@ struct LoopDetectorState {
 
 impl LoopDetectorState {
     fn new() -> Self {
-        Self { history: Vec::new() }
+        Self {
+            history: Vec::new(),
+        }
     }
 
     /// Record a completed tool call with its result hash.
@@ -235,8 +240,13 @@ impl LoopDetectorState {
         for rec in self.history.iter().rev() {
             if rec.name == name && rec.input_hash == input_hash {
                 match last_result {
-                    None => { last_result = Some(rec.result_hash); count += 1; }
-                    Some(lr) if lr == rec.result_hash => { count += 1; }
+                    None => {
+                        last_result = Some(rec.result_hash);
+                        count += 1;
+                    }
+                    Some(lr) if lr == rec.result_hash => {
+                        count += 1;
+                    }
                     _ => break,
                 }
             } else {
@@ -248,14 +258,17 @@ impl LoopDetectorState {
 
     /// Count consecutive calls to the same tool+input at the tail of history.
     fn count_same_tool_streak(&self, name: &str, input_hash: u64) -> usize {
-        self.history.iter().rev()
+        self.history
+            .iter()
+            .rev()
             .take_while(|r| r.name == name && r.input_hash == input_hash)
             .count()
     }
 
     /// Count total occurrences of the same tool+input in the history window.
     fn count_same_tool_total(&self, name: &str, input_hash: u64) -> usize {
-        self.history.iter()
+        self.history
+            .iter()
             .filter(|r| r.name == name && r.input_hash == input_hash)
             .count()
     }
@@ -263,7 +276,9 @@ impl LoopDetectorState {
     /// Detect A→B→A→B alternating pattern at the tail of history.
     /// Returns the number of alternating pairs found.
     fn detect_ping_pong(&self, pending_name: &str, pending_hash: u64) -> usize {
-        if self.history.len() < 2 { return 0; }
+        if self.history.len() < 2 {
+            return 0;
+        }
 
         let last = self.history.last().unwrap();
         if last.name == pending_name && last.input_hash == pending_hash {
@@ -369,10 +384,8 @@ fn compact_old_tool_results(messages: &mut [LlmMessage], keep_recent: usize) {
                     let original_len = content.chars().count();
                     if original_len > 500 {
                         let summary: String = content.chars().take(200).collect();
-                        *content = format!(
-                            "{}... [compacted, was {} chars]",
-                            summary, original_len
-                        );
+                        *content =
+                            format!("{}... [compacted, was {} chars]", summary, original_len);
                     }
                 }
             }
@@ -420,12 +433,14 @@ impl AgentLoop {
         let mut blocks = Vec::new();
 
         if let Some(wait_reason) = self.check_tool_rate_limit(ctx).await {
-            let _ = event_tx.send(AgentEvent::ToolEnd {
-                id: id.to_string(),
-                name: name.to_string(),
-                result: wait_reason.clone(),
-                is_error: true,
-            }).await;
+            let _ = event_tx
+                .send(AgentEvent::ToolEnd {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    result: wait_reason.clone(),
+                    is_error: true,
+                })
+                .await;
             blocks.push(ContentBlock::ToolResult {
                 tool_use_id: id.to_string(),
                 content: wait_reason,
@@ -439,42 +454,71 @@ impl AgentLoop {
         match &decision {
             PolicyDecision::Deny(reason) => {
                 warn!("Tool '{}' denied by policy: {}", name, reason);
-                let _ = event_tx.send(AgentEvent::ToolEnd {
-                    id: id.to_string(), name: name.to_string(),
-                    result: format!("Denied by policy: {}", reason), is_error: true,
-                }).await;
+                let _ = event_tx
+                    .send(AgentEvent::ToolEnd {
+                        id: id.to_string(),
+                        name: name.to_string(),
+                        result: format!("Denied by policy: {}", reason),
+                        is_error: true,
+                    })
+                    .await;
                 blocks.push(ContentBlock::ToolResult {
-                    tool_use_id: id.to_string(), content: format!("Error: {}", reason), is_error: true,
+                    tool_use_id: id.to_string(),
+                    content: format!("Error: {}", reason),
+                    is_error: true,
                 });
                 return blocks;
             }
             PolicyDecision::Warn(msg) => {
-                let tool_wants_confirm = self.registry.get(name)
-                    .map(|t| t.needs_confirmation(input)).unwrap_or(false);
+                let tool_wants_confirm = self
+                    .registry
+                    .get(name)
+                    .map(|t| t.needs_confirmation(input))
+                    .unwrap_or(false);
                 let user_disabled = match name {
-                    "shell" | "bash" | "powershell" | "powershell_query" => !self.confirm_flags.confirm_shell,
+                    "shell" | "bash" | "powershell" | "powershell_query" => {
+                        !self.confirm_flags.confirm_shell
+                    }
                     "file_write" | "file_edit" => !self.confirm_flags.confirm_file_write,
                     _ => false,
                 };
                 if tool_wants_confirm && !user_disabled {
-                    if let (Some(_app), Some(confirms)) = (&self.app_handle, &self.confirmation_responses) {
+                    if let (Some(_app), Some(confirms)) =
+                        (&self.app_handle, &self.confirmation_responses)
+                    {
                         let request_id = uuid::Uuid::new_v4().to_string();
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                        { confirms.lock().await.insert(request_id.clone(), resp_tx); }
-                        let _ = event_tx.send(AgentEvent::PermissionRequest {
-                            request_id, tool_name: name.to_string(),
-                            tool_input: input.clone(), description: msg.clone(),
-                        }).await;
-                        match tokio::time::timeout(std::time::Duration::from_secs(60), resp_rx).await {
-                            Ok(Ok(true)) => { debug!("User approved tool '{}' execution", name); }
+                        {
+                            confirms.lock().await.insert(request_id.clone(), resp_tx);
+                        }
+                        let _ = event_tx
+                            .send(AgentEvent::PermissionRequest {
+                                request_id,
+                                tool_name: name.to_string(),
+                                tool_input: input.clone(),
+                                description: msg.clone(),
+                            })
+                            .await;
+                        match tokio::time::timeout(std::time::Duration::from_secs(60), resp_rx)
+                            .await
+                        {
+                            Ok(Ok(true)) => {
+                                debug!("User approved tool '{}' execution", name);
+                            }
                             _ => {
                                 warn!("Tool '{}' denied by user or timed out", name);
-                                let _ = event_tx.send(AgentEvent::ToolEnd {
-                                    id: id.to_string(), name: name.to_string(),
-                                    result: "Denied by user".into(), is_error: true,
-                                }).await;
+                                let _ = event_tx
+                                    .send(AgentEvent::ToolEnd {
+                                        id: id.to_string(),
+                                        name: name.to_string(),
+                                        result: "Denied by user".into(),
+                                        is_error: true,
+                                    })
+                                    .await;
                                 blocks.push(ContentBlock::ToolResult {
-                                    tool_use_id: id.to_string(), content: "User denied this operation".into(), is_error: true,
+                                    tool_use_id: id.to_string(),
+                                    content: "User denied this operation".into(),
+                                    is_error: true,
                                 });
                                 return blocks;
                             }
@@ -489,11 +533,18 @@ impl AgentLoop {
 
         let mut input_with_trace = input.clone();
         if let Some(obj) = input_with_trace.as_object_mut() {
-            obj.insert("_trace_id".into(), serde_json::Value::String(trace_id.clone()));
+            obj.insert(
+                "_trace_id".into(),
+                serde_json::Value::String(trace_id.clone()),
+            );
         }
-        let _ = event_tx.send(AgentEvent::ToolStart {
-            id: id.to_string(), name: name.to_string(), input: input_with_trace,
-        }).await;
+        let _ = event_tx
+            .send(AgentEvent::ToolStart {
+                id: id.to_string(),
+                name: name.to_string(),
+                input: input_with_trace,
+            })
+            .await;
 
         let result = match self.registry.get(name) {
             Some(tool) => {
@@ -503,15 +554,29 @@ impl AgentLoop {
                     "shell" => format!(
                         "[{}] {}",
                         input["interpreter"].as_str().unwrap_or("powershell"),
-                        input["command"].as_str().unwrap_or("?").chars().take(100).collect::<String>()
+                        input["command"]
+                            .as_str()
+                            .unwrap_or("?")
+                            .chars()
+                            .take(100)
+                            .collect::<String>()
                     ),
                     "powershell_query" => format!(
                         "query={} arch={}",
                         input["query"].as_str().unwrap_or("?"),
                         input["arch"].as_str().unwrap_or("x64")
                     ),
-                    "web_search" => input["query"].as_str().unwrap_or("?").chars().take(80).collect(),
-                    "browser" => format!("action={} url={}", input["action"].as_str().unwrap_or("?"), input["url"].as_str().unwrap_or("")),
+                    "web_search" => input["query"]
+                        .as_str()
+                        .unwrap_or("?")
+                        .chars()
+                        .take(80)
+                        .collect(),
+                    "browser" => format!(
+                        "action={} url={}",
+                        input["action"].as_str().unwrap_or("?"),
+                        input["url"].as_str().unwrap_or("")
+                    ),
                     "com_invoke" => format!(
                         "action={} prog_id={} arch={}",
                         input["action"].as_str().unwrap_or("?"),
@@ -521,7 +586,12 @@ impl AgentLoop {
                     "wmi" => format!(
                         "preset={} query={}",
                         input["preset"].as_str().unwrap_or(""),
-                        input["query"].as_str().unwrap_or("?").chars().take(80).collect::<String>()
+                        input["query"]
+                            .as_str()
+                            .unwrap_or("?")
+                            .chars()
+                            .take(80)
+                            .collect::<String>()
                     ),
                     "uia" => format!(
                         "action={} name={} window={}",
@@ -533,10 +603,14 @@ impl AgentLoop {
                 };
                 // Check cancel before starting the tool
                 if cancel.load(Ordering::Relaxed) {
-                    let _ = event_tx.send(AgentEvent::ToolEnd {
-                        id: id.to_string(), name: name.to_string(),
-                        result: "已取消".into(), is_error: true,
-                    }).await;
+                    let _ = event_tx
+                        .send(AgentEvent::ToolEnd {
+                            id: id.to_string(),
+                            name: name.to_string(),
+                            result: "已取消".into(),
+                            is_error: true,
+                        })
+                        .await;
                     blocks.push(ContentBlock::ToolResult {
                         tool_use_id: id.to_string(),
                         content: "已取消".into(),
@@ -587,7 +661,12 @@ impl AgentLoop {
             }
             None => {
                 warn!("Tool '{}' not found in registry", name);
-                let available: Vec<String> = self.registry.all().iter().map(|t| t.name().to_string()).collect();
+                let available: Vec<String> = self
+                    .registry
+                    .all()
+                    .iter()
+                    .map(|t| t.name().to_string())
+                    .collect();
                 super::tool::ToolResult::err(format!(
                     "工具 '{}' 未找到。当前可用工具：{}。请检查工具名称是否正确，或在设置中启用该工具。",
                     name,
@@ -597,10 +676,14 @@ impl AgentLoop {
         };
 
         let end_result = format!("[trace_id:{}] {}", trace_id, result.content);
-        let _ = event_tx.send(AgentEvent::ToolEnd {
-            id: id.to_string(), name: name.to_string(),
-            result: end_result, is_error: result.is_error,
-        }).await;
+        let _ = event_tx
+            .send(AgentEvent::ToolEnd {
+                id: id.to_string(),
+                name: name.to_string(),
+                result: end_result,
+                is_error: result.is_error,
+            })
+            .await;
 
         if let Some(ref db_arc) = self.db {
             let action = format!("{} [trace:{}]", audit_action_label(name, input), trace_id);
@@ -614,7 +697,14 @@ impl AgentLoop {
             let db_clone = db_arc.clone();
             tokio::spawn(async move {
                 let db = db_clone.lock().await;
-                let _ = db.append_audit(&session_id_clone, &tool_name_clone, &action, input_summary.as_deref(), result_summary.as_deref(), is_err);
+                let _ = db.append_audit(
+                    &session_id_clone,
+                    &tool_name_clone,
+                    &action,
+                    input_summary.as_deref(),
+                    result_summary.as_deref(),
+                    is_err,
+                );
             });
         }
 
@@ -636,7 +726,11 @@ impl AgentLoop {
         });
         if let Some(img) = result.image {
             blocks.push(ContentBlock::Image {
-                source: ImageSource { source_type: "base64".into(), media_type: img.media_type, data: img.base64 },
+                source: ImageSource {
+                    source_type: "base64".into(),
+                    media_type: img.media_type,
+                    data: img.base64,
+                },
             });
         }
         blocks
@@ -677,7 +771,8 @@ impl AgentLoop {
         cancel: Arc<AtomicBool>,
         ctx: ToolContext,
     ) -> Result<(Vec<LlmMessage>, u32, u32)> {
-        let span = tracing::info_span!("agent_loop", session_id = %ctx.session_id, model = %self.model);
+        let span =
+            tracing::info_span!("agent_loop", session_id = %ctx.session_id, model = %self.model);
         let _enter = span.enter();
         drop(_enter); // Don't hold across awaits — use span for structured correlation only
         info!(parent: &span, "agent loop starting");
@@ -689,7 +784,10 @@ impl AgentLoop {
             let db = db_arc.lock().await;
             match db.load_checkpoint(&ctx.session_id) {
                 Ok(Some((iter, json))) => {
-                    info!("Resuming from checkpoint at iteration {} for session {}", iter, ctx.session_id);
+                    info!(
+                        "Resuming from checkpoint at iteration {} for session {}",
+                        iter, ctx.session_id
+                    );
                     match serde_json::from_str::<Vec<LlmMessage>>(&json) {
                         Ok(saved) if !saved.is_empty() => {
                             messages = saved;
@@ -738,13 +836,19 @@ impl AgentLoop {
                 compact_old_tool_results(&mut messages, 4);
             }
 
-            info!("agent loop iteration={} messages={}", _iteration, messages.len());
+            info!(
+                "agent loop iteration={} messages={}",
+                _iteration,
+                messages.len()
+            );
 
             // Signal frontend that a new LLM call is starting — it should replace the
             // current streaming bubble with a fresh one (slide old out, slide new in).
-            let _ = event_tx.send(AgentEvent::TextSegmentStart {
-                iteration: _iteration as u32 + 1,
-            }).await;
+            let _ = event_tx
+                .send(AgentEvent::TextSegmentStart {
+                    iteration: _iteration as u32 + 1,
+                })
+                .await;
 
             // Build request
             let req_messages = vision::inject_selected_context(&messages, &ctx.session_id).await;
@@ -765,7 +869,10 @@ impl AgentLoop {
                 let mut resp = None;
                 for attempt in 0..LLM_MAX_RETRIES {
                     match self.client.complete(req.clone()).await {
-                        Ok(r) => { resp = Some(r); break; }
+                        Ok(r) => {
+                            resp = Some(r);
+                            break;
+                        }
                         Err(e) => {
                             let msg = e.to_string();
                             let is_transient = msg.contains("timeout")
@@ -774,7 +881,12 @@ impl AgentLoop {
                                 || msg.contains("503")
                                 || msg.contains("529")
                                 || msg.contains("overloaded");
-                            warn!("LLM call attempt {}/{} failed: {}", attempt + 1, LLM_MAX_RETRIES, msg);
+                            warn!(
+                                "LLM call attempt {}/{} failed: {}",
+                                attempt + 1,
+                                LLM_MAX_RETRIES,
+                                msg
+                            );
                             if !is_transient || attempt + 1 == LLM_MAX_RETRIES {
                                 last_err = Some(e);
                                 break;
@@ -787,12 +899,18 @@ impl AgentLoop {
                 }
                 match resp {
                     Some(r) => r,
-                    None => return Err(last_err.unwrap_or_else(|| anyhow::anyhow!("LLM call failed"))),
+                    None => {
+                        return Err(last_err.unwrap_or_else(|| anyhow::anyhow!("LLM call failed")))
+                    }
                 }
             };
-            info!("LLM response: input_tokens={} output_tokens={} tool_calls={} text_len={}",
-                response.input_tokens, response.output_tokens,
-                response.tool_calls.len(), response.content.len());
+            info!(
+                "LLM response: input_tokens={} output_tokens={} tool_calls={} text_len={}",
+                response.input_tokens,
+                response.output_tokens,
+                response.tool_calls.len(),
+                response.content.len()
+            );
             total_input += response.input_tokens;
             total_output += response.output_tokens;
 
@@ -805,7 +923,11 @@ impl AgentLoop {
 
             // Emit text delta as a single event
             if !text_buf.is_empty() {
-                let _ = event_tx.send(AgentEvent::TextDelta { delta: text_buf.clone() }).await;
+                let _ = event_tx
+                    .send(AgentEvent::TextDelta {
+                        delta: text_buf.clone(),
+                    })
+                    .await;
             }
 
             // If no tool calls, we're done
@@ -848,9 +970,11 @@ impl AgentLoop {
             // If ALL tool calls in this iteration are blocked, break the loop.
             if !blocked_tool_ids.is_empty() && blocked_tool_ids.len() == tool_calls.len() {
                 let combined_msg = warning_messages.join("\n");
-                let _ = event_tx.send(AgentEvent::TextDelta {
-                    delta: format!("\n\n[系统] {}\n", combined_msg),
-                }).await;
+                let _ = event_tx
+                    .send(AgentEvent::TextDelta {
+                        delta: format!("\n\n[系统] {}\n", combined_msg),
+                    })
+                    .await;
                 messages.push(LlmMessage {
                     role: "assistant".into(),
                     content: MessageContent::text(&text_buf),
@@ -861,7 +985,9 @@ impl AgentLoop {
             // Build assistant message with tool calls
             let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
             if !text_buf.is_empty() {
-                assistant_blocks.push(ContentBlock::Text { text: text_buf.clone() });
+                assistant_blocks.push(ContentBlock::Text {
+                    text: text_buf.clone(),
+                });
             }
             for (id, name, input) in &tool_calls {
                 assistant_blocks.push(ContentBlock::ToolUse {
@@ -884,20 +1010,38 @@ impl AgentLoop {
             }
 
             // Separate blocked, read-only, and write calls
-            let active_calls: Vec<_> = tool_calls.iter()
+            let active_calls: Vec<_> = tool_calls
+                .iter()
                 .filter(|(id, _, _)| !blocked_tool_ids.contains(id))
-                .cloned().collect();
-            let read_only_calls: Vec<_> = active_calls.iter()
-                .filter(|(_, name, _)| self.registry.get(name).map(|t| t.is_read_only()).unwrap_or(false))
-                .cloned().collect();
-            let write_calls: Vec<_> = active_calls.iter()
-                .filter(|(_, name, _)| !self.registry.get(name).map(|t| t.is_read_only()).unwrap_or(false))
-                .cloned().collect();
+                .cloned()
+                .collect();
+            let read_only_calls: Vec<_> = active_calls
+                .iter()
+                .filter(|(_, name, _)| {
+                    self.registry
+                        .get(name)
+                        .map(|t| t.is_read_only())
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+            let write_calls: Vec<_> = active_calls
+                .iter()
+                .filter(|(_, name, _)| {
+                    !self
+                        .registry
+                        .get(name)
+                        .map(|t| t.is_read_only())
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
 
             // Inject synthetic error results for blocked tools
             for (id, name, _) in &tool_calls {
                 if blocked_tool_ids.contains(id) {
-                    let msg = warning_messages.iter()
+                    let msg = warning_messages
+                        .iter()
                         .find(|m| m.contains(name.as_str()))
                         .cloned()
                         .unwrap_or_else(|| format!("工具 '{}' 被循环检测器阻断。", name));
@@ -906,10 +1050,14 @@ impl AgentLoop {
                         content: format!("[循环检测] {}", msg),
                         is_error: true,
                     });
-                    let _ = event_tx.send(AgentEvent::ToolEnd {
-                        id: id.clone(), name: name.clone(),
-                        result: format!("[循环检测] {}", msg), is_error: true,
-                    }).await;
+                    let _ = event_tx
+                        .send(AgentEvent::ToolEnd {
+                            id: id.clone(),
+                            name: name.clone(),
+                            result: format!("[循环检测] {}", msg),
+                            is_error: true,
+                        })
+                        .await;
                 }
             }
 
@@ -917,7 +1065,9 @@ impl AgentLoop {
             if !read_only_calls.is_empty() {
                 let mut start = 0usize;
                 while start < read_only_calls.len() {
-                    if cancel.load(Ordering::Relaxed) { break; }
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
                     let end = (start + READ_TOOL_MAX_CONCURRENCY).min(read_only_calls.len());
                     let batch = &read_only_calls[start..end];
                     let futs: Vec<_> = batch
@@ -935,15 +1085,26 @@ impl AgentLoop {
 
             // Execute write tools serially
             for (id, name, input) in &write_calls {
-                if cancel.load(Ordering::Relaxed) { break; }
-                let blocks = self.execute_single_tool(id, name, input, &ctx, &event_tx, &cancel).await;
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let blocks = self
+                    .execute_single_tool(id, name, input, &ctx, &event_tx, &cancel)
+                    .await;
                 tool_result_blocks.extend(blocks);
             }
 
             // ── Record results into loop detector + inject warnings ──────────
             for block in &tool_result_blocks {
-                if let ContentBlock::ToolResult { tool_use_id, content, .. } = block {
-                    if let Some((_, name, input)) = tool_calls.iter().find(|(id, _, _)| id == tool_use_id) {
+                if let ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } = block
+                {
+                    if let Some((_, name, input)) =
+                        tool_calls.iter().find(|(id, _, _)| id == tool_use_id)
+                    {
                         let rh = stable_hash_result(content);
                         loop_detector.record(name, input, rh);
                     }
@@ -974,9 +1135,12 @@ impl AgentLoop {
                         if json.len() > CHECKPOINT_MAX_BYTES {
                             warn!(
                                 "Checkpoint too large ({} bytes > {} limit), skipping write",
-                                json.len(), CHECKPOINT_MAX_BYTES
+                                json.len(),
+                                CHECKPOINT_MAX_BYTES
                             );
-                        } else if let Err(e) = db.upsert_checkpoint(&ctx.session_id, _iteration, &json) {
+                        } else if let Err(e) =
+                            db.upsert_checkpoint(&ctx.session_id, _iteration, &json)
+                        {
                             warn!("Failed to write checkpoint: {}", e);
                         }
                     }
@@ -1004,14 +1168,19 @@ fn friendly_tool_error(tool_name: &str, raw_error: &str) -> String {
     let raw_lower = raw_error.to_lowercase();
 
     // File system errors
-    if raw_lower.contains("no such file") || raw_lower.contains("not found") || raw_lower.contains("cannot find") {
+    if raw_lower.contains("no such file")
+        || raw_lower.contains("not found")
+        || raw_lower.contains("cannot find")
+    {
         return format!(
             "[{}] 文件或路径不存在。请确认路径正确，或先用 file_write 创建文件。\n详情：{}",
             tool_name, raw_error
         );
     }
-    if raw_lower.contains("permission denied") || raw_lower.contains("access is denied")
-        || raw_lower.contains("拒绝访问") || raw_lower.contains("0x80070005")
+    if raw_lower.contains("permission denied")
+        || raw_lower.contains("access is denied")
+        || raw_lower.contains("拒绝访问")
+        || raw_lower.contains("0x80070005")
     {
         if tool_name == "shell" || tool_name == "file_write" {
             return format!(
@@ -1047,7 +1216,8 @@ fn friendly_tool_error(tool_name: &str, raw_error: &str) -> String {
             tool_name, raw_error
         );
     }
-    if raw_lower.contains("dns") || raw_lower.contains("resolve") || raw_lower.contains("no route") {
+    if raw_lower.contains("dns") || raw_lower.contains("resolve") || raw_lower.contains("no route")
+    {
         return format!(
             "[{}] DNS 解析失败，无法访问目标地址。请检查网络连接。\n详情：{}",
             tool_name, raw_error
@@ -1072,7 +1242,10 @@ fn friendly_tool_error(tool_name: &str, raw_error: &str) -> String {
 
     // Browser errors
     if tool_name == "browser" {
-        if raw_lower.contains("chrome") || raw_lower.contains("browser") || raw_lower.contains("cdp") {
+        if raw_lower.contains("chrome")
+            || raw_lower.contains("browser")
+            || raw_lower.contains("cdp")
+        {
             return format!(
                 "[{}] 浏览器连接失败。请确认 Chrome 已安装，或在设置中检查浏览器配置。\n详情：{}",
                 tool_name, raw_error
@@ -1088,7 +1261,8 @@ fn friendly_tool_error(tool_name: &str, raw_error: &str) -> String {
 
     // WMI / COM errors
     if tool_name == "wmi" || tool_name == "com" {
-        if raw_lower.contains("wmi") || raw_lower.contains("com") || raw_lower.contains("dispatch") {
+        if raw_lower.contains("wmi") || raw_lower.contains("com") || raw_lower.contains("dispatch")
+        {
             return format!(
                 "[{}] Windows 系统接口调用失败。请确认以管理员权限运行，或该功能在当前系统版本可用。\n详情：{}",
                 tool_name, raw_error
@@ -1180,7 +1354,8 @@ fn audit_action_label(tool_name: &str, input: &serde_json::Value) -> String {
             truncate(cmd, 60)
         }
         "powershell_query" => {
-            let cmd = input["command"].as_str()
+            let cmd = input["command"]
+                .as_str()
                 .or_else(|| input["query"].as_str())
                 .unwrap_or("");
             truncate(cmd, 60)
@@ -1207,9 +1382,7 @@ fn audit_action_label(tool_name: &str, input: &serde_json::Value) -> String {
                 action.to_string()
             }
         }
-        "screen_capture" => {
-            input["mode"].as_str().unwrap_or("fullscreen").to_string()
-        }
+        "screen_capture" => input["mode"].as_str().unwrap_or("fullscreen").to_string(),
         "uia" => {
             let action = input["action"].as_str().unwrap_or("");
             if let Some(name) = input["name"].as_str() {

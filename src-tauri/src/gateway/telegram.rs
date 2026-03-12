@@ -28,20 +28,22 @@ impl TelegramChannel {
     }
 
     fn api_url(&self, method: &str) -> String {
-        format!("https://api.telegram.org/bot{}/{}", self.config.bot_token, method)
+        format!(
+            "https://api.telegram.org/bot{}/{}",
+            self.config.bot_token, method
+        )
     }
 }
 
 #[async_trait]
 impl Channel for TelegramChannel {
-    fn name(&self) -> &str { "telegram" }
+    fn name(&self) -> &str {
+        "telegram"
+    }
 
     async fn connect(&mut self) -> Result<()> {
         self.status = ChannelStatus::Connecting;
-        let resp = self.http
-            .get(self.api_url("getMe"))
-            .send()
-            .await?;
+        let resp = self.http.get(self.api_url("getMe")).send().await?;
         let body: serde_json::Value = resp.json().await?;
         if body["ok"].as_bool() == Some(true) {
             self.status = ChannelStatus::Connected;
@@ -49,7 +51,10 @@ impl Channel for TelegramChannel {
             info!("Telegram bot connected: @{}", bot_name);
             Ok(())
         } else {
-            let err = body["description"].as_str().unwrap_or("Unknown error").to_string();
+            let err = body["description"]
+                .as_str()
+                .unwrap_or("Unknown error")
+                .to_string();
             self.status = ChannelStatus::Error(err.clone());
             Err(anyhow::anyhow!("Telegram auth failed: {}", err))
         }
@@ -77,7 +82,8 @@ impl Channel for TelegramChannel {
         let mut offset: i64 = 0;
         info!("Telegram long-polling listener started");
         loop {
-            let resp = self.http
+            let resp = self
+                .http
                 .get(self.api_url("getUpdates"))
                 .query(&[
                     ("offset", offset.to_string()),
@@ -109,7 +115,9 @@ impl Channel for TelegramChannel {
 
                     if let Some(message) = update.get("message") {
                         let text = message["text"].as_str().unwrap_or("").to_string();
-                        if text.is_empty() { continue; }
+                        if text.is_empty() {
+                            continue;
+                        }
 
                         let chat_id = message["chat"]["id"].as_i64().unwrap_or(0);
                         let sender_id = message["from"]["id"].as_i64().unwrap_or(0);

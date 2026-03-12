@@ -28,7 +28,9 @@ pub struct SshServerConfig {
     pub private_key: String,
 }
 
-fn default_ssh_port() -> u16 { 22 }
+fn default_ssh_port() -> u16 {
+    22
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -280,17 +282,31 @@ pub struct Settings {
     pub config_path: PathBuf,
 }
 
-fn default_feishu_domain() -> String { "feishu".into() }
-fn default_smtp_port() -> u16 { 587 }
-fn default_imap_port() -> u16 { 993 }
-fn default_max_iterations() -> u32 { 50 }
-fn default_heartbeat_interval() -> u32 { 30 }
+fn default_feishu_domain() -> String {
+    "feishu".into()
+}
+fn default_smtp_port() -> u16 {
+    587
+}
+fn default_imap_port() -> u16 {
+    993
+}
+fn default_max_iterations() -> u32 {
+    50
+}
+fn default_heartbeat_interval() -> u32 {
+    30
+}
 fn default_heartbeat_prompt() -> String {
     "检查是否仍有未完成工作。只有在没有 active todo、没有 `[ProjectStatus] follow_up_needed` / `[ProjectStatus] waiting` 信号、并且有人明确用 `[ProjectStatus] ready_for_pisci_review @pisci` 把判断权交回时，才可回复 HEARTBEAT_OK；否则应继续协调项目。".into()
 }
 
-fn default_provider() -> String { "anthropic".into() }
-fn default_model() -> String { "claude-sonnet-4-5".into() }
+fn default_provider() -> String {
+    "anthropic".into()
+}
+fn default_model() -> String {
+    "claude-sonnet-4-5".into()
+}
 pub fn default_workspace_path() -> String {
     dirs::document_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -302,11 +318,21 @@ pub fn default_workspace_path() -> String {
 fn default_workspace() -> String {
     default_workspace_path()
 }
-fn default_language() -> String { "zh".into() }
-fn default_max_tokens() -> u32 { 4096 }
-fn default_true() -> bool { true }
-fn default_policy_mode() -> String { "balanced".into() }
-fn default_tool_rate_limit() -> u32 { 120 }
+fn default_language() -> String {
+    "zh".into()
+}
+fn default_max_tokens() -> u32 {
+    4096
+}
+fn default_true() -> bool {
+    true
+}
+fn default_policy_mode() -> String {
+    "balanced".into()
+}
+fn default_tool_rate_limit() -> u32 {
+    120
+}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -395,7 +421,8 @@ impl Settings {
                     tracing::error!(
                         "Failed to parse settings file at '{}': {}. \
                          Falling back to defaults. Original file preserved.",
-                        path.display(), e
+                        path.display(),
+                        e
                     );
                     // Rename broken file so it isn't overwritten silently
                     let backup = path.with_extension("json.bak");
@@ -468,9 +495,9 @@ impl Settings {
     }
 
     fn secret_store(config_path: &Path) -> Option<crate::security::secrets::SecretStore> {
-        config_path.parent().and_then(|dir| {
-            crate::security::secrets::SecretStore::new(dir).ok()
-        })
+        config_path
+            .parent()
+            .and_then(|dir| crate::security::secrets::SecretStore::new(dir).ok())
     }
 
     fn encrypt_field(store: &crate::security::secrets::SecretStore, field: &mut String) {

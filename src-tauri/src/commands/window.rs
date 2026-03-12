@@ -46,10 +46,17 @@ fn primary_work_area_bottom_right(app: &AppHandle) -> (i32, i32) {
 #[cfg(not(target_os = "windows"))]
 fn primary_work_area_bottom_right(app: &AppHandle) -> (i32, i32) {
     let (overlay_w, overlay_h) = get_overlay_size(app);
-    ((1920 - overlay_w - OVERLAY_MARGIN).max(0), (1080 - overlay_h - OVERLAY_MARGIN).max(0))
+    (
+        (1920 - overlay_w - OVERLAY_MARGIN).max(0),
+        (1080 - overlay_h - OVERLAY_MARGIN).max(0),
+    )
 }
 
-async fn persist_overlay_position(state: &State<'_, AppState>, x: i32, y: i32) -> Result<(), String> {
+async fn persist_overlay_position(
+    state: &State<'_, AppState>,
+    x: i32,
+    y: i32,
+) -> Result<(), String> {
     let mut settings = state.settings.lock().await;
     settings.overlay_x = Some(x);
     settings.overlay_y = Some(y);
@@ -60,9 +67,11 @@ pub async fn enter_unattended_im_mode(
     app: &AppHandle,
     state: &crate::store::AppState,
 ) -> Result<(), String> {
-    let main = app.get_webview_window("main")
+    let main = app
+        .get_webview_window("main")
         .ok_or("Main window not found")?;
-    let overlay = app.get_webview_window("overlay")
+    let overlay = app
+        .get_webview_window("overlay")
         .ok_or("Overlay window not found")?;
 
     let (x, y) = primary_work_area_bottom_right(app);
@@ -120,14 +129,16 @@ pub async fn set_window_theme_border(_app: AppHandle, theme: String) -> Result<(
     #[cfg(target_os = "windows")]
     {
         use windows::core::PCWSTR;
-        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR};
+        use windows::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR,
+        };
         use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
 
         // COLORREF = 0x00BBGGRR
         let color: u32 = match theme.as_str() {
             "violet" => 0x00F76A7C, // #7c6af7
-            "gold"   => 0x004CA8C9, // #c9a84c
-            _        => return Ok(()),
+            "gold" => 0x004CA8C9,   // #c9a84c
+            _ => return Ok(()),
         };
 
         let title: Vec<u16> = "Pisci\0".encode_utf16().collect();
@@ -140,8 +151,10 @@ pub async fn set_window_theme_border(_app: AppHandle, theme: String) -> Result<(
         }
 
         unsafe {
-            let _ = DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &color as *const _ as *const _, 4);
-            let _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &color as *const _ as *const _, 4);
+            let _ =
+                DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &color as *const _ as *const _, 4);
+            let _ =
+                DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &color as *const _ as *const _, 4);
         }
         info!("Set window theme border: {}", theme);
         Ok(())
@@ -154,13 +167,12 @@ pub async fn set_window_theme_border(_app: AppHandle, theme: String) -> Result<(
 ///   1. If a saved position exists in settings, restore it.
 ///   2. Otherwise, center the overlay relative to the main window's current position.
 #[tauri::command]
-pub async fn enter_minimal_mode(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let main = app.get_webview_window("main")
+pub async fn enter_minimal_mode(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let main = app
+        .get_webview_window("main")
         .ok_or("Main window not found")?;
-    let overlay = app.get_webview_window("overlay")
+    let overlay = app
+        .get_webview_window("overlay")
         .ok_or("Overlay window not found")?;
 
     // Determine overlay position
@@ -173,7 +185,7 @@ pub async fn enter_minimal_mode(
             if let Ok(pos) = main.outer_position() {
                 if let Ok(size) = main.outer_size() {
                     let cx = pos.x + (size.width as i32) / 2 - 140; // 280/2
-                    let cy = pos.y + (size.height as i32) - 80;      // near bottom
+                    let cy = pos.y + (size.height as i32) - 80; // near bottom
                     (cx.max(0), cy.max(0))
                 } else {
                     (100, 100)
@@ -199,7 +211,8 @@ pub async fn enter_minimal_mode(
 /// Exit minimal overlay mode: hide the HUD strip, show and focus the main window.
 #[tauri::command]
 pub async fn exit_minimal_mode(app: AppHandle) -> Result<(), String> {
-    let main = app.get_webview_window("main")
+    let main = app
+        .get_webview_window("main")
         .ok_or("Main window not found")?;
 
     // Hide overlay if it exists (best-effort — might not exist in dev mode)
@@ -222,7 +235,8 @@ pub async fn exit_minimal_mode(app: AppHandle) -> Result<(), String> {
 /// Called from the frontend drag handler.
 #[tauri::command]
 pub async fn set_overlay_position(app: AppHandle, x: i32, y: i32) -> Result<(), String> {
-    let overlay = app.get_webview_window("overlay")
+    let overlay = app
+        .get_webview_window("overlay")
         .ok_or("Overlay window not found")?;
 
     overlay

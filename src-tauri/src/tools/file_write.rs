@@ -7,7 +7,9 @@ pub struct FileWriteTool;
 
 #[async_trait]
 impl Tool for FileWriteTool {
-    fn name(&self) -> &str { "file_write" }
+    fn name(&self) -> &str {
+        "file_write"
+    }
 
     fn description(&self) -> &str {
         "Write content to a file. Creates the file and all parent directories if they don't exist. \
@@ -34,7 +36,9 @@ impl Tool for FileWriteTool {
         })
     }
 
-    fn needs_confirmation(&self, _input: &Value) -> bool { true }
+    fn needs_confirmation(&self, _input: &Value) -> bool {
+        true
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let path_str = match input["path"].as_str() {
@@ -78,7 +82,9 @@ pub struct FileEditTool;
 
 #[async_trait]
 impl Tool for FileEditTool {
-    fn name(&self) -> &str { "file_edit" }
+    fn name(&self) -> &str {
+        "file_edit"
+    }
 
     fn description(&self) -> &str {
         "Edit a file by replacing exact strings with new strings. \
@@ -123,7 +129,9 @@ impl Tool for FileEditTool {
         })
     }
 
-    fn needs_confirmation(&self, _input: &Value) -> bool { true }
+    fn needs_confirmation(&self, _input: &Value) -> bool {
+        true
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let path_str = match input["path"].as_str() {
@@ -138,7 +146,10 @@ impl Tool for FileEditTool {
         };
 
         if !path.exists() {
-            return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+            return Ok(ToolResult::err(format!(
+                "File not found: {}",
+                path.display()
+            )));
         }
 
         // Build the list of (old, new) pairs from either mode
@@ -151,7 +162,12 @@ impl Tool for FileEditTool {
             for (i, edit) in edits_arr.iter().enumerate() {
                 let old = match edit["old_string"].as_str() {
                     Some(s) if !s.is_empty() => s.to_string(),
-                    Some(_) => return Ok(ToolResult::err(format!("edits[{}].old_string cannot be empty", i))),
+                    Some(_) => {
+                        return Ok(ToolResult::err(format!(
+                            "edits[{}].old_string cannot be empty",
+                            i
+                        )))
+                    }
                     None => return Ok(ToolResult::err(format!("edits[{}] missing old_string", i))),
                 };
                 let new = match edit["new_string"].as_str() {
@@ -163,11 +179,18 @@ impl Tool for FileEditTool {
             pairs
         } else {
             // Single-edit mode (backward compatible)
-            let old_str = match input["old_string"].as_str() {
-                Some(s) if !s.is_empty() => s.to_string(),
-                Some(_) => return Ok(ToolResult::err("old_string cannot be empty — provide the exact text you want to replace")),
-                None => return Ok(ToolResult::err("Missing required parameter: old_string (or use edits array)")),
-            };
+            let old_str =
+                match input["old_string"].as_str() {
+                    Some(s) if !s.is_empty() => s.to_string(),
+                    Some(_) => return Ok(ToolResult::err(
+                        "old_string cannot be empty — provide the exact text you want to replace",
+                    )),
+                    None => {
+                        return Ok(ToolResult::err(
+                            "Missing required parameter: old_string (or use edits array)",
+                        ))
+                    }
+                };
             let new_str = match input["new_string"].as_str() {
                 Some(s) => s.to_string(),
                 None => return Ok(ToolResult::err("Missing required parameter: new_string")),
@@ -182,14 +205,28 @@ impl Tool for FileEditTool {
         for (i, (old, _)) in pairs.iter().enumerate() {
             let count = content.matches(old.as_str()).count();
             if count == 0 {
-                let label = if pairs.len() == 1 { "old_string".to_string() } else { format!("edits[{}].old_string", i) };
-                return Ok(ToolResult::err(format!("{} not found in file: {}", label, path.display())));
+                let label = if pairs.len() == 1 {
+                    "old_string".to_string()
+                } else {
+                    format!("edits[{}].old_string", i)
+                };
+                return Ok(ToolResult::err(format!(
+                    "{} not found in file: {}",
+                    label,
+                    path.display()
+                )));
             }
             if count > 1 {
-                let label = if pairs.len() == 1 { "old_string".to_string() } else { format!("edits[{}].old_string", i) };
+                let label = if pairs.len() == 1 {
+                    "old_string".to_string()
+                } else {
+                    format!("edits[{}].old_string", i)
+                };
                 return Ok(ToolResult::err(format!(
                     "{} appears {} times in file (must appear exactly once): {}",
-                    label, count, path.display()
+                    label,
+                    count,
+                    path.display()
                 )));
             }
         }
@@ -234,12 +271,19 @@ impl Tool for FileEditTool {
         if pairs.len() == 1 {
             Ok(ToolResult::ok(format!(
                 "Edited file: {} ({} chars → {} chars, {} lines {})",
-                path.display(), pairs[0].0.len(), pairs[0].1.len(), lines_after, delta_str
+                path.display(),
+                pairs[0].0.len(),
+                pairs[0].1.len(),
+                lines_after,
+                delta_str
             )))
         } else {
             Ok(ToolResult::ok(format!(
                 "Edited file: {} ({} replacements applied, {} lines {})",
-                path.display(), pairs.len(), lines_after, delta_str
+                path.display(),
+                pairs.len(),
+                lines_after,
+                delta_str
             )))
         }
     }

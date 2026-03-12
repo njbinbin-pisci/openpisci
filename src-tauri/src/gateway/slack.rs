@@ -30,7 +30,9 @@ impl SlackChannel {
 
 #[async_trait]
 impl Channel for SlackChannel {
-    fn name(&self) -> &str { "slack" }
+    fn name(&self) -> &str {
+        "slack"
+    }
 
     async fn connect(&mut self) -> Result<()> {
         self.status = ChannelStatus::Connected;

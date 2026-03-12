@@ -201,8 +201,7 @@ impl Channel for DingtalkChannel {
                     const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
                     loop {
-                        match tokio::time::timeout(poll, ws_reader.next()).await
-                        {
+                        match tokio::time::timeout(poll, ws_reader.next()).await {
                             Ok(Some(Ok(msg))) => {
                                 let text = match msg {
                                     tokio_tungstenite::tungstenite::Message::Text(t) => t,
@@ -226,14 +225,10 @@ impl Channel for DingtalkChannel {
                                     _ => continue,
                                 };
 
-                                if let Ok(frame) =
-                                    serde_json::from_str::<serde_json::Value>(&text)
+                                if let Ok(frame) = serde_json::from_str::<serde_json::Value>(&text)
                                 {
-                                    let frame_type =
-                                        frame["type"].as_str().unwrap_or("");
-                                    let topic = frame["headers"]["topic"]
-                                        .as_str()
-                                        .unwrap_or("");
+                                    let frame_type = frame["type"].as_str().unwrap_or("");
+                                    let topic = frame["headers"]["topic"].as_str().unwrap_or("");
                                     let message_id = frame["headers"]["messageId"]
                                         .as_str()
                                         .unwrap_or("")
@@ -260,20 +255,16 @@ impl Channel for DingtalkChannel {
                                         && topic == "/v1.0/im/bot/messages/get"
                                     {
                                         // data field is a JSON string
-                                        let data_str =
-                                            frame["data"].as_str().unwrap_or("{}");
+                                        let data_str = frame["data"].as_str().unwrap_or("{}");
                                         if let Ok(data) =
-                                            serde_json::from_str::<serde_json::Value>(
-                                                data_str,
-                                            )
+                                            serde_json::from_str::<serde_json::Value>(data_str)
                                         {
                                             let sender_id = data["senderId"]
                                                 .as_str()
                                                 .unwrap_or_default()
                                                 .to_string();
-                                            let sender_nick = data["senderNick"]
-                                                .as_str()
-                                                .map(String::from);
+                                            let sender_nick =
+                                                data["senderNick"].as_str().map(String::from);
                                             let conv_id = data["conversationId"]
                                                 .as_str()
                                                 .unwrap_or_default()
@@ -287,14 +278,12 @@ impl Channel for DingtalkChannel {
                                                 .unwrap_or_default()
                                                 .trim()
                                                 .to_string();
-                                            let is_group = data["conversationType"]
-                                                .as_str()
-                                                == Some("2");
+                                            let is_group =
+                                                data["conversationType"].as_str() == Some("2");
                                             let group_name = data["conversationTitle"]
                                                 .as_str()
                                                 .map(String::from);
-                                            let create_at =
-                                                data["createAt"].as_u64().unwrap_or(0);
+                                            let create_at = data["createAt"].as_u64().unwrap_or(0);
 
                                             if text_content.is_empty() {
                                                 continue;
@@ -337,7 +326,9 @@ impl Channel for DingtalkChannel {
                                 // poll interval elapsed — check shutdown, then maybe ping
                                 if shutdown.load(Ordering::Relaxed) {
                                     info!("DingTalk: shutdown requested, closing WebSocket");
-                                    let _ = ws_sink.send(tokio_tungstenite::tungstenite::Message::Close(None)).await;
+                                    let _ = ws_sink
+                                        .send(tokio_tungstenite::tungstenite::Message::Close(None))
+                                        .await;
                                     return Ok(());
                                 }
                                 ping_elapsed += poll;
@@ -352,7 +343,9 @@ impl Channel for DingtalkChannel {
                         // Check shutdown after every message
                         if shutdown.load(Ordering::Relaxed) {
                             info!("DingTalk: shutdown after message, closing WebSocket");
-                            let _ = ws_sink.send(tokio_tungstenite::tungstenite::Message::Close(None)).await;
+                            let _ = ws_sink
+                                .send(tokio_tungstenite::tungstenite::Message::Close(None))
+                                .await;
                             return Ok(());
                         }
                     }
@@ -391,10 +384,7 @@ impl Channel for DingtalkChannel {
 }
 
 /// Register a DingTalk Stream connection and return (endpoint, ticket).
-async fn get_stream_connection(
-    http: &Client,
-    config: &DingtalkConfig,
-) -> Result<(String, String)> {
+async fn get_stream_connection(http: &Client, config: &DingtalkConfig) -> Result<(String, String)> {
     let resp = http
         .post("https://api.dingtalk.com/v1.0/gateway/connections/open")
         .json(&json!({
@@ -421,19 +411,12 @@ async fn get_stream_connection(
     // The API returns HTTP 200 with endpoint/ticket directly (no code field)
     let endpoint = body["endpoint"]
         .as_str()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Missing endpoint in DingTalk Stream response: {:?}",
-                body
-            )
-        })?
+        .ok_or_else(|| anyhow::anyhow!("Missing endpoint in DingTalk Stream response: {:?}", body))?
         .to_string();
 
     let ticket = body["ticket"]
         .as_str()
-        .ok_or_else(|| {
-            anyhow::anyhow!("Missing ticket in DingTalk Stream response: {:?}", body)
-        })?
+        .ok_or_else(|| anyhow::anyhow!("Missing ticket in DingTalk Stream response: {:?}", body))?
         .to_string();
 
     Ok((endpoint, ticket))

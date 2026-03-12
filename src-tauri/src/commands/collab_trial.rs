@@ -7,7 +7,6 @@
 /// - All events stream to the Chat Pool and Board in real-time
 ///
 /// The user can observe the full collaboration in the Pond UI.
-
 use crate::koi::runtime::KoiRuntime;
 use crate::pisci::project_state::{
     assess_project_state, ProjectAssessment as TrialAssessment, ProjectDecision as TrialDecision,
@@ -69,22 +68,10 @@ fn ensure_trial_koi(
         return Ok(existing);
     }
 
-    if let Some(existing) = all_kois
-        .iter()
-        .find(|k| k.name == spec.name)
-        .cloned()
-    {
+    if let Some(existing) = all_kois.iter().find(|k| k.name == spec.name).cloned() {
         if existing.role != spec.role {
-            db.update_koi(
-                &existing.id,
-                None,
-                Some(spec.role),
-                None,
-                None,
-                None,
-                None,
-            )
-            .map_err(|e| e.to_string())?;
+            db.update_koi(&existing.id, None, Some(spec.role), None, None, None, None)
+                .map_err(|e| e.to_string())?;
 
             let mut updated = existing.clone();
             updated.role = spec.role.to_string();
@@ -156,7 +143,8 @@ pub async fn run_collaboration_trial_with_state(
         error_params: None,
     };
 
-    let pool_id_cell: std::sync::Arc<std::sync::Mutex<String>> = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let pool_id_cell: std::sync::Arc<std::sync::Mutex<String>> =
+        std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let pool_id_for_emit = pool_id_cell.clone();
     let emit = move |phase: &str, detail: &str| {
         let pid = pool_id_for_emit.lock().unwrap().clone();
@@ -168,7 +156,10 @@ pub async fn run_collaboration_trial_with_state(
     };
 
     // ─── Phase 1: Find or create Koi agents ─────────────────────
-    emit("setup", "Checking required Koi roles and creating missing ones...");
+    emit(
+        "setup",
+        "Checking required Koi roles and creating missing ones...",
+    );
 
     let (architect, coder, reviewer, pool) = {
         let db = state.db.lock().await;
@@ -224,7 +215,8 @@ pub async fn run_collaboration_trial_with_state(
             },
         )?;
 
-        let pool = db.create_pool_session("Collaboration Trial")
+        let pool = db
+            .create_pool_session("Collaboration Trial")
             .map_err(|e| e.to_string())?;
 
         let org_spec = format!(
@@ -247,11 +239,13 @@ pub async fn run_collaboration_trial_with_state(
              - When the project may be ready to conclude, an agent signals `[ProjectStatus] ready_for_pisci_review` and Pisci decides whether the trial can end",
             architect.id, coder.id, reviewer.id
         );
-        db.update_pool_org_spec(&pool.id, &org_spec).map_err(|e| e.to_string())?;
+        db.update_pool_org_spec(&pool.id, &org_spec)
+            .map_err(|e| e.to_string())?;
 
         // Post the project kickoff to the pool
         db.insert_pool_message(
-            &pool.id, "pisci",
+            &pool.id,
+            "pisci",
             &format!(
                 "🚀 **Collaboration Trial started**\n\n\
                  Team: {} Architect, {} Coder, {} Reviewer\n\
@@ -259,8 +253,10 @@ pub async fn run_collaboration_trial_with_state(
                  Workflow: Architect → Coder → Reviewer",
                 architect.icon, coder.icon, reviewer.icon
             ),
-            "text", "{}",
-        ).map_err(|e| e.to_string())?;
+            "text",
+            "{}",
+        )
+        .map_err(|e| e.to_string())?;
 
         (architect, coder, reviewer, pool)
     };
@@ -272,7 +268,10 @@ pub async fn run_collaboration_trial_with_state(
 
     tracing::info!(
         "Trial setup: pool={}, architect={}, coder={}, reviewer={}",
-        pool.id, architect.id, coder.id, reviewer.id
+        pool.id,
+        architect.id,
+        coder.id,
+        reviewer.id
     );
 
     // ─── Phase 2: Pisci posts @Architect in pool chat (natural communication) ──
@@ -295,7 +294,8 @@ pub async fn run_collaboration_trial_with_state(
     // Post the message to pool chat (just like Pisci would via pool_chat tool)
     {
         let db = state.db.lock().await;
-        let msg = db.insert_pool_message(&pool.id, "pisci", &task_message, "mention", "{}")
+        let msg = db
+            .insert_pool_message(&pool.id, "pisci", &task_message, "mention", "{}")
             .map_err(|e| e.to_string())?;
         let _ = app_handle.emit(
             &format!("pool_message_{}", pool.id),
@@ -305,7 +305,9 @@ pub async fn run_collaboration_trial_with_state(
 
     // The @mention dispatch activates Architect (assigns task + blocks until done)
     let chain_start = std::time::Instant::now();
-    let arch_results = runtime.handle_mention("pisci", &pool.id, &task_message).await;
+    let arch_results = runtime
+        .handle_mention("pisci", &pool.id, &task_message)
+        .await;
 
     let arch_step = match &arch_results {
         Ok(results) if !results.is_empty() && results[0].success => TrialStep {
@@ -323,7 +325,8 @@ pub async fn run_collaboration_trial_with_state(
             koi_name: "Architect".into(),
             task: "Design string utility module spec".into(),
             success: false,
-            reply_preview: arch_results.as_ref()
+            reply_preview: arch_results
+                .as_ref()
                 .map(|r| r.first().map(|x| x.reply.clone()).unwrap_or_default())
                 .unwrap_or_else(|e| format!("Error: {}", e)),
             reply_preview_key: Some("debug.multiAgentErrWithDetail".into()),
@@ -331,7 +334,11 @@ pub async fn run_collaboration_trial_with_state(
             duration_ms: chain_start.elapsed().as_millis() as u64,
         },
     };
-    tracing::info!("[Trial] Architect: {} ({}ms)", if arch_step.success { "PASS" } else { "FAIL" }, arch_step.duration_ms);
+    tracing::info!(
+        "[Trial] Architect: {} ({}ms)",
+        if arch_step.success { "PASS" } else { "FAIL" },
+        arch_step.duration_ms
+    );
     status.steps.push(arch_step.clone());
 
     if !arch_step.success {
@@ -349,7 +356,10 @@ pub async fn run_collaboration_trial_with_state(
     // The trial no longer ends just because a fixed role completed. Instead, it watches the pool until
     // work is either clearly still in progress or looks ready for Pisci review.
     status.phase = "chain".into();
-    emit("chain", "Waiting for collaboration to settle so Pisci can assess project state...");
+    emit(
+        "chain",
+        "Waiting for collaboration to settle so Pisci can assess project state...",
+    );
 
     let chain_timeout = std::time::Duration::from_secs(900);
     let poll_interval = std::time::Duration::from_secs(5);
@@ -374,14 +384,18 @@ pub async fn run_collaboration_trial_with_state(
 
         if chain_start.elapsed() > chain_timeout {
             tracing::warn!("[Trial] Chain timed out after {}s", chain_timeout.as_secs());
-            emit("timeout", "Collaboration timed out before Pisci could conclude");
+            emit(
+                "timeout",
+                "Collaboration timed out before Pisci could conclude",
+            );
             break;
         }
 
         let db = state.db.lock().await;
         let msgs = db.get_pool_messages(&pool.id, 500, 0).unwrap_or_default();
         let all_todos = db.list_koi_todos(None).unwrap_or_default();
-        let pool_todos: Vec<_> = all_todos.into_iter()
+        let pool_todos: Vec<_> = all_todos
+            .into_iter()
             .filter(|t| t.pool_session_id.as_deref() == Some(&pool.id))
             .collect();
         let architect_koi = db.get_koi(&architect.id).ok().flatten();
@@ -389,9 +403,18 @@ pub async fn run_collaboration_trial_with_state(
         let reviewer_koi = db.get_koi(&reviewer.id).ok().flatten();
         drop(db);
 
-        let architect_status = architect_koi.as_ref().map(|k| k.status.as_str()).unwrap_or("unknown");
-        let coder_status = coder_koi.as_ref().map(|k| k.status.as_str()).unwrap_or("unknown");
-        let reviewer_status = reviewer_koi.as_ref().map(|k| k.status.as_str()).unwrap_or("unknown");
+        let architect_status = architect_koi
+            .as_ref()
+            .map(|k| k.status.as_str())
+            .unwrap_or("unknown");
+        let coder_status = coder_koi
+            .as_ref()
+            .map(|k| k.status.as_str())
+            .unwrap_or("unknown");
+        let reviewer_status = reviewer_koi
+            .as_ref()
+            .map(|k| k.status.as_str())
+            .unwrap_or("unknown");
 
         final_assessment = assess_trial_project_state(&msgs, &pool_todos, &status.koi_ids);
         let phase_detail = format!(
@@ -417,11 +440,13 @@ pub async fn run_collaboration_trial_with_state(
             quiet_polls = 0;
         }
 
-        for msg in msgs.iter().filter(|m|
+        for msg in msgs.iter().filter(|m| {
             m.event_type.as_deref() == Some("task_completed")
                 || m.event_type.as_deref() == Some("task_failed")
-        ) {
-            if !status.koi_ids.iter().any(|id| id == &msg.sender_id) || !seen_completion_event_ids.insert(msg.id) {
+        }) {
+            if !status.koi_ids.iter().any(|id| id == &msg.sender_id)
+                || !seen_completion_event_ids.insert(msg.id)
+            {
                 continue;
             }
 
@@ -429,7 +454,11 @@ pub async fn run_collaboration_trial_with_state(
             *count += 1;
 
             let (base_name, koi_name, task_label) = if msg.sender_id == architect.id {
-                ("design_spec", "Architect", "Design string utility module spec")
+                (
+                    "design_spec",
+                    "Architect",
+                    "Design string utility module spec",
+                )
             } else if msg.sender_id == coder.id {
                 ("implement", "Coder", "Implement string utility module")
             } else if msg.sender_id == reviewer.id {
@@ -439,7 +468,10 @@ pub async fn run_collaboration_trial_with_state(
             };
 
             // The architect's first pass is already represented by arch_step above.
-            if msg.sender_id == architect.id && *count == 1 && status.steps.iter().any(|s| s.name == "design_spec") {
+            if msg.sender_id == architect.id
+                && *count == 1
+                && status.steps.iter().any(|s| s.name == "design_spec")
+            {
                 continue;
             }
 
@@ -461,7 +493,8 @@ pub async fn run_collaboration_trial_with_state(
             });
         }
 
-        let all_idle = architect_status == "idle" && coder_status == "idle" && reviewer_status == "idle";
+        let all_idle =
+            architect_status == "idle" && coder_status == "idle" && reviewer_status == "idle";
         if all_idle && quiet_polls >= quiet_polls_needed {
             match final_assessment.decision {
                 TrialDecision::ReadyForPisciReview => {
@@ -471,7 +504,13 @@ pub async fn run_collaboration_trial_with_state(
                 }
                 TrialDecision::Continue => {
                     if chain_start.elapsed().as_secs() > 30 {
-                        emit("chain", &format!("Project is not ready to conclude yet: {}", final_assessment.summary));
+                        emit(
+                            "chain",
+                            &format!(
+                                "Project is not ready to conclude yet: {}",
+                                final_assessment.summary
+                            ),
+                        );
                         break;
                     }
                 }
@@ -480,7 +519,11 @@ pub async fn run_collaboration_trial_with_state(
     }
 
     // Fill in any missing primary steps as failures so the trial remains debuggable.
-    if !status.steps.iter().any(|s| s.name == "implement" || s.name.starts_with("implement_round_")) {
+    if !status
+        .steps
+        .iter()
+        .any(|s| s.name == "implement" || s.name.starts_with("implement_round_"))
+    {
         status.steps.push(TrialStep {
             name: "implement".into(),
             koi_name: "Coder".into(),
@@ -492,7 +535,11 @@ pub async fn run_collaboration_trial_with_state(
             duration_ms: chain_start.elapsed().as_millis() as u64,
         });
     }
-    if !status.steps.iter().any(|s| s.name == "review" || s.name.starts_with("review_round_")) {
+    if !status
+        .steps
+        .iter()
+        .any(|s| s.name == "review" || s.name.starts_with("review_round_"))
+    {
         status.steps.push(TrialStep {
             name: "review".into(),
             koi_name: "Reviewer".into(),
@@ -524,20 +571,29 @@ pub async fn run_collaboration_trial_with_state(
     {
         let db = state.db.lock().await;
         let emoji = if status.completed { "✅" } else { "⚠️" };
-        let step_lines: Vec<String> = status.steps.iter()
-            .map(|s| format!(
-                "- {} **{}** ({}): {} ({}ms)",
-                if s.success { "✅" } else { "❌" },
-                s.koi_name, s.name,
-                if s.success { "completed" } else { "failed" },
-                s.duration_ms,
-            ))
+        let step_lines: Vec<String> = status
+            .steps
+            .iter()
+            .map(|s| {
+                format!(
+                    "- {} **{}** ({}): {} ({}ms)",
+                    if s.success { "✅" } else { "❌" },
+                    s.koi_name,
+                    s.name,
+                    if s.success { "completed" } else { "failed" },
+                    s.duration_ms,
+                )
+            })
             .collect();
         let total_ms: u64 = status.steps.iter().map(|s| s.duration_ms).sum();
         let summary = format!(
             "{} **Collaboration Trial {}**\n\n{}\n\nPisci assessment: {}\n\nTotal time: {}ms",
             emoji,
-            if status.completed { "PASSED" } else { "INCOMPLETE" },
+            if status.completed {
+                "PASSED"
+            } else {
+                "INCOMPLETE"
+            },
             step_lines.join("\n"),
             final_assessment.summary,
             total_ms,
@@ -545,11 +601,22 @@ pub async fn run_collaboration_trial_with_state(
         let _ = db.insert_pool_message(&pool.id, "pisci", &summary, "text", "{}");
     }
 
-    emit("done", if status.completed { "All agents completed successfully!" } else { "Trial incomplete" });
+    emit(
+        "done",
+        if status.completed {
+            "All agents completed successfully!"
+        } else {
+            "Trial incomplete"
+        },
+    );
 
     tracing::info!(
         "=== Collaboration Trial {} ({}/{} steps) ===",
-        if status.completed { "PASSED" } else { "INCOMPLETE" },
+        if status.completed {
+            "PASSED"
+        } else {
+            "INCOMPLETE"
+        },
         status.steps.iter().filter(|s| s.success).count(),
         status.steps.len(),
     );

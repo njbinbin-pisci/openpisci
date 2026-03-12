@@ -10,7 +10,9 @@ pub struct ScreenTool;
 
 #[async_trait]
 impl Tool for ScreenTool {
-    fn name(&self) -> &str { "screen_capture" }
+    fn name(&self) -> &str {
+        "screen_capture"
+    }
 
     fn description(&self) -> &str {
         "Capture a screenshot of the full screen, a specific window, or a screen region. \
@@ -78,7 +80,9 @@ impl Tool for ScreenTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
         let action = match input["action"].as_str() {
@@ -87,11 +91,11 @@ impl Tool for ScreenTool {
         };
 
         match action {
-            "list_monitors"  => self.list_monitors(),
-            "capture"        => self.capture_full(&input),
+            "list_monitors" => self.list_monitors(),
+            "capture" => self.capture_full(&input),
             "capture_window" => self.capture_window(&input),
             "capture_region" => self.capture_region(&input),
-            "find_element"   => self.capture_full(&input), // capture + return image for Vision AI
+            "find_element" => self.capture_full(&input), // capture + return image for Vision AI
             _ => Ok(ToolResult::err(format!("Unknown action: {}", action))),
         }
     }
@@ -101,13 +105,13 @@ impl ScreenTool {
     // ─── Monitor enumeration ─────────────────────────────────────────────────
 
     fn list_monitors(&self) -> Result<ToolResult> {
-        use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW};
         use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
-        use windows::Win32::UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowTextW, IsWindowVisible, GetWindowRect,
-            IsIconic, GetAncestor, GA_ROOT,
-        };
+        use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW};
         use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, GetAncestor, GetWindowRect, GetWindowTextW, IsIconic, IsWindowVisible,
+            GA_ROOT,
+        };
 
         // Step 1: enumerate monitors
         struct MonitorInfo {
@@ -122,24 +126,30 @@ impl ScreenTool {
             _lprect: *mut RECT,
             lparam: LPARAM,
         ) -> BOOL {
-            let list = &mut *(lparam.0 as *mut Vec<(windows::Win32::Graphics::Gdi::HMONITOR, MonitorInfo)>);
+            let list = &mut *(lparam.0
+                as *mut Vec<(windows::Win32::Graphics::Gdi::HMONITOR, MonitorInfo)>);
             let mut info = MONITORINFOEXW::default();
             info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
             if GetMonitorInfoW(hmonitor, &mut info.monitorInfo as *mut _ as *mut _).as_bool() {
                 let idx = list.len();
-                list.push((hmonitor, MonitorInfo {
-                    rect: info.monitorInfo.rcMonitor,
-                    primary: info.monitorInfo.dwFlags & 1 != 0,
-                    index: idx,
-                }));
+                list.push((
+                    hmonitor,
+                    MonitorInfo {
+                        rect: info.monitorInfo.rcMonitor,
+                        primary: info.monitorInfo.dwFlags & 1 != 0,
+                        index: idx,
+                    },
+                ));
             }
             BOOL(1)
         }
 
-        let mut monitor_list: Vec<(windows::Win32::Graphics::Gdi::HMONITOR, MonitorInfo)> = Vec::new();
+        let mut monitor_list: Vec<(windows::Win32::Graphics::Gdi::HMONITOR, MonitorInfo)> =
+            Vec::new();
         unsafe {
             let _ = EnumDisplayMonitors(
-                None, None,
+                None,
+                None,
                 Some(monitor_enum_proc),
                 LPARAM(&mut monitor_list as *mut _ as isize),
             );
@@ -154,31 +164,50 @@ impl ScreenTool {
         unsafe extern "system" fn win_enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
             let data = &mut *(lparam.0 as *mut WinData);
             // Only visible, non-minimized top-level windows with a title
-            if !IsWindowVisible(hwnd).as_bool() { return BOOL(1); }
-            if IsIconic(hwnd).as_bool() { return BOOL(1); }
+            if !IsWindowVisible(hwnd).as_bool() {
+                return BOOL(1);
+            }
+            if IsIconic(hwnd).as_bool() {
+                return BOOL(1);
+            }
             // Must be a root window (no owner/parent that is also a window)
             let root = GetAncestor(hwnd, GA_ROOT);
-            if root != hwnd { return BOOL(1); }
+            if root != hwnd {
+                return BOOL(1);
+            }
 
             let mut buf = [0u16; 256];
             let len = GetWindowTextW(hwnd, &mut buf);
-            if len <= 0 { return BOOL(1); }
+            if len <= 0 {
+                return BOOL(1);
+            }
             let title = String::from_utf16_lossy(&buf[..len as usize]);
-            if title.trim().is_empty() { return BOOL(1); }
+            if title.trim().is_empty() {
+                return BOOL(1);
+            }
 
             let mut rect = std::mem::zeroed::<RECT>();
-            if GetWindowRect(hwnd, &mut rect).is_err() { return BOOL(1); }
+            if GetWindowRect(hwnd, &mut rect).is_err() {
+                return BOOL(1);
+            }
             // Skip tiny/offscreen windows
-            if rect.right - rect.left < 10 || rect.bottom - rect.top < 10 { return BOOL(1); }
+            if rect.right - rect.left < 10 || rect.bottom - rect.top < 10 {
+                return BOOL(1);
+            }
 
             let hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
             data.windows.push((hmon, title, rect));
             BOOL(1)
         }
 
-        let mut win_data = WinData { windows: Vec::new() };
+        let mut win_data = WinData {
+            windows: Vec::new(),
+        };
         unsafe {
-            let _ = EnumWindows(Some(win_enum_proc), LPARAM(&mut win_data as *mut _ as isize));
+            let _ = EnumWindows(
+                Some(win_enum_proc),
+                LPARAM(&mut win_data as *mut _ as isize),
+            );
         }
 
         // Step 3: build output
@@ -188,13 +217,18 @@ impl ScreenTool {
             let primary_tag = if mi.primary { " [PRIMARY]" } else { "" };
             lines.push(format!(
                 "Monitor {} (index={}): {}x{} at ({},{}){}",
-                mi.index, mi.index,
-                r.right - r.left, r.bottom - r.top,
-                r.left, r.top,
+                mi.index,
+                mi.index,
+                r.right - r.left,
+                r.bottom - r.top,
+                r.left,
+                r.top,
                 primary_tag
             ));
             lines.push("  Windows on this monitor:".to_string());
-            let wins_on: Vec<_> = win_data.windows.iter()
+            let wins_on: Vec<_> = win_data
+                .windows
+                .iter()
                 .filter(|(wmon, _, _)| *wmon == *hmon)
                 .collect();
             if wins_on.is_empty() {
@@ -219,10 +253,10 @@ impl ScreenTool {
     // ─── Full screen capture ─────────────────────────────────────────────────
 
     pub(crate) fn capture_full(&self, input: &Value) -> Result<ToolResult> {
+        use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
         use windows::Win32::Graphics::Gdi::{
             CreateDCA, DeleteDC, EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW,
         };
-        use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
 
         let monitor_index = input["monitor_index"].as_u64().unwrap_or(0) as usize;
 
@@ -245,21 +279,35 @@ impl ScreenTool {
 
         let mut rects: Vec<RECT> = Vec::new();
         unsafe {
-            let _ = EnumDisplayMonitors(None, None, Some(mon_enum), LPARAM(&mut rects as *mut _ as isize));
+            let _ = EnumDisplayMonitors(
+                None,
+                None,
+                Some(mon_enum),
+                LPARAM(&mut rects as *mut _ as isize),
+            );
         }
 
         let rect = rects.get(monitor_index).copied().unwrap_or_else(|| {
-            rects.first().copied().unwrap_or(RECT { left: 0, top: 0, right: 1920, bottom: 1080 })
+            rects.first().copied().unwrap_or(RECT {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            })
         });
 
         let x = rect.left;
         let y = rect.top;
-        let width  = rect.right  - rect.left;
+        let width = rect.right - rect.left;
         let height = rect.bottom - rect.top;
 
         tracing::info!(
             "capture_full: monitor_index={} physical rect=({},{})+({}x{})",
-            monitor_index, x, y, width, height
+            monitor_index,
+            x,
+            y,
+            width,
+            height
         );
 
         // Use "DISPLAY" DC which covers the full virtual desktop in physical pixel coordinates.
@@ -268,7 +316,7 @@ impl ScreenTool {
             let display_name = windows::core::s!("DISPLAY");
             let hdc = CreateDCA(display_name, None, None, None);
             let pixels = self.capture_dc_region(hdc, x, y, width, height)?;
-            DeleteDC(hdc);
+            let _ = DeleteDC(hdc);
             self.encode_and_return_with_offset(&pixels, width as u32, height as u32, input, x, y)
         }
     }
@@ -276,11 +324,11 @@ impl ScreenTool {
     // ─── Window capture ───────────────────────────────────────────────────────
 
     fn capture_window(&self, input: &Value) -> Result<ToolResult> {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            FindWindowW, EnumWindows, GetWindowTextW, IsWindowVisible, GetWindowRect,
-        };
-        use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
         use windows::core::PCWSTR;
+        use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, FindWindowW, GetWindowRect, GetWindowTextW, IsWindowVisible,
+        };
 
         let title = match input["window_title"].as_str() {
             Some(t) => t,
@@ -295,10 +343,15 @@ impl ScreenTool {
             h
         } else {
             // Partial match via EnumWindows
-            struct SearchData { title: String, hwnd: HWND }
+            struct SearchData {
+                title: String,
+                hwnd: HWND,
+            }
             unsafe extern "system" fn enum_proc(h: HWND, lparam: LPARAM) -> BOOL {
                 let data = &mut *(lparam.0 as *mut SearchData);
-                if !IsWindowVisible(h).as_bool() { return BOOL(1); }
+                if !IsWindowVisible(h).as_bool() {
+                    return BOOL(1);
+                }
                 let mut buf = [0u16; 512];
                 let len = GetWindowTextW(h, &mut buf);
                 if len > 0 {
@@ -310,9 +363,15 @@ impl ScreenTool {
                 }
                 BOOL(1)
             }
-            let mut search = SearchData { title: title.to_string(), hwnd: HWND(std::ptr::null_mut()) };
+            let mut search = SearchData {
+                title: title.to_string(),
+                hwnd: HWND(std::ptr::null_mut()),
+            };
             unsafe {
-                let _ = EnumWindows(Some(enum_proc), LPARAM(&mut search as *mut SearchData as isize));
+                let _ = EnumWindows(
+                    Some(enum_proc),
+                    LPARAM(&mut search as *mut SearchData as isize),
+                );
             }
             if search.hwnd.0.is_null() {
                 return Ok(ToolResult::err(format!("Window '{}' not found", title)));
@@ -322,7 +381,9 @@ impl ScreenTool {
 
         // Get window rect and capture
         let mut rect = unsafe { std::mem::zeroed::<windows::Win32::Foundation::RECT>() };
-        unsafe { GetWindowRect(hwnd, &mut rect).map_err(|e| anyhow::anyhow!("{}", e))?; }
+        unsafe {
+            GetWindowRect(hwnd, &mut rect).map_err(|e| anyhow::anyhow!("{}", e))?;
+        }
 
         let w = rect.right - rect.left;
         let h = rect.bottom - rect.top;
@@ -331,8 +392,8 @@ impl ScreenTool {
         }
 
         use windows::Win32::Graphics::Gdi::{
-            CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-            SelectObject, GetDC, ReleaseDC, BitBlt, SRCCOPY,
+            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
+            ReleaseDC, SelectObject, SRCCOPY,
         };
 
         unsafe {
@@ -351,8 +412,7 @@ impl ScreenTool {
             ReleaseDC(hwnd, hdc_win);
 
             self.encode_and_return_with_offset(
-                &pixels, w as u32, h as u32, input,
-                rect.left, rect.top,
+                &pixels, w as u32, h as u32, input, rect.left, rect.top,
             )
         }
     }
@@ -388,10 +448,14 @@ impl ScreenTool {
     unsafe fn capture_dc_region(
         &self,
         hdc: windows::Win32::Graphics::Gdi::HDC,
-        x: i32, y: i32, width: i32, height: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
     ) -> Result<Vec<u8>> {
         use windows::Win32::Graphics::Gdi::{
-            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, SelectObject, SRCCOPY,
+            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+            SelectObject, SRCCOPY,
         };
 
         let mem_dc = CreateCompatibleDC(hdc);
@@ -416,7 +480,9 @@ impl ScreenTool {
         width: i32,
         height: i32,
     ) -> Result<Vec<u8>> {
-        use windows::Win32::Graphics::Gdi::{GetDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS};
+        use windows::Win32::Graphics::Gdi::{
+            GetDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+        };
 
         let mut bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
@@ -456,7 +522,14 @@ impl ScreenTool {
         Ok(pixels)
     }
 
-    fn encode_and_return(&self, rgba: &[u8], width: u32, height: u32, input: &Value) -> Result<ToolResult> {
+    #[allow(dead_code)]
+    fn encode_and_return(
+        &self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        input: &Value,
+    ) -> Result<ToolResult> {
         self.encode_and_return_with_offset(rgba, width, height, input, 0, 0)
     }
 
@@ -479,7 +552,12 @@ impl ScreenTool {
 
         tracing::info!(
             "screen_capture: {}x{} origin=({},{}) grid={} spacing={}",
-            width, height, origin_x, origin_y, draw_grid, grid_spacing
+            width,
+            height,
+            origin_x,
+            origin_y,
+            draw_grid,
+            grid_spacing
         );
 
         let mut img = image::RgbaImage::from_raw(width, height, rgba.to_vec())
@@ -492,7 +570,10 @@ impl ScreenTool {
             {
                 let debug_path = std::env::temp_dir().join("pisci_grid_debug.png");
                 let _ = img.save(&debug_path);
-                tracing::info!("screen_capture: grid image saved to {}", debug_path.display());
+                tracing::info!(
+                    "screen_capture: grid image saved to {}",
+                    debug_path.display()
+                );
             }
         }
 
@@ -527,14 +608,14 @@ impl ScreenTool {
                 )
             } else {
                 " Tip: use grid=true to overlay coordinate labels for precise element location. \
-                 Use list_monitors to see all displays and window positions.".to_string()
+                 Use list_monitors to see all displays and window positions."
+                    .to_string()
             };
             format!(
                 "\nScreen coords: image origin at ({},{}) in physical screen coordinates. \
                  Coordinates are physical pixels (same system as uia click/drag_drop). \
                  Use list_monitors to discover monitor layout and window positions.{}",
-                origin_x, origin_y,
-                grid_note,
+                origin_x, origin_y, grid_note,
             )
         };
         #[cfg(not(target_os = "windows"))]
@@ -549,7 +630,8 @@ impl ScreenTool {
         Ok(ToolResult::ok(format!(
             "Screenshot: {}x{} px, {} KB ({}){}",
             width, height, size_kb, media_type, coord_note
-        )).with_image(image_data))
+        ))
+        .with_image(image_data))
     }
 
     /// Draw a coordinate grid on an RGBA image.
@@ -568,13 +650,21 @@ impl ScreenTool {
             ((-origin_x) as u32 / spacing) * spacing
         } else {
             let rem = origin_x as u32 % spacing;
-            if rem == 0 { 0 } else { spacing - rem }
+            if rem == 0 {
+                0
+            } else {
+                spacing - rem
+            }
         };
         let first_y = if origin_y <= 0 {
             ((-origin_y) as u32 / spacing) * spacing
         } else {
             let rem = origin_y as u32 % spacing;
-            if rem == 0 { 0 } else { spacing - rem }
+            if rem == 0 {
+                0
+            } else {
+                spacing - rem
+            }
         };
 
         // Draw vertical lines
@@ -582,7 +672,9 @@ impl ScreenTool {
         while ix < w {
             for iy in 0..h {
                 blend_pixel(img, ix, iy, [255, 255, 255, 60]);
-                if ix > 0 { blend_pixel(img, ix - 1, iy, [0, 0, 0, 30]); }
+                if ix > 0 {
+                    blend_pixel(img, ix - 1, iy, [0, 0, 0, 30]);
+                }
             }
             ix += spacing;
         }
@@ -592,7 +684,9 @@ impl ScreenTool {
         while iy < h {
             for ix2 in 0..w {
                 blend_pixel(img, ix2, iy, [255, 255, 255, 60]);
-                if iy > 0 { blend_pixel(img, ix2, iy - 1, [0, 0, 0, 30]); }
+                if iy > 0 {
+                    blend_pixel(img, ix2, iy - 1, [0, 0, 0, 30]);
+                }
             }
             iy += spacing;
         }
@@ -615,7 +709,9 @@ impl ScreenTool {
 
 /// Alpha-blend a color onto a pixel (src-over).
 fn blend_pixel(img: &mut image::RgbaImage, x: u32, y: u32, src: [u8; 4]) {
-    if x >= img.width() || y >= img.height() { return; }
+    if x >= img.width() || y >= img.height() {
+        return;
+    }
     let dst = img.get_pixel(x, y);
     let a = src[3] as u32;
     let ia = 255 - a;
@@ -649,7 +745,14 @@ fn draw_label(img: &mut image::RgbaImage, x: u32, y: u32, text: &str) {
 }
 
 /// Minimal 5×7 bitmap font for digits, comma, minus sign — rendered at SCALE×SCALE blocks.
-fn draw_char_scaled(img: &mut image::RgbaImage, x: u32, y: u32, ch: char, color: [u8; 4], scale: u32) {
+fn draw_char_scaled(
+    img: &mut image::RgbaImage,
+    x: u32,
+    y: u32,
+    ch: char,
+    color: [u8; 4],
+    scale: u32,
+) {
     let bitmap: u64 = match ch {
         '0' => 0b_01110_10001_10011_10101_11001_10001_01110,
         '1' => 0b_00100_01100_00100_00100_00100_00100_01110,
@@ -664,7 +767,7 @@ fn draw_char_scaled(img: &mut image::RgbaImage, x: u32, y: u32, ch: char, color:
         ',' => 0b_00000_00000_00000_00000_00110_00110_00100,
         '-' => 0b_00000_00000_00000_11111_00000_00000_00000,
         ' ' => 0,
-        _   => 0b_01110_10001_10001_11111_10001_10001_10001,
+        _ => 0b_01110_10001_10001_11111_10001_10001_10001,
     };
     for row in 0..7u32 {
         for col in 0..5u32 {

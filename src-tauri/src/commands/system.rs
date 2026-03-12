@@ -34,9 +34,7 @@ pub struct RuntimeCheckItem {
 /// `custom_paths` maps runtime key (e.g. "python") to an absolute executable path
 /// supplied by the user when auto-detection fails.
 #[tauri::command]
-pub async fn check_runtimes(
-    state: State<'_, AppState>,
-) -> Result<Vec<RuntimeCheckItem>, String> {
+pub async fn check_runtimes(state: State<'_, AppState>) -> Result<Vec<RuntimeCheckItem>, String> {
     let custom_paths = {
         let settings = state.settings.lock().await;
         settings.runtime_paths.clone()
@@ -120,7 +118,11 @@ pub async fn check_runtimes(
         } else if let Some(cached) = download::chrome_exists(&chrome_dir) {
             let ver = probe_command(cached.to_str().unwrap_or(""), &["--version"])
                 .unwrap_or_else(|| "Chrome for Testing (cached)".to_string());
-            (true, Some(ver), "Chrome for Testing (cached, ~111 MB)".to_string())
+            (
+                true,
+                Some(ver),
+                "Chrome for Testing (cached, ~111 MB)".to_string(),
+            )
         } else {
             (
                 false,
@@ -161,7 +163,11 @@ pub async fn set_runtime_path(
 }
 
 /// Try to run the executable at the user-specified path (if any) for this runtime key.
-fn probe_with_override(key: &str, args: &[&str], custom: &HashMap<String, String>) -> Option<String> {
+fn probe_with_override(
+    key: &str,
+    args: &[&str],
+    custom: &HashMap<String, String>,
+) -> Option<String> {
     let path = custom.get(key)?;
     if path.is_empty() {
         return None;
@@ -200,9 +206,8 @@ pub async fn get_vm_status() -> Result<VmStatus, String> {
     #[cfg(target_os = "windows")]
     {
         // Check if Windows Sandbox is available
-        let sandbox_available = std::path::Path::new(
-            r"C:\Windows\System32\WindowsSandbox.exe"
-        ).exists();
+        let sandbox_available =
+            std::path::Path::new(r"C:\Windows\System32\WindowsSandbox.exe").exists();
 
         if sandbox_available {
             return Ok(VmStatus {
@@ -222,7 +227,9 @@ pub async fn get_vm_status() -> Result<VmStatus, String> {
 
 /// Runtime snapshot for parity tracking and diagnostics.
 #[tauri::command]
-pub async fn get_runtime_capabilities(state: State<'_, AppState>) -> Result<RuntimeCapabilities, String> {
+pub async fn get_runtime_capabilities(
+    state: State<'_, AppState>,
+) -> Result<RuntimeCapabilities, String> {
     let vm = get_vm_status().await?;
 
     let settings = state.settings.lock().await.clone();

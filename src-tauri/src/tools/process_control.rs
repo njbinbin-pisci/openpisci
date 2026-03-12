@@ -16,7 +16,9 @@ pub struct ProcessControlTool;
 
 #[async_trait]
 impl Tool for ProcessControlTool {
-    fn name(&self) -> &str { "process_control" }
+    fn name(&self) -> &str {
+        "process_control"
+    }
 
     fn description(&self) -> &str {
         "Start, stop, and monitor Windows processes. \
@@ -119,8 +121,13 @@ impl ProcessControlTool {
         let wait = input["wait"].as_bool().unwrap_or(false);
         let timeout_secs = input["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
 
-        let args: Vec<String> = input["args"].as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        let args: Vec<String> = input["args"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
 
         // CREATE_NO_WINDOW: prevents a console window from flashing when running CLI tools
@@ -138,18 +145,33 @@ impl ProcessControlTool {
             // When waiting for output, always hide the console window
             #[cfg(target_os = "windows")]
             cmd.creation_flags(CREATE_NO_WINDOW);
-            cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+            cmd.stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
             let run = timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
             match run {
-                Err(_) => Ok(ToolResult::err(format!("Process timed out after {}s", timeout_secs))),
+                Err(_) => Ok(ToolResult::err(format!(
+                    "Process timed out after {}s",
+                    timeout_secs
+                ))),
                 Ok(Err(e)) => Ok(ToolResult::err(format!("Failed to start process: {}", e))),
                 Ok(Ok(output)) => {
-                    let stdout = truncate(&String::from_utf8_lossy(&output.stdout), MAX_OUTPUT_BYTES * 3 / 4);
-                    let stderr = truncate(&String::from_utf8_lossy(&output.stderr), MAX_OUTPUT_BYTES / 4);
+                    let stdout = truncate(
+                        &String::from_utf8_lossy(&output.stdout),
+                        MAX_OUTPUT_BYTES * 3 / 4,
+                    );
+                    let stderr = truncate(
+                        &String::from_utf8_lossy(&output.stderr),
+                        MAX_OUTPUT_BYTES / 4,
+                    );
                     let exit_code = output.status.code().unwrap_or(-1);
                     let mut parts = vec![format!("Exit code: {}", exit_code)];
-                    if !stdout.is_empty() { parts.push(format!("STDOUT:\n{}", stdout)); }
-                    if !stderr.is_empty() { parts.push(format!("STDERR:\n{}", stderr)); }
+                    if !stdout.is_empty() {
+                        parts.push(format!("STDOUT:\n{}", stdout));
+                    }
+                    if !stderr.is_empty() {
+                        parts.push(format!("STDERR:\n{}", stderr));
+                    }
                     Ok(ToolResult::ok(parts.join("\n\n")))
                 }
             }
@@ -164,7 +186,10 @@ impl ProcessControlTool {
                         pid, path
                     )))
                 }
-                Err(e) => Ok(ToolResult::err(format!("Failed to start process '{}': {}", path, e))),
+                Err(e) => Ok(ToolResult::err(format!(
+                    "Failed to start process '{}': {}",
+                    path, e
+                ))),
             }
         }
     }
@@ -176,7 +201,10 @@ impl ProcessControlTool {
         let ps_cmd = if let Some(pid) = input["pid"].as_u64() {
             format!("taskkill {}  /PID {} 2>&1; $LASTEXITCODE", force_flag, pid)
         } else if let Some(name) = input["name"].as_str() {
-            format!("taskkill {}/IM \"{}\" 2>&1; $LASTEXITCODE", force_flag, name)
+            format!(
+                "taskkill {}/IM \"{}\" 2>&1; $LASTEXITCODE",
+                force_flag, name
+            )
         } else {
             return Ok(ToolResult::err("kill requires 'pid' or 'name'"));
         };
@@ -191,7 +219,8 @@ impl ProcessControlTool {
                 "$p = Get-Process -Id {} -ErrorAction SilentlyContinue; \
                  if ($p) {{ @{{running=$true; pid={pid}; name=$p.Name}} | ConvertTo-Json }} \
                  else {{ @{{running=$false; pid={pid}}} | ConvertTo-Json }}",
-                pid, pid = pid
+                pid,
+                pid = pid
             )
         } else if let Some(name) = input["name"].as_str() {
             format!(
@@ -251,13 +280,13 @@ if (-not $found) {{
             timeout = timeout_secs
         );
 
-        let run = timeout(
-            Duration::from_secs(timeout_secs + 5),
-            run_ps(&ps_cmd),
-        ).await;
+        let run = timeout(Duration::from_secs(timeout_secs + 5), run_ps(&ps_cmd)).await;
 
         match run {
-            Err(_) => Ok(ToolResult::err(format!("wait_for_window timed out after {}s", timeout_secs))),
+            Err(_) => Ok(ToolResult::err(format!(
+                "wait_for_window timed out after {}s",
+                timeout_secs
+            ))),
             Ok(Err(e)) => Ok(ToolResult::err(format!("Failed: {}", e))),
             Ok(Ok(output)) => Ok(ToolResult::ok(output)),
         }
@@ -276,7 +305,8 @@ async fn run_ps(command: &str) -> Result<String> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     let mut ps_cmd = Command::new("powershell");
-    ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", &utf8_cmd])
+    ps_cmd
+        .args(["-NoProfile", "-NonInteractive", "-Command", &utf8_cmd])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -296,7 +326,13 @@ async fn run_ps(command: &str) -> Result<String> {
 
 fn truncate(s: &str, max: usize) -> String {
     let s = s.trim();
-    if s.len() <= max { return s.to_string(); }
+    if s.len() <= max {
+        return s.to_string();
+    }
     let half = max / 2;
-    format!("{}\n...[truncated]...\n{}", &s[..half], &s[s.len() - half..])
+    format!(
+        "{}\n...[truncated]...\n{}",
+        &s[..half],
+        &s[s.len() - half..]
+    )
 }

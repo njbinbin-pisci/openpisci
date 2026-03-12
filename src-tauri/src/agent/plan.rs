@@ -70,7 +70,8 @@ pub fn merge_todos(existing: &[PlanTodoItem], updates: &[PlanTodoItem]) -> Vec<P
 }
 
 pub fn summarize_todos(items: &[PlanTodoItem]) -> String {
-    items.iter()
+    items
+        .iter()
         .map(|item| format!("- [{}] {} ({})", item.status, item.content, item.id))
         .collect::<Vec<_>>()
         .join("\n")

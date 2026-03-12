@@ -10,7 +10,9 @@ pub struct FileReadTool;
 
 #[async_trait]
 impl Tool for FileReadTool {
-    fn name(&self) -> &str { "file_read" }
+    fn name(&self) -> &str {
+        "file_read"
+    }
 
     fn description(&self) -> &str {
         "Read the contents of a known file. Returns text with line numbers, or base64 for images. \
@@ -42,7 +44,9 @@ impl Tool for FileReadTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let path_str = match input["path"].as_str() {
@@ -59,24 +63,32 @@ impl Tool for FileReadTool {
 
         if !path.exists() {
             // Try to suggest similar files
-            return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+            return Ok(ToolResult::err(format!(
+                "File not found: {}",
+                path.display()
+            )));
         }
 
         let metadata = std::fs::metadata(&path)?;
 
         // Determine file type by extension
-        let ext = path.extension()
+        let ext = path
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
 
-        let is_image = matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp");
+        let is_image = matches!(
+            ext.as_str(),
+            "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+        );
 
         if is_image {
             if metadata.len() > MAX_IMAGE_BYTES {
                 return Ok(ToolResult::err(format!(
                     "Image too large ({} bytes, max {} bytes)",
-                    metadata.len(), MAX_IMAGE_BYTES
+                    metadata.len(),
+                    MAX_IMAGE_BYTES
                 )));
             }
             let bytes = std::fs::read(&path)?;
@@ -89,7 +101,10 @@ impl Tool for FileReadTool {
             };
             return Ok(ToolResult::ok(format!(
                 "Image file: {} ({} bytes)\nbase64:{};{}",
-                path.display(), bytes.len(), media_type, b64
+                path.display(),
+                bytes.len(),
+                media_type,
+                b64
             )));
         }
 
@@ -137,7 +152,11 @@ impl Tool for FileReadTool {
 
         Ok(ToolResult::ok(format!(
             "File: {} ({} lines total, showing lines {}-{})\n\n{}",
-            path.display(), total, start + 1, end, numbered
+            path.display(),
+            total,
+            start + 1,
+            end,
+            numbered
         )))
     }
 }

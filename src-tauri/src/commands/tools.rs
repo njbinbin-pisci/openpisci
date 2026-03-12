@@ -1,6 +1,6 @@
+use crate::store::AppState;
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use crate::store::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuiltinToolInfo {
@@ -12,7 +12,9 @@ pub struct BuiltinToolInfo {
 
 /// Returns the list of system built-in tools with metadata.
 #[tauri::command]
-pub async fn list_builtin_tools(_state: State<'_, AppState>) -> Result<Vec<BuiltinToolInfo>, String> {
+pub async fn list_builtin_tools(
+    _state: State<'_, AppState>,
+) -> Result<Vec<BuiltinToolInfo>, String> {
     let tools = vec![
         BuiltinToolInfo {
             name: "file_read".into(),
@@ -125,7 +127,10 @@ pub async fn list_builtin_tools(_state: State<'_, AppState>) -> Result<Vec<Built
 pub async fn trigger_heartbeat(state: State<'_, AppState>) -> Result<(), String> {
     let (prompt, enabled) = {
         let settings = state.settings.lock().await;
-        (settings.heartbeat_prompt.clone(), settings.heartbeat_enabled)
+        (
+            settings.heartbeat_prompt.clone(),
+            settings.heartbeat_enabled,
+        )
     };
     if !enabled {
         return Err("Heartbeat is not enabled in settings".into());

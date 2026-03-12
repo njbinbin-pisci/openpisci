@@ -33,7 +33,9 @@ impl MatrixChannel {
 
 #[async_trait]
 impl Channel for MatrixChannel {
-    fn name(&self) -> &str { "matrix" }
+    fn name(&self) -> &str {
+        "matrix"
+    }
 
     async fn connect(&mut self) -> Result<()> {
         self.status = ChannelStatus::Connected;

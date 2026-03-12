@@ -12,7 +12,9 @@ pub struct PlanTodoTool {
 
 #[async_trait]
 impl Tool for PlanTodoTool {
-    fn name(&self) -> &str { "plan_todo" }
+    fn name(&self) -> &str {
+        "plan_todo"
+    }
 
     fn description(&self) -> &str {
         "Maintain a short visible execution plan for the current task. \
@@ -51,7 +53,9 @@ impl Tool for PlanTodoTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let merge = input["merge"].as_bool().unwrap_or(false);
@@ -67,7 +71,11 @@ impl Tool for PlanTodoTool {
         let updated = {
             let mut plan_state = state.plan_state.lock().await;
             let current = plan_state.get(&ctx.session_id).cloned().unwrap_or_default();
-            let next = if merge { merge_todos(&current, &todos) } else { todos.clone() };
+            let next = if merge {
+                merge_todos(&current, &todos)
+            } else {
+                todos.clone()
+            };
             if let Err(e) = validate_todos(&next) {
                 return Ok(ToolResult::err(e));
             }
@@ -78,7 +86,9 @@ impl Tool for PlanTodoTool {
         let payload = serde_json::to_value(AgentEvent::PlanUpdate {
             items: updated.clone(),
         })?;
-        let _ = self.app.emit(&format!("agent_event_{}", ctx.session_id), payload);
+        let _ = self
+            .app
+            .emit(&format!("agent_event_{}", ctx.session_id), payload);
 
         Ok(ToolResult::ok(format!(
             "计划已更新（{} 项）:\n{}",

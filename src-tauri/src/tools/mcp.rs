@@ -45,7 +45,9 @@ pub struct McpServerConfig {
     pub enabled: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 // ─── Tool info returned by tools/list ────────────────────────────────────────
 
@@ -92,12 +94,17 @@ impl StdioTransport {
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
 
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| anyhow!("Failed to spawn MCP server '{}': {}", config.command, e))?;
 
-        let stdin = child.stdin.take()
+        let stdin = child
+            .stdin
+            .take()
             .ok_or_else(|| anyhow!("Failed to get stdin for MCP server"))?;
-        let stdout = child.stdout.take()
+        let stdout = child
+            .stdout
+            .take()
             .ok_or_else(|| anyhow!("Failed to get stdout for MCP server"))?;
 
         Ok(Self {
@@ -115,8 +122,13 @@ impl StdioTransport {
 
         let mut response_line = String::new();
         self.stdout.read_line(&mut response_line).await?;
-        let response: Value = serde_json::from_str(response_line.trim())
-            .map_err(|e| anyhow!("Invalid JSON-RPC response: {} (raw: {})", e, response_line.trim()))?;
+        let response: Value = serde_json::from_str(response_line.trim()).map_err(|e| {
+            anyhow!(
+                "Invalid JSON-RPC response: {} (raw: {})",
+                e,
+                response_line.trim()
+            )
+        })?;
         Ok(response)
     }
 }
@@ -141,10 +153,13 @@ impl SseTransport {
     async fn connect(&mut self) -> Result<()> {
         // Connect to SSE stream to get the endpoint URL
         let sse_url = format!("{}/sse", self.base_url);
-        let resp = self.client.get(&sse_url)
+        let resp = self
+            .client
+            .get(&sse_url)
             .header("Accept", "text/event-stream")
             .timeout(std::time::Duration::from_secs(10))
-            .send().await
+            .send()
+            .await
             .map_err(|e| anyhow!("SSE connect failed: {}", e))?;
 
         let text = resp.text().await?;
@@ -171,13 +186,18 @@ impl SseTransport {
         let fallback = format!("{}/message", self.base_url);
         let endpoint = self.endpoint.as_deref().unwrap_or(&fallback);
 
-        let resp = self.client.post(endpoint)
+        let resp = self
+            .client
+            .post(endpoint)
             .json(request)
             .timeout(std::time::Duration::from_secs(30))
-            .send().await
+            .send()
+            .await
             .map_err(|e| anyhow!("SSE request failed: {}", e))?;
 
-        let response: Value = resp.json().await
+        let response: Value = resp
+            .json()
+            .await
             .map_err(|e| anyhow!("Invalid JSON-RPC response: {}", e))?;
         Ok(response)
     }
@@ -213,11 +233,14 @@ impl McpClient {
             "stdio" => {
                 let mut t = StdioTransport::spawn(&self.config).await?;
                 // Initialize handshake
-                let init_req = make_request("initialize", json!({
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": { "name": "pisci-desktop", "version": "0.1.0" }
-                }));
+                let init_req = make_request(
+                    "initialize",
+                    json!({
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": { "name": "pisci-desktop", "version": "0.1.0" }
+                    }),
+                );
                 let resp = t.send_request(&init_req).await?;
                 if resp.get("error").is_some() {
                     return Err(anyhow!("MCP initialize error: {}", resp["error"]));
@@ -239,11 +262,14 @@ impl McpClient {
                 let mut t = SseTransport::new(&self.config.url);
                 t.connect().await?;
                 // Initialize handshake
-                let init_req = make_request("initialize", json!({
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": { "name": "pisci-desktop", "version": "0.1.0" }
-                }));
+                let init_req = make_request(
+                    "initialize",
+                    json!({
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": { "name": "pisci-desktop", "version": "0.1.0" }
+                    }),
+                );
                 let resp = t.send_request(&init_req).await?;
                 if resp.get("error").is_some() {
                     return Err(anyhow!("MCP initialize error: {}", resp["error"]));
@@ -262,20 +288,26 @@ impl McpClient {
         self.ensure_connected().await?;
         let req = make_request("tools/list", json!({}));
         let resp = self.send_rpc(req).await?;
-        let tools = resp["result"]["tools"].as_array()
+        let tools = resp["result"]["tools"]
+            .as_array()
             .ok_or_else(|| anyhow!("tools/list: missing tools array"))?;
-        let infos: Vec<McpToolInfo> = tools.iter()
+        let infos: Vec<McpToolInfo> = tools
+            .iter()
             .filter_map(|t| serde_json::from_value(t.clone()).ok())
             .collect();
         Ok(infos)
     }
 
+    #[allow(dead_code)]
     pub async fn call_tool(&self, tool_name: &str, arguments: Value) -> Result<String> {
         self.ensure_connected().await?;
-        let req = make_request("tools/call", json!({
-            "name": tool_name,
-            "arguments": arguments,
-        }));
+        let req = make_request(
+            "tools/call",
+            json!({
+                "name": tool_name,
+                "arguments": arguments,
+            }),
+        );
         let resp = self.send_rpc(req).await?;
 
         if let Some(err) = resp.get("error") {
@@ -286,7 +318,8 @@ impl McpClient {
         // Extract text content from result
         if let Some(content) = result.get("content") {
             if let Some(arr) = content.as_array() {
-                let texts: Vec<String> = arr.iter()
+                let texts: Vec<String> = arr
+                    .iter()
                     .filter_map(|c| {
                         if c["type"].as_str() == Some("text") {
                             c["text"].as_str().map(|s| s.to_string())
@@ -320,6 +353,7 @@ impl McpClient {
 // ─── McpProxyTool ─────────────────────────────────────────────────────────────
 
 /// A single tool exposed by an MCP server, registered as a Tool in the registry.
+#[allow(dead_code)]
 pub struct McpProxyTool {
     pub server_name: String,
     pub tool_name: String,
@@ -343,7 +377,10 @@ impl Tool for McpProxyTool {
     }
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
-        info!("MCP tool call: server={} tool={}", self.server_name, self.tool_name);
+        info!(
+            "MCP tool call: server={} tool={}",
+            self.server_name, self.tool_name
+        );
         match self.client.call_tool(&self.tool_name, input).await {
             Ok(output) => Ok(ToolResult::ok(output)),
             Err(e) => {
@@ -360,6 +397,7 @@ impl Tool for McpProxyTool {
 
 /// Connect to an MCP server and return proxy tools for all its tools.
 /// Returns an empty vec on connection failure (with a warning).
+#[allow(dead_code)]
 pub async fn build_mcp_tools(config: &McpServerConfig) -> Vec<McpProxyTool> {
     if !config.enabled || config.name.is_empty() {
         return vec![];
@@ -373,16 +411,21 @@ pub async fn build_mcp_tools(config: &McpServerConfig) -> Vec<McpProxyTool> {
                 config.name,
                 tools.len()
             );
-            tools.into_iter().map(|t| McpProxyTool {
-                server_name: config.name.clone(),
-                tool_name: t.name.clone(),
-                tool_description: t.description.unwrap_or_default(),
-                schema: t.input_schema.unwrap_or_else(|| json!({
-                    "type": "object",
-                    "properties": {}
-                })),
-                client: client.clone(),
-            }).collect()
+            tools
+                .into_iter()
+                .map(|t| McpProxyTool {
+                    server_name: config.name.clone(),
+                    tool_name: t.name.clone(),
+                    tool_description: t.description.unwrap_or_default(),
+                    schema: t.input_schema.unwrap_or_else(|| {
+                        json!({
+                            "type": "object",
+                            "properties": {}
+                        })
+                    }),
+                    client: client.clone(),
+                })
+                .collect()
         }
         Err(e) => {
             warn!("MCP server '{}' failed to connect: {}", config.name, e);

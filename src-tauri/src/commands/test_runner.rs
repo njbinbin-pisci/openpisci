@@ -2,7 +2,6 @@
 ///
 /// Uses in-memory SQLite + LogEventBus to validate the full
 /// collaboration pipeline without calling real LLMs.
-
 use crate::agent::host::HostAgent;
 use crate::commands::collab_trial::assess_trial_project_state;
 use crate::koi::event_bus::LogEventBus;
@@ -74,10 +73,18 @@ fn fail_with_params(
 
 fn backend_err(err: impl ToString) -> LocalizedError {
     let detail = err.to_string();
-    fail_with_params("debug.multiAgentErrBackend", json!({ "detail": detail }), detail)
+    fail_with_params(
+        "debug.multiAgentErrBackend",
+        json!({ "detail": detail }),
+        detail,
+    )
 }
 
-fn finish_test(name: &str, result: Result<(), LocalizedError>, start: std::time::Instant) -> TestResult {
+fn finish_test(
+    name: &str,
+    result: Result<(), LocalizedError>,
+    start: std::time::Instant,
+) -> TestResult {
     match result {
         Ok(()) => TestResult {
             name: name.into(),
@@ -138,40 +145,82 @@ pub async fn run_multi_agent_tests() -> Result<TestSuiteResult, String> {
         format!("{}/{} FAILED", failed, total)
     };
 
-    Ok(TestSuiteResult { total, passed, failed, results, summary })
+    Ok(TestSuiteResult {
+        total,
+        passed,
+        failed,
+        results,
+        summary,
+    })
 }
 
-fn ok() -> Result<(), LocalizedError> { Ok(()) }
+fn ok() -> Result<(), LocalizedError> {
+    Ok(())
+}
 
 async fn test_koi_crud() -> TestResult {
     let start = std::time::Instant::now();
     let r: Result<(), LocalizedError> = async {
         let (db, _, _) = setup();
         let db = db.lock().await;
-        let koi = db.create_koi("Architect", "架构师", "🏗️", "#7c6af7", "Design systems.", "System architect")
+        let koi = db
+            .create_koi(
+                "Architect",
+                "架构师",
+                "🏗️",
+                "#7c6af7",
+                "Design systems.",
+                "System architect",
+            )
             .map_err(backend_err)?;
         if koi.name != "Architect" {
-            return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"koi.name","expected":"Architect","actual":koi.name}), "name mismatch"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrExpectedActual",
+                json!({"subject":"koi.name","expected":"Architect","actual":koi.name}),
+                "name mismatch",
+            ));
         }
         if koi.status != "idle" {
-            return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"koi.status","expected":"idle","actual":koi.status}), "should start idle"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrExpectedActual",
+                json!({"subject":"koi.status","expected":"idle","actual":koi.status}),
+                "should start idle",
+            ));
         }
-        let fetched = db.get_koi(&koi.id).map_err(backend_err)?
-            .ok_or_else(|| fail_with_params("debug.multiAgentErrMissing", json!({"subject":"koi"}), "not found"))?;
+        let fetched = db.get_koi(&koi.id).map_err(backend_err)?.ok_or_else(|| {
+            fail_with_params(
+                "debug.multiAgentErrMissing",
+                json!({"subject":"koi"}),
+                "not found",
+            )
+        })?;
         if fetched.name != "Architect" {
-            return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"fetched.name","expected":"Architect","actual":fetched.name}), "fetch mismatch"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrExpectedActual",
+                json!({"subject":"fetched.name","expected":"Architect","actual":fetched.name}),
+                "fetch mismatch",
+            ));
         }
         db.update_koi_status(&koi.id, "busy").map_err(backend_err)?;
         let u = db.get_koi(&koi.id).map_err(backend_err)?.unwrap();
         if u.status != "busy" {
-            return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"updated.status","expected":"busy","actual":u.status}), "status not updated"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrExpectedActual",
+                json!({"subject":"updated.status","expected":"busy","actual":u.status}),
+                "status not updated",
+            ));
         }
         db.delete_koi(&koi.id).map_err(backend_err)?;
         if db.get_koi(&koi.id).map_err(backend_err)?.is_some() {
-            return Err(fail_with_params("debug.multiAgentErrUnexpectedSome", json!({"subject":"deleted koi"}), "not deleted"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrUnexpectedSome",
+                json!({"subject":"deleted koi"}),
+                "not deleted",
+            ));
         }
         ok()
-    }.await;
+    }
+    .await;
     finish_test("koi_crud", r, start)
 }
 
@@ -180,19 +229,58 @@ async fn test_memory_scoping() -> TestResult {
     let r: Result<(), LocalizedError> = async {
         let (db, _, _) = setup();
         let db = db.lock().await;
-        db.save_memory("Pisci goal", "project", 0.9, Some("s1"), "pisci", "private", "pisci", None).map_err(backend_err)?;
-        db.save_memory("KoiA schema", "fact", 0.85, Some("s2"), "koi-a", "private", "koi-a", None).map_err(backend_err)?;
-        db.save_memory("Shared conv", "project", 0.9, Some("s3"), "pisci", "project", "pool-1", None).map_err(backend_err)?;
+        db.save_memory(
+            "Pisci goal",
+            "project",
+            0.9,
+            Some("s1"),
+            "pisci",
+            "private",
+            "pisci",
+            None,
+        )
+        .map_err(backend_err)?;
+        db.save_memory(
+            "KoiA schema",
+            "fact",
+            0.85,
+            Some("s2"),
+            "koi-a",
+            "private",
+            "koi-a",
+            None,
+        )
+        .map_err(backend_err)?;
+        db.save_memory(
+            "Shared conv",
+            "project",
+            0.9,
+            Some("s3"),
+            "pisci",
+            "project",
+            "pool-1",
+            None,
+        )
+        .map_err(backend_err)?;
         let p = db.list_memories_for_owner("pisci").map_err(backend_err)?;
         if p.len() != 2 {
-            return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"pisci memories","expected":2,"actual":p.len()}), format!("pisci: expected 2, got {}", p.len())));
+            return Err(fail_with_params(
+                "debug.multiAgentErrExpectedActual",
+                json!({"subject":"pisci memories","expected":2,"actual":p.len()}),
+                format!("pisci: expected 2, got {}", p.len()),
+            ));
         }
         let k = db.list_memories_for_owner("koi-a").map_err(backend_err)?;
         if k.len() != 1 {
-            return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"koi-a memories","expected":1,"actual":k.len()}), format!("koi-a: expected 1, got {}", k.len())));
+            return Err(fail_with_params(
+                "debug.multiAgentErrExpectedActual",
+                json!({"subject":"koi-a memories","expected":1,"actual":k.len()}),
+                format!("koi-a: expected 1, got {}", k.len()),
+            ));
         }
         ok()
-    }.await;
+    }
+    .await;
     finish_test("memory_scoping", r, start)
 }
 
@@ -504,9 +592,19 @@ async fn test_pisci_heartbeat_prompt_guardrails() -> TestResult {
         let now = Utc::now();
         let (pool, reviewer) = {
             let db = db.lock().await;
-            let reviewer = db.create_koi("Reviewer", "代码审查员", "🔍", "#26de81", "Review.", "Reviewer")
+            let reviewer = db
+                .create_koi(
+                    "Reviewer",
+                    "代码审查员",
+                    "🔍",
+                    "#26de81",
+                    "Review.",
+                    "Reviewer",
+                )
                 .map_err(backend_err)?;
-            let pool = db.create_pool_session("PromptGuardPool").map_err(backend_err)?;
+            let pool = db
+                .create_pool_session("PromptGuardPool")
+                .map_err(backend_err)?;
             (pool, reviewer)
         };
         let koi_ids = vec![reviewer.id.clone()];
@@ -514,7 +612,8 @@ async fn test_pisci_heartbeat_prompt_guardrails() -> TestResult {
             id: 1,
             pool_session_id: pool.id.clone(),
             sender_id: reviewer.id.clone(),
-            content: "[ProjectStatus] follow_up_needed @Coder Please continue the remaining fixes.".into(),
+            content: "[ProjectStatus] follow_up_needed @Coder Please continue the remaining fixes."
+                .into(),
             msg_type: "text".into(),
             metadata: "{}".into(),
             todo_id: None,
@@ -523,7 +622,12 @@ async fn test_pisci_heartbeat_prompt_guardrails() -> TestResult {
             created_at: now,
         }];
         let attention = collect_pool_attention(&pool, &stalled_follow_up, &[], &koi_ids, 0)
-            .ok_or_else(|| fail("debug.multiAgentErrMissing", "stalled follow-up should trigger attention"))?;
+            .ok_or_else(|| {
+                fail(
+                    "debug.multiAgentErrMissing",
+                    "stalled follow-up should trigger attention",
+                )
+            })?;
         let prompt = build_pool_heartbeat_message("Base heartbeat prompt", &attention);
         if !prompt.contains("NOT ready for HEARTBEAT_OK") {
             return Err(fail_with_params(
@@ -553,7 +657,12 @@ async fn test_pisci_heartbeat_prompt_guardrails() -> TestResult {
             created_at: now,
         }];
         let ready_attention = collect_pool_attention(&pool, &ready_messages, &[], &koi_ids, 0)
-            .ok_or_else(|| fail("debug.multiAgentErrMissing", "ready-for-review handoff should trigger attention"))?;
+            .ok_or_else(|| {
+                fail(
+                    "debug.multiAgentErrMissing",
+                    "ready-for-review handoff should trigger attention",
+                )
+            })?;
         let ready_prompt = build_pool_heartbeat_message("Base heartbeat prompt", &ready_attention);
         if !ready_prompt.contains("HEARTBEAT_OK is still not automatic") {
             return Err(fail_with_params(
@@ -564,7 +673,8 @@ async fn test_pisci_heartbeat_prompt_guardrails() -> TestResult {
         }
 
         ok()
-    }.await;
+    }
+    .await;
     finish_test("pisci_heartbeat_prompt_guardrails", r, start)
 }
 
@@ -573,31 +683,73 @@ async fn test_todo_lifecycle() -> TestResult {
     let r: Result<(), LocalizedError> = async {
         let (db, _, _) = setup();
         let db = db.lock().await;
-        let koi = db.create_koi("Worker", "通用助理", "⚡", "#45b7d1", "Work", "Worker").map_err(backend_err)?;
+        let koi = db
+            .create_koi("Worker", "通用助理", "⚡", "#45b7d1", "Work", "Worker")
+            .map_err(backend_err)?;
         let pool = db.create_pool_session("WorkPool").map_err(backend_err)?;
-        let todo = db.create_koi_todo(&koi.id, "Build auth", "JWT", "high", "pisci", Some(&pool.id), "pisci", None).map_err(backend_err)?;
+        let todo = db
+            .create_koi_todo(
+                &koi.id,
+                "Build auth",
+                "JWT",
+                "high",
+                "pisci",
+                Some(&pool.id),
+                "pisci",
+                None,
+            )
+            .map_err(backend_err)?;
         if todo.status != "todo" {
-            return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"todo.status","expected":"todo","actual":todo.status}), "should be todo"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrExpectedActual",
+                json!({"subject":"todo.status","expected":"todo","actual":todo.status}),
+                "should be todo",
+            ));
         }
         db.claim_koi_todo(&todo.id, &koi.id).map_err(backend_err)?;
         let c = db.get_koi_todo(&todo.id).map_err(backend_err)?.unwrap();
         if c.status != "in_progress" {
-            return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"claimed todo.status","expected":"in_progress","actual":c.status}), "should be in_progress"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrExpectedActual",
+                json!({"subject":"claimed todo.status","expected":"in_progress","actual":c.status}),
+                "should be in_progress",
+            ));
         }
-        db.complete_koi_todo(&todo.id, Some(42)).map_err(backend_err)?;
+        db.complete_koi_todo(&todo.id, Some(42))
+            .map_err(backend_err)?;
         let d = db.get_koi_todo(&todo.id).map_err(backend_err)?.unwrap();
         if d.status != "done" {
-            return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"completed todo.status","expected":"done","actual":d.status}), "should be done"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrExpectedActual",
+                json!({"subject":"completed todo.status","expected":"done","actual":d.status}),
+                "should be done",
+            ));
         }
-        let t2 = db.create_koi_todo(&koi.id, "Deploy", "", "urgent", "pisci", Some(&pool.id), "pisci", Some(&todo.id)).map_err(backend_err)?;
+        let t2 = db
+            .create_koi_todo(
+                &koi.id,
+                "Deploy",
+                "",
+                "urgent",
+                "pisci",
+                Some(&pool.id),
+                "pisci",
+                Some(&todo.id),
+            )
+            .map_err(backend_err)?;
         db.claim_koi_todo(&t2.id, &koi.id).map_err(backend_err)?;
         db.block_koi_todo(&t2.id, "Blocked").map_err(backend_err)?;
         let b = db.get_koi_todo(&t2.id).map_err(backend_err)?.unwrap();
         if b.status != "blocked" {
-            return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"blocked todo.status","expected":"blocked","actual":b.status}), "should be blocked"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrExpectedActual",
+                json!({"subject":"blocked todo.status","expected":"blocked","actual":b.status}),
+                "should be blocked",
+            ));
         }
         ok()
-    }.await;
+    }
+    .await;
     finish_test("todo_lifecycle", r, start)
 }
 
@@ -634,36 +786,76 @@ async fn test_route_to_koi() -> TestResult {
     let r: Result<(), LocalizedError> = async {
         let now = Utc::now();
         let kois = vec![
-            KoiDefinition { id: "fe".into(), name: "FE".into(), role: "前端工程师".into(), icon: "🎨".into(), color: "#45b7d1".into(),
+            KoiDefinition {
+                id: "fe".into(),
+                name: "FE".into(),
+                role: "前端工程师".into(),
+                icon: "🎨".into(),
+                color: "#45b7d1".into(),
                 system_prompt: "Frontend React TypeScript CSS UI design expert.".into(),
                 description: "Frontend development, React, TypeScript, CSS".into(),
-                status: "idle".into(), created_at: now, updated_at: now },
-            KoiDefinition { id: "be".into(), name: "BE".into(), role: "后端工程师".into(), icon: "⚡".into(), color: "#7c6af7".into(),
+                status: "idle".into(),
+                created_at: now,
+                updated_at: now,
+            },
+            KoiDefinition {
+                id: "be".into(),
+                name: "BE".into(),
+                role: "后端工程师".into(),
+                icon: "⚡".into(),
+                color: "#7c6af7".into(),
                 system_prompt: "Backend Rust databases API design expert.".into(),
                 description: "Backend development, Rust, database, API".into(),
-                status: "idle".into(), created_at: now, updated_at: now },
-            KoiDefinition { id: "qa".into(), name: "QA".into(), role: "测试工程师".into(), icon: "🔍".into(), color: "#26de81".into(),
+                status: "idle".into(),
+                created_at: now,
+                updated_at: now,
+            },
+            KoiDefinition {
+                id: "qa".into(),
+                name: "QA".into(),
+                role: "测试工程师".into(),
+                icon: "🔍".into(),
+                color: "#26de81".into(),
                 system_prompt: "Testing quality assurance.".into(),
                 description: "Testing, QA, automation".into(),
-                status: "offline".into(), created_at: now, updated_at: now },
+                status: "offline".into(),
+                created_at: now,
+                updated_at: now,
+            },
         ];
         let r = HostAgent::route_to_koi("Create a React component with TypeScript", &kois);
         if r != Some("fe".into()) {
-            return Err(fail_with_params("debug.multiAgentErrRoute", json!({"subject":"frontend task","actual":format!("{:?}", r),"expected":"fe"}), format!("FE routed to {:?}", r)));
+            return Err(fail_with_params(
+                "debug.multiAgentErrRoute",
+                json!({"subject":"frontend task","actual":format!("{:?}", r),"expected":"fe"}),
+                format!("FE routed to {:?}", r),
+            ));
         }
         let r = HostAgent::route_to_koi("Design database schema and Rust API", &kois);
         if r != Some("be".into()) {
-            return Err(fail_with_params("debug.multiAgentErrRoute", json!({"subject":"backend task","actual":format!("{:?}", r),"expected":"be"}), format!("BE routed to {:?}", r)));
+            return Err(fail_with_params(
+                "debug.multiAgentErrRoute",
+                json!({"subject":"backend task","actual":format!("{:?}", r),"expected":"be"}),
+                format!("BE routed to {:?}", r),
+            ));
         }
         let r = HostAgent::route_to_koi("Write tests", &kois);
         if r == Some("qa".into()) {
-            return Err(fail("debug.multiAgentErrOfflineRouted", "offline Koi routed"));
+            return Err(fail(
+                "debug.multiAgentErrOfflineRouted",
+                "offline Koi routed",
+            ));
         }
         if HostAgent::route_to_koi("x", &[]).is_some() {
-            return Err(fail_with_params("debug.multiAgentErrUnexpectedSome", json!({"subject":"empty route result"}), "empty→Some"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrUnexpectedSome",
+                json!({"subject":"empty route result"}),
+                "empty→Some",
+            ));
         }
         ok()
-    }.await;
+    }
+    .await;
     finish_test("route_to_koi", r, start)
 }
 
@@ -673,52 +865,99 @@ async fn test_runtime_assign_execute() -> TestResult {
         let (db, bus, runtime) = setup();
         let (koi, pool) = {
             let db = db.lock().await;
-            let koi = db.create_koi("Builder", "程序员", "🏗️", "#7c6af7", "Build.", "Builder").map_err(backend_err)?;
+            let koi = db
+                .create_koi("Builder", "程序员", "🏗️", "#7c6af7", "Build.", "Builder")
+                .map_err(backend_err)?;
             let pool = db.create_pool_session("Build").map_err(backend_err)?;
             (koi, pool)
         };
-        let result = runtime.assign_and_execute(&koi.id, "Implement auth", "pisci", Some(&pool.id), "high")
-            .await.map_err(backend_err)?;
+        let result = runtime
+            .assign_and_execute(&koi.id, "Implement auth", "pisci", Some(&pool.id), "high")
+            .await
+            .map_err(backend_err)?;
         if !result.success {
-            return Err(fail_with_params("debug.multiAgentErrTaskFailed", json!({"subject":"runtime assign execute","detail":result.reply}), format!("failed: {}", result.reply)));
+            return Err(fail_with_params(
+                "debug.multiAgentErrTaskFailed",
+                json!({"subject":"runtime assign execute","detail":result.reply}),
+                format!("failed: {}", result.reply),
+            ));
         }
         if !result.reply.contains("Builder") {
-            return Err(fail_with_params("debug.multiAgentErrContains", json!({"subject":"reply","expected":"Builder"}), "missing Koi name in reply"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrContains",
+                json!({"subject":"reply","expected":"Builder"}),
+                "missing Koi name in reply",
+            ));
         }
         {
             let db = db.lock().await;
             let todos = db.list_koi_todos(Some(&koi.id)).map_err(backend_err)?;
             if todos.len() != 1 {
-                return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"todos","expected":1,"actual":todos.len()}), format!("todos: {}", todos.len())));
+                return Err(fail_with_params(
+                    "debug.multiAgentErrExpectedActual",
+                    json!({"subject":"todos","expected":1,"actual":todos.len()}),
+                    format!("todos: {}", todos.len()),
+                ));
             }
             if todos[0].status != "done" {
-                return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"todo status","expected":"done","actual":todos[0].status}), format!("todo status: {}", todos[0].status)));
+                return Err(fail_with_params(
+                    "debug.multiAgentErrExpectedActual",
+                    json!({"subject":"todo status","expected":"done","actual":todos[0].status}),
+                    format!("todo status: {}", todos[0].status),
+                ));
             }
             let k = db.get_koi(&koi.id).map_err(backend_err)?.unwrap();
             if k.status != "idle" {
-                return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"koi status","expected":"idle","actual":k.status}), format!("koi status: {}", k.status)));
+                return Err(fail_with_params(
+                    "debug.multiAgentErrExpectedActual",
+                    json!({"subject":"koi status","expected":"idle","actual":k.status}),
+                    format!("koi status: {}", k.status),
+                ));
             }
-            let msgs = db.get_pool_messages(&pool.id, 100, 0).map_err(backend_err)?;
+            let msgs = db
+                .get_pool_messages(&pool.id, 100, 0)
+                .map_err(backend_err)?;
             if msgs.len() < 3 {
-                return Err(fail_with_params("debug.multiAgentErrExpectedAtLeast", json!({"subject":"pool messages","expected":3,"actual":msgs.len()}), format!("msgs: {}", msgs.len())));
+                return Err(fail_with_params(
+                    "debug.multiAgentErrExpectedAtLeast",
+                    json!({"subject":"pool messages","expected":3,"actual":msgs.len()}),
+                    format!("msgs: {}", msgs.len()),
+                ));
             }
             let evts: Vec<String> = msgs.iter().filter_map(|m| m.event_type.clone()).collect();
             if !evts.contains(&"task_assigned".into()) {
-                return Err(fail_with_params("debug.multiAgentErrMissing", json!({"subject":"task_assigned event"}), "no task_assigned"));
+                return Err(fail_with_params(
+                    "debug.multiAgentErrMissing",
+                    json!({"subject":"task_assigned event"}),
+                    "no task_assigned",
+                ));
             }
             if !evts.contains(&"task_claimed".into()) {
-                return Err(fail_with_params("debug.multiAgentErrMissing", json!({"subject":"task_claimed event"}), "no task_claimed"));
+                return Err(fail_with_params(
+                    "debug.multiAgentErrMissing",
+                    json!({"subject":"task_claimed event"}),
+                    "no task_claimed",
+                ));
             }
             if !evts.contains(&"task_completed".into()) {
-                return Err(fail_with_params("debug.multiAgentErrMissing", json!({"subject":"task_completed event"}), "no task_completed"));
+                return Err(fail_with_params(
+                    "debug.multiAgentErrMissing",
+                    json!({"subject":"task_completed event"}),
+                    "no task_completed",
+                ));
             }
         }
         let events = bus.drain_events().await;
         if !events.iter().any(|(n, _)| n == "koi_status_changed") {
-            return Err(fail_with_params("debug.multiAgentErrMissing", json!({"subject":"koi_status_changed event"}), "no status event"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrMissing",
+                json!({"subject":"koi_status_changed event"}),
+                "no status event",
+            ));
         }
         ok()
-    }.await;
+    }
+    .await;
     finish_test("runtime_assign_execute", r, start)
 }
 
@@ -728,24 +967,37 @@ async fn test_runtime_mention() -> TestResult {
         let (db, _, runtime) = setup();
         let (koi, pool) = {
             let db = db.lock().await;
-            let koi = db.create_koi("Rev", "代码审查员", "🔍", "#26de81", "Review.", "Reviewer").map_err(backend_err)?;
+            let koi = db
+                .create_koi("Rev", "代码审查员", "🔍", "#26de81", "Review.", "Reviewer")
+                .map_err(backend_err)?;
             let pool = db.create_pool_session("Review").map_err(backend_err)?;
             (koi, pool)
         };
-        let r = runtime.handle_mention("pisci", &pool.id, &format!("@{} Review PR", koi.name))
-            .await.map_err(backend_err)?;
+        let r = runtime
+            .handle_mention("pisci", &pool.id, &format!("@{} Review PR", koi.name))
+            .await
+            .map_err(backend_err)?;
         if r.is_empty() {
             return Err(fail("debug.multiAgentErrShouldMatch", "should match"));
         }
         if !r[0].success {
             return Err(fail("debug.multiAgentErrShouldSucceed", "should succeed"));
         }
-        let r = runtime.handle_mention("pisci", &pool.id, "@Nobody stuff").await.map_err(backend_err)?;
+        let r = runtime
+            .handle_mention("pisci", &pool.id, "@Nobody stuff")
+            .await
+            .map_err(backend_err)?;
         if !r.is_empty() {
-            return Err(fail_with_params("debug.multiAgentErrUnexpectedSome", json!({"subject":"unknown mention result"}), "should be empty"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrUnexpectedSome",
+                json!({"subject":"unknown mention result"}),
+                "should be empty",
+            ));
         }
-        let r = runtime.handle_mention(&koi.id, &pool.id, "@pisci Please review")
-            .await.map_err(backend_err)?;
+        let r = runtime
+            .handle_mention(&koi.id, &pool.id, "@pisci Please review")
+            .await
+            .map_err(backend_err)?;
         if !r.is_empty() {
             return Err(fail_with_params(
                 "debug.multiAgentErrUnexpectedSome",
@@ -753,12 +1005,20 @@ async fn test_runtime_mention() -> TestResult {
                 "@pisci should not route through normal Koi mention dispatch",
             ));
         }
-        let r = runtime.handle_mention("pisci", &pool.id, "no mention").await.map_err(backend_err)?;
+        let r = runtime
+            .handle_mention("pisci", &pool.id, "no mention")
+            .await
+            .map_err(backend_err)?;
         if !r.is_empty() {
-            return Err(fail_with_params("debug.multiAgentErrUnexpectedSome", json!({"subject":"plain text mention result"}), "should be empty"));
+            return Err(fail_with_params(
+                "debug.multiAgentErrUnexpectedSome",
+                json!({"subject":"plain text mention result"}),
+                "should be empty",
+            ));
         }
         ok()
-    }.await;
+    }
+    .await;
     finish_test("runtime_mention", r, start)
 }
 
@@ -768,16 +1028,46 @@ async fn test_at_all_mention() -> TestResult {
         let (db, _, runtime) = setup();
         let (_fe, _be, qa, pool) = {
             let db = db.lock().await;
-            let fe = db.create_koi("FE_All", "前端工程师", "🎨", "#45b7d1", "Frontend.", "FE_All").map_err(backend_err)?;
-            let be = db.create_koi("BE_All", "后端工程师", "⚡", "#7c6af7", "Backend.", "BE_All").map_err(backend_err)?;
-            let qa = db.create_koi("QA_All", "测试工程师", "🔍", "#26de81", "Testing.", "QA_All").map_err(backend_err)?;
+            let fe = db
+                .create_koi(
+                    "FE_All",
+                    "前端工程师",
+                    "🎨",
+                    "#45b7d1",
+                    "Frontend.",
+                    "FE_All",
+                )
+                .map_err(backend_err)?;
+            let be = db
+                .create_koi(
+                    "BE_All",
+                    "后端工程师",
+                    "⚡",
+                    "#7c6af7",
+                    "Backend.",
+                    "BE_All",
+                )
+                .map_err(backend_err)?;
+            let qa = db
+                .create_koi(
+                    "QA_All",
+                    "测试工程师",
+                    "🔍",
+                    "#26de81",
+                    "Testing.",
+                    "QA_All",
+                )
+                .map_err(backend_err)?;
             let pool = db.create_pool_session("AtAllTest").map_err(backend_err)?;
-            db.update_koi_status(&qa.id, "offline").map_err(backend_err)?;
+            db.update_koi_status(&qa.id, "offline")
+                .map_err(backend_err)?;
             (fe, be, qa, pool)
         };
 
-        let results = runtime.handle_mention("pisci", &pool.id, "大家好，@all 请参加讨论")
-            .await.map_err(backend_err)?;
+        let results = runtime
+            .handle_mention("pisci", &pool.id, "大家好，@all 请参加讨论")
+            .await
+            .map_err(backend_err)?;
 
         // Should activate FE_All and BE_All (both idle), but not QA_All (offline)
         if results.len() != 2 {
@@ -823,7 +1113,8 @@ async fn test_at_all_mention() -> TestResult {
         }
 
         ok()
-    }.await;
+    }
+    .await;
     finish_test("at_all_mention", r, start)
 }
 
@@ -1093,9 +1384,14 @@ async fn test_koi_limit() -> TestResult {
         let db = db.lock().await;
         for i in 0..5 {
             db.create_koi(
-                &format!("K{}", i), "worker", "🐟", "#45b7d1",
-                &format!("Worker {}.", i), &format!("K{}", i),
-            ).map_err(backend_err)?;
+                &format!("K{}", i),
+                "worker",
+                "🐟",
+                "#45b7d1",
+                &format!("Worker {}.", i),
+                &format!("K{}", i),
+            )
+            .map_err(backend_err)?;
         }
         let count = db.list_kois().map_err(backend_err)?.len();
         if count != 5 {
@@ -1106,7 +1402,8 @@ async fn test_koi_limit() -> TestResult {
             ));
         }
         ok()
-    }.await;
+    }
+    .await;
     finish_test("koi_limit", r, start)
 }
 
@@ -1115,16 +1412,29 @@ async fn test_vacation_cancels_todos() -> TestResult {
     let r: Result<(), LocalizedError> = async {
         let (db, _, _) = setup();
         let db = db.lock().await;
-        let koi = db.create_koi("Vacationer", "通用助理", "🏖️", "#f7b731", "Work.", "Vacationer")
+        let koi = db
+            .create_koi(
+                "Vacationer",
+                "通用助理",
+                "🏖️",
+                "#f7b731",
+                "Work.",
+                "Vacationer",
+            )
             .map_err(backend_err)?;
-        let _t1 = db.create_koi_todo(&koi.id, "Task A", "", "medium", "pisci", None, "pisci", None)
+        let _t1 = db
+            .create_koi_todo(
+                &koi.id, "Task A", "", "medium", "pisci", None, "pisci", None,
+            )
             .map_err(backend_err)?;
-        let t2 = db.create_koi_todo(&koi.id, "Task B", "", "high", "pisci", None, "pisci", None)
+        let t2 = db
+            .create_koi_todo(&koi.id, "Task B", "", "high", "pisci", None, "pisci", None)
             .map_err(backend_err)?;
         db.claim_koi_todo(&t2.id, &koi.id).map_err(backend_err)?;
 
         // Simulate vacation: set offline and cancel uncompleted todos
-        db.update_koi_status(&koi.id, "offline").map_err(backend_err)?;
+        db.update_koi_status(&koi.id, "offline")
+            .map_err(backend_err)?;
         let todos = db.list_koi_todos(Some(&koi.id)).map_err(backend_err)?;
         for todo in &todos {
             if todo.status == "todo" || todo.status == "in_progress" {
@@ -1152,7 +1462,8 @@ async fn test_vacation_cancels_todos() -> TestResult {
             ));
         }
         ok()
-    }.await;
+    }
+    .await;
     finish_test("vacation_cancels_todos", r, start)
 }
 
@@ -1162,16 +1473,29 @@ async fn test_watchdog_recover() -> TestResult {
         let (db, _, runtime) = setup();
         {
             let db = db.lock().await;
-            let koi = db.create_koi("StaleKoi", "worker", "⏰", "#fc5c65", "Work.", "StaleKoi")
+            let koi = db
+                .create_koi("StaleKoi", "worker", "⏰", "#fc5c65", "Work.", "StaleKoi")
                 .map_err(backend_err)?;
             db.update_koi_status(&koi.id, "busy").map_err(backend_err)?;
             // Backdate updated_at to simulate a stale entry (30 min ago)
-            db.conn.execute(
-                "UPDATE kois SET updated_at = datetime('now', '-30 minutes') WHERE id = ?1",
-                rusqlite::params![koi.id],
-            ).map_err(backend_err)?;
+            db.conn
+                .execute(
+                    "UPDATE kois SET updated_at = datetime('now', '-30 minutes') WHERE id = ?1",
+                    rusqlite::params![koi.id],
+                )
+                .map_err(backend_err)?;
 
-            let todo = db.create_koi_todo(&koi.id, "Stale task", "", "medium", "pisci", None, "pisci", None)
+            let todo = db
+                .create_koi_todo(
+                    &koi.id,
+                    "Stale task",
+                    "",
+                    "medium",
+                    "pisci",
+                    None,
+                    "pisci",
+                    None,
+                )
                 .map_err(backend_err)?;
             db.claim_koi_todo(&todo.id, &koi.id).map_err(backend_err)?;
             db.conn.execute(
@@ -1220,7 +1544,8 @@ async fn test_watchdog_recover() -> TestResult {
             }
         }
         ok()
-    }.await;
+    }
+    .await;
     finish_test("watchdog_recover", r, start)
 }
 
@@ -1422,10 +1747,20 @@ async fn test_pool_session_prefix_lookup() -> TestResult {
     let r: Result<(), LocalizedError> = async {
         let (db, _, _) = setup();
         let db = db.lock().await;
-        let pool = db.create_pool_session("PrefixProject").map_err(backend_err)?;
+        let pool = db
+            .create_pool_session("PrefixProject")
+            .map_err(backend_err)?;
         let prefix = &pool.id[..8.min(pool.id.len())];
-        let resolved = db.get_pool_session_by_prefix(prefix).map_err(backend_err)?
-            .ok_or_else(|| fail_with_params("debug.multiAgentErrMissing", json!({"subject":"pool prefix lookup"}), "pool prefix lookup returned none"))?;
+        let resolved = db
+            .get_pool_session_by_prefix(prefix)
+            .map_err(backend_err)?
+            .ok_or_else(|| {
+                fail_with_params(
+                    "debug.multiAgentErrMissing",
+                    json!({"subject":"pool prefix lookup"}),
+                    "pool prefix lookup returned none",
+                )
+            })?;
         if resolved.id != pool.id {
             return Err(fail_with_params(
                 "debug.multiAgentErrExpectedActual",
@@ -1433,8 +1768,16 @@ async fn test_pool_session_prefix_lookup() -> TestResult {
                 "pool prefix lookup resolved the wrong pool",
             ));
         }
-        let by_name = db.resolve_pool_session_identifier(&pool.name).map_err(backend_err)?
-            .ok_or_else(|| fail_with_params("debug.multiAgentErrMissing", json!({"subject":"pool name lookup"}), "pool name lookup returned none"))?;
+        let by_name = db
+            .resolve_pool_session_identifier(&pool.name)
+            .map_err(backend_err)?
+            .ok_or_else(|| {
+                fail_with_params(
+                    "debug.multiAgentErrMissing",
+                    json!({"subject":"pool name lookup"}),
+                    "pool name lookup returned none",
+                )
+            })?;
         if by_name.id != pool.id {
             return Err(fail_with_params(
                 "debug.multiAgentErrExpectedActual",
@@ -1443,7 +1786,8 @@ async fn test_pool_session_prefix_lookup() -> TestResult {
             ));
         }
         ok()
-    }.await;
+    }
+    .await;
     finish_test("pool_session_prefix_lookup", r, start)
 }
 

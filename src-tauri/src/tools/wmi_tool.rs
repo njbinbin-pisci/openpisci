@@ -15,7 +15,9 @@ pub struct WmiTool;
 
 #[async_trait]
 impl Tool for WmiTool {
-    fn name(&self) -> &str { "wmi" }
+    fn name(&self) -> &str {
+        "wmi"
+    }
 
     fn description(&self) -> &str {
         "Query Windows hardware and system info via WMI (WQL). Best for: CPU, RAM, GPU, BIOS, disks, network adapters. \
@@ -64,7 +66,9 @@ impl Tool for WmiTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let max = input["max_results"].as_u64().unwrap_or(20);
@@ -74,7 +78,10 @@ impl Tool for WmiTool {
             self.preset_to_wql(preset)
         } else if let Some(class) = input["class"].as_str() {
             let props = if let Some(arr) = input["properties"].as_array() {
-                arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(",")
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
             } else {
                 "*".to_string()
             };
@@ -127,7 +134,11 @@ impl WmiTool {
         let mut cmd = Command::new("powershell");
         // Use workspace root as cwd if it exists, otherwise fall back to system temp dir
         // to avoid ERROR_INVALID_NAME (os error 123) when workspace_root is empty/invalid.
-        let safe_cwd = if cwd.exists() { cwd.to_path_buf() } else { std::env::temp_dir() };
+        let safe_cwd = if cwd.exists() {
+            cwd.to_path_buf()
+        } else {
+            std::env::temp_dir()
+        };
         cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
             .current_dir(&safe_cwd)
             .stdout(Stdio::piped())
@@ -140,15 +151,25 @@ impl WmiTool {
         let result = timeout(Duration::from_secs(WMI_TIMEOUT_SECS), cmd.output()).await;
 
         match result {
-            Err(_) => Ok(ToolResult::err(format!("WMI query timed out after {}s", WMI_TIMEOUT_SECS))),
+            Err(_) => Ok(ToolResult::err(format!(
+                "WMI query timed out after {}s",
+                WMI_TIMEOUT_SECS
+            ))),
             Ok(Err(e)) => Ok(ToolResult::err(format!("Failed to run WMI query: {}", e))),
             Ok(Ok(output)) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
                 if stdout.is_empty() {
-                    let msg = if stderr.is_empty() { "No results".to_string() } else { stderr };
-                    return Ok(ToolResult::ok(format!("WMI query returned no results.\nQuery: {}\n{}", wql, msg)));
+                    let msg = if stderr.is_empty() {
+                        "No results".to_string()
+                    } else {
+                        stderr
+                    };
+                    return Ok(ToolResult::ok(format!(
+                        "WMI query returned no results.\nQuery: {}\n{}",
+                        wql, msg
+                    )));
                 }
 
                 match serde_json::from_str::<Value>(&stdout) {

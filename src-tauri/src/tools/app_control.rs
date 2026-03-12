@@ -1,8 +1,8 @@
 use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use crate::commands::tools::BuiltinToolInfo;
 use crate::skills::loader::SkillLoader;
-use crate::tools::user_tool::UserToolManifest;
 use crate::store::{settings::SshServerConfig, Database, Settings};
+use crate::tools::user_tool::UserToolManifest;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -22,7 +22,10 @@ async fn clawhub_get_with_retry(
     let base_delay_ms: u64 = 1000;
     let mut attempt = 0u32;
     loop {
-        let resp = client.get(url).send().await
+        let resp = client
+            .get(url)
+            .send()
+            .await
             .map_err(|e| anyhow::anyhow!("Network error: {}", e))?;
         let status = resp.status();
         if status.is_success() || (status.is_client_error() && status.as_u16() != 429) {
@@ -31,7 +34,8 @@ async fn clawhub_get_with_retry(
         if attempt >= max_retries {
             return Ok(resp);
         }
-        let retry_after_ms = resp.headers()
+        let retry_after_ms = resp
+            .headers()
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok())
@@ -42,7 +46,14 @@ async fn clawhub_get_with_retry(
         } else {
             (base_delay_ms * (1u64 << attempt.min(4))).min(16_000)
         };
-        warn!("ClawHub {} for '{}', retrying in {}ms ({}/{})", status, url, backoff_ms, attempt + 1, max_retries);
+        warn!(
+            "ClawHub {} for '{}', retrying in {}ms ({}/{})",
+            status,
+            url,
+            backoff_ms,
+            attempt + 1,
+            max_retries
+        );
         tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
         attempt += 1;
     }
@@ -67,7 +78,9 @@ impl AppControlTool {
 
 #[async_trait]
 impl Tool for AppControlTool {
-    fn name(&self) -> &str { "app_control" }
+    fn name(&self) -> &str {
+        "app_control"
+    }
 
     fn description(&self) -> &str {
         "Control OpenPisci application: manage scheduled tasks, settings, UI/windows, built-in tools, user tools, runtimes, SSH servers, and skills.\
@@ -224,7 +237,9 @@ impl Tool for AppControlTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let action = match input["action"].as_str() {
@@ -291,7 +306,11 @@ impl AppControlTool {
                         }
                     )
                 }).collect();
-                Ok(ToolResult::ok(format!("{} task(s):\n\n{}", tasks.len(), lines.join("\n\n"))))
+                Ok(ToolResult::ok(format!(
+                    "{} task(s):\n\n{}",
+                    tasks.len(),
+                    lines.join("\n\n")
+                )))
             }
             Err(e) => Ok(ToolResult::err(format!("Failed to list tasks: {}", e))),
         }
@@ -302,13 +321,21 @@ impl AppControlTool {
             Some(n) => n,
             None => return Ok(ToolResult::err("'name' is required for task_create")),
         };
-        let cron = match input["cron_expression"].as_str().filter(|s| !s.trim().is_empty()) {
+        let cron = match input["cron_expression"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+        {
             Some(c) => c,
-            None => return Ok(ToolResult::err(
-                "'cron_expression' is required (5 fields, e.g. '0 * * * *' = every hour)"
-            )),
+            None => {
+                return Ok(ToolResult::err(
+                    "'cron_expression' is required (5 fields, e.g. '0 * * * *' = every hour)",
+                ))
+            }
         };
-        let prompt = match input["task_prompt"].as_str().filter(|s| !s.trim().is_empty()) {
+        let prompt = match input["task_prompt"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+        {
             Some(p) => p,
             None => return Ok(ToolResult::err("'task_prompt' is required for task_create")),
         };
@@ -337,8 +364,8 @@ impl AppControlTool {
             Some(i) => i,
             None => return Ok(ToolResult::err("'id' is required for task_update")),
         };
-        let name   = input["name"].as_str();
-        let cron   = input["cron_expression"].as_str();
+        let name = input["name"].as_str();
+        let cron = input["cron_expression"].as_str();
         let prompt = input["task_prompt"].as_str();
         let status = input["status"].as_str();
 
@@ -356,7 +383,7 @@ impl AppControlTool {
         let db = self.db.lock().await;
         match db.get_task(id) {
             Ok(None) => return Ok(ToolResult::err(format!("Task '{}' not found", id))),
-            Err(e)   => return Ok(ToolResult::err(format!("Failed to look up task: {}", e))),
+            Err(e) => return Ok(ToolResult::err(format!("Failed to look up task: {}", e))),
             Ok(Some(_)) => {}
         }
         match db.update_task(id, name, cron, prompt, status) {
@@ -373,9 +400,12 @@ impl AppControlTool {
         let db = self.db.lock().await;
         match db.get_task(id) {
             Ok(None) => Ok(ToolResult::err(format!("Task '{}' not found", id))),
-            Err(e)   => Ok(ToolResult::err(format!("Failed to look up task: {}", e))),
+            Err(e) => Ok(ToolResult::err(format!("Failed to look up task: {}", e))),
             Ok(Some(t)) => match db.delete_task(id) {
-                Ok(_) => Ok(ToolResult::ok(format!("Task '{}' ('{}') deleted.", id, t.name))),
+                Ok(_) => Ok(ToolResult::ok(format!(
+                    "Task '{}' ('{}') deleted.",
+                    id, t.name
+                ))),
                 Err(e) => Ok(ToolResult::err(format!("Failed to delete task: {}", e))),
             },
         }
@@ -402,18 +432,22 @@ impl AppControlTool {
     async fn settings_get(&self) -> anyhow::Result<ToolResult> {
         let s = self.settings.lock().await;
         let mask = |key: &str| -> String {
-            if key.is_empty() { "(not set)".to_string() }
-            else if key.len() <= 4 { "****".to_string() }
-            else { format!("****{}", &key[key.len()-4..]) }
+            if key.is_empty() {
+                "(not set)".to_string()
+            } else if key.len() <= 4 {
+                "****".to_string()
+            } else {
+                format!("****{}", &key[key.len() - 4..])
+            }
         };
         let provider_key = match s.provider.as_str() {
             "openai" | "custom" => mask(&s.openai_api_key),
-            "deepseek"          => mask(&s.deepseek_api_key),
-            "qwen" | "tongyi"   => mask(&s.qwen_api_key),
-            "minimax"           => mask(&s.minimax_api_key),
-            "zhipu"             => mask(&s.zhipu_api_key),
+            "deepseek" => mask(&s.deepseek_api_key),
+            "qwen" | "tongyi" => mask(&s.qwen_api_key),
+            "minimax" => mask(&s.minimax_api_key),
+            "zhipu" => mask(&s.zhipu_api_key),
             "kimi" | "moonshot" => mask(&s.kimi_api_key),
-            _                   => mask(&s.anthropic_api_key),
+            _ => mask(&s.anthropic_api_key),
         };
         let configured = |s: &str| if s.is_empty() { "(not set)" } else { "(set)" };
         Ok(ToolResult::ok(format!(
@@ -456,7 +490,11 @@ impl AppControlTool {
              {ssh_section}",
             provider = s.provider,
             model = s.model,
-            base_url = if s.custom_base_url.is_empty() { "(none)".to_string() } else { s.custom_base_url.clone() },
+            base_url = if s.custom_base_url.is_empty() {
+                "(none)".to_string()
+            } else {
+                s.custom_base_url.clone()
+            },
             key = provider_key,
             max_tokens = s.max_tokens,
             ctx_win = s.context_window,
@@ -485,18 +523,40 @@ impl AppControlTool {
             telegram_enabled = s.telegram_enabled,
             telegram_bot_token = configured(&s.telegram_bot_token),
             ssh_section = if s.ssh_servers.is_empty() {
-                "\n\nSSH Servers:\n- (none configured — add servers in Settings > SSH Servers)".to_string()
+                "\n\nSSH Servers:\n- (none configured — add servers in Settings > SSH Servers)"
+                    .to_string()
             } else {
-                let lines: Vec<String> = s.ssh_servers.iter().map(|srv| {
-                    let auth = if !srv.password.is_empty() { "password" }
-                               else if !srv.private_key.is_empty() { "key" }
-                               else { "no-auth" };
-                    format!("  - '{}' ({}): {}@{}:{} [{}]",
-                        srv.id,
-                        if srv.label.is_empty() { &srv.id } else { &srv.label },
-                        srv.username, srv.host, srv.port, auth)
-                }).collect();
-                format!("\n\nSSH Servers ({} configured):\n{}", s.ssh_servers.len(), lines.join("\n"))
+                let lines: Vec<String> = s
+                    .ssh_servers
+                    .iter()
+                    .map(|srv| {
+                        let auth = if !srv.password.is_empty() {
+                            "password"
+                        } else if !srv.private_key.is_empty() {
+                            "key"
+                        } else {
+                            "no-auth"
+                        };
+                        format!(
+                            "  - '{}' ({}): {}@{}:{} [{}]",
+                            srv.id,
+                            if srv.label.is_empty() {
+                                &srv.id
+                            } else {
+                                &srv.label
+                            },
+                            srv.username,
+                            srv.host,
+                            srv.port,
+                            auth
+                        )
+                    })
+                    .collect();
+                format!(
+                    "\n\nSSH Servers ({} configured):\n{}",
+                    s.ssh_servers.len(),
+                    lines.join("\n")
+                )
             },
         )))
     }
@@ -592,25 +652,47 @@ impl AppControlTool {
 
         // API key — stored into the correct field based on provider
         if let Some(key) = input["api_key"].as_str().filter(|k| !k.trim().is_empty()) {
-            let target = input["provider"].as_str().unwrap_or(&s.provider).to_string();
+            let target = input["provider"]
+                .as_str()
+                .unwrap_or(&s.provider)
+                .to_string();
             match target.as_str() {
-                "openai" | "custom" => { s.openai_api_key = key.to_string(); }
-                "deepseek"          => { s.deepseek_api_key = key.to_string(); }
-                "qwen" | "tongyi"   => { s.qwen_api_key = key.to_string(); }
-                "minimax"           => { s.minimax_api_key = key.to_string(); }
-                "zhipu"             => { s.zhipu_api_key = key.to_string(); }
-                "kimi" | "moonshot" => { s.kimi_api_key = key.to_string(); }
-                _                   => { s.anthropic_api_key = key.to_string(); }
+                "openai" | "custom" => {
+                    s.openai_api_key = key.to_string();
+                }
+                "deepseek" => {
+                    s.deepseek_api_key = key.to_string();
+                }
+                "qwen" | "tongyi" => {
+                    s.qwen_api_key = key.to_string();
+                }
+                "minimax" => {
+                    s.minimax_api_key = key.to_string();
+                }
+                "zhipu" => {
+                    s.zhipu_api_key = key.to_string();
+                }
+                "kimi" | "moonshot" => {
+                    s.kimi_api_key = key.to_string();
+                }
+                _ => {
+                    s.anthropic_api_key = key.to_string();
+                }
             }
-            changed.push(format!("api_key ({}) = ****{}",
+            changed.push(format!(
+                "api_key ({}) = ****{}",
                 target,
-                if key.len() > 4 { &key[key.len()-4..] } else { "****" }
+                if key.len() > 4 {
+                    &key[key.len() - 4..]
+                } else {
+                    "****"
+                }
             ));
         }
 
         if changed.is_empty() {
             return Ok(ToolResult::err(
-                "No recognized fields provided. Use settings_get to see available fields."
+                "No recognized fields provided. Use settings_get to see available fields.",
             ));
         }
 
@@ -619,7 +701,11 @@ impl AppControlTool {
                 self.emit_settings_changed();
                 Ok(ToolResult::ok(format!(
                     "Settings saved. Changed:\n{}",
-                    changed.iter().map(|c| format!("  - {}", c)).collect::<Vec<_>>().join("\n")
+                    changed
+                        .iter()
+                        .map(|c| format!("  - {}", c))
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 )))
             }
             Err(e) => Ok(ToolResult::err(format!("Failed to save settings: {}", e))),
@@ -643,9 +729,11 @@ impl AppControlTool {
             let detected = if !override_path.is_empty() {
                 probe_command(&override_path, &["--version"])
             } else if key == "python" {
-                probe_command("python", &["--version"]).or_else(|| probe_command("python3", &["--version"]))
+                probe_command("python", &["--version"])
+                    .or_else(|| probe_command("python3", &["--version"]))
             } else if key == "pip" {
-                probe_command("pip", &["--version"]).or_else(|| probe_command("pip3", &["--version"]))
+                probe_command("pip", &["--version"])
+                    .or_else(|| probe_command("pip3", &["--version"]))
             } else {
                 probe_command(key, &["--version"])
             };
@@ -655,18 +743,32 @@ impl AppControlTool {
                 key,
                 detected.is_some(),
                 detected.unwrap_or_else(|| "(not found)".to_string()),
-                if override_path.is_empty() { "(none)".to_string() } else { override_path },
+                if override_path.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    override_path
+                },
                 hint
             ));
         }
 
-        Ok(ToolResult::ok(format!("Runtime checks:\n\n{}", lines.join("\n\n"))))
+        Ok(ToolResult::ok(format!(
+            "Runtime checks:\n\n{}",
+            lines.join("\n\n")
+        )))
     }
 
     async fn runtime_set_path(&self, input: &Value) -> anyhow::Result<ToolResult> {
-        let runtime_key = match input["runtime_key"].as_str().filter(|s| !s.trim().is_empty()) {
+        let runtime_key = match input["runtime_key"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+        {
             Some(v) => v.trim().to_string(),
-            None => return Ok(ToolResult::err("'runtime_key' is required for runtime_set_path")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'runtime_key' is required for runtime_set_path",
+                ))
+            }
         };
         let exe_path = input["exe_path"].as_str().unwrap_or("").trim().to_string();
 
@@ -674,9 +776,12 @@ impl AppControlTool {
         if exe_path.is_empty() {
             settings.runtime_paths.remove(&runtime_key);
         } else {
-            settings.runtime_paths.insert(runtime_key.clone(), exe_path.clone());
+            settings
+                .runtime_paths
+                .insert(runtime_key.clone(), exe_path.clone());
         }
-        settings.save()
+        settings
+            .save()
             .map_err(|e| anyhow::anyhow!("Failed to save runtime path: {}", e))?;
         drop(settings);
         self.emit_settings_changed();
@@ -689,7 +794,11 @@ impl AppControlTool {
         };
         Ok(ToolResult::ok(format!(
             "Runtime override {} for '{}'. Probe result: {}",
-            if exe_path.is_empty() { "cleared" } else { "saved" },
+            if exe_path.is_empty() {
+                "cleared"
+            } else {
+                "saved"
+            },
             runtime_key,
             probe
         )))
@@ -700,21 +809,37 @@ impl AppControlTool {
         if settings.ssh_servers.is_empty() {
             return Ok(ToolResult::ok("No SSH servers configured."));
         }
-        let lines: Vec<String> = settings.ssh_servers.iter().map(|srv| {
-            let auth = if !srv.password.is_empty() { "password" }
-                else if !srv.private_key.is_empty() { "key" }
-                else { "no-auth" };
-            format!(
-                "- ID: {}\n  Label: {}\n  Host: {}:{}\n  Username: {}\n  Auth: {}",
-                srv.id,
-                if srv.label.is_empty() { "(none)" } else { &srv.label },
-                srv.host,
-                srv.port,
-                srv.username,
-                auth
-            )
-        }).collect();
-        Ok(ToolResult::ok(format!("SSH servers ({}):\n\n{}", settings.ssh_servers.len(), lines.join("\n\n"))))
+        let lines: Vec<String> = settings
+            .ssh_servers
+            .iter()
+            .map(|srv| {
+                let auth = if !srv.password.is_empty() {
+                    "password"
+                } else if !srv.private_key.is_empty() {
+                    "key"
+                } else {
+                    "no-auth"
+                };
+                format!(
+                    "- ID: {}\n  Label: {}\n  Host: {}:{}\n  Username: {}\n  Auth: {}",
+                    srv.id,
+                    if srv.label.is_empty() {
+                        "(none)"
+                    } else {
+                        &srv.label
+                    },
+                    srv.host,
+                    srv.port,
+                    srv.username,
+                    auth
+                )
+            })
+            .collect();
+        Ok(ToolResult::ok(format!(
+            "SSH servers ({}):\n\n{}",
+            settings.ssh_servers.len(),
+            lines.join("\n\n")
+        )))
     }
 
     async fn ssh_upsert(&self, input: &Value) -> anyhow::Result<ToolResult> {
@@ -726,7 +851,10 @@ impl AppControlTool {
             Some(v) => v.trim().to_string(),
             None => return Ok(ToolResult::err("'ssh_host' is required for ssh_upsert")),
         };
-        let ssh_username = match input["ssh_username"].as_str().filter(|s| !s.trim().is_empty()) {
+        let ssh_username = match input["ssh_username"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+        {
             Some(v) => v.trim().to_string(),
             None => return Ok(ToolResult::err("'ssh_username' is required for ssh_upsert")),
         };
@@ -736,7 +864,11 @@ impl AppControlTool {
         let ssh_private_key = input["ssh_private_key"].as_str().unwrap_or("");
 
         let mut settings = self.settings.lock().await;
-        let existing = settings.ssh_servers.iter().find(|s| s.id == ssh_id).cloned();
+        let existing = settings
+            .ssh_servers
+            .iter()
+            .find(|s| s.id == ssh_id)
+            .cloned();
         let server = SshServerConfig {
             id: ssh_id.clone(),
             label: ssh_label,
@@ -744,12 +876,18 @@ impl AppControlTool {
             port: ssh_port,
             username: ssh_username,
             password: if ssh_password.is_empty() {
-                existing.as_ref().map(|s| s.password.clone()).unwrap_or_default()
+                existing
+                    .as_ref()
+                    .map(|s| s.password.clone())
+                    .unwrap_or_default()
             } else {
                 ssh_password.to_string()
             },
             private_key: if ssh_private_key.is_empty() {
-                existing.as_ref().map(|s| s.private_key.clone()).unwrap_or_default()
+                existing
+                    .as_ref()
+                    .map(|s| s.private_key.clone())
+                    .unwrap_or_default()
             } else {
                 ssh_private_key.to_string()
             },
@@ -760,7 +898,8 @@ impl AppControlTool {
         } else {
             settings.ssh_servers.push(server);
         }
-        settings.save()
+        settings
+            .save()
             .map_err(|e| anyhow::anyhow!("Failed to save SSH server: {}", e))?;
         drop(settings);
         self.emit_settings_changed();
@@ -776,9 +915,13 @@ impl AppControlTool {
         let before = settings.ssh_servers.len();
         settings.ssh_servers.retain(|s| s.id != ssh_id);
         if settings.ssh_servers.len() == before {
-            return Ok(ToolResult::err(format!("SSH server '{}' not found", ssh_id)));
+            return Ok(ToolResult::err(format!(
+                "SSH server '{}' not found",
+                ssh_id
+            )));
         }
-        settings.save()
+        settings
+            .save()
             .map_err(|e| anyhow::anyhow!("Failed to save SSH settings: {}", e))?;
         drop(settings);
         self.emit_settings_changed();
@@ -794,35 +937,61 @@ impl AppControlTool {
         };
         let app = match &self.app_handle {
             Some(app) => app.clone(),
-            None => return Ok(ToolResult::err("Window control is unavailable in this context")),
+            None => {
+                return Ok(ToolResult::err(
+                    "Window control is unavailable in this context",
+                ))
+            }
         };
-        crate::commands::window::apply_app_theme(&app, &theme).await
+        crate::commands::window::apply_app_theme(&app, &theme)
+            .await
             .map_err(|e| anyhow::anyhow!(e))?;
-        Ok(ToolResult::ok(format!("App theme switched to '{}'.", theme)))
+        Ok(ToolResult::ok(format!(
+            "App theme switched to '{}'.",
+            theme
+        )))
     }
 
     async fn ui_set_theme_border(&self, input: &Value) -> anyhow::Result<ToolResult> {
         let theme = match input["theme"].as_str().filter(|s| !s.trim().is_empty()) {
             Some(v) => v.trim().to_string(),
-            None => return Ok(ToolResult::err("'theme' is required for ui_set_theme_border")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'theme' is required for ui_set_theme_border",
+                ))
+            }
         };
         let app = match &self.app_handle {
             Some(app) => app.clone(),
-            None => return Ok(ToolResult::err("Window control is unavailable in this context")),
+            None => {
+                return Ok(ToolResult::err(
+                    "Window control is unavailable in this context",
+                ))
+            }
         };
-        crate::commands::window::set_window_theme_border(app, theme.clone()).await
+        crate::commands::window::set_window_theme_border(app, theme.clone())
+            .await
             .map_err(|e| anyhow::anyhow!(e))?;
-        Ok(ToolResult::ok(format!("Main window border theme set to '{}'.", theme)))
+        Ok(ToolResult::ok(format!(
+            "Main window border theme set to '{}'.",
+            theme
+        )))
     }
 
     async fn ui_enter_minimal_mode(&self) -> anyhow::Result<ToolResult> {
         let app = match &self.app_handle {
             Some(app) => app.clone(),
-            None => return Ok(ToolResult::err("Window control is unavailable in this context")),
+            None => {
+                return Ok(ToolResult::err(
+                    "Window control is unavailable in this context",
+                ))
+            }
         };
-        let main = app.get_webview_window("main")
+        let main = app
+            .get_webview_window("main")
             .ok_or_else(|| anyhow::anyhow!("Main window not found"))?;
-        let overlay = app.get_webview_window("overlay")
+        let overlay = app
+            .get_webview_window("overlay")
             .ok_or_else(|| anyhow::anyhow!("Overlay window not found"))?;
 
         let (ox, oy) = {
@@ -850,41 +1019,75 @@ impl AppControlTool {
         overlay
             .set_always_on_top(true)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        Ok(ToolResult::ok(format!("Entered minimal mode at ({}, {}).", ox, oy)))
+        Ok(ToolResult::ok(format!(
+            "Entered minimal mode at ({}, {}).",
+            ox, oy
+        )))
     }
 
     async fn ui_exit_minimal_mode(&self) -> anyhow::Result<ToolResult> {
         let app = match &self.app_handle {
             Some(app) => app.clone(),
-            None => return Ok(ToolResult::err("Window control is unavailable in this context")),
+            None => {
+                return Ok(ToolResult::err(
+                    "Window control is unavailable in this context",
+                ))
+            }
         };
-        crate::commands::window::exit_minimal_mode(app).await
+        crate::commands::window::exit_minimal_mode(app)
+            .await
             .map_err(|e| anyhow::anyhow!(e))?;
         Ok(ToolResult::ok("Exited minimal mode."))
     }
 
     async fn window_move(&self, input: &Value) -> anyhow::Result<ToolResult> {
-        let target = match input["window_target"].as_str().filter(|s| !s.trim().is_empty()) {
+        let target = match input["window_target"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+        {
             Some(v @ ("main" | "overlay")) => v,
-            Some(_) => return Ok(ToolResult::err("'window_target' must be 'main' or 'overlay'")),
-            None => return Ok(ToolResult::err("'window_target' is required for window_move")),
+            Some(_) => {
+                return Ok(ToolResult::err(
+                    "'window_target' must be 'main' or 'overlay'",
+                ))
+            }
+            None => {
+                return Ok(ToolResult::err(
+                    "'window_target' is required for window_move",
+                ))
+            }
         };
         let app = match &self.app_handle {
             Some(app) => app.clone(),
-            None => return Ok(ToolResult::err("Window control is unavailable in this context")),
+            None => {
+                return Ok(ToolResult::err(
+                    "Window control is unavailable in this context",
+                ))
+            }
         };
         let window = app
             .get_webview_window(target)
             .ok_or_else(|| anyhow::anyhow!("Window '{}' not found", target))?;
 
-        let (x, y) = match input["position_preset"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        let (x, y) = match input["position_preset"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             Some("bottom_right") => bottom_right_position(&window)?,
-            Some(other) => return Ok(ToolResult::err(format!("Unsupported position_preset '{}'", other))),
+            Some(other) => {
+                return Ok(ToolResult::err(format!(
+                    "Unsupported position_preset '{}'",
+                    other
+                )))
+            }
             None => {
-                let x = input["x"].as_i64()
-                    .ok_or_else(|| anyhow::anyhow!("'x' is required when position_preset is not used"))? as i32;
-                let y = input["y"].as_i64()
-                    .ok_or_else(|| anyhow::anyhow!("'y' is required when position_preset is not used"))? as i32;
+                let x = input["x"].as_i64().ok_or_else(|| {
+                    anyhow::anyhow!("'x' is required when position_preset is not used")
+                })? as i32;
+                let y = input["y"].as_i64().ok_or_else(|| {
+                    anyhow::anyhow!("'y' is required when position_preset is not used")
+                })? as i32;
                 (x, y)
             }
         };
@@ -896,10 +1099,14 @@ impl AppControlTool {
             let mut settings = self.settings.lock().await;
             settings.overlay_x = Some(x);
             settings.overlay_y = Some(y);
-            settings.save()
+            settings
+                .save()
                 .map_err(|e| anyhow::anyhow!("Failed to persist overlay position: {}", e))?;
         }
-        Ok(ToolResult::ok(format!("Moved '{}' window to ({}, {}).", target, x, y)))
+        Ok(ToolResult::ok(format!(
+            "Moved '{}' window to ({}, {}).",
+            target, x, y
+        )))
     }
 
     // ── Built-in Tools ────────────────────────────────────────────────────────
@@ -928,19 +1135,36 @@ impl AppControlTool {
     async fn builtin_tool_toggle(&self, input: &Value) -> anyhow::Result<ToolResult> {
         let tool_name = match input["tool_name"].as_str().filter(|s| !s.trim().is_empty()) {
             Some(v) => v.trim().to_string(),
-            None => return Ok(ToolResult::err("'tool_name' is required for builtin_tool_toggle")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'tool_name' is required for builtin_tool_toggle",
+                ))
+            }
         };
         let enabled = match input["enabled"].as_bool() {
             Some(v) => v,
-            None => return Ok(ToolResult::err("'enabled' (boolean) is required for builtin_tool_toggle")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'enabled' (boolean) is required for builtin_tool_toggle",
+                ))
+            }
         };
-        if !builtin_tool_catalog().iter().any(|tool| tool.name == tool_name.as_str()) {
-            return Ok(ToolResult::err(format!("Built-in tool '{}' not found", tool_name)));
+        if !builtin_tool_catalog()
+            .iter()
+            .any(|tool| tool.name == tool_name.as_str())
+        {
+            return Ok(ToolResult::err(format!(
+                "Built-in tool '{}' not found",
+                tool_name
+            )));
         }
 
         let mut settings = self.settings.lock().await;
-        settings.builtin_tool_enabled.insert(tool_name.clone(), enabled);
-        settings.save()
+        settings
+            .builtin_tool_enabled
+            .insert(tool_name.clone(), enabled);
+        settings
+            .save()
             .map_err(|e| anyhow::anyhow!("Failed to save built-in tool settings: {}", e))?;
         drop(settings);
         self.emit_settings_changed();
@@ -986,13 +1210,21 @@ impl AppControlTool {
                 tool.manifest.description
             ));
         }
-        Ok(ToolResult::ok(format!("{} user tool(s):\n\n{}", lines.len(), lines.join("\n\n"))))
+        Ok(ToolResult::ok(format!(
+            "{} user tool(s):\n\n{}",
+            lines.len(),
+            lines.join("\n\n")
+        )))
     }
 
     async fn user_tool_config_get(&self, input: &Value) -> anyhow::Result<ToolResult> {
         let tool_name = match input["tool_name"].as_str().filter(|s| !s.trim().is_empty()) {
             Some(v) => v.trim().to_string(),
-            None => return Ok(ToolResult::err("'tool_name' is required for user_tool_config_get")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'tool_name' is required for user_tool_config_get",
+                ))
+            }
         };
         let manifest = load_user_tool_manifest(&self.app_data_dir, &tool_name)?;
         let settings = self.settings.lock().await;
@@ -1030,17 +1262,27 @@ impl AppControlTool {
             }
         }
 
-        Ok(ToolResult::ok(serde_json::to_string_pretty(&Value::Object(result))?))
+        Ok(ToolResult::ok(serde_json::to_string_pretty(
+            &Value::Object(result),
+        )?))
     }
 
     async fn user_tool_config_set(&self, input: &Value) -> anyhow::Result<ToolResult> {
         let tool_name = match input["tool_name"].as_str().filter(|s| !s.trim().is_empty()) {
             Some(v) => v.trim().to_string(),
-            None => return Ok(ToolResult::err("'tool_name' is required for user_tool_config_set")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'tool_name' is required for user_tool_config_set",
+                ))
+            }
         };
         let new_config = match input.get("config") {
             Some(Value::Object(map)) => map.clone(),
-            _ => return Ok(ToolResult::err("'config' object is required for user_tool_config_set")),
+            _ => {
+                return Ok(ToolResult::err(
+                    "'config' object is required for user_tool_config_set",
+                ))
+            }
         };
         let manifest = load_user_tool_manifest(&self.app_data_dir, &tool_name)?;
 
@@ -1067,11 +1309,15 @@ impl AppControlTool {
         settings
             .user_tool_configs
             .insert(tool_name.clone(), Value::Object(merged));
-        settings.save()
+        settings
+            .save()
             .map_err(|e| anyhow::anyhow!("Failed to save user tool config: {}", e))?;
         drop(settings);
         self.emit_settings_changed();
-        Ok(ToolResult::ok(format!("Config for user tool '{}' saved.", tool_name)))
+        Ok(ToolResult::ok(format!(
+            "Config for user tool '{}' saved.",
+            tool_name
+        )))
     }
 
     // ── Skills ────────────────────────────────────────────────────────────────
@@ -1095,7 +1341,9 @@ impl AppControlTool {
 
         let mut lines: Vec<String> = Vec::new();
         for db_skill in &db_skills {
-            let fs_entry = fs_skills.iter().find(|s| s.name == db_skill.name || s.name == db_skill.id);
+            let fs_entry = fs_skills
+                .iter()
+                .find(|s| s.name == db_skill.name || s.name == db_skill.id);
             lines.push(format!(
                 "ID: {}\n  Name: {}\n  Description: {}\n  Enabled: {}\n  Source: {}\n  Version: {}\n  Tools: {}\n  Dependencies: {}{}",
                 db_skill.id,
@@ -1110,7 +1358,11 @@ impl AppControlTool {
             ));
         }
 
-        Ok(ToolResult::ok(format!("{} skill(s):\n\n{}", lines.len(), lines.join("\n\n"))))
+        Ok(ToolResult::ok(format!(
+            "{} skill(s):\n\n{}",
+            lines.len(),
+            lines.join("\n\n")
+        )))
     }
 
     async fn skill_search(&self, input: &Value) -> anyhow::Result<ToolResult> {
@@ -1124,33 +1376,58 @@ impl AppControlTool {
             .map_err(|e| anyhow::anyhow!(e))?;
 
         let (url, use_search) = if query.is_empty() {
-            (format!("{}/api/v1/skills?sort=stars&limit={}", CLAWHUB_API, limit), false)
+            (
+                format!("{}/api/v1/skills?sort=stars&limit={}", CLAWHUB_API, limit),
+                false,
+            )
         } else {
-            (format!("{}/api/v1/search?q={}&limit={}", CLAWHUB_API, urlencoding::encode(&query), limit), true)
+            (
+                format!(
+                    "{}/api/v1/search?q={}&limit={}",
+                    CLAWHUB_API,
+                    urlencoding::encode(&query),
+                    limit
+                ),
+                true,
+            )
         };
 
         info!("skill_search: {}", url);
 
-        let resp = clawhub_get_with_retry(&client, &url, 3).await
+        let resp = clawhub_get_with_retry(&client, &url, 3)
+            .await
             .map_err(|e| anyhow::anyhow!("Cannot reach ClawHub: {}", e))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let hint = if status.as_u16() == 429 { " (rate limited, please retry later)" } else { "" };
+            let hint = if status.as_u16() == 429 {
+                " (rate limited, please retry later)"
+            } else {
+                ""
+            };
             let body = resp.text().await.unwrap_or_default();
-            return Ok(ToolResult::err(format!("ClawHub HTTP {}{}: {}", status, hint,
+            return Ok(ToolResult::err(format!(
+                "ClawHub HTTP {}{}: {}",
+                status,
+                hint,
                 if body.chars().count() > 200 {
                     body.chars().take(200).collect::<String>()
                 } else {
                     body
-                })));
+                }
+            )));
         }
 
-        let body: Value = resp.json().await
+        let body: Value = resp
+            .json()
+            .await
             .map_err(|e| anyhow::anyhow!("Invalid ClawHub response: {}", e))?;
 
         let items: Vec<String> = if use_search {
-            body["results"].as_array().cloned().unwrap_or_default()
+            body["results"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
                 .iter()
                 .filter_map(|r| {
                     let slug = r["slug"].as_str()?;
@@ -1164,22 +1441,33 @@ impl AppControlTool {
                         if ver.is_empty() { "(unspecified)" } else { ver },
                         desc
                     ))
-                }).collect()
+                })
+                .collect()
         } else {
-            body["items"].as_array().cloned().unwrap_or_default()
+            body["items"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
                 .iter()
                 .filter_map(|r| {
                     let slug = r["slug"].as_str()?;
                     let name = r["displayName"].as_str().unwrap_or(slug);
                     let desc = r["summary"].as_str().unwrap_or("");
-                    let ver  = r["latestVersion"]["version"].as_str().unwrap_or("latest");
+                    let ver = r["latestVersion"]["version"].as_str().unwrap_or("latest");
                     let stars = r["stats"]["stars"].as_u64().unwrap_or(0);
-                    Some(format!("Slug: {}\n  Name: {}\n  Version: {}\n  Stars: {}\n  Description: {}", slug, name, ver, stars, desc))
-                }).collect()
+                    Some(format!(
+                        "Slug: {}\n  Name: {}\n  Version: {}\n  Stars: {}\n  Description: {}",
+                        slug, name, ver, stars, desc
+                    ))
+                })
+                .collect()
         };
 
         if items.is_empty() {
-            return Ok(ToolResult::ok(format!("No skills found for query '{}'.", query)));
+            return Ok(ToolResult::ok(format!(
+                "No skills found for query '{}'.",
+                query
+            )));
         }
 
         Ok(ToolResult::ok(format!(
@@ -1194,41 +1482,69 @@ impl AppControlTool {
         let source = match input["source"].as_str().filter(|s| !s.trim().is_empty()) {
             Some(s) => s.to_string(),
             None => return Ok(ToolResult::err(
-                "'source' is required: provide a ClawHub slug (e.g. 'pptx-maker') or a direct URL"
+                "'source' is required: provide a ClawHub slug (e.g. 'pptx-maker') or a direct URL",
             )),
         };
 
         // Determine if source is a URL or a slug
         let content = if source.starts_with("http://") || source.starts_with("https://") {
             // Direct URL — download SKILL.md
-            let blocked = ["localhost", "127.0.0.1", "0.0.0.0", "192.168.", "10.", "172."];
+            let blocked = [
+                "localhost",
+                "127.0.0.1",
+                "0.0.0.0",
+                "192.168.",
+                "10.",
+                "172.",
+            ];
             for pat in blocked {
                 if source.contains(pat) {
-                    return Ok(ToolResult::err(format!("Blocked URL: '{}' points to a private address", source)));
+                    return Ok(ToolResult::err(format!(
+                        "Blocked URL: '{}' points to a private address",
+                        source
+                    )));
                 }
             }
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .user_agent("Pisci-Desktop/1.0")
-                .build().map_err(|e| anyhow::anyhow!(e))?;
-            let resp = client.get(&source).send().await
+                .build()
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let resp = client
+                .get(&source)
+                .send()
+                .await
                 .map_err(|e| anyhow::anyhow!("Download failed: {}", e))?;
             if !resp.status().is_success() {
-                return Ok(ToolResult::err(format!("HTTP {} fetching URL", resp.status())));
+                return Ok(ToolResult::err(format!(
+                    "HTTP {} fetching URL",
+                    resp.status()
+                )));
             }
             resp.text().await.map_err(|e| anyhow::anyhow!(e))?
         } else {
             // Treat as ClawHub slug
-            if !source.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
-                return Ok(ToolResult::err(format!("Invalid slug '{}': use alphanumeric, hyphens, underscores only", source)));
+            if !source
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+            {
+                return Ok(ToolResult::err(format!(
+                    "Invalid slug '{}': use alphanumeric, hyphens, underscores only",
+                    source
+                )));
             }
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .user_agent("Pisci-Desktop/1.0")
-                .build().map_err(|e| anyhow::anyhow!(e))?;
-            let file_url = format!("{}/api/v1/skills/{}/file?path=SKILL.md", CLAWHUB_API, source);
+                .build()
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let file_url = format!(
+                "{}/api/v1/skills/{}/file?path=SKILL.md",
+                CLAWHUB_API, source
+            );
             info!("skill_install: fetching {} from {}", source, file_url);
-            let resp = clawhub_get_with_retry(&client, &file_url, 3).await
+            let resp = clawhub_get_with_retry(&client, &file_url, 3)
+                .await
                 .map_err(|e| anyhow::anyhow!("ClawHub request failed: {}", e))?;
             if resp.status().is_success() {
                 resp.text().await.map_err(|e| anyhow::anyhow!(e))?
@@ -1236,8 +1552,12 @@ impl AppControlTool {
                 let file_status = resp.status();
                 // Fallback: zip download
                 let zip_url = format!("{}/api/v1/download?slug={}", CLAWHUB_API, source);
-                info!("skill_install: file endpoint failed ({}), trying zip: {}", file_status, zip_url);
-                let zip_resp = clawhub_get_with_retry(&client, &zip_url, 3).await
+                info!(
+                    "skill_install: file endpoint failed ({}), trying zip: {}",
+                    file_status, zip_url
+                );
+                let zip_resp = clawhub_get_with_retry(&client, &zip_url, 3)
+                    .await
                     .map_err(|e| anyhow::anyhow!("Zip download failed: {}", e))?;
                 if !zip_resp.status().is_success() {
                     let hint = if zip_resp.status().as_u16() == 429 {
@@ -1261,11 +1581,19 @@ impl AppControlTool {
     async fn skill_toggle(&self, input: &Value) -> anyhow::Result<ToolResult> {
         let skill_id = match input["skill_id"].as_str().filter(|s| !s.trim().is_empty()) {
             Some(i) => i,
-            None => return Ok(ToolResult::err("'skill_id' is required for skill_toggle (get IDs from skill_list)")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'skill_id' is required for skill_toggle (get IDs from skill_list)",
+                ))
+            }
         };
         let enabled = match input["enabled"].as_bool() {
             Some(e) => e,
-            None => return Ok(ToolResult::err("'enabled' (boolean) is required for skill_toggle")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'enabled' (boolean) is required for skill_toggle",
+                ))
+            }
         };
 
         let db = self.db.lock().await;
@@ -1280,15 +1608,30 @@ impl AppControlTool {
     }
 
     async fn skill_uninstall(&self, input: &Value) -> anyhow::Result<ToolResult> {
-        let skill_name = match input["skill_name"].as_str().filter(|s| !s.trim().is_empty()) {
+        let skill_name = match input["skill_name"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+        {
             Some(n) => n,
-            None => return Ok(ToolResult::err("'skill_name' is required for skill_uninstall")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'skill_name' is required for skill_uninstall",
+                ))
+            }
         };
 
         let skills_dir = self.app_data_dir.join("skills");
-        let safe_name: String = skill_name.chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-            .collect::<String>().to_lowercase();
+        let safe_name: String = skill_name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>()
+            .to_lowercase();
         // Remove from DB first — abort before touching filesystem if this fails
         {
             let db = self.db.lock().await;
@@ -1298,16 +1641,25 @@ impl AppControlTool {
 
         // Remove matching skill directories from disk as well.
         if skills_dir.exists() {
-            let canonical_skills = skills_dir.canonicalize()
+            let canonical_skills = skills_dir
+                .canonicalize()
                 .map_err(|e| anyhow::anyhow!("Path error: {}", e))?;
             let mut loader = SkillLoader::new(&skills_dir);
             let _ = loader.load_all();
-            let mut candidate_dirs: std::collections::BTreeSet<std::path::PathBuf> = std::collections::BTreeSet::new();
+            let mut candidate_dirs: std::collections::BTreeSet<std::path::PathBuf> =
+                std::collections::BTreeSet::new();
             candidate_dirs.insert(skills_dir.join(&safe_name));
             for skill in loader.list_skills() {
-                let parsed_safe_name = skill.name
+                let parsed_safe_name = skill
+                    .name
                     .chars()
-                    .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                    .map(|c| {
+                        if c.is_alphanumeric() || c == '-' || c == '_' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
                     .collect::<String>()
                     .to_lowercase();
                 if skill.name.eq_ignore_ascii_case(skill_name) || parsed_safe_name == safe_name {
@@ -1320,46 +1672,68 @@ impl AppControlTool {
                 if !skill_dir.exists() {
                     continue;
                 }
-                let canonical_dir = skill_dir.canonicalize()
+                let canonical_dir = skill_dir
+                    .canonicalize()
                     .map_err(|e| anyhow::anyhow!("Path error: {}", e))?;
                 if !canonical_dir.starts_with(&canonical_skills) {
                     return Ok(ToolResult::err("Path traversal attempt blocked"));
                 }
-                tokio::fs::remove_dir_all(&skill_dir).await
-                    .map_err(|e| anyhow::anyhow!("Skill removed from database but failed to delete files: {}", e))?;
+                tokio::fs::remove_dir_all(&skill_dir).await.map_err(|e| {
+                    anyhow::anyhow!(
+                        "Skill removed from database but failed to delete files: {}",
+                        e
+                    )
+                })?;
             }
         }
 
         info!("Uninstalled skill '{}'", skill_name);
-        Ok(ToolResult::ok(format!("Skill '{}' uninstalled.", skill_name)))
+        Ok(ToolResult::ok(format!(
+            "Skill '{}' uninstalled.",
+            skill_name
+        )))
     }
 
     async fn install_skill_from_content(&self, content: &str) -> anyhow::Result<ToolResult> {
         let skills_dir = self.app_data_dir.join("skills");
         let loader = SkillLoader::new(&skills_dir);
-        let skill = loader.parse_skill_from_content(content)
+        let skill = loader
+            .parse_skill_from_content(content)
             .map_err(|e| anyhow::anyhow!("Failed to parse SKILL.md: {}", e))?;
 
         if skill.name.is_empty() || skill.name == "unnamed" {
-            return Ok(ToolResult::err("SKILL.md must declare a 'name' field in frontmatter"));
+            return Ok(ToolResult::err(
+                "SKILL.md must declare a 'name' field in frontmatter",
+            ));
         }
 
         let compat = crate::skills::loader::check_skill_compatibility(&skill).await;
         if !compat.compatible {
             return Ok(ToolResult::err(format!(
                 "Skill '{}' is incompatible with this system:\n{}",
-                skill.name, compat.issues.join("\n")
+                skill.name,
+                compat.issues.join("\n")
             )));
         }
         for w in &compat.warnings {
             warn!("Skill '{}' warning: {}", skill.name, w);
         }
 
-        let safe_name: String = skill.name.chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-            .collect::<String>().to_lowercase();
+        let safe_name: String = skill
+            .name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>()
+            .to_lowercase();
         let skill_dir = skills_dir.join(&safe_name);
-        tokio::fs::create_dir_all(&skill_dir).await
+        tokio::fs::create_dir_all(&skill_dir)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to create skill dir: {}", e))?;
         {
             let db = self.db.lock().await;
@@ -1378,7 +1752,15 @@ impl AppControlTool {
         let warn_msg = if compat.warnings.is_empty() {
             String::new()
         } else {
-            format!("\nWarnings:\n{}", compat.warnings.iter().map(|w| format!("  - {}", w)).collect::<Vec<_>>().join("\n"))
+            format!(
+                "\nWarnings:\n{}",
+                compat
+                    .warnings
+                    .iter()
+                    .map(|w| format!("  - {}", w))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
         };
 
         Ok(ToolResult::ok(format!(
@@ -1391,8 +1773,16 @@ impl AppControlTool {
             skill.name,
             skill.version,
             skill.description,
-            if skill.tools.is_empty() { "(none)".to_string() } else { skill.tools.join(", ") },
-            if skill.dependencies.is_empty() { "(none)".to_string() } else { skill.dependencies.join(", ") },
+            if skill.tools.is_empty() {
+                "(none)".to_string()
+            } else {
+                skill.tools.join(", ")
+            },
+            if skill.dependencies.is_empty() {
+                "(none)".to_string()
+            } else {
+                skill.dependencies.join(", ")
+            },
             warn_msg,
         )))
     }
@@ -1400,53 +1790,210 @@ impl AppControlTool {
 
 fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
     vec![
-        BuiltinToolInfo { name: "file_read".into(), description: "Read local files.".into(), icon: "📄".into(), windows_only: false },
-        BuiltinToolInfo { name: "file_write".into(), description: "Write or append local files.".into(), icon: "✏️".into(), windows_only: false },
-        BuiltinToolInfo { name: "file_edit".into(), description: "Edit existing local files.".into(), icon: "📝".into(), windows_only: false },
-        BuiltinToolInfo { name: "file_diff".into(), description: "Compare file contents.".into(), icon: "📚".into(), windows_only: false },
-        BuiltinToolInfo { name: "code_run".into(), description: "Run code snippets.".into(), icon: "▶️".into(), windows_only: false },
-        BuiltinToolInfo { name: "file_search".into(), description: "Search text in files.".into(), icon: "🔎".into(), windows_only: false },
-        BuiltinToolInfo { name: "file_list".into(), description: "List files and folders.".into(), icon: "🗂️".into(), windows_only: false },
-        BuiltinToolInfo { name: "process_control".into(), description: "Inspect and manage processes.".into(), icon: "⚙️".into(), windows_only: false },
-        BuiltinToolInfo { name: "shell".into(), description: "Execute shell commands.".into(), icon: "⌨️".into(), windows_only: false },
-        BuiltinToolInfo { name: "powershell_query".into(), description: "Run PowerShell commands.".into(), icon: "🪟".into(), windows_only: false },
-        BuiltinToolInfo { name: "web_search".into(), description: "Search the web.".into(), icon: "🔍".into(), windows_only: false },
-        BuiltinToolInfo { name: "office".into(), description: "Operate Office documents.".into(), icon: "📊".into(), windows_only: false },
-        BuiltinToolInfo { name: "browser".into(), description: "Control the browser.".into(), icon: "🌐".into(), windows_only: false },
-        BuiltinToolInfo { name: "email".into(), description: "Send and read email.".into(), icon: "📧".into(), windows_only: false },
-        BuiltinToolInfo { name: "memory_store".into(), description: "Persist long-term memory.".into(), icon: "🧠".into(), windows_only: false },
-        BuiltinToolInfo { name: "plan_todo".into(), description: "Maintain a visible task plan for complex work.".into(), icon: "📋".into(), windows_only: false },
-        BuiltinToolInfo { name: "vision_context".into(), description: "Manage reusable vision artifacts for the next multimodal step.".into(), icon: "🖼️".into(), windows_only: false },
-        BuiltinToolInfo { name: "call_fish".into(), description: "Delegate work to Fish sub-agents.".into(), icon: "🐠".into(), windows_only: false },
-        BuiltinToolInfo { name: "call_koi".into(), description: "Delegate work to persistent Koi agents.".into(), icon: "🐟".into(), windows_only: false },
-        BuiltinToolInfo { name: "pool_org".into(), description: "Create and manage project pools and organization specs.".into(), icon: "🏊".into(), windows_only: false },
-        BuiltinToolInfo { name: "app_control".into(), description: "Manage Pisci app settings and system state.".into(), icon: "🎛️".into(), windows_only: false },
-        BuiltinToolInfo { name: "skill_search".into(), description: "Search installed skills and instructions.".into(), icon: "📦".into(), windows_only: false },
-        BuiltinToolInfo { name: "ssh".into(), description: "Run commands on SSH servers.".into(), icon: "🔐".into(), windows_only: false },
-        BuiltinToolInfo { name: "pdf".into(), description: "Read or write PDF files.".into(), icon: "📕".into(), windows_only: false },
-        BuiltinToolInfo { name: "wmi".into(), description: "Query Windows system information via WMI.".into(), icon: "💻".into(), windows_only: true },
-        BuiltinToolInfo { name: "uia".into(), description: "Control Windows UI Automation elements.".into(), icon: "🖱️".into(), windows_only: true },
-        BuiltinToolInfo { name: "screen_capture".into(), description: "Capture the screen.".into(), icon: "📸".into(), windows_only: true },
-        BuiltinToolInfo { name: "com".into(), description: "Use COM/OLE automation.".into(), icon: "🔌".into(), windows_only: true },
-        BuiltinToolInfo { name: "com_invoke".into(), description: "Invoke COM methods.".into(), icon: "🧩".into(), windows_only: true },
+        BuiltinToolInfo {
+            name: "file_read".into(),
+            description: "Read local files.".into(),
+            icon: "📄".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "file_write".into(),
+            description: "Write or append local files.".into(),
+            icon: "✏️".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "file_edit".into(),
+            description: "Edit existing local files.".into(),
+            icon: "📝".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "file_diff".into(),
+            description: "Compare file contents.".into(),
+            icon: "📚".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "code_run".into(),
+            description: "Run code snippets.".into(),
+            icon: "▶️".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "file_search".into(),
+            description: "Search text in files.".into(),
+            icon: "🔎".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "file_list".into(),
+            description: "List files and folders.".into(),
+            icon: "🗂️".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "process_control".into(),
+            description: "Inspect and manage processes.".into(),
+            icon: "⚙️".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "shell".into(),
+            description: "Execute shell commands.".into(),
+            icon: "⌨️".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "powershell_query".into(),
+            description: "Run PowerShell commands.".into(),
+            icon: "🪟".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "web_search".into(),
+            description: "Search the web.".into(),
+            icon: "🔍".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "office".into(),
+            description: "Operate Office documents.".into(),
+            icon: "📊".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "browser".into(),
+            description: "Control the browser.".into(),
+            icon: "🌐".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "email".into(),
+            description: "Send and read email.".into(),
+            icon: "📧".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "memory_store".into(),
+            description: "Persist long-term memory.".into(),
+            icon: "🧠".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "plan_todo".into(),
+            description: "Maintain a visible task plan for complex work.".into(),
+            icon: "📋".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "vision_context".into(),
+            description: "Manage reusable vision artifacts for the next multimodal step.".into(),
+            icon: "🖼️".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "call_fish".into(),
+            description: "Delegate work to Fish sub-agents.".into(),
+            icon: "🐠".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "call_koi".into(),
+            description: "Delegate work to persistent Koi agents.".into(),
+            icon: "🐟".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "pool_org".into(),
+            description: "Create and manage project pools and organization specs.".into(),
+            icon: "🏊".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "app_control".into(),
+            description: "Manage Pisci app settings and system state.".into(),
+            icon: "🎛️".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "skill_search".into(),
+            description: "Search installed skills and instructions.".into(),
+            icon: "📦".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "ssh".into(),
+            description: "Run commands on SSH servers.".into(),
+            icon: "🔐".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "pdf".into(),
+            description: "Read or write PDF files.".into(),
+            icon: "📕".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "wmi".into(),
+            description: "Query Windows system information via WMI.".into(),
+            icon: "💻".into(),
+            windows_only: true,
+        },
+        BuiltinToolInfo {
+            name: "uia".into(),
+            description: "Control Windows UI Automation elements.".into(),
+            icon: "🖱️".into(),
+            windows_only: true,
+        },
+        BuiltinToolInfo {
+            name: "screen_capture".into(),
+            description: "Capture the screen.".into(),
+            icon: "📸".into(),
+            windows_only: true,
+        },
+        BuiltinToolInfo {
+            name: "com".into(),
+            description: "Use COM/OLE automation.".into(),
+            icon: "🔌".into(),
+            windows_only: true,
+        },
+        BuiltinToolInfo {
+            name: "com_invoke".into(),
+            description: "Invoke COM methods.".into(),
+            icon: "🧩".into(),
+            windows_only: true,
+        },
     ]
 }
 
 fn safe_user_tool_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .to_lowercase()
 }
 
-fn load_user_tool_manifest(app_data_dir: &std::path::Path, tool_name: &str) -> anyhow::Result<UserToolManifest> {
-    let tool_dir = app_data_dir.join("user-tools").join(safe_user_tool_name(tool_name));
+fn load_user_tool_manifest(
+    app_data_dir: &std::path::Path,
+    tool_name: &str,
+) -> anyhow::Result<UserToolManifest> {
+    let tool_dir = app_data_dir
+        .join("user-tools")
+        .join(safe_user_tool_name(tool_name));
     UserToolManifest::load(&tool_dir)
         .map_err(|e| anyhow::anyhow!("User tool '{}' not found: {}", tool_name, e))
 }
 
 fn bottom_right_position(window: &tauri::WebviewWindow) -> anyhow::Result<(i32, i32)> {
-    let size = window.outer_size()
+    let size = window
+        .outer_size()
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     #[cfg(target_os = "windows")]
     {
@@ -1469,7 +2016,10 @@ fn bottom_right_position(window: &tauri::WebviewWindow) -> anyhow::Result<(i32, 
             return Ok((x, y));
         }
     }
-    Ok((((1920 - size.width as i32) - 16).max(0), ((1080 - size.height as i32) - 16).max(0)))
+    Ok((
+        ((1920 - size.width as i32) - 16).max(0),
+        ((1080 - size.height as i32) - 16).max(0),
+    ))
 }
 
 fn extract_skill_md_from_zip(zip_bytes: &[u8]) -> anyhow::Result<String> {

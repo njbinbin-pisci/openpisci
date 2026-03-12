@@ -54,7 +54,10 @@ pub fn assess_project_state(
         .iter()
         .filter(|t| matches!(t.status.as_str(), "todo" | "in_progress" | "blocked"))
         .collect();
-    let blocked_todo_count = active_todos.iter().filter(|t| t.status == "blocked").count();
+    let blocked_todo_count = active_todos
+        .iter()
+        .filter(|t| t.status == "blocked")
+        .count();
     let active_todo_count = active_todos.len();
 
     let koi_id_set: HashSet<&str> = koi_ids.iter().map(|s| s.as_str()).collect();
@@ -85,10 +88,7 @@ pub fn assess_project_state(
         .copied()
         .collect();
     let ready_signal_count = ready_states.len();
-    let explicit_pisci_handoff_count = ready_states
-        .iter()
-        .filter(|s| s.mentions_pisci)
-        .count();
+    let explicit_pisci_handoff_count = ready_states.iter().filter(|s| s.mentions_pisci).count();
 
     if active_todo_count > 0 {
         let summary = if blocked_todo_count > 0 {

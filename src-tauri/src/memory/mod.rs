@@ -1,7 +1,7 @@
 pub mod vector;
 
-use anyhow::Result;
 use crate::store::db::{Database, Memory};
+use anyhow::Result;
 
 /// Hybrid search: combines FTS5 keyword results with vector similarity results.
 /// If `query_embedding` is None, only FTS5 is used.
@@ -31,8 +31,10 @@ pub fn search_hybrid(
 
     // Fetch full Memory objects by id
     let all_memories = db.list_memories()?;
-    let memory_map: std::collections::HashMap<String, Memory> =
-        all_memories.into_iter().map(|m| (m.id.clone(), m)).collect();
+    let memory_map: std::collections::HashMap<String, Memory> = all_memories
+        .into_iter()
+        .map(|m| (m.id.clone(), m))
+        .collect();
 
     let results = merged
         .into_iter()

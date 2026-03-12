@@ -100,20 +100,21 @@ pub struct FishSettingOption {
 
 /// Returns all built-in Fish definitions (compiled into the binary).
 pub fn builtin_fish() -> Vec<FishDefinition> {
-    vec![
-        FishDefinition {
-            id: "file-assistant".to_string(),
-            name: "文件助手".to_string(),
-            description: "专注于文件管理、整理和批量操作的小鱼。擅长文件重命名、目录整理、内容搜索等任务。".to_string(),
-            icon: "🐠".to_string(),
-            tools: vec![
-                "file_read".to_string(),
-                "file_write".to_string(),
-                "shell".to_string(),
-                "memory_store".to_string(),
-            ],
-            agent: FishAgentConfig {
-                system_prompt: "你是一条专注于文件管理的小鱼（OpenPisci 子 Agent）。\n\
+    vec![FishDefinition {
+        id: "file-assistant".to_string(),
+        name: "文件助手".to_string(),
+        description:
+            "专注于文件管理、整理和批量操作的小鱼。擅长文件重命名、目录整理、内容搜索等任务。"
+                .to_string(),
+        icon: "🐠".to_string(),
+        tools: vec![
+            "file_read".to_string(),
+            "file_write".to_string(),
+            "shell".to_string(),
+            "memory_store".to_string(),
+        ],
+        agent: FishAgentConfig {
+            system_prompt: "你是一条专注于文件管理的小鱼（OpenPisci 子 Agent）。\n\
                     你的专长是：\n\
                     - 文件和目录的整理、重命名、移动\n\
                     - 批量文件操作（批量重命名、格式转换等）\n\
@@ -123,36 +124,48 @@ pub fn builtin_fish() -> Vec<FishDefinition> {
                     - 删除操作前必须确认\n\
                     - 优先在用户指定的工作目录内操作\n\
                     - 遇到系统文件时谨慎处理\n\n\
-                    当你了解到用户的文件管理偏好时，使用 memory_store 保存。".to_string(),
-                max_iterations: 20,
-                model: String::new(),
-            },
-            settings: vec![
-                FishSettingDef {
-                    key: "workspace".to_string(),
-                    label: "默认工作目录".to_string(),
-                    setting_type: "text".to_string(),
-                    default: String::new(),
-                    placeholder: "例如：C:\\Users\\你的用户名\\Documents".to_string(),
-                    options: vec![],
-                },
-            ],
-            builtin: true,
-            source: FishSource::Builtin,
+                    当你了解到用户的文件管理偏好时，使用 memory_store 保存。"
+                .to_string(),
+            max_iterations: 20,
+            model: String::new(),
         },
-    ]
+        settings: vec![FishSettingDef {
+            key: "workspace".to_string(),
+            label: "默认工作目录".to_string(),
+            setting_type: "text".to_string(),
+            default: String::new(),
+            placeholder: "例如：C:\\Users\\你的用户名\\Documents".to_string(),
+            options: vec![],
+        }],
+        builtin: true,
+        source: FishSource::Builtin,
+    }]
 }
 
 /// Skill → Fish icon mapping based on skill name keywords.
 fn skill_icon(skill_name: &str) -> &'static str {
     let lower = skill_name.to_lowercase();
-    if lower.contains("office") || lower.contains("word") || lower.contains("excel") { return "📊"; }
-    if lower.contains("file") || lower.contains("文件") { return "📁"; }
-    if lower.contains("web") || lower.contains("browser") || lower.contains("网页") { return "🌐"; }
-    if lower.contains("system") || lower.contains("admin") || lower.contains("系统") { return "⚙️"; }
-    if lower.contains("desktop") || lower.contains("桌面") || lower.contains("uia") { return "🖥️"; }
-    if lower.contains("email") || lower.contains("邮件") { return "📧"; }
-    if lower.contains("code") || lower.contains("代码") { return "💻"; }
+    if lower.contains("office") || lower.contains("word") || lower.contains("excel") {
+        return "📊";
+    }
+    if lower.contains("file") || lower.contains("文件") {
+        return "📁";
+    }
+    if lower.contains("web") || lower.contains("browser") || lower.contains("网页") {
+        return "🌐";
+    }
+    if lower.contains("system") || lower.contains("admin") || lower.contains("系统") {
+        return "⚙️";
+    }
+    if lower.contains("desktop") || lower.contains("桌面") || lower.contains("uia") {
+        return "🖥️";
+    }
+    if lower.contains("email") || lower.contains("邮件") {
+        return "📧";
+    }
+    if lower.contains("code") || lower.contains("代码") {
+        return "💻";
+    }
     "🐡"
 }
 
@@ -161,14 +174,22 @@ fn skill_fish_id(skill_name: &str) -> String {
     let slug = skill_name
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>();
     // Collapse multiple dashes
     let mut result = String::new();
     let mut last_dash = false;
     for c in slug.chars() {
         if c == '-' {
-            if !last_dash { result.push(c); }
+            if !last_dash {
+                result.push(c);
+            }
             last_dash = true;
         } else {
             result.push(c);
@@ -193,8 +214,7 @@ pub fn fish_from_skill(skill: &crate::skills::loader::SkillDefinition) -> FishDe
                 "你是一条专注于「{}」任务的小鱼（OpenPisci 子 Agent）。\n\n{}\n\n\
                 请专注于你的专长领域，高效完成用户交给你的任务。\
                 遇到超出你工具权限范围的任务时，请明确告知用户。",
-                skill.name,
-                skill.instructions
+                skill.name, skill.instructions
             ),
             max_iterations: 25,
             model: String::new(),
@@ -301,13 +321,13 @@ fn load_user_fish(dir: &Path) -> Result<Vec<FishDefinition>> {
 }
 
 fn load_fish_toml(path: &PathBuf) -> Result<FishDefinition> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    toml::from_str(&content)
-        .with_context(|| format!("parsing {}", path.display()))
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))
 }
 
 /// Build a system prompt for a Fish.
+#[allow(dead_code)]
 pub fn build_fish_system_prompt(def: &FishDefinition) -> String {
     def.agent.system_prompt.clone()
 }

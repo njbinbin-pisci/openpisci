@@ -35,7 +35,9 @@ const MAX_CALL_DEPTH: u32 = 5;
 
 #[async_trait]
 impl Tool for CallKoiTool {
-    fn name(&self) -> &str { "call_koi" }
+    fn name(&self) -> &str {
+        "call_koi"
+    }
 
     fn description(&self) -> &str {
         "Delegate a task to a persistent Koi agent. \
@@ -74,14 +76,19 @@ impl Tool for CallKoiTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let action = input["action"].as_str().unwrap_or("list");
         match action {
             "list" => self.list_kois().await,
             "call" => self.call_koi(&input, ctx).await,
-            _ => Ok(ToolResult::err(format!("Unknown action '{}'. Use: list, call", action))),
+            _ => Ok(ToolResult::err(format!(
+                "Unknown action '{}'. Use: list, call",
+                action
+            ))),
         }
     }
 }
@@ -98,20 +105,29 @@ impl CallKoiTool {
         drop(db);
 
         if kois.is_empty() {
-            return Ok(ToolResult::ok("No Koi agents available. Create one in the Pond UI."));
+            return Ok(ToolResult::ok(
+                "No Koi agents available. Create one in the Pond UI.",
+            ));
         }
 
-        let lines: Vec<String> = kois.iter()
+        let lines: Vec<String> = kois
+            .iter()
             .filter(|k| self.caller_koi_id.as_deref() != Some(&k.id))
-            .map(|k| format!(
-                "- {} {} (id: {}) | role: {} | description: {} [status: {}]",
-                k.icon,
-                k.name,
-                k.id,
-                if k.role.trim().is_empty() { "unspecified" } else { &k.role },
-                k.description,
-                k.status
-            ))
+            .map(|k| {
+                format!(
+                    "- {} {} (id: {}) | role: {} | description: {} [status: {}]",
+                    k.icon,
+                    k.name,
+                    k.id,
+                    if k.role.trim().is_empty() {
+                        "unspecified"
+                    } else {
+                        &k.role
+                    },
+                    k.description,
+                    k.status
+                )
+            })
             .collect();
 
         Ok(ToolResult::ok(format!(
@@ -124,7 +140,8 @@ impl CallKoiTool {
     async fn call_koi(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         if self.depth >= MAX_CALL_DEPTH {
             return Ok(ToolResult::err(format!(
-                "Maximum Koi call depth ({}) reached. Cannot delegate further.", MAX_CALL_DEPTH
+                "Maximum Koi call depth ({}) reached. Cannot delegate further.",
+                MAX_CALL_DEPTH
             )));
         }
 
@@ -136,7 +153,8 @@ impl CallKoiTool {
             Some(t) if !t.trim().is_empty() => t.trim().to_string(),
             _ => return Ok(ToolResult::err("'task' is required for action 'call'")),
         };
-        let requested_pool_session_id = input["pool_session_id"].as_str()
+        let requested_pool_session_id = input["pool_session_id"]
+            .as_str()
             .map(str::trim)
             .filter(|id| !id.is_empty() && *id != "current")
             .map(str::to_string)
@@ -148,9 +166,12 @@ impl CallKoiTool {
             let db = state.db.lock().await;
             let koi_def = match db.resolve_koi_identifier(&requested_koi_id)? {
                 Some(k) => k,
-                None => return Ok(ToolResult::err(format!(
-                    "Koi '{}' not found. Use action 'list' to see available Koi agents.", requested_koi_id
-                ))),
+                None => {
+                    return Ok(ToolResult::err(format!(
+                        "Koi '{}' not found. Use action 'list' to see available Koi agents.",
+                        requested_koi_id
+                    )))
+                }
             };
             let pool_session = match requested_pool_session_id.as_deref() {
                 Some(id) => match db.resolve_pool_session_identifier(id)? {
@@ -159,7 +180,8 @@ impl CallKoiTool {
                 },
                 None => None,
             };
-            let org_spec_ctx = pool_session.as_ref()
+            let org_spec_ctx = pool_session
+                .as_ref()
                 .and_then(|session| {
                     if session.org_spec.is_empty() {
                         None
@@ -168,7 +190,11 @@ impl CallKoiTool {
                     }
                 })
                 .unwrap_or_default();
-            (koi_def, pool_session.map(|session| session.id), org_spec_ctx)
+            (
+                koi_def,
+                pool_session.map(|session| session.id),
+                org_spec_ctx,
+            )
         };
         let koi_id = koi_def.id.clone();
 
@@ -191,15 +217,20 @@ impl CallKoiTool {
         // Load Koi's scoped memories for context injection
         let memory_context = {
             let db = state.db.lock().await;
-            let koi_memories = db.search_memories_scoped(
-                &task, &koi_id, pool_session_id.as_deref(), 5
-            ).unwrap_or_default();
+            let koi_memories = db
+                .search_memories_scoped(&task, &koi_id, pool_session_id.as_deref(), 5)
+                .unwrap_or_default();
             if koi_memories.is_empty() {
                 String::new()
             } else {
-                let items: Vec<String> = koi_memories.iter()
+                let items: Vec<String> = koi_memories
+                    .iter()
                     .map(|m| {
-                        let scope_tag = if m.scope_type != "private" { format!(" [{}]", m.scope_type) } else { String::new() };
+                        let scope_tag = if m.scope_type != "private" {
+                            format!(" [{}]", m.scope_type)
+                        } else {
+                            String::new()
+                        };
                         format!("- [{}]{} {}", m.category, scope_tag, m.content)
                     })
                     .collect();
@@ -215,21 +246,26 @@ impl CallKoiTool {
                 String::new()
             } else {
                 let kois = db.list_kois().unwrap_or_default();
-                let koi_names: std::collections::HashMap<String, String> = kois.iter()
+                let koi_names: std::collections::HashMap<String, String> = kois
+                    .iter()
                     .map(|k| (k.id.clone(), format!("{} {}", k.icon, k.name)))
                     .collect();
-                let lines: Vec<String> = messages.iter().map(|m| {
-                    let sender = koi_names.get(&m.sender_id)
-                        .cloned()
-                        .unwrap_or_else(|| m.sender_id.clone());
-                    let time = m.created_at.format("%m-%d %H:%M").to_string();
-                    let content = if m.content.chars().count() > 300 {
-                        format!("{}...", m.content.chars().take(300).collect::<String>())
-                    } else {
-                        m.content.clone()
-                    };
-                    format!("[{}] {} ({}): {}", time, sender, m.msg_type, content)
-                }).collect();
+                let lines: Vec<String> = messages
+                    .iter()
+                    .map(|m| {
+                        let sender = koi_names
+                            .get(&m.sender_id)
+                            .cloned()
+                            .unwrap_or_else(|| m.sender_id.clone());
+                        let time = m.created_at.format("%m-%d %H:%M").to_string();
+                        let content = if m.content.chars().count() > 300 {
+                            format!("{}...", m.content.chars().take(300).collect::<String>())
+                        } else {
+                            m.content.clone()
+                        };
+                        format!("[{}] {} ({}): {}", time, sender, m.msg_type, content)
+                    })
+                    .collect();
                 format!("\n\n## Recent Pool Chat\n{}", lines.join("\n"))
             }
         } else {
@@ -276,9 +312,20 @@ impl CallKoiTool {
         }];
 
         // Read settings
-        let (provider, model, api_key, base_url, workspace_root, max_tokens,
-             policy_mode, tool_rate_limit_per_minute, tool_settings, builtin_tool_enabled,
-             allow_outside_workspace, vision_enabled) = {
+        let (
+            provider,
+            model,
+            api_key,
+            base_url,
+            workspace_root,
+            max_tokens,
+            policy_mode,
+            tool_rate_limit_per_minute,
+            tool_settings,
+            builtin_tool_enabled,
+            allow_outside_workspace,
+            vision_enabled,
+        ) = {
             let settings = state.settings.lock().await;
             (
                 settings.provider.clone(),
@@ -300,8 +347,8 @@ impl CallKoiTool {
             return Ok(ToolResult::err("API key not configured"));
         }
 
-        let vision_capable = vision_enabled
-            || crate::commands::chat::model_supports_vision(&provider, &model);
+        let vision_capable =
+            vision_enabled || crate::commands::chat::model_supports_vision(&provider, &model);
 
         let cancel = Arc::new(AtomicBool::new(false));
 
@@ -311,7 +358,10 @@ impl CallKoiTool {
                 let db = state.db.lock().await;
                 let _ = db.update_koi_status(&koi_id, "busy");
             }
-            let _ = state.app_handle.emit("koi_status_changed", json!({ "id": koi_id, "status": "busy" }));
+            let _ = state.app_handle.emit(
+                "koi_status_changed",
+                json!({ "id": koi_id, "status": "busy" }),
+            );
         }
 
         // Record task assignment in Chat Pool
@@ -331,7 +381,11 @@ impl CallKoiTool {
 
         // Register cancel flag so cancel_koi_task can find it.
         // Include pool_session_id so the same Koi can be cancelled per-project independently.
-        let cancel_key = format!("koi_{}_{}", koi_id, pool_session_id.as_deref().unwrap_or("default"));
+        let cancel_key = format!(
+            "koi_{}_{}",
+            koi_id,
+            pool_session_id.as_deref().unwrap_or("default")
+        );
         {
             let mut flags = state.cancel_flags.lock().await;
             flags.insert(cancel_key.clone(), cancel.clone());
@@ -340,10 +394,19 @@ impl CallKoiTool {
         let client = crate::llm::build_client(
             &provider,
             &api_key,
-            if base_url.is_empty() { None } else { Some(&base_url) },
+            if base_url.is_empty() {
+                None
+            } else {
+                Some(&base_url)
+            },
         );
 
-        let user_tools_dir = self.app.path().app_data_dir().map(|d| d.join("user-tools")).ok();
+        let user_tools_dir = self
+            .app
+            .path()
+            .app_data_dir()
+            .map(|d| d.join("user-tools"))
+            .ok();
         let app_data_dir = self.app.path().app_data_dir().ok();
         // Load skill_loader so Koi can use skill_search (same as Pisci)
         let skill_loader = app_data_dir.as_ref().map(|d| {
@@ -386,7 +449,10 @@ impl CallKoiTool {
         let registry_tools = Arc::new(registry_tools);
 
         let policy = Arc::new(crate::policy::PolicyGate::with_profile_and_flags(
-            &workspace_root, &policy_mode, tool_rate_limit_per_minute, allow_outside_workspace,
+            &workspace_root,
+            &policy_mode,
+            tool_rate_limit_per_minute,
+            allow_outside_workspace,
         ));
 
         let agent = AgentLoop {
@@ -404,13 +470,21 @@ impl CallKoiTool {
                 confirm_file_write: false,
             },
             vision_override: Some(vision_capable),
-            notification_rx: self.notification_rx.lock().unwrap().take()
+            notification_rx: self
+                .notification_rx
+                .lock()
+                .unwrap()
+                .take()
                 .map(|rx| tokio::sync::Mutex::new(rx)),
         };
 
         let koi_ctx = ToolContext {
             // Include pool_session_id so each project gets an isolated session context
-            session_id: format!("koi_{}_{}", koi_id, pool_session_id.as_deref().unwrap_or("default")),
+            session_id: format!(
+                "koi_{}_{}",
+                koi_id,
+                pool_session_id.as_deref().unwrap_or("default")
+            ),
             workspace_root: std::path::PathBuf::from(&workspace_root),
             bypass_permissions: false,
             settings: tool_settings,
@@ -440,33 +514,27 @@ impl CallKoiTool {
                             status: "thinking".to_string(),
                         })
                     }
-                    AgentEvent::ToolStart { name, .. } => {
-                        Some(AgentEvent::FishProgress {
-                            fish_id: koi_id_fwd.clone(),
-                            fish_name: koi_name_fwd.clone(),
-                            iteration,
-                            tool_name: Some(name.clone()),
-                            status: "tool_call".to_string(),
-                        })
-                    }
-                    AgentEvent::ToolEnd { name, .. } => {
-                        Some(AgentEvent::FishProgress {
-                            fish_id: koi_id_fwd.clone(),
-                            fish_name: koi_name_fwd.clone(),
-                            iteration,
-                            tool_name: Some(name.clone()),
-                            status: "tool_done".to_string(),
-                        })
-                    }
-                    AgentEvent::Done { .. } => {
-                        Some(AgentEvent::FishProgress {
-                            fish_id: koi_id_fwd.clone(),
-                            fish_name: koi_name_fwd.clone(),
-                            iteration,
-                            tool_name: None,
-                            status: "done".to_string(),
-                        })
-                    }
+                    AgentEvent::ToolStart { name, .. } => Some(AgentEvent::FishProgress {
+                        fish_id: koi_id_fwd.clone(),
+                        fish_name: koi_name_fwd.clone(),
+                        iteration,
+                        tool_name: Some(name.clone()),
+                        status: "tool_call".to_string(),
+                    }),
+                    AgentEvent::ToolEnd { name, .. } => Some(AgentEvent::FishProgress {
+                        fish_id: koi_id_fwd.clone(),
+                        fish_name: koi_name_fwd.clone(),
+                        iteration,
+                        tool_name: Some(name.clone()),
+                        status: "tool_done".to_string(),
+                    }),
+                    AgentEvent::Done { .. } => Some(AgentEvent::FishProgress {
+                        fish_id: koi_id_fwd.clone(),
+                        fish_name: koi_name_fwd.clone(),
+                        iteration,
+                        tool_name: None,
+                        status: "done".to_string(),
+                    }),
                     _ => None,
                 };
                 if let Some(prog) = progress {
@@ -479,11 +547,14 @@ impl CallKoiTool {
         let run_result = match tokio::time::timeout(
             std::time::Duration::from_secs(600),
             agent.run(llm_messages, event_tx, cancel, koi_ctx),
-        ).await {
+        )
+        .await
+        {
             Ok(result) => result,
             Err(_) => Err(anyhow::anyhow!(
                 "Koi '{}' timed out after 10 minutes on task: {}",
-                koi_def.name, task
+                koi_def.name,
+                task
             )),
         };
         let _ = forward_handle.await;
@@ -500,12 +571,17 @@ impl CallKoiTool {
                 let db = state.db.lock().await;
                 let _ = db.update_koi_status(&koi_id, "idle");
             }
-            let _ = state.app_handle.emit("koi_status_changed", json!({ "id": koi_id, "status": "idle" }));
+            let _ = state.app_handle.emit(
+                "koi_status_changed",
+                json!({ "id": koi_id, "status": "idle" }),
+            );
         }
 
         match run_result {
             Ok((final_msgs, _, _)) => {
-                let reply = final_msgs.iter().rev()
+                let reply = final_msgs
+                    .iter()
+                    .rev()
                     .find(|m| m.role == "assistant")
                     .map(|m| m.content.as_text())
                     .unwrap_or_default();
@@ -519,13 +595,7 @@ impl CallKoiTool {
                         } else {
                             reply.clone()
                         };
-                        let _ = db.insert_pool_message(
-                            pool_sid,
-                            &koi_id,
-                            &summary,
-                            "result",
-                            "{}",
-                        );
+                        let _ = db.insert_pool_message(pool_sid, &koi_id, &summary, "result", "{}");
                     }
                 }
 
@@ -558,7 +628,8 @@ impl CallKoiTool {
                     }
                 }
                 Ok(ToolResult::err(format!(
-                    "Koi '{}' failed: {}", koi_def.name, e
+                    "Koi '{}' failed: {}",
+                    koi_def.name, e
                 )))
             }
         }

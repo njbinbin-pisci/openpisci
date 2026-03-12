@@ -30,7 +30,9 @@ impl DiscordChannel {
 
 #[async_trait]
 impl Channel for DiscordChannel {
-    fn name(&self) -> &str { "discord" }
+    fn name(&self) -> &str {
+        "discord"
+    }
 
     async fn connect(&mut self) -> Result<()> {
         self.status = ChannelStatus::Connected;

@@ -32,16 +32,13 @@ pub async fn add_memory(
         "pisci",
         "private",
         "pisci",
-        None,  // cross-project memory (no project tag)
+        None, // cross-project memory (no project tag)
     )
     .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn delete_memory(
-    state: State<'_, AppState>,
-    memory_id: String,
-) -> Result<(), String> {
+pub async fn delete_memory(state: State<'_, AppState>, memory_id: String) -> Result<(), String> {
     let db = state.db.lock().await;
     db.delete_memory(&memory_id).map_err(|e| e.to_string())
 }

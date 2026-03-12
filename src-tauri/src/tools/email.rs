@@ -9,7 +9,9 @@ pub struct EmailTool;
 
 #[async_trait]
 impl Tool for EmailTool {
-    fn name(&self) -> &str { "email" }
+    fn name(&self) -> &str {
+        "email"
+    }
 
     fn description(&self) -> &str {
         "Send and read emails. SMTP/IMAP credentials are taken from Settings — \
@@ -69,19 +71,19 @@ impl Tool for EmailTool {
 
         if !s.email_enabled {
             return Ok(ToolResult::err(
-                "Email tool is disabled. Enable it in Settings → Email."
+                "Email tool is disabled. Enable it in Settings → Email.",
             ));
         }
         if s.smtp_host.is_empty() {
             return Ok(ToolResult::err(
-                "SMTP not configured. Add smtp_host and credentials in Settings → Email."
+                "SMTP not configured. Add smtp_host and credentials in Settings → Email.",
             ));
         }
 
         let action = input["action"].as_str().unwrap_or_default();
         match action {
-            "smtp_send"   => self.smtp_send(&input, ctx).await,
-            "imap_fetch"  => self.imap_fetch(&input, ctx).await,
+            "smtp_send" => self.smtp_send(&input, ctx).await,
+            "imap_fetch" => self.imap_fetch(&input, ctx).await,
             "imap_search" => self.imap_search(&input, ctx).await,
             _ => Ok(ToolResult::err(format!("Unknown email action: {}", action))),
         }
@@ -104,7 +106,7 @@ impl EmailTool {
             None => return Ok(ToolResult::err("smtp_send requires 'to'")),
         };
         let subject = input["subject"].as_str().unwrap_or("(no subject)");
-        let body     = input["body"].as_str().unwrap_or("");
+        let body = input["body"].as_str().unwrap_or("");
         let html_body = input["html_body"].as_str().unwrap_or("");
 
         // Build From header: "Display Name <user@host>" or just "user@host"
@@ -115,7 +117,7 @@ impl EmailTool {
         };
 
         let from_mb: Mailbox = from_str.parse()?;
-        let to_mb: Mailbox   = to.parse()?;
+        let to_mb: Mailbox = to.parse()?;
 
         let multipart = if !html_body.is_empty() {
             MultiPart::alternative()
@@ -150,14 +152,16 @@ impl EmailTool {
     async fn imap_fetch(&self, input: &Value, ctx: &ToolContext) -> Result<ToolResult> {
         let s = ctx.settings.clone();
         let imap_host = if s.imap_host.is_empty() {
-            return Ok(ToolResult::err("IMAP host not configured in Settings → Email."));
+            return Ok(ToolResult::err(
+                "IMAP host not configured in Settings → Email.",
+            ));
         } else {
             s.imap_host.clone()
         };
         let imap_port = s.imap_port;
-        let username  = s.smtp_username.clone(); // shared account
-        let password  = s.smtp_password.clone();
-        let folder    = input["folder"].as_str().unwrap_or("INBOX").to_string();
+        let username = s.smtp_username.clone(); // shared account
+        let password = s.smtp_password.clone();
+        let folder = input["folder"].as_str().unwrap_or("INBOX").to_string();
         let max_items = input["max_items"].as_u64().unwrap_or(10) as usize;
 
         let rows = tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
@@ -169,19 +173,28 @@ impl EmailTool {
             let mut out = Vec::new();
             for msg in msgs.iter().rev().take(max_items) {
                 let mut subject = String::new();
-                let mut from    = String::new();
-                let mut date    = String::new();
+                let mut from = String::new();
+                let mut date = String::new();
                 if let Some(header) = msg.header() {
                     let (headers, _) = mailparse::parse_headers(header)?;
-                    if let Some(v) = Self::header_value(&headers, "Subject") { subject = v; }
-                    if let Some(v) = Self::header_value(&headers, "From")    { from    = v; }
-                    if let Some(v) = Self::header_value(&headers, "Date")    { date    = v; }
+                    if let Some(v) = Self::header_value(&headers, "Subject") {
+                        subject = v;
+                    }
+                    if let Some(v) = Self::header_value(&headers, "From") {
+                        from = v;
+                    }
+                    if let Some(v) = Self::header_value(&headers, "Date") {
+                        date = v;
+                    }
                 }
-                out.push(json!({ "seq": msg.message, "subject": subject, "from": from, "date": date }));
+                out.push(
+                    json!({ "seq": msg.message, "subject": subject, "from": from, "date": date }),
+                );
             }
             let _ = session.logout();
             Ok(out)
-        }).await??;
+        })
+        .await??;
 
         Ok(ToolResult::ok(
             serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string()),
@@ -191,15 +204,17 @@ impl EmailTool {
     async fn imap_search(&self, input: &Value, ctx: &ToolContext) -> Result<ToolResult> {
         let s = ctx.settings.clone();
         let imap_host = if s.imap_host.is_empty() {
-            return Ok(ToolResult::err("IMAP host not configured in Settings → Email."));
+            return Ok(ToolResult::err(
+                "IMAP host not configured in Settings → Email.",
+            ));
         } else {
             s.imap_host.clone()
         };
         let imap_port = s.imap_port;
-        let username  = s.smtp_username.clone();
-        let password  = s.smtp_password.clone();
-        let folder    = input["folder"].as_str().unwrap_or("INBOX").to_string();
-        let query     = input["query"].as_str().unwrap_or("ALL").to_string();
+        let username = s.smtp_username.clone();
+        let password = s.smtp_password.clone();
+        let folder = input["folder"].as_str().unwrap_or("INBOX").to_string();
+        let query = input["query"].as_str().unwrap_or("ALL").to_string();
         let max_items = input["max_items"].as_u64().unwrap_or(10) as usize;
 
         let rows = tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
@@ -215,18 +230,23 @@ impl EmailTool {
                 let msgs = session.fetch(format!("{}", id), "RFC822.HEADER")?;
                 for msg in msgs.iter() {
                     let mut subject = String::new();
-                    let mut from    = String::new();
+                    let mut from = String::new();
                     if let Some(header) = msg.header() {
                         let (headers, _) = mailparse::parse_headers(header)?;
-                        if let Some(v) = Self::header_value(&headers, "Subject") { subject = v; }
-                        if let Some(v) = Self::header_value(&headers, "From")    { from    = v; }
+                        if let Some(v) = Self::header_value(&headers, "Subject") {
+                            subject = v;
+                        }
+                        if let Some(v) = Self::header_value(&headers, "From") {
+                            from = v;
+                        }
                     }
                     out.push(json!({ "seq": msg.message, "subject": subject, "from": from }));
                 }
             }
             let _ = session.logout();
             Ok(out)
-        }).await??;
+        })
+        .await??;
 
         Ok(ToolResult::ok(
             serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string()),

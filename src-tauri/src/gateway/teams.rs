@@ -30,7 +30,9 @@ impl TeamsChannel {
 
 #[async_trait]
 impl Channel for TeamsChannel {
-    fn name(&self) -> &str { "teams" }
+    fn name(&self) -> &str {
+        "teams"
+    }
 
     async fn connect(&mut self) -> Result<()> {
         self.status = ChannelStatus::Connected;

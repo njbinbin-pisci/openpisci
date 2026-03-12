@@ -20,7 +20,9 @@ pub struct ComInvokeTool;
 
 #[async_trait]
 impl Tool for ComInvokeTool {
-    fn name(&self) -> &str { "com_invoke" }
+    fn name(&self) -> &str {
+        "com_invoke"
+    }
 
     fn description(&self) -> &str {
         "Instantiate any Windows COM/ActiveX object by ProgID and call its methods or read properties. \
@@ -90,7 +92,10 @@ impl Tool for ComInvokeTool {
 
     fn needs_confirmation(&self, input: &Value) -> bool {
         // set_property and run_script can have side effects
-        matches!(input["action"].as_str(), Some("set_property") | Some("run_script") | Some("call_method"))
+        matches!(
+            input["action"].as_str(),
+            Some("set_property") | Some("run_script") | Some("call_method")
+        )
     }
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
@@ -103,12 +108,10 @@ impl Tool for ComInvokeTool {
         let timeout_secs = input["timeout"].as_u64().unwrap_or(COM_TIMEOUT_SECS);
 
         let script = match action {
-            "run_script" => {
-                match input["script"].as_str() {
-                    Some(s) => s.to_string(),
-                    None => return Ok(ToolResult::err("run_script requires 'script' parameter")),
-                }
-            }
+            "run_script" => match input["script"].as_str() {
+                Some(s) => s.to_string(),
+                None => return Ok(ToolResult::err("run_script requires 'script' parameter")),
+            },
             "create" => {
                 let prog_id = match input["prog_id"].as_str() {
                     Some(p) => p,
@@ -274,7 +277,11 @@ fn build_ps_args(args: &Value) -> String {
     match args.as_array() {
         None => String::new(),
         Some(arr) if arr.is_empty() => String::new(),
-        Some(arr) => arr.iter().map(json_to_ps_value).collect::<Vec<_>>().join(", "),
+        Some(arr) => arr
+            .iter()
+            .map(json_to_ps_value)
+            .collect::<Vec<_>>()
+            .join(", "),
     }
 }
 
@@ -282,7 +289,13 @@ fn json_to_ps_value(v: &Value) -> String {
     match v {
         Value::String(s) => format!("'{}'", s.replace('\'', "''")),
         Value::Number(n) => n.to_string(),
-        Value::Bool(b) => if *b { "$true".to_string() } else { "$false".to_string() },
+        Value::Bool(b) => {
+            if *b {
+                "$true".to_string()
+            } else {
+                "$false".to_string()
+            }
+        }
         Value::Null => "$null".to_string(),
         _ => format!("'{}'", v.to_string().replace('\'', "''")),
     }
@@ -314,8 +327,14 @@ async fn run_com_script(script: &str, arch: &str, timeout_secs: u64) -> Result<T
     let result = timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
 
     match result {
-        Err(_) => Ok(ToolResult::err(format!("COM script timed out after {}s", timeout_secs))),
-        Ok(Err(e)) => Ok(ToolResult::err(format!("Failed to spawn PowerShell: {}", e))),
+        Err(_) => Ok(ToolResult::err(format!(
+            "COM script timed out after {}s",
+            timeout_secs
+        ))),
+        Ok(Err(e)) => Ok(ToolResult::err(format!(
+            "Failed to spawn PowerShell: {}",
+            e
+        ))),
         Ok(Ok(output)) => {
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

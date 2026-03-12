@@ -7,7 +7,9 @@ pub struct FileDiffTool;
 
 #[async_trait]
 impl Tool for FileDiffTool {
-    fn name(&self) -> &str { "file_diff" }
+    fn name(&self) -> &str {
+        "file_diff"
+    }
 
     fn description(&self) -> &str {
         "Preview changes before writing, or compare two files. Read-only — makes no modifications.\n\
@@ -46,7 +48,9 @@ impl Tool for FileDiffTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let context_lines = input["context_lines"].as_u64().unwrap_or(3) as usize;
@@ -62,7 +66,10 @@ impl Tool for FileDiffTool {
                     ctx.workspace_root.join(path_str)
                 };
                 if !path.exists() {
-                    return Ok(ToolResult::err(format!("File not found: {}", path.display())));
+                    return Ok(ToolResult::err(format!(
+                        "File not found: {}",
+                        path.display()
+                    )));
                 }
                 let current = std::fs::read_to_string(&path)?;
                 let proposed = input["new_content"].as_str().unwrap().to_string();
@@ -84,30 +91,33 @@ impl Tool for FileDiffTool {
                 let pa = resolve(input["path_a"].as_str().unwrap());
                 let pb = resolve(input["path_b"].as_str().unwrap());
                 if !pa.exists() {
-                    return Ok(ToolResult::err(format!("path_a not found: {}", pa.display())));
+                    return Ok(ToolResult::err(format!(
+                        "path_a not found: {}",
+                        pa.display()
+                    )));
                 }
                 if !pb.exists() {
-                    return Ok(ToolResult::err(format!("path_b not found: {}", pb.display())));
+                    return Ok(ToolResult::err(format!(
+                        "path_b not found: {}",
+                        pb.display()
+                    )));
                 }
                 let ca = std::fs::read_to_string(&pa)?;
                 let cb = std::fs::read_to_string(&pb)?;
-                (
-                    pa.display().to_string(),
-                    ca,
-                    pb.display().to_string(),
-                    cb,
-                )
+                (pa.display().to_string(), ca, pb.display().to_string(), cb)
             } else {
                 return Ok(ToolResult::err(
                     "Provide either (path + new_content) for preview mode, \
-                     or (path_a + path_b) for compare mode"
+                     or (path_a + path_b) for compare mode",
                 ));
             };
 
         let diff = unified_diff(&content_a, &content_b, &label_a, &label_b, context_lines);
 
         if diff.is_empty() {
-            Ok(ToolResult::ok("No differences — files are identical.".to_string()))
+            Ok(ToolResult::ok(
+                "No differences — files are identical.".to_string(),
+            ))
         } else {
             Ok(ToolResult::ok(diff))
         }
@@ -144,16 +154,33 @@ fn unified_diff(old: &str, new: &str, label_a: &str, label_b: &str, context: usi
 
     for hunk in &hunks {
         // Count old/new lines in this hunk
-        let old_count = hunk.iter().filter(|op| matches!(op, DiffOp::Equal(_) | DiffOp::Delete(_))).count();
-        let new_count = hunk.iter().filter(|op| matches!(op, DiffOp::Equal(_) | DiffOp::Insert(_))).count();
-        let old_start = hunk.iter()
-            .find_map(|op| match op { DiffOp::Equal(i) | DiffOp::Delete(i) => Some(*i + 1), _ => None })
+        let old_count = hunk
+            .iter()
+            .filter(|op| matches!(op, DiffOp::Equal(_) | DiffOp::Delete(_)))
+            .count();
+        let new_count = hunk
+            .iter()
+            .filter(|op| matches!(op, DiffOp::Equal(_) | DiffOp::Insert(_)))
+            .count();
+        let old_start = hunk
+            .iter()
+            .find_map(|op| match op {
+                DiffOp::Equal(i) | DiffOp::Delete(i) => Some(*i + 1),
+                _ => None,
+            })
             .unwrap_or(1);
-        let new_start = hunk.iter()
-            .find_map(|op| match op { DiffOp::Equal(i) | DiffOp::Insert(i) => Some(*i + 1), _ => None })
+        let new_start = hunk
+            .iter()
+            .find_map(|op| match op {
+                DiffOp::Equal(i) | DiffOp::Insert(i) => Some(*i + 1),
+                _ => None,
+            })
             .unwrap_or(1);
 
-        out.push_str(&format!("@@ -{},{} +{},{} @@\n", old_start, old_count, new_start, new_count));
+        out.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n",
+            old_start, old_count, new_start, new_count
+        ));
 
         for op in hunk {
             match op {
@@ -220,9 +247,16 @@ fn diff_lines<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<DiffOp> {
 }
 
 /// Group diff ops into hunks, each surrounded by `context` equal lines.
-fn build_hunks(ops: &[DiffOp], _old_len: usize, _new_len: usize, context: usize) -> Vec<Vec<DiffOp>> {
+fn build_hunks(
+    ops: &[DiffOp],
+    _old_len: usize,
+    _new_len: usize,
+    context: usize,
+) -> Vec<Vec<DiffOp>> {
     // Find indices of changed ops
-    let changed: Vec<usize> = ops.iter().enumerate()
+    let changed: Vec<usize> = ops
+        .iter()
+        .enumerate()
         .filter(|(_, op)| !matches!(op, DiffOp::Equal(_)))
         .map(|(i, _)| i)
         .collect();
@@ -249,7 +283,5 @@ fn build_hunks(ops: &[DiffOp], _old_len: usize, _new_len: usize, context: usize)
     }
     ranges.push((range_start, range_end));
 
-    ranges.iter()
-        .map(|&(s, e)| ops[s..e].to_vec())
-        .collect()
+    ranges.iter().map(|&(s, e)| ops[s..e].to_vec()).collect()
 }

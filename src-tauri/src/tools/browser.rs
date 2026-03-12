@@ -57,7 +57,9 @@ impl BrowserTool {
 
 #[async_trait]
 impl Tool for BrowserTool {
-    fn name(&self) -> &str { "browser" }
+    fn name(&self) -> &str {
+        "browser"
+    }
 
     fn description(&self) -> &str {
         "Control a Chrome browser via CDP. Navigate pages, click elements, type text, \
@@ -180,7 +182,9 @@ impl Tool for BrowserTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
         let action = match input["action"].as_str() {
@@ -189,41 +193,41 @@ impl Tool for BrowserTool {
         };
 
         match action {
-            "launch"        => self.launch_browser(&input).await,
-            "close"         => self.close_browser().await,
-            "navigate"      => self.navigate(&input).await,
-            "go_back"       => self.go_back(&input).await,
-            "go_forward"    => self.go_forward(&input).await,
-            "reload"        => self.reload(&input).await,
-            "click"         => self.click(&input).await,
-            "double_click"  => self.double_click(&input).await,
-            "right_click"   => self.right_click(&input).await,
-            "hover"         => self.hover(&input).await,
-            "click_coords"  => self.click_coords(&input).await,
-            "type_text"     => self.type_text(&input).await,
-            "clear"         => self.clear(&input).await,
-            "press_key"     => self.press_key(&input).await,
-            "screenshot"    => self.screenshot(&input).await,
-            "annotate_screenshot"       => self.annotate_screenshot(&input).await,
-            "get_interactive_elements"  => self.get_interactive_elements(&input).await,
-            "get_content"   => self.get_content(&input).await,
-            "get_text"      => self.get_text(&input).await,
+            "launch" => self.launch_browser(&input).await,
+            "close" => self.close_browser().await,
+            "navigate" => self.navigate(&input).await,
+            "go_back" => self.go_back(&input).await,
+            "go_forward" => self.go_forward(&input).await,
+            "reload" => self.reload(&input).await,
+            "click" => self.click(&input).await,
+            "double_click" => self.double_click(&input).await,
+            "right_click" => self.right_click(&input).await,
+            "hover" => self.hover(&input).await,
+            "click_coords" => self.click_coords(&input).await,
+            "type_text" => self.type_text(&input).await,
+            "clear" => self.clear(&input).await,
+            "press_key" => self.press_key(&input).await,
+            "screenshot" => self.screenshot(&input).await,
+            "annotate_screenshot" => self.annotate_screenshot(&input).await,
+            "get_interactive_elements" => self.get_interactive_elements(&input).await,
+            "get_content" => self.get_content(&input).await,
+            "get_text" => self.get_text(&input).await,
             "get_attribute" => self.get_attribute(&input).await,
-            "eval_js"       => self.eval_js(&input).await,
-            "wait_for"      => self.wait_for(&input).await,
-            "scroll"        => self.scroll(&input).await,
-            "select"        => self.select(&input).await,
-            "check"         => self.set_checked(&input, true).await,
-            "uncheck"       => self.set_checked(&input, false).await,
-            "list_tabs"     => self.list_tabs().await,
-            "new_tab"       => self.new_tab(&input).await,
-            "close_tab"     => self.close_tab(&input).await,
-            "switch_tab"    => self.switch_tab(&input).await,
-            "get_cookies"   => self.get_cookies(&input).await,
-            "set_cookie"    => self.set_cookie(&input).await,
+            "eval_js" => self.eval_js(&input).await,
+            "wait_for" => self.wait_for(&input).await,
+            "scroll" => self.scroll(&input).await,
+            "select" => self.select(&input).await,
+            "check" => self.set_checked(&input, true).await,
+            "uncheck" => self.set_checked(&input, false).await,
+            "list_tabs" => self.list_tabs().await,
+            "new_tab" => self.new_tab(&input).await,
+            "close_tab" => self.close_tab(&input).await,
+            "switch_tab" => self.switch_tab(&input).await,
+            "get_cookies" => self.get_cookies(&input).await,
+            "set_cookie" => self.set_cookie(&input).await,
             "clear_cookies" => self.clear_cookies(&input).await,
-            "get_url"       => self.get_url(&input).await,
-            "get_title"     => self.get_title(&input).await,
+            "get_url" => self.get_url(&input).await,
+            "get_title" => self.get_title(&input).await,
             "detect_challenge" => self.detect_challenge(&input).await,
             "download_file" => self.download_file(&input, _ctx).await,
             "list_downloads" => self.list_downloads().await,
@@ -259,15 +263,21 @@ impl BrowserTool {
         match mgr.launch().await {
             Ok(()) => {}
             Err(first_err) => {
-                tracing::warn!("Browser launch attempt 1 failed: {}. Retrying after 1s...", first_err);
+                tracing::warn!(
+                    "Browser launch attempt 1 failed: {}. Retrying after 1s...",
+                    first_err
+                );
                 // Wait briefly and retry — Chrome may need time to fully exit
                 drop(mgr);
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                 let mut mgr2 = self.manager.lock().await;
-                mgr2.launch().await.map_err(|e| anyhow::anyhow!(
-                    "Browser launch failed after retry.\nFirst error: {}\nRetry error: {}",
-                    first_err, e
-                ))?;
+                mgr2.launch().await.map_err(|e| {
+                    anyhow::anyhow!(
+                        "Browser launch failed after retry.\nFirst error: {}\nRetry error: {}",
+                        first_err,
+                        e
+                    )
+                })?;
                 return Ok(ToolResult::ok(format!(
                     "Browser launched (headless={}, needed retry)",
                     mgr2.headless()
@@ -299,28 +309,47 @@ impl BrowserTool {
         let page = mgr.active_page().await?;
         drop(mgr);
 
-        let _ = page.goto(&url).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        self.wait_until_navigation_ready(&page, DEFAULT_TIMEOUT_MS).await?;
+        let _ = page
+            .goto(&url)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        self.wait_until_navigation_ready(&page, DEFAULT_TIMEOUT_MS)
+            .await?;
 
-        let title = page.evaluate("document.title").await
-            .ok().and_then(|r| r.into_value::<String>().ok()).unwrap_or_default();
-        let current_url = page.evaluate("window.location.href").await
-            .ok().and_then(|r| r.into_value::<String>().ok()).unwrap_or_default();
+        let title = page
+            .evaluate("document.title")
+            .await
+            .ok()
+            .and_then(|r| r.into_value::<String>().ok())
+            .unwrap_or_default();
+        let current_url = page
+            .evaluate("window.location.href")
+            .await
+            .ok()
+            .and_then(|r| r.into_value::<String>().ok())
+            .unwrap_or_default();
         if let Some(reason) = self.detect_challenge_hint(&page).await? {
             return Ok(ToolResult::ok(format!(
                 "Navigated to: {}\nTitle: {}\n\n检测到可能验证码/人机校验: {}\n请人工完成校验后，再调用 browser.wait_for(wait_condition='human_verification') 继续。",
                 current_url, title, reason
             )));
         }
-        Ok(ToolResult::ok(format!("Navigated to: {}\nTitle: {}", current_url, title)))
+        Ok(ToolResult::ok(format!(
+            "Navigated to: {}\nTitle: {}",
+            current_url, title
+        )))
     }
 
     async fn go_back(&self, _input: &Value) -> Result<ToolResult> {
         let mut mgr = self.manager.lock().await;
         let page = mgr.active_page().await?;
         drop(mgr);
-        page.evaluate("history.back()").await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        let _ = self.wait_until_navigation_ready(&page, DEFAULT_TIMEOUT_MS).await;
+        page.evaluate("history.back()")
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let _ = self
+            .wait_until_navigation_ready(&page, DEFAULT_TIMEOUT_MS)
+            .await;
         Ok(ToolResult::ok("Navigated back"))
     }
 
@@ -328,8 +357,12 @@ impl BrowserTool {
         let mut mgr = self.manager.lock().await;
         let page = mgr.active_page().await?;
         drop(mgr);
-        page.evaluate("history.forward()").await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        let _ = self.wait_until_navigation_ready(&page, DEFAULT_TIMEOUT_MS).await;
+        page.evaluate("history.forward()")
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let _ = self
+            .wait_until_navigation_ready(&page, DEFAULT_TIMEOUT_MS)
+            .await;
         Ok(ToolResult::ok("Navigated forward"))
     }
 
@@ -338,7 +371,9 @@ impl BrowserTool {
         let page = mgr.active_page().await?;
         drop(mgr);
         page.reload().await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        let _ = self.wait_until_navigation_ready(&page, DEFAULT_TIMEOUT_MS).await;
+        let _ = self
+            .wait_until_navigation_ready(&page, DEFAULT_TIMEOUT_MS)
+            .await;
         Ok(ToolResult::ok("Page reloaded"))
     }
 
@@ -350,9 +385,14 @@ impl BrowserTool {
         let page = mgr.active_page().await?;
         drop(mgr);
 
-        let element = page.find_element(&selector).await
+        let element = page
+            .find_element(&selector)
+            .await
             .map_err(|e| anyhow::anyhow!("Element '{}' not found: {}", selector, e))?;
-        element.click().await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        element
+            .click()
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         Ok(ToolResult::ok(format!("Clicked: {}", selector)))
     }
 
@@ -370,7 +410,9 @@ impl BrowserTool {
             "#,
             Self::js_str(&selector)
         );
-        page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        page.evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         Ok(ToolResult::ok(format!("Double-clicked: {}", selector)))
     }
 
@@ -388,7 +430,9 @@ impl BrowserTool {
             "#,
             Self::js_str(&selector)
         );
-        page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        page.evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         Ok(ToolResult::ok(format!("Right-clicked: {}", selector)))
     }
 
@@ -407,7 +451,9 @@ impl BrowserTool {
             "#,
             Self::js_str(&selector)
         );
-        page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        page.evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         Ok(ToolResult::ok(format!("Hovered: {}", selector)))
     }
 
@@ -422,9 +468,14 @@ impl BrowserTool {
         let page = mgr.active_page().await?;
         drop(mgr);
 
-        let element = page.find_element(&selector).await
+        let element = page
+            .find_element(&selector)
+            .await
             .map_err(|e| anyhow::anyhow!("Element '{}' not found: {}", selector, e))?;
-        element.click().await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        element
+            .click()
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         // Set value via JS for reliability
         let js = format!(
             r#"
@@ -438,8 +489,14 @@ impl BrowserTool {
             Self::js_str(&selector),
             Self::js_str(&text)
         );
-        page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        Ok(ToolResult::ok(format!("Typed into {}: {}", selector, &text[..text.len().min(50)])))
+        page.evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        Ok(ToolResult::ok(format!(
+            "Typed into {}: {}",
+            selector,
+            &text[..text.len().min(50)]
+        )))
     }
 
     async fn clear(&self, input: &Value) -> Result<ToolResult> {
@@ -457,14 +514,20 @@ impl BrowserTool {
             "#,
             Self::js_str(&selector)
         );
-        page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        page.evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         Ok(ToolResult::ok(format!("Cleared: {}", selector)))
     }
 
     async fn press_key(&self, input: &Value) -> Result<ToolResult> {
         let key = match input["key"].as_str() {
             Some(k) => k.to_string(),
-            None => return Ok(ToolResult::err("press_key requires key (e.g. 'Enter', 'Tab')")),
+            None => {
+                return Ok(ToolResult::err(
+                    "press_key requires key (e.g. 'Enter', 'Tab')",
+                ))
+            }
         };
 
         let mut mgr = self.manager.lock().await;
@@ -482,8 +545,11 @@ impl BrowserTool {
         page.evaluate(format!(
             "document.dispatchEvent(new KeyboardEvent('keydown', {{key: '{}', bubbles: true}})); \
              document.dispatchEvent(new KeyboardEvent('keyup', {{key: '{}', bubbles: true}}))",
-            key.replace('\'', "\\'"), key.replace('\'', "\\'")
-        )).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+            key.replace('\'', "\\'"),
+            key.replace('\'', "\\'")
+        ))
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
         Ok(ToolResult::ok(format!("Pressed key: {}", key)))
     }
 
@@ -503,21 +569,32 @@ impl BrowserTool {
             ..Default::default()
         };
 
-        let png_bytes = page.screenshot(params)
-            .await.map_err(|e| anyhow::anyhow!("Screenshot failed: {}", e))?;
+        let png_bytes = page
+            .screenshot(params)
+            .await
+            .map_err(|e| anyhow::anyhow!("Screenshot failed: {}", e))?;
 
         let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
         let size_kb = png_bytes.len() / 1024;
 
-        let url = page.evaluate("window.location.href").await
-            .ok().and_then(|r| r.into_value::<String>().ok()).unwrap_or_default();
-        let title = page.evaluate("document.title").await
-            .ok().and_then(|r| r.into_value::<String>().ok()).unwrap_or_default();
+        let url = page
+            .evaluate("window.location.href")
+            .await
+            .ok()
+            .and_then(|r| r.into_value::<String>().ok())
+            .unwrap_or_default();
+        let title = page
+            .evaluate("document.title")
+            .await
+            .ok()
+            .and_then(|r| r.into_value::<String>().ok())
+            .unwrap_or_default();
 
         Ok(ToolResult::ok(format!(
             "Screenshot captured: {} KB\nURL: {}\nTitle: {}\nFull page: {}",
             size_kb, url, title, full_page
-        )).with_image(ImageData::jpeg(b64)))
+        ))
+        .with_image(ImageData::jpeg(b64)))
     }
 
     // ─── Element discovery ────────────────────────────────────────────────────
@@ -599,16 +676,27 @@ impl BrowserTool {
         })()
         "#;
 
-        let raw = page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        let json_str = raw.into_value::<String>().unwrap_or_else(|_| "[]".to_string());
+        let raw = page
+            .evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let json_str = raw
+            .into_value::<String>()
+            .unwrap_or_else(|_| "[]".to_string());
         let elements: Vec<Value> = serde_json::from_str(&json_str).unwrap_or_default();
 
         if elements.is_empty() {
-            return Ok(ToolResult::ok("No interactive elements found on current page."));
+            return Ok(ToolResult::ok(
+                "No interactive elements found on current page.",
+            ));
         }
 
-        let url = page.evaluate("window.location.href").await
-            .ok().and_then(|r| r.into_value::<String>().ok()).unwrap_or_default();
+        let url = page
+            .evaluate("window.location.href")
+            .await
+            .ok()
+            .and_then(|r| r.into_value::<String>().ok())
+            .unwrap_or_default();
 
         let mut lines = vec![
             format!("URL: {}", url),
@@ -618,20 +706,25 @@ impl BrowserTool {
         ];
 
         for el in &elements {
-            let idx  = el["index"].as_i64().unwrap_or(0);
-            let tag  = el["tag"].as_str().unwrap_or("");
+            let idx = el["index"].as_i64().unwrap_or(0);
+            let tag = el["tag"].as_str().unwrap_or("");
             let itype = el["type"].as_str().unwrap_or("");
             let text = el["text"].as_str().unwrap_or("");
-            let lbl  = el["label"].as_str().unwrap_or("");
-            let ph   = el["placeholder"].as_str().unwrap_or("");
-            let sel  = el["selector"].as_str().unwrap_or("");
-            let cx   = el["cx"].as_i64().unwrap_or(0);
-            let cy   = el["cy"].as_i64().unwrap_or(0);
+            let lbl = el["label"].as_str().unwrap_or("");
+            let ph = el["placeholder"].as_str().unwrap_or("");
+            let sel = el["selector"].as_str().unwrap_or("");
+            let cx = el["cx"].as_i64().unwrap_or(0);
+            let cy = el["cy"].as_i64().unwrap_or(0);
 
-            let display = if !text.is_empty() { text }
-                else if !lbl.is_empty() { lbl }
-                else if !ph.is_empty() { ph }
-                else { "(no label)" };
+            let display = if !text.is_empty() {
+                text
+            } else if !lbl.is_empty() {
+                lbl
+            } else if !ph.is_empty() {
+                ph
+            } else {
+                "(no label)"
+            };
 
             let tag_str = if !itype.is_empty() && itype != tag {
                 format!("{}<{}>", tag, itype)
@@ -641,7 +734,12 @@ impl BrowserTool {
 
             lines.push(format!(
                 "{:>5} | {:<13} | {:<48} | {}  [cx={} cy={}]",
-                idx, tag_str, display.chars().take(48).collect::<String>(), sel, cx, cy
+                idx,
+                tag_str,
+                display.chars().take(48).collect::<String>(),
+                sel,
+                cx,
+                cy
             ));
         }
 
@@ -736,8 +834,13 @@ impl BrowserTool {
         })()
         "#;
 
-        let raw = page.evaluate(inject_js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        let json_str = raw.into_value::<String>().unwrap_or_else(|_| "[]".to_string());
+        let raw = page
+            .evaluate(inject_js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let json_str = raw
+            .into_value::<String>()
+            .unwrap_or_else(|_| "[]".to_string());
         let elements: Vec<Value> = serde_json::from_str(&json_str).unwrap_or_default();
 
         // Capture screenshot with overlay visible
@@ -746,13 +849,15 @@ impl BrowserTool {
             quality: Some(80),
             ..Default::default()
         };
-        let img_bytes = page.screenshot(params)
-            .await.map_err(|e| anyhow::anyhow!("Screenshot failed: {}", e))?;
+        let img_bytes = page
+            .screenshot(params)
+            .await
+            .map_err(|e| anyhow::anyhow!("Screenshot failed: {}", e))?;
 
         // Remove overlay immediately
-        let _ = page.evaluate(
-            "document.getElementById('__pisci_som_overlay__')?.remove()"
-        ).await;
+        let _ = page
+            .evaluate("document.getElementById('__pisci_som_overlay__')?.remove()")
+            .await;
 
         let b64 = base64::engine::general_purpose::STANDARD.encode(&img_bytes);
 
@@ -765,19 +870,22 @@ impl BrowserTool {
             String::from("------|----------|----------------------------------------------|----------"),
         ];
         for el in &elements {
-            let i    = el["index"].as_i64().unwrap_or(0);
-            let tag  = el["tag"].as_str().unwrap_or("");
+            let i = el["index"].as_i64().unwrap_or(0);
+            let tag = el["tag"].as_str().unwrap_or("");
             let text = el["text"].as_str().unwrap_or("(no label)");
-            let cx   = el["cx"].as_i64().unwrap_or(0);
-            let cy   = el["cy"].as_i64().unwrap_or(0);
+            let cx = el["cx"].as_i64().unwrap_or(0);
+            let cy = el["cy"].as_i64().unwrap_or(0);
             lines.push(format!(
                 "{:>5} | {:<8} | {:<44} | {:>4}  {:>4}",
-                i, tag, text.chars().take(44).collect::<String>(), cx, cy
+                i,
+                tag,
+                text.chars().take(44).collect::<String>(),
+                cx,
+                cy
             ));
         }
 
-        Ok(ToolResult::ok(lines.join("\n"))
-            .with_image(ImageData::jpeg(b64)))
+        Ok(ToolResult::ok(lines.join("\n")).with_image(ImageData::jpeg(b64)))
     }
 
     /// Click at absolute pixel coordinates (viewport-relative).
@@ -808,12 +916,19 @@ impl BrowserTool {
                 return el.tagName.toLowerCase() + (el.id ? '#'+el.id : '') + ' | ' + (el.textContent||'').trim().slice(0,40);
             }})()
             "#,
-            x = x, y = y
+            x = x,
+            y = y
         );
 
-        let result = page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        let result = page
+            .evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         let desc = result.into_value::<String>().unwrap_or_default();
-        Ok(ToolResult::ok(format!("Clicked ({}, {}): {}", x as i64, y as i64, desc)))
+        Ok(ToolResult::ok(format!(
+            "Clicked ({}, {}): {}",
+            x as i64, y as i64, desc
+        )))
     }
 
     // ─── Content extraction ───────────────────────────────────────────────────
@@ -823,8 +938,10 @@ impl BrowserTool {
         let page = mgr.active_page().await?;
         drop(mgr);
 
-        let result = page.evaluate("document.documentElement.outerHTML")
-            .await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        let result = page
+            .evaluate("document.documentElement.outerHTML")
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         let content = result.into_value::<String>().unwrap_or_default();
 
         // Truncate large pages
@@ -862,8 +979,12 @@ impl BrowserTool {
                 sel = Self::js_str(selector),
                 lim = char_limit,
             );
-            let result = page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-            let text = result.into_value::<Option<String>>()
+            let result = page
+                .evaluate(js)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let text = result
+                .into_value::<Option<String>>()
                 .unwrap_or(None)
                 .unwrap_or_else(|| "Element not found".to_string());
             return Ok(ToolResult::ok(text));
@@ -916,15 +1037,17 @@ impl BrowserTool {
             lim = char_limit,
         );
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            page.evaluate(js),
-        ).await
+        let result = tokio::time::timeout(std::time::Duration::from_secs(30), page.evaluate(js))
+            .await
             .map_err(|_| anyhow::anyhow!("get_text timed out (30s) — page may be too complex"))?
             .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         let text = result.into_value::<String>().unwrap_or_default();
-        Ok(ToolResult::ok(if text.is_empty() { "Page appears to have no readable text.".into() } else { text }))
+        Ok(ToolResult::ok(if text.is_empty() {
+            "Page appears to have no readable text.".into()
+        } else {
+            text
+        }))
     }
 
     async fn get_attribute(&self, input: &Value) -> Result<ToolResult> {
@@ -946,11 +1069,18 @@ impl BrowserTool {
             Self::js_str(&selector),
             Self::js_str(&attr)
         );
-        let result = page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        let value = result.into_value::<Option<String>>()
+        let result = page
+            .evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let value = result
+            .into_value::<Option<String>>()
             .unwrap_or(None)
             .unwrap_or_else(|| "null".to_string());
-        Ok(ToolResult::ok(format!("{}[{}] = {}", selector, attr, value)))
+        Ok(ToolResult::ok(format!(
+            "{}[{}] = {}",
+            selector, attr, value
+        )))
     }
 
     // ─── JavaScript execution ─────────────────────────────────────────────────
@@ -965,10 +1095,16 @@ impl BrowserTool {
         let page = mgr.active_page().await?;
         drop(mgr);
 
-        let result = page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        let json_val = result.into_value::<serde_json::Value>()
+        let result = page
+            .evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let json_val = result
+            .into_value::<serde_json::Value>()
             .unwrap_or(Value::String("(non-serializable result)".into()));
-        Ok(ToolResult::ok(serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| format!("{:?}", json_val))))
+        Ok(ToolResult::ok(
+            serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| format!("{:?}", json_val)),
+        ))
     }
 
     // ─── Wait ─────────────────────────────────────────────────────────────────
@@ -994,7 +1130,10 @@ impl BrowserTool {
                         return Ok(ToolResult::ok(format!("Element found: {}", selector)));
                     }
                     if start.elapsed().as_millis() as u64 >= timeout_ms {
-                        return Ok(ToolResult::err(format!("Timeout: element '{}' not found", selector)));
+                        return Ok(ToolResult::err(format!(
+                            "Timeout: element '{}' not found",
+                            selector
+                        )));
                     }
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
@@ -1007,7 +1146,10 @@ impl BrowserTool {
                         return Ok(ToolResult::ok(format!("Element hidden: {}", selector)));
                     }
                     if start.elapsed().as_millis() as u64 >= timeout_ms {
-                        return Ok(ToolResult::err(format!("Timeout: element '{}' still visible", selector)));
+                        return Ok(ToolResult::err(format!(
+                            "Timeout: element '{}' still visible",
+                            selector
+                        )));
                     }
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
@@ -1019,12 +1161,19 @@ impl BrowserTool {
             "human_verification" => {
                 let cleared = self.wait_until_no_challenge(&page, timeout_ms).await?;
                 if cleared {
-                    Ok(ToolResult::ok("Human verification cleared, automation can continue"))
+                    Ok(ToolResult::ok(
+                        "Human verification cleared, automation can continue",
+                    ))
                 } else {
-                    Ok(ToolResult::err("Timeout waiting for human verification to be cleared"))
+                    Ok(ToolResult::err(
+                        "Timeout waiting for human verification to be cleared",
+                    ))
                 }
             }
-            _ => Ok(ToolResult::err(format!("Unknown wait_condition: {}", condition))),
+            _ => Ok(ToolResult::err(format!(
+                "Unknown wait_condition: {}",
+                condition
+            ))),
         }
     }
 
@@ -1039,17 +1188,22 @@ impl BrowserTool {
         drop(mgr);
 
         let js = match direction {
-            "up"     => format!("window.scrollBy(0, -{})", amount),
-            "down"   => format!("window.scrollBy(0, {})", amount),
-            "left"   => format!("window.scrollBy(-{}, 0)", amount),
-            "right"  => format!("window.scrollBy({}, 0)", amount),
-            "top"    => "window.scrollTo(0, 0)".to_string(),
+            "up" => format!("window.scrollBy(0, -{})", amount),
+            "down" => format!("window.scrollBy(0, {})", amount),
+            "left" => format!("window.scrollBy(-{}, 0)", amount),
+            "right" => format!("window.scrollBy({}, 0)", amount),
+            "top" => "window.scrollTo(0, 0)".to_string(),
             "bottom" => "window.scrollTo(0, document.body.scrollHeight)".to_string(),
-            _        => format!("window.scrollBy(0, {})", amount),
+            _ => format!("window.scrollBy(0, {})", amount),
         };
 
-        page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-        Ok(ToolResult::ok(format!("Scrolled {} by {} px", direction, amount)))
+        page.evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        Ok(ToolResult::ok(format!(
+            "Scrolled {} by {} px",
+            direction, amount
+        )))
     }
 
     // ─── Form controls ────────────────────────────────────────────────────────
@@ -1058,7 +1212,11 @@ impl BrowserTool {
         let selector = self.require_selector(input)?;
         let value = match input["text"].as_str() {
             Some(v) => v.to_string(),
-            None => return Ok(ToolResult::err("select requires text (option value or label)")),
+            None => {
+                return Ok(ToolResult::err(
+                    "select requires text (option value or label)",
+                ))
+            }
         };
 
         let mut mgr = self.manager.lock().await;
@@ -1084,9 +1242,15 @@ impl BrowserTool {
             Self::js_str(&value),
             Self::js_str(&value),
         );
-        let result = page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        let result = page
+            .evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         let selected = result.into_value::<String>().unwrap_or_default();
-        Ok(ToolResult::ok(format!("Selected '{}' in {}", selected, selector)))
+        Ok(ToolResult::ok(format!(
+            "Selected '{}' in {}",
+            selected, selector
+        )))
     }
 
     async fn set_checked(&self, input: &Value, checked: bool) -> Result<ToolResult> {
@@ -1107,7 +1271,9 @@ impl BrowserTool {
             Self::js_str(&selector),
             checked
         );
-        page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        page.evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         let action = if checked { "Checked" } else { "Unchecked" };
         Ok(ToolResult::ok(format!("{}: {}", action, selector)))
     }
@@ -1123,14 +1289,22 @@ impl BrowserTool {
         if tabs.is_empty() {
             return Ok(ToolResult::ok("No open tabs"));
         }
-        let list: Vec<String> = tabs.iter().map(|t| {
-            if t == &active { format!("* {} (active)", t) } else { t.clone() }
-        }).collect();
+        let list: Vec<String> = tabs
+            .iter()
+            .map(|t| {
+                if t == &active {
+                    format!("* {} (active)", t)
+                } else {
+                    t.clone()
+                }
+            })
+            .collect();
         Ok(ToolResult::ok(format!("Open tabs:\n{}", list.join("\n"))))
     }
 
     async fn new_tab(&self, input: &Value) -> Result<ToolResult> {
-        let tab_id = input["tab_id"].as_str()
+        let tab_id = input["tab_id"]
+            .as_str()
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("tab_{}", Uuid::new_v4().simple()))
             .to_string();
@@ -1141,7 +1315,10 @@ impl BrowserTool {
         drop(mgr);
 
         if url != "about:blank" {
-            let _ = page.goto(&url).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+            let _ = page
+                .goto(&url)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
         }
         Ok(ToolResult::ok(format!("New tab created: {}", tab_id)))
     }
@@ -1173,12 +1350,15 @@ impl BrowserTool {
         let page = mgr.active_page().await?;
         drop(mgr);
 
-        let cookies = page.get_cookies().await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        let cookies = page
+            .get_cookies()
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         if cookies.is_empty() {
             return Ok(ToolResult::ok("No cookies"));
         }
         Ok(ToolResult::ok(
-            serde_json::to_string_pretty(&cookies).unwrap_or_else(|_| format!("{:#?}", cookies))
+            serde_json::to_string_pretty(&cookies).unwrap_or_else(|_| format!("{:#?}", cookies)),
         ))
     }
 
@@ -1201,7 +1381,11 @@ impl BrowserTool {
         let cookie = CookieParam {
             name: name.clone(),
             value,
-            url: if current_url.is_empty() { None } else { Some(current_url) },
+            url: if current_url.is_empty() {
+                None
+            } else {
+                Some(current_url)
+            },
             domain: None,
             path: Some("/".to_string()),
             secure: None,
@@ -1214,7 +1398,9 @@ impl BrowserTool {
             source_port: None,
             partition_key: None,
         };
-        page.set_cookie(cookie).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        page.set_cookie(cookie)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         Ok(ToolResult::ok(format!("Cookie set: {}", name)))
     }
 
@@ -1222,7 +1408,10 @@ impl BrowserTool {
         let mut mgr = self.manager.lock().await;
         let page = mgr.active_page().await?;
         drop(mgr);
-        let cookies = page.get_cookies().await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        let cookies = page
+            .get_cookies()
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         if cookies.is_empty() {
             return Ok(ToolResult::ok("No cookies to clear"));
         }
@@ -1236,7 +1425,9 @@ impl BrowserTool {
                 partition_key: None,
             })
             .collect();
-        page.delete_cookies(deletes).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        page.delete_cookies(deletes)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         Ok(ToolResult::ok("Cookies cleared via CDP"))
     }
 
@@ -1246,9 +1437,12 @@ impl BrowserTool {
         let mut mgr = self.manager.lock().await;
         let page = mgr.active_page().await?;
         drop(mgr);
-        let url = page.evaluate("window.location.href")
-            .await.map_err(|e| anyhow::anyhow!("{}", e))?
-            .into_value::<String>().unwrap_or_default();
+        let url = page
+            .evaluate("window.location.href")
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?
+            .into_value::<String>()
+            .unwrap_or_default();
         Ok(ToolResult::ok(url))
     }
 
@@ -1256,9 +1450,12 @@ impl BrowserTool {
         let mut mgr = self.manager.lock().await;
         let page = mgr.active_page().await?;
         drop(mgr);
-        let title = page.evaluate("document.title")
-            .await.map_err(|e| anyhow::anyhow!("{}", e))?
-            .into_value::<String>().unwrap_or_default();
+        let title = page
+            .evaluate("document.title")
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?
+            .into_value::<String>()
+            .unwrap_or_default();
         Ok(ToolResult::ok(title))
     }
 
@@ -1281,7 +1478,11 @@ impl BrowserTool {
             None => return Ok(ToolResult::err("download_file requires url")),
         };
         let download_id = format!("dl_{}", Uuid::new_v4().simple());
-        let save_path = self.resolve_download_path(input["save_path"].as_str(), &download_id, &ctx.workspace_root);
+        let save_path = self.resolve_download_path(
+            input["save_path"].as_str(),
+            &download_id,
+            &ctx.workspace_root,
+        );
         let save_path_display = save_path.to_string_lossy().to_string();
 
         {
@@ -1314,7 +1515,14 @@ impl BrowserTool {
                     return;
                 }
             }
-            match BrowserTool::download_to_path(&spawn_url, &save_path, downloads.clone(), &spawn_download_id).await {
+            match BrowserTool::download_to_path(
+                &spawn_url,
+                &save_path,
+                downloads.clone(),
+                &spawn_download_id,
+            )
+            .await
+            {
                 Ok(_) => {}
                 Err(e) => {
                     let mut map = downloads.write().await;
@@ -1362,17 +1570,25 @@ impl BrowserTool {
                             return Ok(ToolResult::err(format!(
                                 "Download failed: {}\nerror: {}",
                                 download_id,
-                                item.error.clone().unwrap_or_else(|| "unknown error".to_string())
+                                item.error
+                                    .clone()
+                                    .unwrap_or_else(|| "unknown error".to_string())
                             )));
                         }
                         DownloadStatus::Running => {}
                     }
                 } else {
-                    return Ok(ToolResult::err(format!("Download id not found: {}", download_id)));
+                    return Ok(ToolResult::err(format!(
+                        "Download id not found: {}",
+                        download_id
+                    )));
                 }
             }
             if start.elapsed().as_millis() as u64 >= timeout_ms {
-                return Ok(ToolResult::err(format!("Timeout waiting for download: {}", download_id)));
+                return Ok(ToolResult::err(format!(
+                    "Timeout waiting for download: {}",
+                    download_id
+                )));
             }
             tokio::time::sleep(Duration::from_millis(DOWNLOAD_POLL_MS)).await;
         }
@@ -1383,7 +1599,9 @@ impl BrowserTool {
     fn require_selector(&self, input: &Value) -> Result<String> {
         match input["selector"].as_str() {
             Some(s) => Ok(s.to_string()),
-            None => Err(anyhow::anyhow!("This action requires a 'selector' parameter (CSS selector)")),
+            None => Err(anyhow::anyhow!(
+                "This action requires a 'selector' parameter (CSS selector)"
+            )),
         }
     }
 
@@ -1401,7 +1619,12 @@ impl BrowserTool {
         })
     }
 
-    fn resolve_download_path(&self, provided_path: Option<&str>, download_id: &str, workspace_root: &Path) -> PathBuf {
+    fn resolve_download_path(
+        &self,
+        provided_path: Option<&str>,
+        download_id: &str,
+        workspace_root: &Path,
+    ) -> PathBuf {
         if let Some(p) = provided_path {
             return PathBuf::from(p);
         }
@@ -1420,7 +1643,11 @@ impl BrowserTool {
         let client = reqwest::Client::new();
         let resp = client.get(url).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow::anyhow!("HTTP {} while downloading {}", resp.status(), url));
+            return Err(anyhow::anyhow!(
+                "HTTP {} while downloading {}",
+                resp.status(),
+                url
+            ));
         }
         let total = resp.content_length();
         {
@@ -1508,10 +1735,7 @@ impl BrowserTool {
         Err(anyhow::anyhow!("Timeout waiting for network idle"))
     }
 
-    async fn detect_challenge_hint(
-        &self,
-        page: &chromiumoxide::Page,
-    ) -> Result<Option<String>> {
+    async fn detect_challenge_hint(&self, page: &chromiumoxide::Page) -> Result<Option<String>> {
         let js = r#"
 (() => {
   const text = (document.body?.innerText || '').toLowerCase();
@@ -1533,7 +1757,10 @@ impl BrowserTool {
   return { hasChallenge: false, reason: '' };
 })()
 "#;
-        let obj = page.evaluate(js).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        let obj = page
+            .evaluate(js)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         let val = obj.into_value::<Value>().unwrap_or(Value::Null);
         if val["hasChallenge"].as_bool().unwrap_or(false) {
             return Ok(Some(

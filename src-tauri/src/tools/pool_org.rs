@@ -10,7 +10,6 @@
 /// This is the "project manager" interface: Pisci converses with the user,
 /// understands the project goals, then uses this tool to formalize them into
 /// a pool with an org_spec, assign Koi roles, and start execution.
-
 use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use crate::koi::runtime::KOI_SESSIONS;
 use crate::store::Database;
@@ -29,7 +28,9 @@ pub struct PoolOrgTool {
 
 #[async_trait]
 impl Tool for PoolOrgTool {
-    fn name(&self) -> &str { "pool_org" }
+    fn name(&self) -> &str {
+        "pool_org"
+    }
 
     fn description(&self) -> &str {
         "Manage project pools, lifecycle, and organization specs. Use this to set up collaborative projects. \
@@ -121,7 +122,9 @@ impl Tool for PoolOrgTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let action = input["action"].as_str().unwrap_or("list");
@@ -162,9 +165,13 @@ impl PoolOrgTool {
         ))
     }
 
-    async fn list_active_pool_todos(&self, pool_id: &str) -> anyhow::Result<Vec<crate::koi::KoiTodo>> {
+    async fn list_active_pool_todos(
+        &self,
+        pool_id: &str,
+    ) -> anyhow::Result<Vec<crate::koi::KoiTodo>> {
         let db = self.db.lock().await;
-        Ok(db.list_koi_todos(None)?
+        Ok(db
+            .list_koi_todos(None)?
             .into_iter()
             .filter(|todo| {
                 todo.pool_session_id.as_deref() == Some(pool_id)
@@ -200,7 +207,8 @@ impl PoolOrgTool {
                 }
                 sessions.remove(&key);
             }
-            sessions.keys()
+            sessions
+                .keys()
                 .filter_map(|key| key.split(':').next().map(str::to_string))
                 .collect()
         };
@@ -221,7 +229,10 @@ impl PoolOrgTool {
         drop(db);
 
         for koi_id in &koi_ids_to_idle {
-            let _ = self.app.emit("koi_status_changed", json!({ "id": koi_id, "status": "idle" }));
+            let _ = self.app.emit(
+                "koi_status_changed",
+                json!({ "id": koi_id, "status": "idle" }),
+            );
         }
 
         Ok(koi_ids_to_idle.len())
@@ -239,7 +250,8 @@ impl PoolOrgTool {
         ctx: &ToolContext,
         action: &str,
     ) -> anyhow::Result<crate::koi::PoolSession> {
-        let requested = input["pool_id"].as_str()
+        let requested = input["pool_id"]
+            .as_str()
             .map(str::trim)
             .filter(|id| !id.is_empty() && *id != "current")
             .map(str::to_string)
@@ -247,7 +259,12 @@ impl PoolOrgTool {
 
         let pool_id = match requested {
             Some(id) => id,
-            None => return Err(anyhow::anyhow!("'pool_id' is required for action '{}'", action)),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "'pool_id' is required for action '{}'",
+                    action
+                ))
+            }
         };
 
         let db = self.db.lock().await;
@@ -263,14 +280,20 @@ impl PoolOrgTool {
             _ => return Ok(ToolResult::err("'name' is required for action 'create'")),
         };
         let org_spec = input["org_spec"].as_str().unwrap_or("").trim();
-        let project_dir = input["project_dir"].as_str().map(|s| s.trim()).filter(|s| !s.is_empty());
+        let project_dir = input["project_dir"]
+            .as_str()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
 
         // If project_dir is specified, create directory and initialize Git repo
         let mut git_info = String::new();
         if let Some(dir) = project_dir {
             let dir_path = std::path::Path::new(dir);
             if let Err(e) = std::fs::create_dir_all(dir_path) {
-                return Ok(ToolResult::err(format!("Failed to create project directory '{}': {}", dir, e)));
+                return Ok(ToolResult::err(format!(
+                    "Failed to create project directory '{}': {}",
+                    dir, e
+                )));
             }
             let git_dir = dir_path.join(".git");
             if !git_dir.exists() {
@@ -299,7 +322,10 @@ impl PoolOrgTool {
                         return Ok(ToolResult::err(format!("git init failed: {}", stderr)));
                     }
                     Err(e) => {
-                        return Ok(ToolResult::err(format!("Failed to run git: {}. Is Git installed?", e)));
+                        return Ok(ToolResult::err(format!(
+                            "Failed to run git: {}. Is Git installed?",
+                            e
+                        )));
                     }
                 }
             } else {
@@ -315,16 +341,33 @@ impl PoolOrgTool {
         }
 
         let _ = db.insert_pool_message_ext(
-            &session.id, "pisci",
-            &format!("项目池「{}」已创建。{}{}", name,
-                if org_spec.is_empty() { "尚未设定组织规范。" } else { "组织规范已就绪。" },
-                if project_dir.is_some() { " Git 仓库已初始化，Koi 将使用独立 worktree 工作。" } else { "" }),
+            &session.id,
+            "pisci",
+            &format!(
+                "项目池「{}」已创建。{}{}",
+                name,
+                if org_spec.is_empty() {
+                    "尚未设定组织规范。"
+                } else {
+                    "组织规范已就绪。"
+                },
+                if project_dir.is_some() {
+                    " Git 仓库已初始化，Koi 将使用独立 worktree 工作。"
+                } else {
+                    ""
+                }
+            ),
             "status_update",
             &json!({ "event": "pool_created" }).to_string(),
-            None, None, Some("pool_created"),
+            None,
+            None,
+            Some("pool_created"),
         );
 
-        let _ = self.app.emit("pool_session_created", json!({ "id": session.id, "name": name }));
+        let _ = self.app.emit(
+            "pool_session_created",
+            json!({ "id": session.id, "name": name }),
+        );
 
         Ok(ToolResult::ok(format!(
             "Project pool created.\n\
@@ -333,8 +376,13 @@ impl PoolOrgTool {
              Org Spec: {}{}\n\n\
              Next: use 'assign_koi' to assign Koi agents and kick off tasks, \
              or use 'call_koi' to directly delegate work.",
-            session.id, name,
-            if org_spec.is_empty() { "not set (use 'update' to add one)" } else { "set" },
+            session.id,
+            name,
+            if org_spec.is_empty() {
+                "not set (use 'update' to add one)"
+            } else {
+                "set"
+            },
             git_info
         )))
     }
@@ -360,10 +408,18 @@ impl PoolOrgTool {
         }
     }
 
-    async fn update_org_spec(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+    async fn update_org_spec(
+        &self,
+        input: &Value,
+        ctx: &ToolContext,
+    ) -> anyhow::Result<ToolResult> {
         let org_spec = match input["org_spec"].as_str() {
             Some(s) if !s.trim().is_empty() => s.trim(),
-            _ => return Ok(ToolResult::err("'org_spec' is required for action 'update'")),
+            _ => {
+                return Ok(ToolResult::err(
+                    "'org_spec' is required for action 'update'",
+                ))
+            }
         };
 
         let session = match self.resolve_pool_session(input, ctx, "update").await {
@@ -375,11 +431,14 @@ impl PoolOrgTool {
         db.update_pool_org_spec(&session.id, org_spec)?;
 
         let _ = db.insert_pool_message_ext(
-            &session.id, "pisci",
+            &session.id,
+            "pisci",
             "组织规范已更新。",
             "status_update",
             &json!({ "event": "org_spec_updated" }).to_string(),
-            None, None, Some("org_spec_updated"),
+            None,
+            None,
+            Some("org_spec_updated"),
         );
 
         Ok(ToolResult::ok(format!(
@@ -398,47 +457,76 @@ impl PoolOrgTool {
         if sessions.is_empty() {
             return Ok(ToolResult::ok(
                 "No project pools exist yet.\n\
-                 Use 'create' to set up a new project pool with an org_spec."
+                 Use 'create' to set up a new project pool with an org_spec.",
             ));
         }
 
         let mut lines: Vec<String> = Vec::new();
         for s in &sessions {
-            let has_spec = if s.org_spec.is_empty() { "no spec" } else { "has spec" };
-            let last_active = s.last_active_at
+            let has_spec = if s.org_spec.is_empty() {
+                "no spec"
+            } else {
+                "has spec"
+            };
+            let last_active = s
+                .last_active_at
                 .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
                 .unwrap_or_else(|| "never".to_string());
-            let dir_info = s.project_dir.as_deref()
+            let dir_info = s
+                .project_dir
+                .as_deref()
                 .map(|d| format!(" | dir: {}", d))
                 .unwrap_or_default();
             lines.push(format!(
                 "- {} (id: {}) [{}] status: {} | last active: {} | updated: {}{}",
-                s.name, &s.id[..8.min(s.id.len())], has_spec,
-                s.status, last_active,
+                s.name,
+                &s.id[..8.min(s.id.len())],
+                has_spec,
+                s.status,
+                last_active,
                 s.updated_at.format("%Y-%m-%d %H:%M"),
                 dir_info
             ));
         }
 
-        let koi_summary: Vec<String> = kois.iter().map(|k| {
-            format!(
-                "  {} {} (id: {}) [{}] role: {}",
-                k.icon,
-                k.name,
-                &k.id[..8.min(k.id.len())],
-                k.status,
-                if k.role.trim().is_empty() { "unspecified" } else { &k.role }
-            )
-        }).collect();
+        let koi_summary: Vec<String> = kois
+            .iter()
+            .map(|k| {
+                format!(
+                    "  {} {} (id: {}) [{}] role: {}",
+                    k.icon,
+                    k.name,
+                    &k.id[..8.min(k.id.len())],
+                    k.status,
+                    if k.role.trim().is_empty() {
+                        "unspecified"
+                    } else {
+                        &k.role
+                    }
+                )
+            })
+            .collect();
 
         Ok(ToolResult::ok(format!(
             "Project Pools ({}):\n{}\n\nAvailable Koi ({}):\n{}",
-            sessions.len(), lines.join("\n"),
-            kois.len(), if koi_summary.is_empty() { "  (none)".to_string() } else { koi_summary.join("\n") }
+            sessions.len(),
+            lines.join("\n"),
+            kois.len(),
+            if koi_summary.is_empty() {
+                "  (none)".to_string()
+            } else {
+                koi_summary.join("\n")
+            }
         )))
     }
 
-    async fn set_status(&self, input: &Value, ctx: &ToolContext, action: &str, new_status: &str) -> anyhow::Result<ToolResult> {
+    async fn set_status(
+        &self,
+        input: &Value,
+        ctx: &ToolContext,
+        action: &str,
+        new_status: &str,
+    ) -> anyhow::Result<ToolResult> {
         let session = match self.resolve_pool_session(input, ctx, action).await {
             Ok(session) => session,
             Err(err) => return Ok(ToolResult::err(err.to_string())),
@@ -454,7 +542,8 @@ impl PoolOrgTool {
         if new_status == "archived" {
             let active_todos = self.list_active_pool_todos(&session.id).await?;
             if !active_todos.is_empty() {
-                let todo_preview = active_todos.iter()
+                let todo_preview = active_todos
+                    .iter()
                     .take(3)
                     .map(|todo| format!("{} [{}]", &todo.id[..8.min(todo.id.len())], todo.status))
                     .collect::<Vec<_>>()
@@ -489,7 +578,8 @@ impl PoolOrgTool {
 
         let db = self.db.lock().await;
         let _ = db.insert_pool_message_ext(
-            &session.id, "pisci",
+            &session.id,
+            "pisci",
             &format!("项目状态变更: {} → {}", old_status, new_status),
             "status_update",
             &json!({
@@ -497,12 +587,18 @@ impl PoolOrgTool {
                 "old": old_status,
                 "new": new_status,
                 "halted_koi_count": halted_koi_count
-            }).to_string(),
-            None, None, Some("status_changed"),
+            })
+            .to_string(),
+            None,
+            None,
+            Some("status_changed"),
         );
         drop(db);
 
-        let _ = self.app.emit("pool_session_updated", json!({ "id": session.id, "status": new_status }));
+        let _ = self.app.emit(
+            "pool_session_updated",
+            json!({ "id": session.id, "status": new_status }),
+        );
 
         Ok(ToolResult::ok(format!(
             "Project '{}' {status_label} (status: {} → {}).{}",
@@ -520,7 +616,11 @@ impl PoolOrgTool {
     async fn find_related(&self, input: &Value) -> anyhow::Result<ToolResult> {
         let keywords = match input["keywords"].as_str() {
             Some(k) if !k.trim().is_empty() => k.trim(),
-            _ => return Ok(ToolResult::err("'keywords' is required for action 'find_related'")),
+            _ => {
+                return Ok(ToolResult::err(
+                    "'keywords' is required for action 'find_related'",
+                ))
+            }
         };
 
         let db = self.db.lock().await;
@@ -536,19 +636,29 @@ impl PoolOrgTool {
 
         let mut lines: Vec<String> = Vec::new();
         for s in &results {
-            let last_active = s.last_active_at
+            let last_active = s
+                .last_active_at
                 .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
                 .unwrap_or_else(|| "never".to_string());
             lines.push(format!(
                 "- {} (id: {}) [{}] last active: {}{}",
-                s.name, &s.id[..8.min(s.id.len())], s.status, last_active,
-                if s.org_spec.is_empty() { "" } else { " | has org_spec" }
+                s.name,
+                &s.id[..8.min(s.id.len())],
+                s.status,
+                last_active,
+                if s.org_spec.is_empty() {
+                    ""
+                } else {
+                    " | has org_spec"
+                }
             ));
         }
 
         Ok(ToolResult::ok(format!(
             "Found {} related project(s) for '{}':\n{}",
-            results.len(), keywords, lines.join("\n")
+            results.len(),
+            keywords,
+            lines.join("\n")
         )))
     }
 
@@ -563,23 +673,30 @@ impl PoolOrgTool {
         let pool_id = pool.id.clone();
         let koi_id = match input["koi_id"].as_str() {
             Some(id) if !id.trim().is_empty() => id.trim().to_string(),
-            _ => return Ok(ToolResult::err("'koi_id' is required for action 'assign_koi'")),
+            _ => {
+                return Ok(ToolResult::err(
+                    "'koi_id' is required for action 'assign_koi'",
+                ))
+            }
         };
         let task = match input["task"].as_str() {
             Some(t) if !t.trim().is_empty() => t.trim().to_string(),
-            _ => return Ok(ToolResult::err("'task' is required for action 'assign_koi'")),
+            _ => {
+                return Ok(ToolResult::err(
+                    "'task' is required for action 'assign_koi'",
+                ))
+            }
         };
         let priority = input["priority"].as_str().unwrap_or("medium").to_string();
 
         let state = self.app.state::<crate::store::AppState>();
-        let runtime = crate::koi::runtime::KoiRuntime::from_tauri(
-            self.app.clone(), state.db.clone(),
-        );
+        let runtime =
+            crate::koi::runtime::KoiRuntime::from_tauri(self.app.clone(), state.db.clone());
 
         // Create the todo (non-blocking)
-        let (todo, assign_msg_id) = runtime.assign_task(
-            &koi_id, &task, "pisci", Some(&pool_id), &priority,
-        ).await?;
+        let (todo, assign_msg_id) = runtime
+            .assign_task(&koi_id, &task, "pisci", Some(&pool_id), &priority)
+            .await?;
 
         let todo_id_short = todo.id[..8.min(todo.id.len())].to_string();
 
@@ -590,15 +707,21 @@ impl PoolOrgTool {
         let pool_id_clone = pool_id.clone();
         tokio::spawn(async move {
             let runtime = crate::koi::runtime::KoiRuntime::from_tauri(app_clone, db_clone);
-            match runtime.execute_todo(
-                &koi_id_clone, &todo, assign_msg_id, Some(&pool_id_clone),
-            ).await {
+            match runtime
+                .execute_todo(&koi_id_clone, &todo, assign_msg_id, Some(&pool_id_clone))
+                .await
+            {
                 Ok(r) => {
-                    tracing::info!("Koi '{}' task completed (success={})", koi_id_clone, r.success);
+                    tracing::info!(
+                        "Koi '{}' task completed (success={})",
+                        koi_id_clone,
+                        r.success
+                    );
                     if r.success && r.reply.contains('@') {
-                        if let Err(e) = runtime.handle_mention(
-                            &koi_id_clone, &pool_id_clone, &r.reply,
-                        ).await {
+                        if let Err(e) = runtime
+                            .handle_mention(&koi_id_clone, &pool_id_clone, &r.reply)
+                            .await
+                        {
                             tracing::warn!("@mention dispatch from result failed: {}", e);
                         }
                     }
@@ -648,7 +771,11 @@ impl PoolOrgTool {
             "Pool '{}' messages ({}):\n{}",
             &session.id[..8.min(session.id.len())],
             messages.len(),
-            if lines.is_empty() { "(none)".to_string() } else { lines.join("\n") }
+            if lines.is_empty() {
+                "(none)".to_string()
+            } else {
+                lines.join("\n")
+            }
         )))
     }
 
@@ -681,7 +808,11 @@ impl PoolOrgTool {
             "Pool '{}' todos ({}):\n{}",
             &session.id[..8.min(session.id.len())],
             todos.len(),
-            if lines.is_empty() { "(none)".to_string() } else { lines.join("\n") }
+            if lines.is_empty() {
+                "(none)".to_string()
+            } else {
+                lines.join("\n")
+            }
         )))
     }
 
@@ -690,14 +821,23 @@ impl PoolOrgTool {
     }
 
     fn resolve_todo_id<'a>(input: &'a Value) -> Option<&'a str> {
-        input["todo_id"].as_str().filter(|s| !s.trim().is_empty()).map(|s| s.trim())
+        input["todo_id"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim())
     }
 
-    async fn find_todo_by_prefix(&self, prefix: &str) -> anyhow::Result<Option<crate::koi::KoiTodo>> {
+    async fn find_todo_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> anyhow::Result<Option<crate::koi::KoiTodo>> {
         let db = self.db.lock().await;
         let todos = db.list_koi_todos(None)?;
         drop(db);
-        let matches: Vec<_> = todos.into_iter().filter(|t| t.id.starts_with(prefix)).collect();
+        let matches: Vec<_> = todos
+            .into_iter()
+            .filter(|t| t.id.starts_with(prefix))
+            .collect();
         match matches.len() {
             0 => Ok(None),
             1 => Ok(Some(matches.into_iter().next().unwrap())),
@@ -705,7 +845,10 @@ impl PoolOrgTool {
         }
     }
 
-    fn check_todo_ownership(todo: &crate::koi::KoiTodo, ctx: &ToolContext) -> Result<(), ToolResult> {
+    fn check_todo_ownership(
+        todo: &crate::koi::KoiTodo,
+        ctx: &ToolContext,
+    ) -> Result<(), ToolResult> {
         if Self::is_pisci(ctx) {
             return Ok(());
         }
@@ -722,7 +865,11 @@ impl PoolOrgTool {
     async fn complete_todo(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let todo_id = match Self::resolve_todo_id(input) {
             Some(id) => id,
-            None => return Ok(ToolResult::err("'todo_id' is required for action 'complete_todo'")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'todo_id' is required for action 'complete_todo'",
+                ))
+            }
         };
 
         let todo = match self.find_todo_by_prefix(todo_id).await? {
@@ -731,7 +878,10 @@ impl PoolOrgTool {
         };
 
         if todo.status == "done" {
-            return Ok(ToolResult::ok(format!("Todo '{}' is already completed.", &todo.id[..8.min(todo.id.len())])));
+            return Ok(ToolResult::ok(format!(
+                "Todo '{}' is already completed.",
+                &todo.id[..8.min(todo.id.len())]
+            )));
         }
         if todo.status == "cancelled" {
             return Ok(ToolResult::err("Cannot complete a cancelled todo."));
@@ -745,20 +895,28 @@ impl PoolOrgTool {
         db.complete_koi_todo(&todo.id, None)?;
         drop(db);
 
-        let _ = self.app.emit("koi_todo_updated", json!({
-            "id": todo.id, "action": "completed", "by": ctx.memory_owner_id
-        }));
+        let _ = self.app.emit(
+            "koi_todo_updated",
+            json!({
+                "id": todo.id, "action": "completed", "by": ctx.memory_owner_id
+            }),
+        );
 
         Ok(ToolResult::ok(format!(
             "Todo '{}' ({}) marked as completed.",
-            &todo.id[..8.min(todo.id.len())], todo.title
+            &todo.id[..8.min(todo.id.len())],
+            todo.title
         )))
     }
 
     async fn cancel_todo(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let todo_id = match Self::resolve_todo_id(input) {
             Some(id) => id,
-            None => return Ok(ToolResult::err("'todo_id' is required for action 'cancel_todo'")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'todo_id' is required for action 'cancel_todo'",
+                ))
+            }
         };
         let reason = input["reason"].as_str().unwrap_or("Cancelled");
 
@@ -768,7 +926,10 @@ impl PoolOrgTool {
         };
 
         if todo.status == "cancelled" {
-            return Ok(ToolResult::ok(format!("Todo '{}' is already cancelled.", &todo.id[..8.min(todo.id.len())])));
+            return Ok(ToolResult::ok(format!(
+                "Todo '{}' is already cancelled.",
+                &todo.id[..8.min(todo.id.len())]
+            )));
         }
         if todo.status == "done" {
             return Ok(ToolResult::err("Cannot cancel a completed todo."));
@@ -782,9 +943,12 @@ impl PoolOrgTool {
         db.update_koi_todo(&todo.id, None, None, Some("cancelled"), None)?;
         drop(db);
 
-        let _ = self.app.emit("koi_todo_updated", json!({
-            "id": todo.id, "action": "cancelled", "by": ctx.memory_owner_id, "reason": reason
-        }));
+        let _ = self.app.emit(
+            "koi_todo_updated",
+            json!({
+                "id": todo.id, "action": "cancelled", "by": ctx.memory_owner_id, "reason": reason
+            }),
+        );
 
         if let Some(ref psid) = todo.pool_session_id {
             let db = self.db.lock().await;
@@ -799,14 +963,24 @@ impl PoolOrgTool {
 
         Ok(ToolResult::ok(format!(
             "Todo '{}' ({}) cancelled. Reason: {}",
-            &todo.id[..8.min(todo.id.len())], todo.title, reason
+            &todo.id[..8.min(todo.id.len())],
+            todo.title,
+            reason
         )))
     }
 
-    async fn update_todo_status(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+    async fn update_todo_status(
+        &self,
+        input: &Value,
+        ctx: &ToolContext,
+    ) -> anyhow::Result<ToolResult> {
         let todo_id = match Self::resolve_todo_id(input) {
             Some(id) => id,
-            None => return Ok(ToolResult::err("'todo_id' is required for action 'update_todo_status'")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'todo_id' is required for action 'update_todo_status'",
+                ))
+            }
         };
         let new_status = match input["status"].as_str() {
             Some(s) if matches!(s, "todo" | "in_progress" | "blocked") => s,
@@ -819,7 +993,10 @@ impl PoolOrgTool {
         };
 
         if todo.status == "done" || todo.status == "cancelled" {
-            return Ok(ToolResult::err(format!("Cannot update status of a {} todo.", todo.status)));
+            return Ok(ToolResult::err(format!(
+                "Cannot update status of a {} todo.",
+                todo.status
+            )));
         }
 
         if let Err(r) = Self::check_todo_ownership(&todo, ctx) {
@@ -836,24 +1013,35 @@ impl PoolOrgTool {
 
         Ok(ToolResult::ok(format!(
             "Todo '{}' ({}) status changed to '{}'.",
-            &todo.id[..8.min(todo.id.len())], todo.title, new_status
+            &todo.id[..8.min(todo.id.len())],
+            todo.title,
+            new_status
         )))
     }
 
     async fn merge_branches(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
-        let session = match self.resolve_pool_session(input, ctx, "merge_branches").await {
+        let session = match self
+            .resolve_pool_session(input, ctx, "merge_branches")
+            .await
+        {
             Ok(session) => session,
             Err(err) => return Ok(ToolResult::err(err.to_string())),
         };
 
-        let project_dir = match session.project_dir.as_deref() {
-            Some(d) => d,
-            None => return Ok(ToolResult::err("This pool has no project_dir. merge_branches requires a Git-backed project.")),
-        };
+        let project_dir =
+            match session.project_dir.as_deref() {
+                Some(d) => d,
+                None => return Ok(ToolResult::err(
+                    "This pool has no project_dir. merge_branches requires a Git-backed project.",
+                )),
+            };
 
         let dir = std::path::Path::new(project_dir);
         if !dir.join(".git").exists() {
-            return Ok(ToolResult::err(format!("No Git repo found at '{}'", project_dir)));
+            return Ok(ToolResult::err(format!(
+                "No Git repo found at '{}'",
+                project_dir
+            )));
         }
 
         let branch_output = std::process::Command::new("git")
@@ -862,13 +1050,11 @@ impl PoolOrgTool {
             .output();
 
         let branches: Vec<String> = match branch_output {
-            Ok(o) if o.status.success() => {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .map(|l| l.trim().trim_start_matches("* ").to_string())
-                    .filter(|l| !l.is_empty())
-                    .collect()
-            }
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(|l| l.trim().trim_start_matches("* ").to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
             _ => return Ok(ToolResult::err("Failed to list git branches")),
         };
 
@@ -881,14 +1067,22 @@ impl PoolOrgTool {
             .args(["checkout", "main"])
             .current_dir(dir)
             .output()
-            .or_else(|_| std::process::Command::new("git")
-                .args(["checkout", "master"])
-                .current_dir(dir)
-                .output());
+            .or_else(|_| {
+                std::process::Command::new("git")
+                    .args(["checkout", "master"])
+                    .current_dir(dir)
+                    .output()
+            });
 
         for branch in &branches {
             let merge = std::process::Command::new("git")
-                .args(["merge", "--no-ff", branch, "-m", &format!("Merge {}", branch)])
+                .args([
+                    "merge",
+                    "--no-ff",
+                    branch,
+                    "-m",
+                    &format!("Merge {}", branch),
+                ])
                 .current_dir(dir)
                 .output();
             match merge {
@@ -901,7 +1095,11 @@ impl PoolOrgTool {
                         .current_dir(dir)
                         .output();
                     let stderr = String::from_utf8_lossy(&o.stderr);
-                    results.push(format!("  {} — CONFLICT (aborted): {}", branch, stderr.trim()));
+                    results.push(format!(
+                        "  {} — CONFLICT (aborted): {}",
+                        branch,
+                        stderr.trim()
+                    ));
                 }
                 Err(e) => {
                     results.push(format!("  {} — error: {}", branch, e));
@@ -911,7 +1109,9 @@ impl PoolOrgTool {
 
         Ok(ToolResult::ok(format!(
             "Merge results for '{}' ({} branches):\n{}",
-            session.name, branches.len(), results.join("\n")
+            session.name,
+            branches.len(),
+            results.join("\n")
         )))
     }
 }

@@ -25,38 +25,51 @@ impl ClaudeClient {
     }
 
     fn build_body(&self, req: &LlmRequest) -> Value {
-        let messages: Vec<Value> = req.messages.iter().map(|m| {
-            let content: Value = match &m.content {
-                MessageContent::Text(t) => json!(t),
-                MessageContent::Blocks(blocks) => {
-                    let parts: Vec<Value> = blocks.iter().map(|b| match b {
-                        ContentBlock::Text { text } => json!({"type": "text", "text": text}),
-                        ContentBlock::Image { source } => json!({
-                            "type": "image",
-                            "source": {
-                                "type": source.source_type,
-                                "media_type": source.media_type,
-                                "data": source.data
-                            }
-                        }),
-                        ContentBlock::ToolUse { id, name, input } => json!({
-                            "type": "tool_use",
-                            "id": id,
-                            "name": name,
-                            "input": input
-                        }),
-                        ContentBlock::ToolResult { tool_use_id, content, is_error } => json!({
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "content": content,
-                            "is_error": is_error
-                        }),
-                    }).collect();
-                    json!(parts)
-                }
-            };
-            json!({"role": m.role, "content": content})
-        }).collect();
+        let messages: Vec<Value> = req
+            .messages
+            .iter()
+            .map(|m| {
+                let content: Value = match &m.content {
+                    MessageContent::Text(t) => json!(t),
+                    MessageContent::Blocks(blocks) => {
+                        let parts: Vec<Value> = blocks
+                            .iter()
+                            .map(|b| match b {
+                                ContentBlock::Text { text } => {
+                                    json!({"type": "text", "text": text})
+                                }
+                                ContentBlock::Image { source } => json!({
+                                    "type": "image",
+                                    "source": {
+                                        "type": source.source_type,
+                                        "media_type": source.media_type,
+                                        "data": source.data
+                                    }
+                                }),
+                                ContentBlock::ToolUse { id, name, input } => json!({
+                                    "type": "tool_use",
+                                    "id": id,
+                                    "name": name,
+                                    "input": input
+                                }),
+                                ContentBlock::ToolResult {
+                                    tool_use_id,
+                                    content,
+                                    is_error,
+                                } => json!({
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_use_id,
+                                    "content": content,
+                                    "is_error": is_error
+                                }),
+                            })
+                            .collect();
+                        json!(parts)
+                    }
+                };
+                json!({"role": m.role, "content": content})
+            })
+            .collect();
 
         let mut body = json!({
             "model": req.model,
@@ -70,11 +83,17 @@ impl ClaudeClient {
         }
 
         if !req.tools.is_empty() {
-            let tools: Vec<Value> = req.tools.iter().map(|t| json!({
-                "name": t.name,
-                "description": t.description,
-                "input_schema": t.input_schema,
-            })).collect();
+            let tools: Vec<Value> = req
+                .tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "input_schema": t.input_schema,
+                    })
+                })
+                .collect();
             body["tools"] = json!(tools);
         }
 
@@ -149,7 +168,8 @@ impl LlmClient for ClaudeClient {
 
         let body = self.build_body(&req_with_stream);
 
-        let response = self.http
+        let response = self
+            .http
             .post(CLAUDE_API_URL)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
@@ -167,7 +187,8 @@ impl LlmClient for ClaudeClient {
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
         // Track tool use accumulation: index -> (id, name, json_buf)
-        let mut tool_bufs: std::collections::HashMap<usize, (String, String, String)> = std::collections::HashMap::new();
+        let mut tool_bufs: std::collections::HashMap<usize, (String, String, String)> =
+            std::collections::HashMap::new();
         let mut input_tokens = 0u32;
         let mut output_tokens = 0u32;
 
@@ -195,11 +216,17 @@ impl LlmClient for ClaudeClient {
                                     }
                                 }
                                 "content_block_start" => {
-                                    if let (Some(idx), Some(cb)) = (event.index, event.content_block) {
+                                    if let (Some(idx), Some(cb)) =
+                                        (event.index, event.content_block)
+                                    {
                                         if cb.block_type == "tool_use" {
                                             tool_bufs.insert(
                                                 idx,
-                                                (cb.id.unwrap_or_default(), cb.name.unwrap_or_default(), String::new()),
+                                                (
+                                                    cb.id.unwrap_or_default(),
+                                                    cb.name.unwrap_or_default(),
+                                                    String::new(),
+                                                ),
                                             );
                                         }
                                     }
@@ -209,11 +236,14 @@ impl LlmClient for ClaudeClient {
                                         match delta.delta_type.as_deref() {
                                             Some("text_delta") => {
                                                 if let Some(text) = delta.text {
-                                                    let _ = tx.send(LlmChunk::TextDelta(text)).await;
+                                                    let _ =
+                                                        tx.send(LlmChunk::TextDelta(text)).await;
                                                 }
                                             }
                                             Some("input_json_delta") => {
-                                                if let (Some(idx), Some(partial)) = (event.index, delta.partial_json) {
+                                                if let (Some(idx), Some(partial)) =
+                                                    (event.index, delta.partial_json)
+                                                {
                                                     if let Some(buf) = tool_bufs.get_mut(&idx) {
                                                         buf.2.push_str(&partial);
                                                     }
@@ -226,9 +256,12 @@ impl LlmClient for ClaudeClient {
                                 "content_block_stop" => {
                                     if let Some(idx) = event.index {
                                         if let Some((id, name, json_buf)) = tool_bufs.remove(&idx) {
-                                            let input = serde_json::from_str(&json_buf)
-                                                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-                                            let _ = tx.send(LlmChunk::ToolUse { id, name, input }).await;
+                                            let input = serde_json::from_str(&json_buf).unwrap_or(
+                                                serde_json::Value::Object(serde_json::Map::new()),
+                                            );
+                                            let _ = tx
+                                                .send(LlmChunk::ToolUse { id, name, input })
+                                                .await;
                                         }
                                     }
                                 }
@@ -238,7 +271,12 @@ impl LlmClient for ClaudeClient {
                                     }
                                 }
                                 "message_stop" => {
-                                    let _ = tx.send(LlmChunk::Done { input_tokens, output_tokens }).await;
+                                    let _ = tx
+                                        .send(LlmChunk::Done {
+                                            input_tokens,
+                                            output_tokens,
+                                        })
+                                        .await;
                                 }
                                 _ => {}
                             }
@@ -256,7 +294,8 @@ impl LlmClient for ClaudeClient {
         req_no_stream.stream = false;
         let body = self.build_body(&req_no_stream);
 
-        let response = self.http
+        let response = self
+            .http
             .post(CLAUDE_API_URL)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)

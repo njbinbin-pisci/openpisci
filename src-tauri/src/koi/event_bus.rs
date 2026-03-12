@@ -2,7 +2,6 @@
 ///
 /// Real implementation uses `tauri::AppHandle::emit()`.
 /// Test implementation captures events into a log for assertions.
-
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -15,7 +14,9 @@ pub trait EventBus: Send + Sync {
     fn db(&self) -> &std::sync::Arc<tokio::sync::Mutex<crate::store::Database>>;
 
     /// Access the Tauri AppHandle if available (returns None in test mode).
-    fn app_handle(&self) -> Option<&tauri::AppHandle> { None }
+    fn app_handle(&self) -> Option<&tauri::AppHandle> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -68,7 +69,8 @@ impl LogEventBus {
 
     pub async fn events_named(&self, name: &str) -> Vec<Value> {
         let events = self.events.lock().await;
-        events.iter()
+        events
+            .iter()
             .filter(|(n, _)| n == name)
             .map(|(_, v)| v.clone())
             .collect()
@@ -85,7 +87,9 @@ impl EventBus for LogEventBus {
         let events = self.events.clone();
         let event = event.to_string();
         match events.try_lock() {
-            Ok(mut guard) => { guard.push((event, payload)); }
+            Ok(mut guard) => {
+                guard.push((event, payload));
+            }
             Err(_) => {
                 let events2 = events.clone();
                 tokio::spawn(async move {
