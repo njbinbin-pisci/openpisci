@@ -2171,6 +2171,23 @@ const CTX_TRIM_TAIL: usize = 300;
 /// All rows for this turn share the same `turn_index` derived from the current
 /// message count in the session.
 /// Persist only the *new* messages produced by the agent loop.
+/// Strip `SEND_FILE:` and `SEND_IMAGE:` marker lines from text before persisting to DB.
+/// These lines are consumed by the gateway for file dispatch and must not appear in chat history.
+fn strip_send_markers(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains("SEND_FILE:") && !text.contains("SEND_IMAGE:") {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let cleaned: String = text
+        .lines()
+        .filter(|line| {
+            let t = line.trim();
+            !t.starts_with("SEND_FILE:") && !t.starts_with("SEND_IMAGE:")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::borrow::Cow::Owned(cleaned.trim().to_string())
+}
+
 /// `context_len` is the number of messages that were passed INTO agent.run() as context
 /// (already stored in the DB). Only messages at index >= context_len are new and need saving.
 pub fn persist_agent_turn(
@@ -2211,7 +2228,8 @@ pub fn persist_agent_turn(
 
                 if !tool_uses.is_empty() {
                     // Assistant message with tool calls
-                    let text = msg.content.as_text();
+                    let raw_text = msg.content.as_text();
+                    let text = strip_send_markers(&raw_text);
                     let calls_json = serde_json::to_string(&tool_uses).unwrap_or_default();
                     let _ = db.append_message_full(
                         session_id,
@@ -2249,20 +2267,26 @@ pub fn persist_agent_turn(
             }
             MessageContent::Text(text) => {
                 if !text.is_empty() {
-                    let logged = if text.len() > 10_000 {
+                    let clean = if msg.role == "assistant" {
+                        strip_send_markers(text)
+                    } else {
+                        std::borrow::Cow::Borrowed(text.as_str())
+                    };
+                    if clean.is_empty() {
+                        i += 1;
+                        continue;
+                    }
+                    if clean.len() > 10_000 {
                         tracing::info!(
                             "Saving large assistant message ({} chars) for session={}",
-                            text.len(),
+                            clean.len(),
                             session_id
                         );
-                        text.as_str()
-                    } else {
-                        text.as_str()
-                    };
+                    }
                     let _ = db.append_message_full(
                         session_id,
                         &msg.role,
-                        logged,
+                        &clean,
                         None,
                         None,
                         Some(turn_index),

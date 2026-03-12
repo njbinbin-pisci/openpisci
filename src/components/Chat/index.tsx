@@ -1416,11 +1416,11 @@ const LOCAL_PATH_RE =
 
 function linkifyPaths(text: string): string {
   return text.replace(LOCAL_PATH_RE, (match) => {
-    // Skip if already inside a markdown link target or code fence line
     const encoded = match.replace(/\\/g, "/");
+    // encodeURI preserves /:\. but encodes spaces, CJK and other non-ASCII chars
     const uri = encoded.startsWith("//")
-      ? `file:${encoded}`           // UNC \\server\share → file://server/share
-      : `file:///${encoded.replace(/^\//, "")}`; // Unix /home/... or Windows C:/...
+      ? `file:${encodeURI(encoded)}`          // UNC \\server\share
+      : `file:///${encodeURI(encoded.replace(/^\//, ""))}`; // Windows C:/... or Unix /home/...
     return `[${match}](${uri})`;
   });
 }
@@ -1430,9 +1430,19 @@ function isLocalPath(href: string | undefined): boolean {
   return href.startsWith("file://") || /^[A-Za-z]:[\\/]/.test(href) || href.startsWith("\\\\");
 }
 
+// Strip SEND_FILE: / SEND_IMAGE: marker lines from the display text (they are
+// consumed by the backend for file dispatch and should not be shown to the user).
+function stripSendMarkers(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !/^\s*SEND_(FILE|IMAGE):/i.test(line))
+    .join("\n")
+    .trim();
+}
+
 // Renders message content with full Markdown support (GFM: tables, strikethrough, task lists, etc.)
 function MessageContent({ content }: { content: string }) {
-  const processed = linkifyPaths(content);
+  const processed = linkifyPaths(stripSendMarkers(content));
   const fallback = (
     <pre className="code-block">
       <span className="code-lang">text</span>
@@ -1472,6 +1482,7 @@ function MessageContent({ content }: { content: string }) {
                   </a>
                 );
               }
+              if (!href) return <span>{children}</span>;
               return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
             },
             // Code blocks with language label; mermaid gets special rendering
