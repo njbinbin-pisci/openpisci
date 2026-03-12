@@ -398,6 +398,9 @@ pub struct AgentLoop {
     /// User-configured vision override (from settings.vision_enabled).
     /// None = auto-detect from model name.
     pub vision_override: Option<bool>,
+    /// Receives runtime notifications (e.g. @mention alerts) injected into the
+    /// message stream so the agent can react mid-execution.
+    pub notification_rx: Option<Mutex<mpsc::Receiver<String>>>,
 }
 
 impl AgentLoop {
@@ -711,6 +714,23 @@ impl AgentLoop {
         for _iteration in 0..max_iterations {
             if cancel.load(Ordering::Relaxed) {
                 break;
+            }
+
+            // Drain pending notifications (e.g. @mention alerts from other Koi)
+            if let Some(ref rx_mutex) = self.notification_rx {
+                let mut rx = rx_mutex.lock().await;
+                while let Ok(msg) = rx.try_recv() {
+                    let preview = if msg.chars().count() > 80 {
+                        format!("{}...", msg.chars().take(80).collect::<String>())
+                    } else {
+                        msg.clone()
+                    };
+                    info!("Injecting notification into agent loop: {}", preview);
+                    messages.push(LlmMessage {
+                        role: "user".into(),
+                        content: MessageContent::text(&msg),
+                    });
+                }
             }
 
             // Compact old tool results to keep memory and token usage bounded.

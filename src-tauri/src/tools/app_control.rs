@@ -284,8 +284,8 @@ impl AppControlTool {
                             .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
                             .unwrap_or_else(|| "never".to_string()),
                         t.run_count,
-                        if t.task_prompt.len() > 80 {
-                            format!("{}…", &t.task_prompt[..80])
+                        if t.task_prompt.chars().count() > 80 {
+                            format!("{}…", t.task_prompt.chars().take(80).collect::<String>())
                         } else {
                             t.task_prompt.clone()
                         }
@@ -1077,13 +1077,11 @@ impl AppControlTool {
     // ── Skills ────────────────────────────────────────────────────────────────
 
     async fn skill_list(&self) -> anyhow::Result<ToolResult> {
-        // DB skills (enabled/disabled state)
         let db_skills = {
             let db = self.db.lock().await;
             db.list_skills().unwrap_or_default()
         };
 
-        // File-system skills (actual SKILL.md definitions)
         let skills_dir = self.app_data_dir.join("skills");
         let mut loader = SkillLoader::new(&skills_dir);
         if let Err(e) = loader.load_all() {
@@ -1091,40 +1089,25 @@ impl AppControlTool {
         }
         let fs_skills = loader.list_skills();
 
-        if db_skills.is_empty() && fs_skills.is_empty() {
+        if db_skills.is_empty() {
             return Ok(ToolResult::ok("No skills installed."));
         }
 
-        // Merge: prefer FS info, annotate with DB enabled state
         let mut lines: Vec<String> = Vec::new();
-
-        // Show FS skills with DB enabled state
-        for skill in &fs_skills {
-            let db_entry = db_skills.iter().find(|s| s.name == skill.name || s.id == skill.name);
-            let enabled = db_entry.map(|s| s.enabled).unwrap_or(true);
-            let skill_id = db_entry.map(|s| s.id.as_str()).unwrap_or(&skill.name);
-            lines.push(format!(
-                "ID: {}\n  Name: {}\n  Description: {}\n  Version: {}\n  Source: {}\n  Enabled: {}\n  Tools: {}\n  Dependencies: {}",
-                skill_id,
-                skill.name,
-                skill.description,
-                skill.version,
-                skill.source,
-                enabled,
-                if skill.tools.is_empty() { "(none)".to_string() } else { skill.tools.join(", ") },
-                if skill.dependencies.is_empty() { "(none)".to_string() } else { skill.dependencies.join(", ") },
-            ));
-        }
-
-        // Also show DB-only skills not found on FS
         for db_skill in &db_skills {
-            let in_fs = fs_skills.iter().any(|s| s.name == db_skill.name || s.name == db_skill.id);
-            if !in_fs {
-                lines.push(format!(
-                    "ID: {}\n  Name: {}\n  Description: {}\n  Enabled: {}\n  (definition file not found on disk)",
-                    db_skill.id, db_skill.name, db_skill.description, db_skill.enabled
-                ));
-            }
+            let fs_entry = fs_skills.iter().find(|s| s.name == db_skill.name || s.name == db_skill.id);
+            lines.push(format!(
+                "ID: {}\n  Name: {}\n  Description: {}\n  Enabled: {}\n  Source: {}\n  Version: {}\n  Tools: {}\n  Dependencies: {}{}",
+                db_skill.id,
+                db_skill.name,
+                db_skill.description,
+                db_skill.enabled,
+                fs_entry.map(|s| s.source.as_str()).unwrap_or("db"),
+                fs_entry.map(|s| s.version.as_str()).filter(|s| !s.is_empty()).unwrap_or("(unknown)"),
+                fs_entry.map(|s| if s.tools.is_empty() { "(none)".to_string() } else { s.tools.join(", ") }).unwrap_or_else(|| "(unknown)".to_string()),
+                fs_entry.map(|s| if s.dependencies.is_empty() { "(none)".to_string() } else { s.dependencies.join(", ") }).unwrap_or_else(|| "(unknown)".to_string()),
+                if fs_entry.is_none() { "\n  (definition file not found on disk)" } else { "" }
+            ));
         }
 
         Ok(ToolResult::ok(format!("{} skill(s):\n\n{}", lines.len(), lines.join("\n\n"))))
@@ -1156,7 +1139,11 @@ impl AppControlTool {
             let hint = if status.as_u16() == 429 { " (rate limited, please retry later)" } else { "" };
             let body = resp.text().await.unwrap_or_default();
             return Ok(ToolResult::err(format!("ClawHub HTTP {}{}: {}", status, hint,
-                if body.len() > 200 { &body[..200] } else { &body })));
+                if body.chars().count() > 200 {
+                    body.chars().take(200).collect::<String>()
+                } else {
+                    body
+                })));
         }
 
         let body: Value = resp.json().await
@@ -1302,21 +1289,6 @@ impl AppControlTool {
         let safe_name: String = skill_name.chars()
             .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
             .collect::<String>().to_lowercase();
-        let skill_dir = skills_dir.join(&safe_name);
-
-        if !skill_dir.exists() {
-            return Ok(ToolResult::err(format!("Skill '{}' not found on disk", skill_name)));
-        }
-
-        // Safety: must be inside skills_dir
-        let canonical_dir = skill_dir.canonicalize()
-            .map_err(|e| anyhow::anyhow!("Path error: {}", e))?;
-        let canonical_skills = skills_dir.canonicalize()
-            .map_err(|e| anyhow::anyhow!("Path error: {}", e))?;
-        if !canonical_dir.starts_with(&canonical_skills) {
-            return Ok(ToolResult::err("Path traversal attempt blocked"));
-        }
-
         // Remove from DB first — abort before touching filesystem if this fails
         {
             let db = self.db.lock().await;
@@ -1324,10 +1296,38 @@ impl AppControlTool {
                 .map_err(|e| anyhow::anyhow!("Failed to remove skill from database: {}", e))?;
         }
 
-        // Remove files; if this fails the DB entry is already gone (acceptable)
-        if skill_dir.exists() {
-            tokio::fs::remove_dir_all(&skill_dir).await
-                .map_err(|e| anyhow::anyhow!("Skill removed from database but failed to delete files: {}", e))?;
+        // Remove matching skill directories from disk as well.
+        if skills_dir.exists() {
+            let canonical_skills = skills_dir.canonicalize()
+                .map_err(|e| anyhow::anyhow!("Path error: {}", e))?;
+            let mut loader = SkillLoader::new(&skills_dir);
+            let _ = loader.load_all();
+            let mut candidate_dirs: std::collections::BTreeSet<std::path::PathBuf> = std::collections::BTreeSet::new();
+            candidate_dirs.insert(skills_dir.join(&safe_name));
+            for skill in loader.list_skills() {
+                let parsed_safe_name = skill.name
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                    .collect::<String>()
+                    .to_lowercase();
+                if skill.name.eq_ignore_ascii_case(skill_name) || parsed_safe_name == safe_name {
+                    if let Some(dir) = skill.source_path.parent() {
+                        candidate_dirs.insert(dir.to_path_buf());
+                    }
+                }
+            }
+            for skill_dir in candidate_dirs {
+                if !skill_dir.exists() {
+                    continue;
+                }
+                let canonical_dir = skill_dir.canonicalize()
+                    .map_err(|e| anyhow::anyhow!("Path error: {}", e))?;
+                if !canonical_dir.starts_with(&canonical_skills) {
+                    return Ok(ToolResult::err("Path traversal attempt blocked"));
+                }
+                tokio::fs::remove_dir_all(&skill_dir).await
+                    .map_err(|e| anyhow::anyhow!("Skill removed from database but failed to delete files: {}", e))?;
+            }
         }
 
         info!("Uninstalled skill '{}'", skill_name);
@@ -1418,6 +1418,8 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
         BuiltinToolInfo { name: "plan_todo".into(), description: "Maintain a visible task plan for complex work.".into(), icon: "📋".into(), windows_only: false },
         BuiltinToolInfo { name: "vision_context".into(), description: "Manage reusable vision artifacts for the next multimodal step.".into(), icon: "🖼️".into(), windows_only: false },
         BuiltinToolInfo { name: "call_fish".into(), description: "Delegate work to Fish sub-agents.".into(), icon: "🐠".into(), windows_only: false },
+        BuiltinToolInfo { name: "call_koi".into(), description: "Delegate work to persistent Koi agents.".into(), icon: "🐟".into(), windows_only: false },
+        BuiltinToolInfo { name: "pool_org".into(), description: "Create and manage project pools and organization specs.".into(), icon: "🏊".into(), windows_only: false },
         BuiltinToolInfo { name: "app_control".into(), description: "Manage Pisci app settings and system state.".into(), icon: "🎛️".into(), windows_only: false },
         BuiltinToolInfo { name: "skill_search".into(), description: "Search installed skills and instructions.".into(), icon: "📦".into(), windows_only: false },
         BuiltinToolInfo { name: "ssh".into(), description: "Run commands on SSH servers.".into(), icon: "🔐".into(), windows_only: false },

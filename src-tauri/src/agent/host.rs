@@ -35,7 +35,10 @@ impl HostAgent {
             a sequence of concrete sub-tasks. Each sub-task should be independently executable. \
             Return a JSON array of objects with fields: id, description, app_hint (optional application name), \
             dependencies (array of prerequisite task ids). \
-            Keep it concise - most requests need 1-3 sub-tasks.".to_string();
+            Keep it concise - most requests need 1-3 sub-tasks. \
+            IMPORTANT: If tasks have data or file dependencies, set the `dependencies` array correctly. \
+            Tasks that edit the same file MUST be sequential (set dependency). \
+            Tasks on different files/modules CAN run in parallel (empty dependencies).".to_string();
 
         let messages = vec![LlmMessage {
             role: "user".into(),
@@ -89,6 +92,68 @@ impl HostAgent {
             || request.contains("，接着")
             || request.contains("并且");
         word_count > 20 || has_multiple_actions
+    }
+
+    /// Attempt to route a sub-task to a persistent Koi agent.
+    ///
+    /// Returns `Some(koi_id)` if the task description or hint suggests a role
+    /// that matches an available Koi agent. Looks at the Koi's `role`,
+    /// `description`, `name`, and `system_prompt`.
+    pub fn route_to_koi(task_description: &str, kois: &[crate::koi::KoiDefinition]) -> Option<String> {
+        if kois.is_empty() {
+            return None;
+        }
+        let desc_lower = task_description.to_lowercase();
+
+        for koi in kois {
+            if koi.status == "offline" {
+                continue;
+            }
+            let koi_role = koi.role.to_lowercase();
+            let koi_desc = koi.description.to_lowercase();
+            let koi_name = koi.name.to_lowercase();
+            let koi_prompt = koi.system_prompt.to_lowercase();
+            let role_keywords: Vec<&str> = koi_role
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|w| w.len() > 1)
+                .collect();
+            let role_match = role_keywords
+                .iter()
+                .filter(|kw| desc_lower.contains(*kw))
+                .count();
+            if role_match >= 1 || (!koi_role.is_empty() && desc_lower.contains(&koi_role)) {
+                return Some(koi.id.clone());
+            }
+
+            let desc_keywords: Vec<&str> = koi_desc
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|w| w.len() > 2)
+                .collect();
+
+            let match_count = desc_keywords
+                .iter()
+                .filter(|kw| desc_lower.contains(*kw))
+                .count();
+
+            if match_count >= 2 {
+                return Some(koi.id.clone());
+            }
+            if desc_lower.contains(&koi_name) {
+                return Some(koi.id.clone());
+            }
+            let prompt_keywords: Vec<&str> = koi_prompt
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|w| w.len() > 3)
+                .collect();
+            let prompt_match = prompt_keywords
+                .iter()
+                .filter(|kw| desc_lower.contains(*kw))
+                .count();
+            if prompt_match >= 3 {
+                return Some(koi.id.clone());
+            }
+        }
+        None
     }
 
     /// Map an `app_hint` from a decomposed SubTask to a Fish ID.

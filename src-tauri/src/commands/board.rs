@@ -2,6 +2,7 @@
 use crate::koi::KoiTodo;
 use crate::store::AppState;
 use serde::Deserialize;
+use serde_json::json;
 use tauri::{Emitter, State};
 
 #[tauri::command]
@@ -21,6 +22,8 @@ pub struct CreateKoiTodoInput {
     pub priority: Option<String>,
     pub assigned_by: Option<String>,
     pub pool_session_id: Option<String>,
+    pub source_type: Option<String>,
+    pub depends_on: Option<String>,
 }
 
 #[tauri::command]
@@ -36,6 +39,8 @@ pub async fn create_koi_todo(
         input.priority.as_deref().unwrap_or("medium"),
         input.assigned_by.as_deref().unwrap_or("user"),
         input.pool_session_id.as_deref(),
+        input.source_type.as_deref().unwrap_or("user"),
+        input.depends_on.as_deref(),
     ).map_err(|e| e.to_string())?;
 
     let _ = state.app_handle.emit("koi_todo_updated", &todo);
@@ -66,6 +71,30 @@ pub async fn update_koi_todo(
     ).map_err(|e| e.to_string())?;
 
     let _ = state.app_handle.emit("koi_todo_updated", &input.id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn claim_koi_todo(
+    state: State<'_, AppState>,
+    id: String,
+    claimed_by: String,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.claim_koi_todo(&id, &claimed_by).map_err(|e| e.to_string())?;
+    let _ = state.app_handle.emit("koi_todo_updated", json!({ "id": id, "action": "claimed", "claimed_by": claimed_by }));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn complete_koi_todo(
+    state: State<'_, AppState>,
+    id: String,
+    result_message_id: Option<i64>,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.complete_koi_todo(&id, result_message_id).map_err(|e| e.to_string())?;
+    let _ = state.app_handle.emit("koi_todo_updated", json!({ "id": id, "action": "completed" }));
     Ok(())
 }
 

@@ -25,8 +25,12 @@ pub struct AppState {
     pub app_handle: AppHandle,
     /// Pending permission confirmation channels: request_id -> oneshot sender
     pub confirmation_responses: Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+    /// Pending interactive UI response channels: request_id -> oneshot sender
+    pub interactive_responses: Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
     /// IM gateway manager
     pub gateway: Arc<crate::gateway::GatewayManager>,
+    /// Per-pool heartbeat cursor: pool_id -> last processed pool_message.id
+    pub pisci_heartbeat_cursor: Arc<Mutex<std::collections::HashMap<String, i64>>>,
 }
 
 impl AppState {
@@ -62,7 +66,9 @@ impl AppState {
             scheduler: Arc::new(scheduler),
             app_handle: app.clone(),
             confirmation_responses: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            interactive_responses: Arc::new(Mutex::new(std::collections::HashMap::new())),
             gateway: Arc::new(crate::gateway::GatewayManager::new()),
+            pisci_heartbeat_cursor: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
     }
 }

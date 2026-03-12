@@ -104,6 +104,18 @@ pub async fn list_builtin_tools(_state: State<'_, AppState>) -> Result<Vec<Built
             icon: "🐠".into(),
             windows_only: false,
         },
+        BuiltinToolInfo {
+            name: "call_koi".into(),
+            description: "委托任务给持久化 Koi 代理，具备独立记忆与长期职责".into(),
+            icon: "🐟".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "pool_org".into(),
+            description: "创建和管理项目池与组织规范，由 Pisci 主动发起协作项目".into(),
+            icon: "🏊".into(),
+            windows_only: false,
+        },
     ];
     Ok(tools)
 }
@@ -118,7 +130,6 @@ pub async fn trigger_heartbeat(state: State<'_, AppState>) -> Result<(), String>
     if !enabled {
         return Err("Heartbeat is not enabled in settings".into());
     }
-    let session_id = "heartbeat_manual";
     let state_ref = crate::store::AppState {
         db: state.db.clone(),
         settings: state.settings.clone(),
@@ -126,12 +137,14 @@ pub async fn trigger_heartbeat(state: State<'_, AppState>) -> Result<(), String>
         browser: state.browser.clone(),
         cancel_flags: state.cancel_flags.clone(),
         confirmation_responses: state.confirmation_responses.clone(),
+        interactive_responses: state.interactive_responses.clone(),
         app_handle: state.app_handle.clone(),
         scheduler: state.scheduler.clone(),
         gateway: state.gateway.clone(),
+        pisci_heartbeat_cursor: state.pisci_heartbeat_cursor.clone(),
     };
     tokio::spawn(async move {
-        let _ = crate::commands::chat::run_agent_headless(&state_ref, session_id, &prompt, None, "internal").await;
+        let _ = crate::pisci::heartbeat::dispatch_heartbeat(&state_ref, &prompt, "internal").await;
     });
     Ok(())
 }

@@ -20,6 +20,9 @@ pub mod plan_todo;
 pub mod vision_context;
 pub mod call_fish;
 pub mod call_koi;
+pub mod pool_org;
+pub mod pool_chat;
+pub mod chat_ui;
 pub mod mcp;
 pub mod skill_search;
 pub mod ssh;
@@ -135,6 +138,50 @@ pub fn build_registry(
     if is_enabled("call_fish") {
         if let Some(ref app) = app_handle {
             registry.register(Box::new(call_fish::CallFishTool { app: app.clone() }));
+        }
+    }
+
+    // call_koi tool — lets Pisci or a Koi delegate tasks to persistent Koi agents
+    if is_enabled("call_koi") {
+        if let Some(ref app) = app_handle {
+            registry.register(Box::new(call_koi::CallKoiTool {
+                app: app.clone(),
+                caller_koi_id: None,
+                depth: 0,
+                managed_externally: false,
+                notification_rx: std::sync::Mutex::new(None),
+            }));
+        }
+    }
+
+    // chat_ui tool — lets Pisci show interactive UI cards in the chat
+    if is_enabled("chat_ui") {
+        if let Some(ref app) = app_handle {
+            registry.register(Box::new(chat_ui::ChatUiTool {
+                app: app.clone(),
+            }));
+        }
+    }
+
+    // pool_org tool — lets Pisci create/manage project pools and org specs
+    if is_enabled("pool_org") {
+        if let (Some(ref app), Some(ref db_arc)) = (&app_handle, &db) {
+            registry.register(Box::new(pool_org::PoolOrgTool {
+                app: app.clone(),
+                db: db_arc.clone(),
+            }));
+        }
+    }
+
+    // pool_chat tool — lets Pisci participate in pool conversations directly
+    if is_enabled("pool_chat") {
+        if let (Some(ref app), Some(ref db_arc)) = (&app_handle, &db) {
+            registry.register(Box::new(pool_chat::PoolChatTool {
+                app: app.clone(),
+                db: db_arc.clone(),
+                sender_id: "pisci".to_string(),
+                sender_name: "Pisci".to_string(),
+            }));
         }
     }
 

@@ -51,6 +51,11 @@ pub struct ToolContext {
     pub settings: Arc<ToolSettings>,
     /// Maximum agent loop iterations (from Settings, default 50)
     pub max_iterations: Option<u32>,
+    /// Memory owner: "pisci" for the main agent, or a koi_id for Koi agents.
+    /// Used by memory_store and auto_extract_memories to scope reads/writes.
+    pub memory_owner_id: String,
+    /// Optional pool session ID for Chat Pool integration.
+    pub pool_session_id: Option<String>,
 }
 
 /// Image data attached to a tool result (for Vision AI)
@@ -127,6 +132,10 @@ impl ToolRegistry {
 
     pub fn register(&mut self, tool: Box<dyn Tool>) {
         self.tools.push(tool);
+    }
+
+    pub fn unregister(&mut self, name: &str) {
+        self.tools.retain(|t| t.name() != name);
     }
 
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {

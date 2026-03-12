@@ -207,6 +207,7 @@ impl CallFishTool {
                 confirm_file_write: false,
             },
             vision_override: Some(vision_capable),
+            notification_rx: None,
         };
 
         let fish_ctx = ToolContext {
@@ -215,6 +216,8 @@ impl CallFishTool {
             bypass_permissions: false,
             settings: tool_settings,
             max_iterations: Some(fish_def.agent.max_iterations),
+            memory_owner_id: ctx.memory_owner_id.clone(),
+            pool_session_id: ctx.pool_session_id.clone(),
         };
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
@@ -284,8 +287,12 @@ impl CallFishTool {
                     .map(|m| m.content.as_text())
                     .unwrap_or_default();
 
-                let summary = if reply.len() > 2000 {
-                    format!("{}…\n[truncated, {} chars total]", &reply[..2000], reply.len())
+                let summary = if reply.chars().count() > 2000 {
+                    format!(
+                        "{}…\n[truncated, {} chars total]",
+                        reply.chars().take(2000).collect::<String>(),
+                        reply.chars().count()
+                    )
                 } else {
                     reply
                 };

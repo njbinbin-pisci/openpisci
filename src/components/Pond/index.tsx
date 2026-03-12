@@ -3,9 +3,10 @@ import { useTranslation } from "react-i18next";
 import KoiManager from "./KoiManager";
 import ChatPool from "./ChatPool";
 import Board from "./Board";
+import PisciInbox from "./PisciInbox";
 import "./Pond.css";
 
-type PondSubTab = "kois" | "pool" | "board";
+type PondSubTab = "kois" | "pool" | "board" | "inbox";
 
 export default function Pond() {
   const { t } = useTranslation();
@@ -15,6 +16,7 @@ export default function Pond() {
     { id: "kois", label: t("pond.tabKois"), icon: "🐡" },
     { id: "pool", label: t("pond.tabPool"), icon: "💬" },
     { id: "board", label: t("pond.tabBoard"), icon: "📋" },
+    { id: "inbox", label: t("pond.tabInbox"), icon: "📬" },
   ];
 
   return (
@@ -38,6 +40,7 @@ export default function Pond() {
         {subTab === "kois" && <KoiManager />}
         {subTab === "pool" && <ChatPool />}
         {subTab === "board" && <Board />}
+        {subTab === "inbox" && <PisciInbox />}
       </div>
     </div>
   );

@@ -2,7 +2,7 @@
 
 **开源 Windows AI Agent 桌面应用**
 
-OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tauri 2 + Rust + React 构建。大鱼（Pisci）是主 Agent，小鱼（Fish）是用户自定义的专属子 Agent。
+OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tauri 2 + Rust + React 构建。大鱼（Pisci）是主 Agent，锦鲤（Koi）是持久化协作 Agent，小鱼（Fish）是无状态临时子 Agent。
 
 [English](./README_EN.md) | 中文
 
@@ -18,6 +18,67 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 - **崩溃恢复**：每次迭代写入 checkpoint，程序崩溃后可从断点恢复
 - **心跳机制**：可配置定时心跳，Agent 自主检查待处理任务
 - **循环检测**：四种检测器（GenericRepeat / KnownPollNoProgress / PingPong / GlobalCircuitBreaker）防止 Agent 陷入死循环
+
+### 🐟 Pisci / Koi / Fish：三层 Agent 架构
+
+| 角色 | 定位 | 生命周期 | 典型职责 | 与其他角色的关系 |
+|------|------|----------|----------|------------------|
+| `Pisci` | 主 Agent / 项目经理 / 用户入口 | 常驻 | 与用户对话、调用工具、创建鱼池、协调多 Agent、判断项目是否可收尾 | 负责组织 Koi，也可调用 Fish 处理临时子任务 |
+| `Koi` | 持久化协作 Agent | 持久化存在，可多项目复用 | 在鱼池中承担角色分工，如架构、编码、测试、审查、研究 | 通过 `pool_chat` 在鱼池中协作，必要时 @mention 彼此或 @pisci |
+| `Fish` | 无状态临时子 Agent | 一次性 / 按需创建 | 处理批量扫描、资料整理、单次分析、上下文隔离的多步骤工作 | 由 Pisci 或 Koi 通过 `call_fish` 委派，不直接参与鱼池协作 |
+
+**理解方式：**
+- `Pisci` 是总控入口，负责对用户负责。
+- `Koi` 是长期团队成员，适合持续项目协作。
+- `Fish` 是临时工，适合“做完即走”的子任务。
+
+**关键区别：**
+- `Pisci` 决定是否建池、如何分工、何时继续推进、何时请求用户确认收尾。
+- `Koi` 有独立身份、独立记忆归属、独立待办，能在多个项目中被反复唤醒。
+- `Fish` 不维护长期项目状态，不占用主会话上下文，只返回最终结果。
+
+### 🏞️ 鱼池（Pond）里有什么
+
+鱼池不是一个单独 Agent，而是一套围绕项目协作构建的可视化工作区：
+
+- **项目池（Pool Session）**：一个项目对应一个池，包含项目名、状态、组织规范（`org_spec`）和可选 `project_dir`
+- **Pool Chat**：Pisci、Koi 在这里自然对话、交接、提问、@mention 协作
+- **看板（Board / Kanban）**：展示 Koi todo 的 `todo / in_progress / blocked / done / cancelled`
+- **Koi 面板**：展示每个 Koi 的身份、角色、在线状态、当前工作负载
+- **Pisci Inbox / Heartbeat**：Pisci 的项目级收件箱，用于接收 `@pisci`、状态信号、心跳巡检结果
+- **知识库（`kb/`）**：项目共享知识区，用于沉淀架构、API、缺陷、决策等文档
+- **项目目录 / Git worktree**：若设置 `project_dir`，每个 Koi 可在自己的分支和 worktree 中工作，减少文件冲突
+
+### 🤝 鱼池如何协同
+
+一个标准的鱼池项目通常按下面的机制运行：
+
+1. **用户发起项目**
+   - 用户可以在应用内聊天，也可以通过飞书等 IM 直接告诉 Pisci“创建一个鱼池项目”
+   - Pisci 通过 `pool_org(action="create")` 创建项目池，并写入 `org_spec`
+
+2. **Pisci 组织团队**
+   - Pisci 根据项目目标选择合适的 Koi 角色
+   - Pisci 优先通过 `pool_chat` 发送带 `@KoiName` 的消息来发起工作，而不是死板串行分配
+
+3. **Koi 自主协作**
+   - Koi 在 `pool_chat` 中汇报进展、交接工作、提出问题、请求复审
+   - `@mention` 是消息，不是硬命令：被提及的 Koi 会自主判断是立即响应、继续当前工作，还是请求 Pisci 协调
+   - `@all` 可向整个项目团队广播
+
+4. **待办与状态同步**
+   - 任务通过 `koi_todos` 追踪，状态流转为 `todo -> in_progress -> done / blocked / cancelled`
+   - Pisci 和任务所有者可以更新任务状态；其他 Koi 需要通过 `@pisci` 请求变更
+   - `pool_chat` 中的 `[ProjectStatus] follow_up_needed / waiting / ready_for_pisci_review` 信号会辅助 Pisci判断项目是否继续推进
+
+5. **Pisci 心跳与继续推进**
+   - 心跳会扫描池内新消息、待办和状态信号
+   - 只要仍有 active todo，或有人发出 `follow_up_needed / waiting`，Pisci 就应继续协调，而不是把项目误判为结束
+   - 只有当工作真正收敛，并且有人明确用 `ready_for_pisci_review @pisci` 把判断权交回时，Pisci 才进入收尾审查
+
+6. **项目收尾**
+   - Koi 只能建议“可由 Pisci 审查是否结束”，不能单方面宣布项目结束
+   - 最终是否归档，由 Pisci 汇总后向用户确认，再执行 `pool_org(action="archive")`
 
 ### 🛠️ 丰富的 Windows 工具集
 
@@ -48,10 +109,10 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 
 ### 🐠 小鱼（Fish）子 Agent 系统
 - 通过 `FISH.toml` 定义专属子 Agent，拥有独立人设、工具权限和配置
-- 小鱼是**无状态临时工作者**：主 Agent 通过 `call_fish` 工具委派子任务，小鱼执行完毕后仅返回最终结果
-- **核心价值**：小鱼的中间推理和工具调用不会污染主 Agent 上下文，有效节省上下文窗口
+- 小鱼是**无状态临时工作者**：主 Agent 或 Koi 通过 `call_fish` 工具委派子任务，小鱼执行完毕后仅返回最终结果
+- **核心价值**：小鱼的中间推理和工具调用不会污染主 Agent / Koi 的上下文，有效节省上下文窗口
 - 用户可在 `%APPDATA%\com.pisci.desktop\fish\` 目录放置自定义小鱼
-- 适用于批量文件处理、数据收集、代码扫描等多步骤任务
+- 适用于批量文件处理、数据收集、代码扫描等多步骤任务，而不是长期项目协作
 
 ### ⚡ 技能系统（Skills）
 - 使用 `SKILL.md` 格式定义技能：YAML frontmatter（名称、描述、工具列表等）+ Markdown 正文（使用说明）
@@ -275,6 +336,11 @@ OpenPisci
 ---
 
 ## 📋 更新日志
+
+### v0.5.3
+- **补充多 Agent 文档**：新增 Pisci / Koi / Fish 分层说明，以及鱼池组件与协同机制说明
+- **修复 Pisci 心跳误判**：有 `follow_up_needed / waiting` 但无 active todo 时，不再误报 `HEARTBEAT_OK`，而是要求继续协调
+- **协同测试覆盖增强**：多 Agent 集成测试新增心跳保护、短 `pool_id` 解析与陈旧状态恢复覆盖
 
 ### v0.5.2
 - **修复 unnamed 技能幽灵问题**：卸载技能后切回技能页不再出现 unnamed 占位技能；在 FS→DB 同步、DB→FS 反向同步、`list_skills` 返回值四处均过滤无效记录，并在启动时主动清理历史遗留的 unnamed 条目

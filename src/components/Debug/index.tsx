@@ -1,8 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { useTranslation } from "react-i18next";
-import { systemApi, settingsApi, RuntimeCheckItem, Settings } from "../../services/tauri";
+import { systemApi, settingsApi, RuntimeCheckItem, Settings, poolApi, koiApi, PoolMessage, KoiWithStats } from "../../services/tauri";
 import "./Debug.css";
 
 // ─── Types (mirror Rust structs) ─────────────────────────────────────────────
@@ -112,7 +113,7 @@ export default function DebugPanel() {
   const [running, setRunning] = useState<Record<string, boolean>>({});
   const [report, setReport] = useState<DebugReport | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState<"scenarios" | "report" | "logs" | "uia">("scenarios");
+  const [activeTab, setActiveTab] = useState<"scenarios" | "report" | "logs" | "uia" | "multiagent">("scenarios");
   const [loadingReport, setLoadingReport] = useState(false);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [runningAll, setRunningAll] = useState(false);
@@ -308,6 +309,12 @@ export default function DebugPanel() {
         >
           {t("debug.tabUia")}
         </button>
+        <button
+          className={`dbg-tab ${activeTab === "multiagent" ? "active" : ""}`}
+          onClick={() => setActiveTab("multiagent")}
+        >
+          Multi-Agent
+        </button>
       </div>
 
       <div className="dbg-body">
@@ -387,6 +394,10 @@ export default function DebugPanel() {
 
         {activeTab === "uia" && (
           <UiaTestPanel />
+        )}
+
+        {activeTab === "multiagent" && (
+          <MultiAgentTestPanel />
         )}
       </div>
     </div>
@@ -1048,6 +1059,356 @@ function UiaTestPanel() {
           <li>{t("debug.uiaStep3")}</li>
           <li>{t("debug.uiaStep4")}</li>
         </ol>
+      </div>
+    </div>
+  );
+}
+
+// ─── Multi-Agent Test Panel ───────────────────────────────────────────────────
+
+interface TestResult {
+  name: string;
+  passed: boolean;
+  message: string;
+  message_key?: string | null;
+  message_params?: Record<string, unknown> | null;
+  duration_ms: number;
+}
+
+interface TestSuiteResult {
+  total: number;
+  passed: number;
+  failed: number;
+  results: TestResult[];
+  summary: string;
+}
+
+interface TrialStep {
+  name: string;
+  koi_name: string;
+  task: string;
+  success: boolean;
+  reply_preview: string;
+  reply_preview_key?: string | null;
+  reply_preview_params?: Record<string, unknown> | null;
+  duration_ms: number;
+}
+
+interface TrialStatus {
+  phase: string;
+  pool_id: string;
+  koi_ids: string[];
+  steps: TrialStep[];
+  completed: boolean;
+  error: string | null;
+  error_key?: string | null;
+  error_params?: Record<string, unknown> | null;
+}
+
+function localizeTrialPhase(t: (key: string, options?: any) => string, phase: string): string {
+  const key = `debug.multiAgentPhase_${phase}`;
+  const translated = t(key);
+  return translated === key ? phase : translated;
+}
+
+function localizeTestName(t: (key: string, options?: any) => string, name: string): string {
+  const key = `debug.multiAgentTest_${name}`;
+  const translated = t(key);
+  return translated === key ? name : translated;
+}
+
+function localizeTrialStepName(t: (key: string, options?: any) => string, name: string): string {
+  const key = `debug.multiAgentStep_${name}`;
+  const translated = t(key);
+  return translated === key ? name : translated;
+}
+
+function localizeMessage(
+  t: (key: string, options?: any) => string,
+  key: string | null | undefined,
+  params: Record<string, unknown> | null | undefined,
+  fallback: string,
+): string {
+  if (!key) return fallback;
+  const translated = t(key, params ?? {});
+  return translated === key ? fallback : translated;
+}
+
+function TrialMessageBubble({ msg, kois }: { msg: PoolMessage; kois: KoiWithStats[] }) {
+  const sender = kois.find((k) => k.id === msg.sender_id);
+  const isPisci = msg.sender_id === "pisci";
+  const icon = isPisci ? "🐋" : sender?.icon ?? "🐟";
+  const color = isPisci ? "#7c3aed" : sender?.color ?? "#6b7280";
+  const name = isPisci ? "Pisci" : sender?.name ?? msg.sender_id;
+
+  const time = (() => {
+    const d = new Date(msg.created_at);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  })();
+
+  const isEvent = ["task_assign", "task_claimed", "task_blocked", "task_done", "status_update"].includes(msg.msg_type);
+
+  if (isEvent) {
+    const eventIcons: Record<string, string> = {
+      task_assign: "📋", task_claimed: "✋", task_blocked: "🚫",
+      task_done: "✅", status_update: "📡",
+    };
+    return (
+      <div className="dbg-trial-event">
+        <span className="dbg-trial-event-icon">{eventIcons[msg.msg_type] ?? "•"}</span>
+        <span className="dbg-trial-event-sender" style={{ color }}>{icon} {name}</span>
+        <span className="dbg-trial-event-text">{msg.content.length > 120 ? msg.content.slice(0, 120) + "…" : msg.content}</span>
+        <span className="dbg-trial-event-time">{time}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="dbg-trial-msg">
+      <div className="dbg-trial-msg-bar" style={{ background: color }} />
+      <div className="dbg-trial-msg-body">
+        <div className="dbg-trial-msg-header">
+          <span className="dbg-trial-msg-icon">{icon}</span>
+          <span className="dbg-trial-msg-name" style={{ color }}>{name}</span>
+          <span className="dbg-trial-msg-time">{time}</span>
+        </div>
+        <div className="dbg-trial-msg-text">{msg.content}</div>
+      </div>
+    </div>
+  );
+}
+
+const PHASE_ICONS: Record<string, string> = {
+  setup: "⚙️", pool_ready: "🏊", architect: "🏗️",
+  coder: "💻", reviewer: "🔍", completed: "✅", error: "❌", done: "✅",
+};
+
+function MultiAgentTestPanel() {
+  const { t } = useTranslation();
+  const [suiteResult, setSuiteResult] = useState<TestSuiteResult | null>(null);
+  const [trialResult, setTrialResult] = useState<TrialStatus | null>(null);
+  const [runningPipeline, setRunningPipeline] = useState(false);
+  const [runningTrial, setRunningTrial] = useState(false);
+
+  const [trialMessages, setTrialMessages] = useState<PoolMessage[]>([]);
+  const [trialPoolId, setTrialPoolId] = useState("");
+  const [trialPhase, setTrialPhase] = useState("");
+  const [trialPhaseDetail, setTrialPhaseDetail] = useState("");
+  const [trialKois, setTrialKois] = useState<KoiWithStats[]>([]);
+  const trialScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (trialScrollRef.current) {
+      trialScrollRef.current.scrollTop = trialScrollRef.current.scrollHeight;
+    }
+  }, [trialMessages.length]);
+
+  useEffect(() => {
+    let unlistenProgress: (() => void) | null = null;
+    let unlistenMessages: (() => void) | null = null;
+
+    listen<{ phase: string; detail: string; pool_id?: string }>(
+      "collab_trial_progress",
+      async (e) => {
+        setTrialPhase(e.payload.phase);
+        setTrialPhaseDetail(e.payload.detail);
+
+        if (e.payload.pool_id && !unlistenMessages) {
+          const pid = e.payload.pool_id;
+          setTrialPoolId(pid);
+          try {
+            const msgs = await poolApi.getMessages({ session_id: pid, limit: 200 });
+            setTrialMessages(msgs);
+          } catch { /* ignore */ }
+          try {
+            const fn = await poolApi.onMessage(pid, (msg) => {
+              setTrialMessages((prev) => {
+                if (prev.some((m) => m.id === msg.id)) return prev;
+                return [...prev, msg];
+              });
+            });
+            unlistenMessages = fn;
+          } catch { /* ignore */ }
+        }
+
+        if (e.payload.pool_id && trialKois.length === 0) {
+          try {
+            const list = await koiApi.list();
+            setTrialKois(list);
+          } catch { /* ignore */ }
+        }
+      },
+    ).then((fn) => { unlistenProgress = fn; });
+
+    return () => {
+      unlistenProgress?.();
+      unlistenMessages?.();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRunPipeline = async () => {
+    setRunningPipeline(true);
+    setSuiteResult(null);
+    try {
+      const result = await invoke<TestSuiteResult>("run_multi_agent_tests");
+      setSuiteResult(result);
+    } catch (e: any) {
+      setSuiteResult({
+        total: 0, passed: 0, failed: 1, results: [],
+        summary: `${t("common.error")}: ${e}`,
+      });
+    } finally {
+      setRunningPipeline(false);
+    }
+  };
+
+  const handleRunTrial = async () => {
+    setRunningTrial(true);
+    setTrialResult(null);
+    setTrialMessages([]);
+    setTrialPoolId("");
+    setTrialPhase("setup");
+    setTrialPhaseDetail("");
+    try {
+      const list = await koiApi.list();
+      setTrialKois(list);
+    } catch { /* ignore */ }
+    try {
+      const result = await invoke<TrialStatus>("run_collaboration_trial");
+      setTrialResult(result);
+      if (result.pool_id) {
+        try {
+          const msgs = await poolApi.getMessages({ session_id: result.pool_id, limit: 200 });
+          setTrialMessages(msgs);
+        } catch { /* ignore */ }
+      }
+    } catch (e: any) {
+      setTrialResult({
+        phase: "error", pool_id: "", koi_ids: [],
+        steps: [], completed: false, error: `${e}`,
+      });
+    } finally {
+      setRunningTrial(false);
+    }
+  };
+
+  const showChat = runningTrial || trialMessages.length > 0;
+
+  return (
+    <div className="dbg-multiagent">
+      <div className="dbg-multiagent-section">
+        <h3>{t("debug.multiAgentPipelineTitle")}</h3>
+        <p className="dbg-multiagent-desc">
+          {t("debug.multiAgentPipelineDesc")}
+        </p>
+        <button
+          className="dbg-btn dbg-btn-primary"
+          onClick={handleRunPipeline}
+          disabled={runningPipeline}
+        >
+          {runningPipeline ? t("debug.running") : t("debug.multiAgentRunPipeline")}
+        </button>
+
+        {suiteResult && (
+          <div className="dbg-multiagent-results">
+            <div className="dbg-multiagent-summary">
+              {suiteResult.results.length > 0
+                ? t("debug.multiAgentPipelineSummary", {
+                    passed: suiteResult.passed,
+                    total: suiteResult.total,
+                    failed: suiteResult.failed,
+                  })
+                : suiteResult.summary}
+            </div>
+            {suiteResult.results.map((r, i) => (
+              <div key={i} className={`dbg-multiagent-row ${r.passed ? "dbg-row-pass" : "dbg-row-fail"}`}>
+                <span className="dbg-multiagent-status">{r.passed ? t("debug.multiAgentPass") : t("debug.multiAgentFail")}</span>
+                <span className="dbg-multiagent-name">{localizeTestName(t, r.name)}</span>
+                <span className="dbg-multiagent-time">{ms(r.duration_ms)}</span>
+                {!r.passed && (
+                  <span className="dbg-multiagent-msg">
+                    {localizeMessage(t, r.message_key, r.message_params, r.message)}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <hr className="dbg-multiagent-divider" />
+
+      <div className="dbg-multiagent-section">
+        <h3>{t("debug.multiAgentTrialTitle")}</h3>
+        <p className="dbg-multiagent-desc">
+          {t("debug.multiAgentTrialDesc")}
+        </p>
+        <button
+          className="dbg-btn dbg-btn-primary"
+          onClick={handleRunTrial}
+          disabled={runningTrial}
+        >
+          {runningTrial ? t("debug.multiAgentRunningTrial") : t("debug.multiAgentRunTrial")}
+        </button>
+
+        {showChat && (
+          <div className="dbg-trial-chat">
+            <div className="dbg-trial-chat-header">
+              <span className="dbg-trial-chat-title">
+                💬 {t("debug.trialChatTitle")}
+              </span>
+              {runningTrial && trialPhase && (
+                <span className="dbg-trial-phase">
+                  {PHASE_ICONS[trialPhase] ?? "⏳"} {localizeTrialPhase(t, trialPhase)}
+                  {trialPhaseDetail && <span className="dbg-trial-phase-detail"> — {trialPhaseDetail}</span>}
+                </span>
+              )}
+              {trialResult && !runningTrial && (
+                <span className={`dbg-trial-verdict ${trialResult.completed ? "dbg-trial-verdict-pass" : "dbg-trial-verdict-fail"}`}>
+                  {trialResult.completed ? "✅ " + t("debug.multiAgentAllPassed") : "⚠️ " + t("debug.multiAgentIncomplete")}
+                </span>
+              )}
+            </div>
+
+            <div className="dbg-trial-chat-scroll" ref={trialScrollRef}>
+              {trialMessages.length === 0 && runningTrial && (
+                <div className="dbg-trial-chat-empty">
+                  <span className="dbg-trial-chat-empty-icon">⏳</span>
+                  <span>{t("debug.trialChatWaiting")}</span>
+                </div>
+              )}
+              {trialMessages.map((msg) => (
+                <TrialMessageBubble key={msg.id} msg={msg} kois={trialKois} />
+              ))}
+              {runningTrial && trialMessages.length > 0 && (
+                <div className="dbg-trial-typing">
+                  <span className="dbg-trial-typing-dots">
+                    <span /><span /><span />
+                  </span>
+                  {trialPhase && <span className="dbg-trial-typing-label">{PHASE_ICONS[trialPhase] ?? "⏳"} {localizeTrialPhase(t, trialPhase)}…</span>}
+                </div>
+              )}
+            </div>
+
+            {trialResult && trialResult.steps.length > 0 && (
+              <div className="dbg-trial-chat-footer">
+                {trialResult.steps.map((s, i) => (
+                  <div key={i} className={`dbg-multiagent-row ${s.success ? "dbg-row-pass" : "dbg-row-fail"}`}>
+                    <span className="dbg-multiagent-status">{s.success ? "✅" : "❌"}</span>
+                    <span className="dbg-multiagent-name">{s.koi_name}: {localizeTrialStepName(t, s.name)}</span>
+                    <span className="dbg-multiagent-time">{ms(s.duration_ms)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {trialResult && trialResult.error && (
+          <div className="dbg-multiagent-error" style={{ marginTop: 8 }}>
+            {localizeMessage(t, trialResult.error_key, trialResult.error_params, trialResult.error)}
+          </div>
+        )}
       </div>
     </div>
   );

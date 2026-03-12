@@ -8,6 +8,19 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ## [Unreleased]
 
+### Documentation
+- **Multi-agent architecture docs**: README (Chinese and English) now explains the
+  roles and boundaries of Pisci, Koi, and Fish, plus the structure of the Pond
+  workspace and the collaboration lifecycle.
+
+### Changed
+- **Heartbeat guardrails**: Pisci heartbeat now treats follow-up signals without
+  active todos as a coordination stall, and no longer treats "no todo" as
+  sufficient evidence to emit `HEARTBEAT_OK`.
+- **Multi-agent verification**: collaboration regressions are now covered by the
+  expanded in-app multi-agent integration suite, including heartbeat guardrails
+  and stale-state recovery cases.
+
 ### Added
 - **Skill installation**: Install community Anthropic-spec skills from URLs or
   local paths; `install_skill` / `uninstall_skill` Tauri commands.

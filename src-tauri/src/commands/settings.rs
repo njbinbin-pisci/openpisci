@@ -11,6 +11,11 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String
 }
 
 #[tauri::command]
+pub async fn get_default_workspace() -> Result<String, String> {
+    Ok(crate::store::settings::default_workspace_path())
+}
+
+#[tauri::command]
 pub async fn save_settings(
     state: State<'_, AppState>,
     updates: Value,
@@ -50,10 +55,14 @@ pub async fn save_settings(
         settings.custom_base_url = v.to_string();
     }
     if let Some(v) = updates["workspace_root"].as_str() {
-        settings.workspace_root = v.to_string();
-        if !v.is_empty() {
-            let _ = std::fs::create_dir_all(v);
-        }
+        // workspace_root must never be empty — fall back to default if blank
+        let resolved = if v.trim().is_empty() {
+            crate::store::settings::default_workspace_path()
+        } else {
+            v.to_string()
+        };
+        let _ = std::fs::create_dir_all(&resolved);
+        settings.workspace_root = resolved;
     }
     if let Some(v) = updates["allow_outside_workspace"].as_bool() {
         settings.allow_outside_workspace = v;

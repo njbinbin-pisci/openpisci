@@ -46,6 +46,11 @@ impl Tool for MemoryStoreTool {
                 "id": {
                     "type": "string",
                     "description": "For 'delete': the memory ID to delete (get from list or search results)"
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["private", "project", "global"],
+                    "description": "For 'save': memory scope. 'private' (default) for personal, 'project' for shared project knowledge, 'global' for organization-wide."
                 }
             }
         })
@@ -58,8 +63,8 @@ impl Tool for MemoryStoreTool {
 
         match action {
             "save" => self.save(&input, ctx).await,
-            "search" => self.search(&input).await,
-            "list" => self.list(&input).await,
+            "search" => self.search(&input, ctx).await,
+            "list" => self.list(&input, ctx).await,
             "delete" => self.delete(&input).await,
             _ => Ok(ToolResult::err(format!("Unknown action '{}'. Use: save, search, list, delete", action))),
         }
@@ -73,33 +78,51 @@ impl MemoryStoreTool {
             _ => return Ok(ToolResult::err("save requires non-empty 'content'")),
         };
         let category = input["category"].as_str().unwrap_or("general");
+        let scope_type = input["scope"].as_str().unwrap_or("private");
+        let scope_id = match scope_type {
+            "project" => ctx.pool_session_id.as_deref().unwrap_or(&ctx.memory_owner_id),
+            "global" => "global",
+            _ => &ctx.memory_owner_id,
+        };
+
+        // For private memories, tag with the current project so project-specific experiences
+        // are prioritised over cross-project skills when the same Koi works in multiple projects.
+        // Memories saved without a project context (project_scope_id = None) act as global skills/preferences.
+        let project_scope_id = if scope_type == "private" {
+            ctx.pool_session_id.as_deref()
+        } else {
+            None
+        };
 
         let db = self.db.lock().await;
-        match db.save_memory(content, category, 0.9, Some(&ctx.session_id)) {
+        match db.save_memory(content, category, 0.9, Some(&ctx.session_id), &ctx.memory_owner_id, scope_type, scope_id, project_scope_id) {
             Ok(mem) => Ok(ToolResult::ok(format!(
-                "Memory saved.\nID: {}\nCategory: {}\nContent: {}",
+                "Memory saved.\nID: {}\nCategory: {}\nScope: {} ({})\nContent: {}",
                 &mem.id[..8.min(mem.id.len())],
                 category,
+                scope_type,
+                ctx.memory_owner_id,
                 content
             ))),
             Err(e) => Ok(ToolResult::err(format!("Failed to save memory: {}", e))),
         }
     }
 
-    async fn search(&self, input: &Value) -> anyhow::Result<ToolResult> {
+    async fn search(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let query = match input["content"].as_str() {
             Some(q) if !q.trim().is_empty() => q,
             _ => return Ok(ToolResult::err("search requires 'content' as the search query")),
         };
 
         let db = self.db.lock().await;
-        match db.search_memories_fts(query, 20) {
+        match db.search_memories_scoped(query, &ctx.memory_owner_id, ctx.pool_session_id.as_deref(), 20) {
             Ok(mems) if mems.is_empty() => Ok(ToolResult::ok(format!(
                 "No memories found matching '{}'", query
             ))),
             Ok(mems) => {
                 let items: Vec<String> = mems.iter().map(|m| {
-                    format!("[{}] [{}] {}", &m.id[..8.min(m.id.len())], m.category, m.content)
+                    let scope_tag = if m.scope_type == "private" { "" } else { &format!(" [{}]", m.scope_type) };
+                    format!("[{}] [{}]{} {}", &m.id[..8.min(m.id.len())], m.category, scope_tag, m.content)
                 }).collect();
                 Ok(ToolResult::ok(format!(
                     "Found {} memory/memories matching '{}':\n{}",
@@ -110,11 +133,11 @@ impl MemoryStoreTool {
         }
     }
 
-    async fn list(&self, input: &Value) -> anyhow::Result<ToolResult> {
+    async fn list(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let category_filter = input["category"].as_str();
 
         let db = self.db.lock().await;
-        match db.list_memories() {
+        match db.list_memories_for_owner(&ctx.memory_owner_id) {
             Ok(mems) => {
                 let filtered: Vec<_> = mems.iter()
                     .filter(|m| category_filter.map(|c| m.category == c).unwrap_or(true))

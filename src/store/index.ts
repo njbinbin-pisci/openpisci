@@ -383,6 +383,16 @@ const poolSlice = createSlice({
   reducers: {
     setPoolSessions: (state, action: PayloadAction<PoolSession[]>) => {
       state.sessions = action.payload;
+      if (state.activeSessionId && !action.payload.some(s => s.id === state.activeSessionId)) {
+        state.activeSessionId = action.payload[0]?.id ?? null;
+        // clean up stale message cache
+        const validIds = new Set(action.payload.map(s => s.id));
+        for (const key of Object.keys(state.messagesBySession)) {
+          if (!validIds.has(key)) {
+            delete state.messagesBySession[key];
+          }
+        }
+      }
     },
     addPoolSession: (state, action: PayloadAction<PoolSession>) => {
       state.sessions.unshift(action.payload);
@@ -420,12 +430,13 @@ interface BoardState {
   todos: KoiTodo[];
   filterOwnerId: string | null;
   filterPriority: string | null;
+  filterSessionId: string | null;
   loading: boolean;
 }
 
 const boardSlice = createSlice({
   name: "board",
-  initialState: { todos: [], filterOwnerId: null, filterPriority: null, loading: false } as BoardState,
+  initialState: { todos: [], filterOwnerId: null, filterPriority: null, filterSessionId: null, loading: false } as BoardState,
   reducers: {
     setTodos: (state, action: PayloadAction<KoiTodo[]>) => {
       state.todos = action.payload;
@@ -445,6 +456,9 @@ const boardSlice = createSlice({
     },
     setFilterPriority: (state, action: PayloadAction<string | null>) => {
       state.filterPriority = action.payload;
+    },
+    setFilterSessionId: (state, action: PayloadAction<string | null>) => {
+      state.filterSessionId = action.payload;
     },
     setLoading: (state, action: PayloadAction<boolean>) => {
       state.loading = action.payload;

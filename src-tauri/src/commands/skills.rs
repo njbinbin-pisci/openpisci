@@ -119,66 +119,6 @@ pub async fn scan_skill_catalog(state: State<'_, AppState>) -> Result<Vec<SkillC
 
     let fs_skills = loader.list_skills();
 
-    // Compute safe_name for each FS skill (same sanitisation as install_skill)
-    let fs_safe_names: std::collections::HashSet<String> = fs_skills
-        .iter()
-        .map(|s| {
-            s.name
-                .chars()
-                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-                .collect::<String>()
-                .to_lowercase()
-        })
-        .collect();
-
-    // Sync FS → DB: upsert every skill found on disk so it appears in list_skills
-    // Only sync non-builtin skills (builtin ones are seeded separately via seed_skills)
-    {
-        let db = state.db.lock().await;
-        for skill in &fs_skills {
-            if skill.source == "builtin" {
-                continue;
-            }
-            // Skip skills that failed to parse (name defaults to "unnamed")
-            if skill.name.is_empty() || skill.name == "unnamed" {
-                continue;
-            }
-            let safe_name: String = skill
-                .name
-                .chars()
-                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-                .collect::<String>()
-                .to_lowercase();
-            if let Err(e) = db.upsert_skill(&safe_name, &skill.name, &skill.description, "📦") {
-                warn!("scan_skill_catalog: failed to upsert '{}' in DB: {}", skill.name, e);
-            }
-        }
-
-        // Sync DB → FS: remove DB entries whose files no longer exist on disk
-        // (only for non-seeded skills — don't remove the built-in seed entries)
-        if let Ok(db_skills) = db.list_skills() {
-            let seeded_ids = [
-                "web-search", "shell", "file-ops", "uia",
-                "screen-vision", "scheduled-tasks", "docx", "xlsx",
-            ];
-            for db_skill in db_skills {
-                if seeded_ids.contains(&db_skill.id.as_str()) {
-                    continue;
-                }
-                // Remove stale "unnamed" entries left by failed parses
-                if db_skill.name == "unnamed" || db_skill.id == "unnamed" {
-                    info!("scan_skill_catalog: removing stale 'unnamed' entry '{}'", db_skill.id);
-                    let _ = db.delete_skill(&db_skill.id);
-                    continue;
-                }
-                if !fs_safe_names.contains(&db_skill.id) {
-                    info!("scan_skill_catalog: removing orphan DB entry '{}'", db_skill.id);
-                    let _ = db.delete_skill(&db_skill.id);
-                }
-            }
-        }
-    }
-
     let items = fs_skills
         .into_iter()
         .filter(|s| !s.name.is_empty() && s.name != "unnamed")
@@ -633,17 +573,6 @@ pub async fn uninstall_skill(
         .collect::<String>()
         .to_lowercase();
 
-    let skill_dir = skills_dir.join(&safe_name);
-
-    // Safety: must be inside skills_dir (check before existence to avoid TOCTOU)
-    if skill_dir.exists() {
-        let canonical_dir = skill_dir.canonicalize().map_err(|e| e.to_string())?;
-        let canonical_skills = skills_dir.canonicalize().map_err(|e| e.to_string())?;
-        if !canonical_dir.starts_with(&canonical_skills) {
-            return Err("Path traversal attempt blocked".into());
-        }
-    }
-
     // Remove from DB first — if the DB delete fails, abort before touching the filesystem
     {
         let db = state.db.lock().await;
@@ -651,12 +580,39 @@ pub async fn uninstall_skill(
             .map_err(|e| format!("Failed to remove skill from database: {}", e))?;
     }
 
-    // Now remove the files; if this fails the DB entry is already gone, which is acceptable
-    // (the skill won't appear in the list, and the orphan directory can be cleaned up manually)
-    if skill_dir.exists() {
-        tokio::fs::remove_dir_all(&skill_dir)
-            .await
-            .map_err(|e| format!("Skill removed from database but failed to delete files: {}", e))?;
+    // Remove matching skill folders from disk by both directory id and parsed skill name.
+    if skills_dir.exists() {
+        let canonical_skills = skills_dir.canonicalize().map_err(|e| e.to_string())?;
+        let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+        let _ = loader.load_all();
+
+        let mut candidate_dirs: std::collections::BTreeSet<std::path::PathBuf> = std::collections::BTreeSet::new();
+        candidate_dirs.insert(skills_dir.join(&safe_name));
+        for skill in loader.list_skills() {
+            let parsed_safe_name = skill.name
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                .collect::<String>()
+                .to_lowercase();
+            if skill.name.eq_ignore_ascii_case(&skill_name) || parsed_safe_name == safe_name {
+                if let Some(dir) = skill.source_path.parent() {
+                    candidate_dirs.insert(dir.to_path_buf());
+                }
+            }
+        }
+
+        for skill_dir in candidate_dirs {
+            if !skill_dir.exists() {
+                continue;
+            }
+            let canonical_dir = skill_dir.canonicalize().map_err(|e| e.to_string())?;
+            if !canonical_dir.starts_with(&canonical_skills) {
+                return Err("Path traversal attempt blocked".into());
+            }
+            tokio::fs::remove_dir_all(&skill_dir)
+                .await
+                .map_err(|e| format!("Skill removed from database but failed to delete files: {}", e))?;
+        }
     }
 
     info!("Uninstalled skill '{}'", skill_name);
@@ -747,11 +703,16 @@ pub async fn clawhub_search(query: String, limit: Option<u32>) -> Result<ClawHub
             String::new()
         };
         let body = resp.text().await.unwrap_or_default();
+        let body_preview = if body.chars().count() > 300 {
+            body.chars().take(300).collect::<String>()
+        } else {
+            body.clone()
+        };
         return Err(format!(
             "ClawHub 返回错误 HTTP {}{}：{}",
             status,
             hint,
-            if body.len() > 300 { &body[..300] } else { &body }
+            body_preview
         ));
     }
 

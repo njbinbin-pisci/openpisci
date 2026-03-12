@@ -224,6 +224,9 @@ pub struct Settings {
     /// Prompt sent to the agent on each heartbeat
     #[serde(default = "default_heartbeat_prompt")]
     pub heartbeat_prompt: String,
+    /// Whether the app has already seeded the first-run starter Koi set.
+    #[serde(default)]
+    pub starter_kois_initialized: bool,
 
     // ── User Tools ──────────────────────────────────────────────────────────
     /// Per-user-tool config values, keyed by tool name.
@@ -282,16 +285,22 @@ fn default_smtp_port() -> u16 { 587 }
 fn default_imap_port() -> u16 { 993 }
 fn default_max_iterations() -> u32 { 50 }
 fn default_heartbeat_interval() -> u32 { 30 }
-fn default_heartbeat_prompt() -> String { "检查是否有待处理任务，如无则回复 HEARTBEAT_OK".into() }
+fn default_heartbeat_prompt() -> String {
+    "检查是否仍有未完成工作。只有在没有 active todo、没有 `[ProjectStatus] follow_up_needed` / `[ProjectStatus] waiting` 信号、并且有人明确用 `[ProjectStatus] ready_for_pisci_review @pisci` 把判断权交回时，才可回复 HEARTBEAT_OK；否则应继续协调项目。".into()
+}
 
 fn default_provider() -> String { "anthropic".into() }
 fn default_model() -> String { "claude-sonnet-4-5".into() }
-fn default_workspace() -> String {
+pub fn default_workspace_path() -> String {
     dirs::document_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Pisci")
         .to_string_lossy()
         .into_owned()
+}
+
+fn default_workspace() -> String {
+    default_workspace_path()
 }
 fn default_language() -> String { "zh".into() }
 fn default_max_tokens() -> u32 { 4096 }
@@ -361,6 +370,7 @@ impl Default for Settings {
             heartbeat_enabled: false,
             heartbeat_interval_mins: default_heartbeat_interval(),
             heartbeat_prompt: default_heartbeat_prompt(),
+            starter_kois_initialized: false,
             user_tool_configs: HashMap::new(),
             builtin_tool_enabled: HashMap::new(),
             mcp_servers: Vec::new(),

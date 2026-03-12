@@ -1,0 +1,3 @@
+[build]
+# Place build artifacts outside src-tauri to avoid Tauri's file watcher triggering rebuild loops
+target-dir = "../target"

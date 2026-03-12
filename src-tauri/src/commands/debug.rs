@@ -1120,6 +1120,7 @@ pub async fn run_debug_scenario(
             confirm_file_write: false,
         },
         vision_override: None,
+        notification_rx: None,
     };
 
     let ctx = ToolContext {
@@ -1127,7 +1128,9 @@ pub async fn run_debug_scenario(
         workspace_root: effective_workspace.clone(),
         bypass_permissions: false,
         settings: tool_settings,
-        max_iterations: Some(max_iterations.min(10)), // cap at 10 for debug runs
+        max_iterations: Some(max_iterations.min(10)),
+        memory_owner_id: "pisci".to_string(),
+        pool_session_id: None,
     };
 
     // Inject the effective workspace path into the prompt so the agent knows where to write files.
@@ -1612,6 +1615,7 @@ pub async fn run_uia_drag_test(
             confirm_file_write: false,
         },
         vision_override: Some(vision_enabled),
+        notification_rx: None,
     };
 
     let ctx = ToolContext {
@@ -1620,6 +1624,8 @@ pub async fn run_uia_drag_test(
         bypass_permissions: false,
         settings: tool_settings,
         max_iterations: Some(max_iterations.min(12)),
+        memory_owner_id: "pisci".to_string(),
+        pool_session_id: None,
     };
 
     let messages = vec![LlmMessage {

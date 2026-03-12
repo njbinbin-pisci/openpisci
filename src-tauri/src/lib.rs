@@ -3,19 +3,20 @@
 // lib.rs — Tauri application library entry point.
 // main.rs calls run() from here; this allows Tauri mobile targets to work.
 
-mod agent;
+pub mod agent;
 mod browser;
 mod commands;
 mod fish;
 mod gateway;
-mod koi;
+pub mod koi;
 mod llm;
 mod memory;
 mod policy;
+mod pisci;
 mod scheduler;
 mod security;
 mod skills;
-mod store;
+pub mod store;
 mod tools;
 
 use tauri::{Emitter, Manager};
@@ -230,8 +231,10 @@ pub fn run() {
                 let browser = state.browser.clone();
                 let cancel_flags = state.cancel_flags.clone();
                 let confirm_resp = state.confirmation_responses.clone();
+                let interactive_resp = state.interactive_responses.clone();
                 let app_h = app_handle.clone();
                 let sched = state.scheduler.clone();
+                let pisci_heartbeat_cursor = state.pisci_heartbeat_cursor.clone();
                 // Per-session mutex map: prevents two concurrent agent runs for the same IM session.
                 // Messages for the same sender are queued and processed one at a time.
                 let im_session_locks: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
@@ -249,9 +252,11 @@ pub fn run() {
                                 browser: browser.clone(),
                                 cancel_flags: cancel_flags.clone(),
                                 confirmation_responses: confirm_resp.clone(),
+                                interactive_responses: interactive_resp.clone(),
                                 app_handle: app_h.clone(),
                                 scheduler: sched.clone(),
                                 gateway: gateway.clone(),
+                                pisci_heartbeat_cursor: pisci_heartbeat_cursor.clone(),
                             }).await {
                                 tracing::warn!("Failed to enter unattended IM mode: {}", e);
                             }
@@ -305,9 +310,11 @@ pub fn run() {
                                 browser: browser.clone(),
                                 cancel_flags: cancel_flags.clone(),
                                 confirmation_responses: confirm_resp.clone(),
+                                interactive_responses: interactive_resp.clone(),
                                 app_handle: app_h.clone(),
                                 scheduler: sched.clone(),
                                 gateway: gateway.clone(),
+                                pisci_heartbeat_cursor: pisci_heartbeat_cursor.clone(),
                             };
 
                             let gw = gateway.clone();
@@ -319,7 +326,14 @@ pub fn run() {
                                 let _session_guard = session_lock.lock().await;
                                 info!("IM session lock acquired for {}", session_id);
 
-                                let response = commands::chat::run_agent_headless(&state_ref, &session_id, &msg.content, inbound_media, &msg_channel).await;
+                                let response = commands::chat::run_agent_headless(
+                                    &state_ref,
+                                    &session_id,
+                                    &msg.content,
+                                    inbound_media,
+                                    &msg_channel,
+                                    None,
+                                ).await;
 
                                 // run_agent_headless emits im_session_done after persist on success.
                                 // On error it returns Err without emitting, so we emit here as fallback.
@@ -398,9 +412,11 @@ pub fn run() {
                 let browser_arc = state.browser.clone();
                 let cancel_flags_arc = state.cancel_flags.clone();
                 let confirm_resp_arc = state.confirmation_responses.clone();
+                let interactive_resp_arc = state.interactive_responses.clone();
                 let app_h = app_handle.clone();
                 let sched_arc = state.scheduler.clone();
                 let gateway_arc = state.gateway.clone();
+                let pisci_heartbeat_cursor_arc = state.pisci_heartbeat_cursor.clone();
                 tauri::async_runtime::spawn(async move {
                     loop {
                         let (enabled, interval_mins, prompt) = {
@@ -426,54 +442,183 @@ pub fn run() {
                             browser: browser_arc.clone(),
                             cancel_flags: cancel_flags_arc.clone(),
                             confirmation_responses: confirm_resp_arc.clone(),
+                            interactive_responses: interactive_resp_arc.clone(),
                             app_handle: app_h.clone(),
                             scheduler: sched_arc.clone(),
                             gateway: gateway_arc.clone(),
+                            pisci_heartbeat_cursor: pisci_heartbeat_cursor_arc.clone(),
                         };
-                        let _ = commands::chat::run_agent_headless(&state_ref, "heartbeat", &prompt, None, "heartbeat").await;
+                        let _ = crate::pisci::heartbeat::dispatch_heartbeat(&state_ref, &prompt, "heartbeat").await;
                     }
                 });
             }
 
-            // ── Startup skill sync: scan disk → DB so installed skills survive restarts ──
-            // This runs before app.manage() so the DB is consistent before any command runs.
+            // Spawn Koi patrol loop — periodic watchdog recovery + pending todo activation
             {
-                let app_dir = app_handle.path().app_data_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
-                let skills_dir = app_dir.join("skills");
                 let db_arc = state.db.clone();
-                tauri::async_runtime::block_on(async {
-                    let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
-                    if let Err(e) = loader.load_all() {
-                        tracing::warn!("Startup skill scan failed: {}", e);
-                        return;
-                    }
-                    let db = db_arc.lock().await;
-                    for skill in loader.list_skills() {
-                        if skill.source == "builtin" { continue; }
-                        // Skip skills that failed to parse (name defaults to "unnamed")
-                        if skill.name.is_empty() || skill.name == "unnamed" { continue; }
-                        let safe_name: String = skill.name.chars()
-                            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-                            .collect::<String>()
-                            .to_lowercase();
-                        if let Err(e) = db.upsert_skill(&safe_name, &skill.name, &skill.description, "📦") {
-                            tracing::warn!("Startup skill sync: failed to upsert '{}': {}", skill.name, e);
-                        } else {
-                            tracing::info!("Startup skill sync: registered '{}'", skill.name);
+                let app_h = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    // On startup, immediately recover stale state and re-activate pending todos
+                    // so crashed/restarted Koi resume quickly instead of waiting for the first patrol interval.
+                    {
+                        let runtime = crate::koi::runtime::KoiRuntime::from_tauri(
+                            app_h.clone(), db_arc.clone(),
+                        );
+                        let (stale_koi, stale_todo) = runtime.watchdog_recover(0).await;
+                        let stale_sessions = {
+                            let db = db_arc.lock().await;
+                            db.recover_stale_running_sessions(0).unwrap_or(0)
+                        };
+                        if stale_koi > 0 || stale_todo > 0 || stale_sessions > 0 {
+                            tracing::info!(
+                                "Koi patrol startup: recovered {} stale Koi, {} stale todos, {} stale sessions",
+                                stale_koi, stale_todo, stale_sessions
+                            );
+                        }
+                        match runtime.activate_pending_todos(None).await {
+                            Ok(activated) if activated > 0 => {
+                                tracing::info!("Koi patrol startup: activated {} pending todos", activated);
+                            }
+                            Err(e) => {
+                                tracing::warn!("Koi patrol startup: pending todo activation error: {}", e);
+                            }
+                            _ => {}
                         }
                     }
+
+                    // Wait before the next periodic patrol pass
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    loop {
+                        let runtime = crate::koi::runtime::KoiRuntime::from_tauri(
+                            app_h.clone(), db_arc.clone(),
+                        );
+
+                        // 1. Watchdog: recover stale busy Koi and in_progress todos (threshold: 10 min)
+                        let (stale_koi, stale_todo) = runtime.watchdog_recover(600).await;
+                        let stale_sessions = {
+                            let db = db_arc.lock().await;
+                            db.recover_stale_running_sessions(600).unwrap_or(0)
+                        };
+                        if stale_koi > 0 || stale_todo > 0 || stale_sessions > 0 {
+                            tracing::info!(
+                                "Koi patrol: recovered {} stale Koi, {} stale todos, {} stale sessions",
+                                stale_koi, stale_todo, stale_sessions
+                            );
+                        }
+
+                        // 2. Activate pending (unclaimed) todos for idle Koi
+                        match runtime.activate_pending_todos(None).await {
+                            Ok(activated) if activated > 0 => {
+                                tracing::info!("Koi patrol: activated {} pending todos", activated);
+                            }
+                            Err(e) => {
+                                tracing::warn!("Koi patrol: pending todo activation error: {}", e);
+                            }
+                            _ => {}
+                        }
+
+                        // Patrol every 2 minutes
+                        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                    }
+                });
+            }
+
+            // ── Startup skill cleanup: remove stale DB placeholders only ──
+            // Database is the source of truth for installed/enabled skills. We do not
+            // auto-import arbitrary skill folders from disk on startup.
+            {
+                let db_arc = state.db.clone();
+                tauri::async_runtime::block_on(async {
+                    let db = db_arc.lock().await;
                     // Clean up any stale "unnamed" DB entries left from previous bad parses
                     if let Ok(db_skills) = db.list_skills() {
                         for s in db_skills {
                             if s.name == "unnamed" || s.id == "unnamed" {
                                 let _ = db.delete_skill(&s.id);
-                                tracing::info!("Startup skill sync: removed stale 'unnamed' entry '{}'", s.id);
+                                tracing::info!("Startup skill cleanup: removed stale 'unnamed' entry '{}'", s.id);
                             }
                         }
                     }
                 });
             }
+
+            // ── Startup Koi dedup: remove duplicate Koi created by repeated trial runs ──
+            {
+                let db_arc = state.db.clone();
+                tauri::async_runtime::block_on(async {
+                    let db = db_arc.lock().await;
+                    match db.dedup_kois() {
+                        Ok(0) => {}
+                        Ok(n) => info!("Startup dedup: removed {} duplicate Koi entries", n),
+                        Err(e) => tracing::warn!("Startup dedup failed: {}", e),
+                    }
+                });
+            }
+
+            // ── First-run starter Koi seed ──────────────────────────────────────
+            {
+                let db_arc = state.db.clone();
+                let settings_arc = state.settings.clone();
+                tauri::async_runtime::block_on(async {
+                    let should_seed = {
+                        let settings = settings_arc.lock().await;
+                        !settings.starter_kois_initialized
+                    };
+
+                    if should_seed {
+                        let created = {
+                            let db = db_arc.lock().await;
+                            db.ensure_starter_kois()
+                        };
+
+                        match created {
+                            Ok(created) => {
+                                let mut settings = settings_arc.lock().await;
+                                settings.starter_kois_initialized = true;
+                                if let Err(e) = settings.save() {
+                                    tracing::warn!("Startup Koi seed: failed to persist init flag: {}", e);
+                                }
+
+                                if created.is_empty() {
+                                    info!("Startup Koi seed: skipped starter Koi creation because Koi already exist");
+                                } else {
+                                    let names = created.iter()
+                                        .map(|k| k.name.clone())
+                                        .collect::<Vec<_>>()
+                                        .join(", ");
+                                    info!("Startup Koi seed: created starter Koi [{}]", names);
+                                }
+                            }
+                            Err(e) => tracing::warn!("Startup Koi seed failed: {}", e),
+                        }
+                    }
+                });
+            }
+
+            // ── Startup recovery: fix stale state from previous crash/restart ──
+            {
+                let db_arc = state.db.clone();
+                tauri::async_runtime::block_on(async {
+                    let db = db_arc.lock().await;
+                    let _ = db.recover_stale_koi_status();
+                    let _ = db.recover_stale_todos();
+                    let _ = db.recover_stale_running_sessions(0);
+                });
+            }
+
+            let startup_trial_state = store::AppState {
+                db: state.db.clone(),
+                settings: state.settings.clone(),
+                plan_state: state.plan_state.clone(),
+                browser: state.browser.clone(),
+                cancel_flags: state.cancel_flags.clone(),
+                confirmation_responses: state.confirmation_responses.clone(),
+                interactive_responses: state.interactive_responses.clone(),
+                app_handle: app_handle.clone(),
+                scheduler: state.scheduler.clone(),
+                gateway: state.gateway.clone(),
+                pisci_heartbeat_cursor: state.pisci_heartbeat_cursor.clone(),
+            };
 
             app.manage(state);
 
@@ -494,6 +639,54 @@ pub fn run() {
             }
 
             info!("OpenPisci started");
+
+            // Optional developer hook: auto-run a real collaboration trial on startup.
+            if std::env::var("PISCI_RUN_COLLAB_TRIAL").ok().as_deref() == Some("1") {
+                let state_ref = startup_trial_state;
+                let app_for_trial = app_handle.clone();
+                let exit_after_trial = std::env::var("PISCI_EXIT_AFTER_COLLAB_TRIAL").ok().as_deref() == Some("1");
+                tauri::async_runtime::spawn(async move {
+                    tracing::info!("Startup hook: running real collaboration trial");
+                    match crate::commands::collab_trial::run_collaboration_trial_with_state(app_for_trial.clone(), &state_ref).await {
+                        Ok(status) => {
+                            tracing::info!(
+                                "Startup hook: collaboration trial completed, completed={}, pool_id={}, steps={}",
+                                status.completed,
+                                status.pool_id,
+                                status.steps.len()
+                            );
+                        }
+                        Err(e) => tracing::error!("Startup hook: collaboration trial failed: {}", e),
+                    }
+                    if exit_after_trial {
+                        tracing::info!("Startup hook: exiting after collaboration trial");
+                        app_for_trial.exit(0);
+                    }
+                });
+            }
+
+            // Auto-run multi-agent tests in dev mode
+            #[cfg(debug_assertions)]
+            {
+                tauri::async_runtime::spawn(async move {
+                    // Always run pipeline tests (fast, no LLM)
+                    info!("=== Running Multi-Agent Integration Tests ===");
+                    match commands::test_runner::run_multi_agent_tests().await {
+                        Ok(suite) => {
+                            for r in &suite.results {
+                                if r.passed {
+                                    info!("[PASS] {} ({}ms)", r.name, r.duration_ms);
+                                } else {
+                                    tracing::error!("[FAIL] {} — {} ({}ms)", r.name, r.message, r.duration_ms);
+                                }
+                            }
+                            info!("=== {} ===", suite.summary);
+                        }
+                        Err(e) => tracing::error!("Test runner error: {}", e),
+                    }
+                });
+            }
+
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -516,6 +709,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Settings
             commands::settings::get_settings,
+            commands::settings::get_default_workspace,
             commands::settings::save_settings,
             commands::settings::is_configured,
             // Sessions
@@ -558,6 +752,8 @@ pub fn run() {
             commands::audit::clear_audit_log,
             // Permission
             commands::permission::respond_permission,
+            // Interactive UI (chat_ui tool responses)
+            commands::interactive::respond_interactive_ui,
             // Gateway / IM
             commands::gateway::list_gateway_channels,
             commands::gateway::diagnose_gateway_channels,
@@ -588,17 +784,26 @@ pub fn run() {
             commands::koi::create_koi,
             commands::koi::update_koi,
             commands::koi::delete_koi,
+            commands::koi::set_koi_active,
             commands::koi::get_koi_palette,
+            commands::koi::dedup_kois,
             // Chat Pool
             commands::pool::list_pool_sessions,
             commands::pool::create_pool_session,
             commands::pool::delete_pool_session,
             commands::pool::get_pool_messages,
             commands::pool::send_pool_message,
+            commands::pool::get_pool_org_spec,
+            commands::pool::update_pool_org_spec,
+            commands::pool::dispatch_koi_task,
+            commands::pool::cancel_koi_task,
+            commands::pool::handle_pool_mention,
             // Board (Kanban)
             commands::board::list_koi_todos,
             commands::board::create_koi_todo,
             commands::board::update_koi_todo,
+            commands::board::claim_koi_todo,
+            commands::board::complete_koi_todo,
             commands::board::delete_koi_todo,
             // MCP servers
             commands::mcp::list_mcp_servers,
@@ -611,6 +816,9 @@ pub fn run() {
             commands::window::save_overlay_position,
             commands::window::set_app_theme,
             commands::window::set_window_theme_border,
+            // Test runner
+            commands::test_runner::run_multi_agent_tests,
+            commands::collab_trial::run_collaboration_trial,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pisci Desktop");

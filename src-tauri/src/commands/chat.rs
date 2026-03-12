@@ -1,6 +1,6 @@
 use crate::agent::loop_::{AgentLoop, ConfirmFlags};
 use crate::agent::messages::AgentEvent;
-use crate::agent::tool::ToolContext;
+use crate::agent::tool::{Tool, ToolContext};
 use crate::llm::{build_client, ContentBlock, LlmMessage, MessageContent};
 use crate::policy::PolicyGate;
 use crate::store::{db::ChatMessage, db::Session, AppState};
@@ -294,7 +294,15 @@ pub async fn chat_send(
         if let Err(e) = loader.load_all() {
             tracing::warn!("Failed to load skills: {}", e);
         }
-        let enabled_names: Vec<String> = loader.list_skills().iter().map(|s| s.name.clone()).collect();
+        let enabled_names: Vec<String> = {
+            let db = state.db.lock().await;
+            db.list_skills()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|s| s.enabled)
+                .map(|s| s.name)
+                .collect()
+        };
         let dir = loader.generate_skill_directory(&enabled_names);
         let arc = Arc::new(tokio::sync::Mutex::new(loader));
         (dir, arc)
@@ -313,12 +321,12 @@ pub async fn chat_send(
 
     let policy = Arc::new(PolicyGate::with_profile_and_flags(&workspace_root, &policy_mode, tool_rate_limit_per_minute, allow_outside_workspace));
 
-    // Inject relevant memories into the system prompt
+    // Inject relevant memories into the system prompt (scoped to Pisci)
     let memory_context = {
         let db = state.db.lock().await;
         let keywords: Vec<&str> = effective_content.split_whitespace().take(10).collect();
         let query = keywords.join(" ");
-        match db.search_memories_fts(&query, 5) {
+        match db.search_memories_scoped(&query, "pisci", None, 5) {
             Ok(mems) if !mems.is_empty() => {
                 let mut ctx = String::from("\n\n## Personal Context (from memory)\n");
                 for m in &mems {
@@ -362,7 +370,7 @@ pub async fn chat_send(
         client,
         registry,
         policy,
-        system_prompt: build_system_prompt(&full_memory_context, &skill_context),
+        system_prompt: build_system_prompt_with_env(&full_memory_context, &skill_context, &workspace_root, allow_outside_workspace),
         model: model.clone(),
         max_tokens,
         db: Some(state.db.clone()),
@@ -373,6 +381,7 @@ pub async fn chat_send(
             confirm_file_write,
         },
         vision_override: Some(vision_capable),
+        notification_rx: None,
     };
 
     let tool_settings_for_fish = tool_settings.clone();
@@ -382,6 +391,8 @@ pub async fn chat_send(
         bypass_permissions: false,
         settings: tool_settings,
         max_iterations: Some(max_iterations),
+        memory_owner_id: "pisci".to_string(),
+        pool_session_id: None,
     };
 
     // Check if the request should be decomposed by HostAgent
@@ -464,10 +475,70 @@ pub async fn chat_send(
             // Load app_data_dir once for Fish registry lookups
             let app_data_dir_for_fish = app_clone.path().app_data_dir().ok();
 
+            // Load available Koi agents for routing
+            let available_kois = {
+                let db = db_arc.lock().await;
+                db.list_kois().unwrap_or_default()
+            };
+
             for task in &tasks {
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) { break; }
 
-                // Try to route this sub-task to a Fish agent based on app_hint
+                // Priority 1: Try to route to a persistent Koi agent
+                let koi_match = crate::agent::host::HostAgent::route_to_koi(
+                    &task.description, &available_kois,
+                );
+                if let Some(ref koi_id) = koi_match {
+                    if let Some(koi_def) = available_kois.iter().find(|k| &k.id == koi_id) {
+                        let _ = event_tx.send(AgentEvent::TextDelta {
+                            delta: format!("🐟 路由到 Koi「{} {}」: {}\n", koi_def.icon, koi_def.name, task.description),
+                        }).await;
+
+                        let koi_input = serde_json::json!({
+                            "action": "call",
+                            "koi_id": koi_id,
+                            "task": task.description,
+                        });
+                        let koi_tool = crate::tools::call_koi::CallKoiTool {
+                            app: app_clone.clone(),
+                            caller_koi_id: None,
+                            depth: 0,
+                            managed_externally: false,
+                            notification_rx: std::sync::Mutex::new(None),
+                        };
+                        match koi_tool.call(koi_input, &ctx).await {
+                            Ok(result) if !result.is_error => {
+                                let reply = result.content;
+                                all_messages.push(crate::llm::LlmMessage {
+                                    role: "assistant".into(),
+                                    content: crate::llm::MessageContent::text(format!(
+                                        "[Koi {} 完成子任务: {}]\n\n{}", koi_def.name, task.description, reply
+                                    )),
+                                });
+                                let _ = event_tx.send(AgentEvent::TextDelta {
+                                    delta: format!("✓ Koi「{}」已完成\n", koi_def.name),
+                                }).await;
+                            }
+                            Ok(result) => {
+                                tracing::warn!(
+                                    "Koi '{}' returned tool error for sub-task '{}': {}",
+                                    koi_id,
+                                    task.description,
+                                    result.content
+                                );
+                                let _ = event_tx.send(AgentEvent::TextDelta {
+                                    delta: format!("⚠ Koi「{}」执行失败，改由其他路径继续\n", koi_def.name),
+                                }).await;
+                            }
+                            Err(e) => {
+                                tracing::warn!("Koi '{}' failed for sub-task, falling through: {}", koi_id, e);
+                            }
+                        }
+                        continue;
+                    }
+                }
+
+                // Priority 2: Try to route to a Fish agent based on app_hint
                 let fish_id_opt = task.app_hint.as_deref()
                     .and_then(crate::agent::host::HostAgent::route_to_fish);
 
@@ -515,6 +586,7 @@ pub async fn chat_send(
                             confirmation_responses: None,
                             confirm_flags: ConfirmFlags { confirm_shell: false, confirm_file_write: false },
                             vision_override: Some(vision_capable),
+                            notification_rx: None,
                         };
                         let fish_ctx = ToolContext {
                             session_id: format!("fish_ephemeral_{}", fish_id),
@@ -522,6 +594,8 @@ pub async fn chat_send(
                             bypass_permissions: false,
                             settings: tool_settings_for_fish.clone(),
                             max_iterations: Some(fish_def.agent.max_iterations),
+                            memory_owner_id: "pisci".to_string(),
+                            pool_session_id: None,
                         };
 
                         let (fish_tx, mut fish_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
@@ -669,7 +743,7 @@ pub async fn chat_send(
                         if base_url_clone.is_empty() { None } else { Some(&base_url_clone) },
                     );
                     tokio::spawn(async move {
-                        auto_extract_memories(db_for_mem, sid_for_mem, msgs_for_mem, mem_client, model_for_mem, max_tokens_clone).await;
+                        auto_extract_memories(db_for_mem, sid_for_mem, msgs_for_mem, mem_client, model_for_mem, max_tokens_clone, "pisci".to_string()).await;
                     });
                 }
 
@@ -749,12 +823,82 @@ pub fn model_supports_vision(provider: &str, model: &str) -> bool {
 }
 
 /// Return value: (text_reply, optional_image_bytes, optional_image_mime)
+#[derive(Debug, Clone, Default)]
+pub struct HeadlessRunOptions {
+    pub pool_session_id: Option<String>,
+    pub extra_system_context: Option<String>,
+    pub session_title: Option<String>,
+    pub session_source: Option<String>,
+}
+
+pub(crate) const SESSION_SOURCE_IM_PREFIX: &str = "im_";
+pub(crate) const SESSION_SOURCE_PISCI_INBOX_GLOBAL: &str = "pisci_inbox_global";
+pub(crate) const SESSION_SOURCE_PISCI_INBOX_POOL: &str = "pisci_inbox_pool";
+pub(crate) const SESSION_SOURCE_PISCI_INTERNAL: &str = "pisci_internal";
+
+fn normalize_session_source_compat(source: &str) -> &str {
+    match source {
+        "heartbeat" => SESSION_SOURCE_PISCI_INBOX_GLOBAL,
+        "heartbeat_pool" => SESSION_SOURCE_PISCI_INBOX_POOL,
+        other => other,
+    }
+}
+
+fn is_pool_scoped_session_source(source: &str) -> bool {
+    normalize_session_source_compat(source) == SESSION_SOURCE_PISCI_INBOX_POOL
+}
+
+fn derive_headless_session_source(channel: &str, pool_session_id: Option<&str>) -> String {
+    if pool_session_id.is_some() {
+        return SESSION_SOURCE_PISCI_INBOX_POOL.to_string();
+    }
+    match channel {
+        "heartbeat" => SESSION_SOURCE_PISCI_INBOX_GLOBAL.to_string(),
+        "internal" => SESSION_SOURCE_PISCI_INTERNAL.to_string(),
+        other if other.starts_with(SESSION_SOURCE_IM_PREFIX) => other.to_string(),
+        other => format!("{}{}", SESSION_SOURCE_IM_PREFIX, other),
+    }
+}
+
+pub(crate) fn validate_headless_session_scope(
+    actual_source: &str,
+    desired_source: &str,
+    pool_session_id: Option<&str>,
+) -> Result<(), String> {
+    let actual = normalize_session_source_compat(actual_source);
+    let desired = normalize_session_source_compat(desired_source);
+
+    if actual != desired {
+        return Err(format!(
+            "Session source mismatch: session is '{}' but this run requires '{}'",
+            actual_source, desired_source
+        ));
+    }
+
+    if pool_session_id.is_some() && !is_pool_scoped_session_source(actual) {
+        return Err(format!(
+            "Pool-scoped run cannot reuse non-pool session source '{}'",
+            actual_source
+        ));
+    }
+
+    if pool_session_id.is_none() && is_pool_scoped_session_source(actual) {
+        return Err(format!(
+            "Non-pool run cannot reuse pool-scoped session source '{}'",
+            actual_source
+        ));
+    }
+
+    Ok(())
+}
+
 pub async fn run_agent_headless(
     state: &AppState,
     session_id: &str,
     user_message: &str,
     inbound_media: Option<crate::gateway::MediaAttachment>,
     channel: &str,
+    options: Option<HeadlessRunOptions>,
 ) -> Result<(String, Option<Vec<u8>>, Option<String>), String> {
     let (provider, model, api_key, base_url, workspace_root, max_tokens, context_window, policy_mode, tool_rate_limit_per_minute, tool_settings, max_iterations, builtin_tool_enabled, allow_outside_workspace, vision_setting) = {
         let settings = state.settings.lock().await;
@@ -784,6 +928,20 @@ pub async fn run_agent_headless(
         plans.remove(session_id);
     }
     crate::agent::vision::clear_selection(session_id).await;
+
+    let pool_session_id = options.as_ref().and_then(|o| o.pool_session_id.clone());
+    let extra_system_context = options
+        .as_ref()
+        .and_then(|o| o.extra_system_context.clone())
+        .unwrap_or_default();
+    let desired_session_title = options
+        .as_ref()
+        .and_then(|o| o.session_title.clone())
+        .unwrap_or_else(|| session_id.to_string());
+    let desired_session_source = options
+        .as_ref()
+        .and_then(|o| o.session_source.clone())
+        .unwrap_or_else(|| derive_headless_session_source(channel, pool_session_id.as_deref()));
 
     // vision_capable: user override OR auto-detection by provider/model name
     let vision_capable = vision_setting || model_supports_vision(&provider, &model);
@@ -825,6 +983,19 @@ pub async fn run_agent_headless(
 
     {
         let db = state.db.lock().await;
+        match db.get_session(session_id).map_err(|e| e.to_string())? {
+            Some(existing) => {
+                validate_headless_session_scope(
+                    &existing.source,
+                    &desired_session_source,
+                    pool_session_id.as_deref(),
+                )?;
+            }
+            None => {
+                db.ensure_fixed_session(session_id, &desired_session_title, &desired_session_source)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
         // Check if this user message was already pre-inserted by lib.rs (to ensure it's visible
         // in the frontend before the agent starts). Skip duplicate insertion if so.
         let already_inserted = db.get_messages_latest(session_id, 1)
@@ -863,9 +1034,109 @@ pub async fn run_agent_headless(
     ));
     let policy = Arc::new(PolicyGate::with_profile_and_flags(&workspace_root, &policy_mode, tool_rate_limit_per_minute, allow_outside_workspace));
 
+    let scoped_memory_context = {
+        let keywords: Vec<&str> = effective_user_message.split_whitespace().take(10).collect();
+        let query = keywords.join(" ");
+        if query.trim().is_empty() {
+            String::new()
+        } else {
+            let db = state.db.lock().await;
+            match db.search_memories_scoped(&query, "pisci", pool_session_id.as_deref(), 5) {
+                Ok(mems) if !mems.is_empty() => {
+                    let mut ctx = String::from("\n\n## Relevant Memory\n");
+                    for m in &mems {
+                        ctx.push_str(&format!("- {}\n", m.content));
+                    }
+                    ctx
+                }
+                _ => String::new(),
+            }
+        }
+    };
+
+    let pool_context = if let Some(pool_id) = pool_session_id.as_deref() {
+        let db = state.db.lock().await;
+        let pool = db.get_pool_session(pool_id).map_err(|e| e.to_string())?;
+        let recent_messages = db.get_pool_messages(pool_id, 12, 0).map_err(|e| e.to_string())?;
+        let todos = db.list_koi_todos(None).map_err(|e| e.to_string())?;
+        let pool_todos: Vec<_> = todos
+            .into_iter()
+            .filter(|t| t.pool_session_id.as_deref() == Some(pool_id))
+            .collect();
+
+        let todo_summary = if pool_todos.is_empty() {
+            "No pool todos.".to_string()
+        } else {
+            let mut counts = std::collections::BTreeMap::<String, usize>::new();
+            for todo in &pool_todos {
+                *counts.entry(todo.status.clone()).or_insert(0) += 1;
+            }
+            let parts = counts
+                .into_iter()
+                .map(|(status, count)| format!("{}={}", status, count))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Pool todos: {}", parts)
+        };
+
+        let message_summary = if recent_messages.is_empty() {
+            "No recent pool messages.".to_string()
+        } else {
+            let lines = recent_messages
+                .iter()
+                .rev()
+                .take(6)
+                .rev()
+                .map(|m| {
+                    let content = if m.content.chars().count() > 220 {
+                        format!("{}...", m.content.chars().take(220).collect::<String>())
+                    } else {
+                        m.content.clone()
+                    };
+                    format!("- #{} {} [{}]: {}", m.id, m.sender_id, m.msg_type, content.replace('\n', " "))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("Recent pool messages:\n{}", lines)
+        };
+
+        let mut ctx = String::new();
+        if let Some(pool) = pool {
+            ctx.push_str("\n\n## Pool Context\n");
+            ctx.push_str(&format!("Pool: {} ({})\nStatus: {}", pool.name, pool.id, pool.status));
+            if let Some(project_dir) = pool.project_dir {
+                ctx.push_str(&format!("\nProject dir: {}", project_dir));
+            }
+            if !pool.org_spec.trim().is_empty() {
+                let org_preview = if pool.org_spec.chars().count() > 800 {
+                    format!("{}...", pool.org_spec.chars().take(800).collect::<String>())
+                } else {
+                    pool.org_spec
+                };
+                ctx.push_str(&format!("\nOrg spec:\n{}", org_preview));
+            }
+        }
+        ctx.push_str(&format!("\n{}\n{}", todo_summary, message_summary));
+        ctx
+    } else {
+        String::new()
+    };
+
+    let mut system_prompt = build_im_system_prompt(channel, vision_capable);
+    if !scoped_memory_context.is_empty() {
+        system_prompt.push_str(&scoped_memory_context);
+    }
+    if !pool_context.is_empty() {
+        system_prompt.push_str(&pool_context);
+    }
+    if !extra_system_context.trim().is_empty() {
+        system_prompt.push_str("\n\n## Additional Context\n");
+        system_prompt.push_str(&extra_system_context);
+    }
+
     let agent = AgentLoop {
         client, registry, policy,
-        system_prompt: build_im_system_prompt(channel, vision_capable),
+        system_prompt,
         model, max_tokens,
         db: Some(state.db.clone()),
         app_handle: None,
@@ -875,6 +1146,7 @@ pub async fn run_agent_headless(
             confirm_file_write: false,
         },
         vision_override: Some(vision_capable),
+        notification_rx: None,
     };
     let ctx = ToolContext {
         session_id: session_id.to_string(),
@@ -882,6 +1154,8 @@ pub async fn run_agent_headless(
         bypass_permissions: false,
         settings: tool_settings,
         max_iterations: Some(max_iterations),
+        memory_owner_id: "pisci".to_string(),
+        pool_session_id: pool_session_id.clone(),
     };
     // Load full conversation history for context.
     // After building LLM messages, sanitize any orphaned tool_use blocks (tool calls without
@@ -949,8 +1223,7 @@ pub async fn run_agent_headless(
         let _ = db.update_session_status(session_id, "running");
     }
 
-    let (final_msgs, _, _) = agent.run(llm_messages, event_tx, cancel.clone(), ctx).await
-        .map_err(|e| e.to_string())?;
+    let run_result = agent.run(llm_messages, event_tx, cancel.clone(), ctx).await;
     let _ = forward_handle.await;
 
     // Clean up cancel flag
@@ -958,6 +1231,19 @@ pub async fn run_agent_headless(
         let mut flags = state.cancel_flags.lock().await;
         flags.remove(session_id);
     }
+
+    {
+        let db = state.db.lock().await;
+        let _ = db.update_session_status(session_id, "idle");
+    }
+
+    let (final_msgs, _, _) = match run_result {
+        Ok(messages) => messages,
+        Err(e) => {
+            let _ = state.app_handle.emit("im_session_done", session_id);
+            return Err(e.to_string());
+        }
+    };
 
     // Extract the last assistant message: text + optional image
     let (response_text, image_data, image_mime) = final_msgs.iter().rev()
@@ -993,8 +1279,7 @@ pub async fn run_agent_headless(
         tracing::info!("run_agent_headless: persisting agent turn for {}", session_id);
         let db = state.db.lock().await;
         persist_agent_turn(&db, session_id, &final_msgs, context_len);
-        let _ = db.update_session_status(session_id, "idle");
-        tracing::info!("run_agent_headless: persist done, status=idle for {}", session_id);
+        tracing::info!("run_agent_headless: persist done for {}", session_id);
     }
 
     // Emit Done event for tool-steps panel
@@ -1008,8 +1293,6 @@ pub async fn run_agent_headless(
     // NOW emit im_session_done — DB is already written, frontend reload will see new messages.
     tracing::info!("run_agent_headless: emitting im_session_done for {}", session_id);
     let _ = state.app_handle.emit("im_session_done", session_id);
-
-    // im_session_done is emitted by _done_guard on drop (RAII above), covering both success and error paths.
 
     Ok((response_text, image_data, image_mime))
 }
@@ -1046,9 +1329,23 @@ fn compute_injection_budget(context_window: u32) -> usize {
 }
 
 pub fn build_system_prompt(memory_context: &str, skill_context: &str) -> String {
+    build_system_prompt_with_env(memory_context, skill_context, "", false)
+}
+
+pub fn build_system_prompt_with_env(memory_context: &str, skill_context: &str, workspace_root: &str, allow_outside: bool) -> String {
+    let workspace_line = if workspace_root.trim().is_empty() {
+        String::new()
+    } else {
+        let outside_note = if allow_outside {
+            " (access outside this directory is also permitted when needed)"
+        } else {
+            " (file operations are restricted to this directory)"
+        };
+        format!("\nWorkspace: `{}`{}", workspace_root, outside_note)
+    };
     format!(
         r#"You are Pisci, a powerful Windows AI Agent. You run on the user's local Windows machine and can control the entire desktop environment.
-Today's date: {date}
+Today's date: {date}{workspace_line}
 
 ## ⚡ First Step: Always Check Skills
 Before doing anything else, call `skill_search` with the user's task as the query.
@@ -1237,6 +1534,69 @@ You have access to specialized Fish sub-agents via the `call_fish` tool. Fish ag
 - User asks: "帮我整理 C:\Projects 下所有 Python 项目的依赖清单"
 - Good: `call_fish(action="call", fish_id="file-management", task="扫描 C:\\Projects 下所有包含 requirements.txt 或 pyproject.toml 的目录，列出每个项目名称及其依赖列表")`
 - The Fish will do all the scanning, reading, and aggregation internally, and return only the final summary
+
+## Multi-Agent Collaboration (call_koi + pool_org)
+
+You are the project manager. When a user discusses a project that requires sustained, multi-role effort, you should proactively organize a collaborative project:
+
+**1. Understand the project through conversation**
+- Ask clarifying questions about goals, scope, timeline, and constraints
+- Identify distinct roles/responsibilities needed (e.g., frontend dev, backend dev, tester, doc writer)
+
+**2. Set up the project pool using `pool_org`**
+- `pool_org(action="list")` — see existing pools and available Koi agents
+- `pool_org(action="create", name="<project name>", org_spec="<markdown>")` — create a new project pool with a comprehensive organization spec
+- The org_spec should define: project goals, Koi role assignments, collaboration rules, activation conditions, and success metrics
+
+**3. Communicate with Koi agents via @mention**
+- Use `pool_chat(action="send", pool_id=..., content="@KoiName your task description...")` to assign work. The @mention system automatically activates the Koi and assigns the task.
+- You can @mention multiple Koi in one message, or use `@all` to broadcast to all agents.
+- Example: `pool_chat(action="send", pool_id="abc", sender_id="pisci", content="@Architect Design the database schema for user authentication. When done, hand off to @Coder for implementation.")`
+- After the Koi completes, its result @mentions cascade automatically — if Architect writes "@Coder please implement", Coder is activated without your intervention.
+- Use `pool_chat(action="read", pool_id=...)` or `pool_org(action="get_todos", pool_id=...)` to monitor progress.
+- Koi agents are fully autonomous: they communicate via pool_chat, share results, and collaborate with each other through @mentions. Do NOT micromanage their approach.
+- Every Koi may declare a free-form `role` plus a detailed description. Use both fields to understand their specialization before assigning work.
+- **IMPORTANT**: Do NOT use `pool_org(action="assign_koi")` for normal task assignment. Use @mention in pool_chat instead — this is the natural communication channel that all agents share.
+
+**4. Evolve the org_spec as the project progresses**
+- `pool_org(action="read", pool_id=...)` — review current org_spec
+- `pool_org(action="update", pool_id=..., org_spec="...")` — update as requirements change
+
+**When to initiate multi-agent collaboration:**
+- The project has multiple distinct work streams that benefit from specialization
+- The user describes a sustained effort, not a one-off task
+- Different parts of the work require different skills or perspectives
+
+**Key principles:**
+- You decide the organizational structure; the user approves it
+- Each Koi has full capabilities — do not micromanage their approach
+- The pool chat room and kanban board are observation windows for the user, not control surfaces
+- Prefer fewer, well-defined Koi roles over many fragmented ones
+- All agent communication flows through pool_chat @mentions — this is how Koi hand off work, ask questions, and collaborate naturally
+
+**5. Task Lifecycle Management**
+- When a Koi reports completion via pool_chat, review the result. If satisfactory, mark the todo as done: `pool_org(action="complete_todo", todo_id="...")`.
+- If a task is no longer needed (scope change, duplicate, superseded), cancel it: `pool_org(action="cancel_todo", todo_id="...", reason="...")`. You can cancel ANY Koi's todo — you have global task authority.
+- Monitor blocked tasks with `pool_org(action="get_todos")`. If a task is stuck, unblock or reassign it.
+- Task status flow: `todo` → `in_progress` → `done` / `cancelled` / `blocked`. Only Pisci and the task owner can change status. Other Koi must @pisci to request task changes.
+- When the project is complete, ensure all remaining todos are either completed or cancelled before archiving the pool.
+- **Project completion flow**: When all tasks are done, summarize results for the user and ask for confirmation before archiving. Then call `pool_org(action="archive", pool_id=...)`. Only Pisci can archive a project — Koi should @pisci when they believe all work is finished.
+- **Koi cannot archive**: If a Koi's final message says "ready to archive" or "all done", treat it as a signal to review and confirm with the user, not an automatic archive trigger.
+- **No fixed completion role**: A reviewer, architect, tester, or any other Koi can provide input, but none of them alone decides project completion. You decide based on overall pool state and then the user confirms.
+- Prefer these internal status signals from Koi pool_chat updates when assessing progress: `[ProjectStatus] follow_up_needed`, `[ProjectStatus] waiting`, `[ProjectStatus] ready_for_pisci_review`. Treat them as structured hints, not final authority.
+
+**6. Knowledge Base (kb/)**
+- Each project workspace has a shared `kb/` subdirectory for persistent knowledge. At project start, use `file_list` to browse `<workspace>/kb/` and read relevant files to understand existing context.
+- Encourage Koi to write findings to `kb/` using `file_write`. Subdirectories: `kb/decisions/`, `kb/architecture/`, `kb/api/`, `kb/bugs/`, `kb/research/`. Use `.md` for notes, `.jsonl` for structured records.
+- You can write high-level summaries and project decisions yourself. The `kb/` directory persists across sessions and is visible to all agents.
+
+**7. Task Dependency & Conflict Avoidance**
+- Before assigning parallel tasks, analyze dependencies. If Task B needs Task A's output, mark the dependency explicitly and assign sequentially.
+- When assigning file-editing tasks to multiple Koi, ensure they work on DIFFERENT files or directories. Never assign two Koi to edit the same file simultaneously.
+- If the project has a `project_dir`, a Git repo is automatically initialized. Each Koi works in its own Git worktree/branch, so file conflicts are structurally prevented at the filesystem level.
+- After all Koi tasks complete, review their branches and merge results. Use `pool_org(action="merge_branches", pool_id=...)` to trigger integration.
+- When creating a project with `pool_org(action="create")`, provide a `project_dir` path to enable Git-based isolation. Example: `pool_org(action="create", name="My App", project_dir="C:\\Users\\zzz\\Projects\\my-app", org_spec="...")`
+- Use `pool_org(action="get_messages", pool_id=...)` and `pool_org(action="get_todos", pool_id=...)` to monitor project progress before assigning new tasks.
 
 ## Key Rules
 
@@ -2138,6 +2498,7 @@ pub async fn auto_extract_memories(
     client: Box<dyn crate::llm::LlmClient>,
     model: String,
     max_tokens: u32,
+    owner_id: String,
 ) {
     // Only extract if there's meaningful assistant content
     let assistant_chars: usize = messages.iter()
@@ -2212,8 +2573,8 @@ pub async fn auto_extract_memories(
                 let category = if valid_categories.contains(&category) { category } else { "general" };
 
                 if !content.is_empty() {
-                    let _ = db.save_memory(content, category, 0.75, Some(&session_id));
-                    tracing::info!("Auto-extracted memory [{category}]: {content}");
+                    let _ = db.save_memory(content, category, 0.75, Some(&session_id), &owner_id, "private", &owner_id, None);
+                    tracing::info!("Auto-extracted memory [{category}] for {owner_id}: {content}");
                 }
             }
         }

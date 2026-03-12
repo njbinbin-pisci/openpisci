@@ -170,12 +170,12 @@ function AppContent() {
 
   const tabs: { id: Tab; label: string; icon: string }[] = [
     { id: "chat", label: t("nav.chat"), icon: "💬" },
-    { id: "memory", label: t("nav.memory"), icon: "💡" },
-    { id: "tools", label: t("nav.tools"), icon: "🔧" },
     { id: "pond", label: t("nav.pond"), icon: "🏊" },
-    { id: "fish", label: t("nav.fish"), icon: "🐠" },
+    { id: "tools", label: t("nav.tools"), icon: "🔧" },
     { id: "skills", label: t("nav.skills"), icon: "⚡" },
+    { id: "fish", label: t("nav.fish"), icon: "🐠" },
     { id: "scheduler", label: t("nav.scheduler"), icon: "⏰" },
+    { id: "memory", label: t("nav.memory"), icon: "💡" },
     { id: "audit", label: t("nav.audit"), icon: "🔍" },
     { id: "settings", label: t("nav.settings"), icon: "⚙️" },
     { id: "about", label: t("nav.about"), icon: "ℹ️" },

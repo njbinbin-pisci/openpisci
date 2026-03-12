@@ -196,6 +196,7 @@ export type AgentEventType =
   | { type: "tool_end"; id: string; name: string; result: string; is_error: boolean }
   | { type: "message_commit"; message: unknown }
   | { type: "permission_request"; request_id: string; tool_name: string; tool_input: unknown; description: string }
+  | { type: "interactive_ui"; request_id: string; ui_definition: unknown }
   | { type: "done"; total_input_tokens: number; total_output_tokens: number }
   | { type: "error"; message: string }
   | {
@@ -226,6 +227,7 @@ export const settingsApi = {
   get: () => invoke<Settings>("get_settings"),
   save: (updates: Partial<Settings>) => invoke<Settings>("save_settings", { updates }),
   isConfigured: () => invoke<boolean>("is_configured"),
+  getDefaultWorkspace: () => invoke<string>("get_default_workspace"),
 };
 
 // ---------------------------------------------------------------------------
@@ -437,6 +439,15 @@ export const permissionApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Interactive UI (chat_ui tool responses)
+// ---------------------------------------------------------------------------
+
+export const interactiveApi = {
+  respond: (requestId: string, values: Record<string, unknown>) =>
+    invoke<void>('respond_interactive_ui', { requestId, values }),
+};
+
+// ---------------------------------------------------------------------------
 // User Tools
 // ---------------------------------------------------------------------------
 
@@ -517,6 +528,7 @@ export const fishApi = {
 export interface KoiDefinition {
   id: string;
   name: string;
+  role: string;
   icon: string;
   color: string;
   system_prompt: string;
@@ -529,6 +541,7 @@ export interface KoiDefinition {
 export interface KoiWithStats {
   id: string;
   name: string;
+  role: string;
   icon: string;
   color: string;
   system_prompt: string;
@@ -550,6 +563,12 @@ export interface KoiTodo {
   priority: string;
   assigned_by: string;
   pool_session_id?: string;
+  claimed_by?: string;
+  claimed_at?: string;
+  depends_on?: string;
+  blocked_reason?: string;
+  result_message_id?: number;
+  source_type: string;
   created_at: string;
   updated_at: string;
 }
@@ -557,6 +576,9 @@ export interface KoiTodo {
 export interface PoolSession {
   id: string;
   name: string;
+  org_spec: string;
+  status: string;
+  last_active_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -568,6 +590,9 @@ export interface PoolMessage {
   content: string;
   msg_type: string;
   metadata: string;
+  todo_id?: string;
+  reply_to_message_id?: number;
+  event_type?: string;
   created_at: string;
 }
 
@@ -581,6 +606,7 @@ export const koiApi = {
   get: (id: string) => invoke<KoiDefinition | null>("get_koi", { id }),
   create: (input: {
     name: string;
+    role: string;
     icon: string;
     color: string;
     system_prompt: string;
@@ -589,12 +615,14 @@ export const koiApi = {
   update: (input: {
     id: string;
     name?: string;
+    role?: string;
     icon?: string;
     color?: string;
     system_prompt?: string;
     description?: string;
   }) => invoke<void>("update_koi", { input }),
   delete: (id: string) => invoke<void>("delete_koi", { id }),
+  setActive: (id: string, active: boolean) => invoke<void>("set_koi_active", { id, active }),
   palette: () => invoke<KoiPalette>("get_koi_palette"),
 };
 
@@ -611,6 +639,19 @@ export const poolApi = {
     msg_type?: string;
     metadata?: string;
   }) => invoke<PoolMessage>("send_pool_message", { input }),
+  getOrgSpec: (id: string) => invoke<string>("get_pool_org_spec", { id }),
+  updateOrgSpec: (id: string, orgSpec: string) =>
+    invoke<void>("update_pool_org_spec", { id, orgSpec }),
+  dispatchTask: (koiId: string, task: string, poolSessionId?: string, priority?: string) =>
+    invoke<{ success: boolean; reply: string; result_message_id?: number }>(
+      "dispatch_koi_task", { koiId, task, poolSessionId, priority }
+    ),
+  cancelKoiTask: (koiId: string, poolSessionId?: string) =>
+    invoke<void>("cancel_koi_task", { koiId, poolSessionId: poolSessionId ?? null }),
+  handleMention: (senderId: string, poolSessionId: string, content: string) =>
+    invoke<{ success: boolean; reply: string; result_message_id?: number } | null>(
+      "handle_pool_mention", { senderId, poolSessionId, content }
+    ),
   onMessage: (sessionId: string, handler: (msg: PoolMessage) => void): Promise<UnlistenFn> =>
     listen<PoolMessage>(`pool_message_${sessionId}`, (e) => handler(e.payload)),
 };
@@ -624,6 +665,8 @@ export const boardApi = {
     priority?: string;
     assigned_by?: string;
     pool_session_id?: string;
+    source_type?: string;
+    depends_on?: string;
   }) => invoke<KoiTodo>("create_koi_todo", { input }),
   updateTodo: (input: {
     id: string;
@@ -632,6 +675,10 @@ export const boardApi = {
     status?: string;
     priority?: string;
   }) => invoke<void>("update_koi_todo", { input }),
+  claimTodo: (id: string, claimedBy: string) =>
+    invoke<void>("claim_koi_todo", { id, claimedBy }),
+  completeTodo: (id: string, resultMessageId?: number) =>
+    invoke<void>("complete_koi_todo", { id, resultMessageId }),
   deleteTodo: (id: string) => invoke<void>("delete_koi_todo", { id }),
   onTodoUpdated: (handler: (data: unknown) => void): Promise<UnlistenFn> =>
     listen("koi_todo_updated", (e) => handler(e.payload)),
@@ -683,6 +730,48 @@ export const windowApi = {
   setThemeBorder: (theme: "violet" | "gold") =>
     invoke<void>("set_window_theme_border", { theme }),
 };
+
+// ---------------------------------------------------------------------------
+// Test Runner (multi-agent integration tests)
+// ---------------------------------------------------------------------------
+
+export interface TestResult {
+  name: string;
+  passed: boolean;
+  message: string;
+  duration_ms: number;
+}
+
+export interface TestSuiteResult {
+  total: number;
+  passed: number;
+  failed: number;
+  results: TestResult[];
+  summary: string;
+}
+
+export const testApi = {
+  runMultiAgentTests: () => invoke<TestSuiteResult>("run_multi_agent_tests"),
+  runCollaborationTrial: () => invoke<CollabTrialStatus>("run_collaboration_trial"),
+};
+
+export interface CollabTrialStep {
+  name: string;
+  koi_name: string;
+  task: string;
+  success: boolean;
+  reply_preview: string;
+  duration_ms: number;
+}
+
+export interface CollabTrialStatus {
+  phase: string;
+  pool_id: string;
+  koi_ids: string[];
+  steps: CollabTrialStep[];
+  completed: boolean;
+  error: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // System / Diagnostics

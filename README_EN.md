@@ -2,7 +2,7 @@
 
 **Open-source Windows AI Agent Desktop**
 
-OpenPisci is a local-first AI Agent desktop application for Windows, built with Tauri 2 + Rust + React. The main agent is **Pisci** (大鱼 / Big Fish), and user-defined sub-agents are called **Fish** (小鱼 / Small Fish).
+OpenPisci is a local-first AI Agent desktop application for Windows, built with Tauri 2 + Rust + React. **Pisci** is the main agent, **Koi** are persistent collaboration agents, and **Fish** are stateless temporary sub-agents.
 
 [中文](./README.md) | English
 
@@ -18,6 +18,67 @@ OpenPisci is a local-first AI Agent desktop application for Windows, built with 
 - **Crash recovery**: Checkpoints are written every iteration; the agent resumes from the last checkpoint after a crash
 - **Heartbeat mechanism**: Configurable periodic heartbeat for proactive task checking
 - **Loop detection**: Four detectors (GenericRepeat / KnownPollNoProgress / PingPong / GlobalCircuitBreaker) prevent the agent from getting stuck in infinite loops
+
+### 🐟 Pisci / Koi / Fish: Three Layers of Agents
+
+| Role | Positioning | Lifecycle | Typical Responsibility | Relationship |
+|------|-------------|-----------|------------------------|--------------|
+| `Pisci` | Main agent / project manager / user-facing entry point | Persistent | Talks to the user, uses tools, creates project pools, coordinates multi-agent work, decides whether a project can wrap up | Organizes Koi and can delegate one-off work to Fish |
+| `Koi` | Persistent collaboration agent | Persistent and reusable across projects | Owns long-running project roles such as architect, coder, tester, reviewer, researcher | Collaborates inside a pool through `pool_chat`, @mentions peers, and escalates to @pisci when needed |
+| `Fish` | Stateless temporary sub-agent | Ephemeral / on-demand | Handles focused work such as batch scanning, research, summarization, and context-isolated sub-tasks | Invoked through `call_fish`; does not directly participate in pool collaboration |
+
+**A simple mental model:**
+- `Pisci` is the accountable coordinator.
+- `Koi` are long-lived team members for sustained collaboration.
+- `Fish` are temporary workers that do a job and return only the final result.
+
+**Key differences:**
+- `Pisci` decides whether to create a pool, how to organize work, when to keep pushing, and when to ask the user to confirm project wrap-up.
+- `Koi` have stable identities, their own todo ownership, and project-aware persistent collaboration behavior.
+- `Fish` do not maintain long-term project state and are designed to protect the main context window from intermediate noise.
+
+### 🏞️ What Is Inside the Pond
+
+The Pond is not a single agent. It is the collaboration workspace around a project:
+
+- **Project Pool (`Pool Session`)**: a project container with name, status, organization spec (`org_spec`), and optional `project_dir`
+- **Pool Chat**: the shared conversation space where Pisci and Koi discuss, hand off work, ask questions, and @mention each other
+- **Board / Kanban**: visualizes Koi todos as `todo / in_progress / blocked / done / cancelled`
+- **Koi Panel**: shows each Koi's identity, role, availability, and workload
+- **Pisci Inbox / Heartbeat**: Pisci's project-level inbox for `@pisci`, heartbeat scans, and state signals
+- **Knowledge Base (`kb/`)**: shared project documentation space for architecture, API notes, bugs, decisions, and research
+- **Project Directory / Git Worktrees**: when `project_dir` is configured, Koi can work in isolated branches/worktrees to reduce file conflicts
+
+### 🤝 How Collaboration Works in a Pond
+
+A typical pond project follows this mechanism:
+
+1. **The user starts a project**
+   - The user can start it from the app or from IM channels such as Feishu by asking Pisci to create a project pool
+   - Pisci uses `pool_org(action="create")` to create the pool and write its `org_spec`
+
+2. **Pisci organizes the team**
+   - Pisci chooses suitable Koi roles based on the project
+   - Pisci should primarily kick off work by sending `@KoiName` messages in `pool_chat`, instead of rigid sequential assignment
+
+3. **Koi collaborate autonomously**
+   - Koi report progress, ask for reviews, hand off work, and raise blockers inside `pool_chat`
+   - An `@mention` is a message, not a hard command: the mentioned Koi decides whether to react immediately, keep current focus, or ask Pisci to coordinate
+   - `@all` can broadcast to the whole project team
+
+4. **Todos and state stay in sync**
+   - Work is tracked through `koi_todos` with the lifecycle `todo -> in_progress -> done / blocked / cancelled`
+   - Pisci and the task owner can update task state; other Koi must ask via `@pisci`
+   - Structured pool chat signals such as `[ProjectStatus] follow_up_needed / waiting / ready_for_pisci_review` help Pisci reason about the next step
+
+5. **Pisci heartbeat keeps the project moving**
+   - Heartbeat scans new pool messages, todos, and project-state signals
+   - If there are active todos, or someone signals `follow_up_needed / waiting`, Pisci should continue coordinating instead of treating the project as finished
+   - Only when work truly converges and someone explicitly hands control back with `ready_for_pisci_review @pisci` should Pisci move into wrap-up review
+
+6. **Project wrap-up**
+   - Koi may suggest that a project looks ready, but they do not get to unilaterally declare it finished
+   - Pisci reviews the overall state, confirms with the user, and only then archives the pool through `pool_org(action="archive")`
 
 ### 🛠️ Rich Windows Toolset
 
@@ -47,10 +108,10 @@ OpenPisci is a local-first AI Agent desktop application for Windows, built with 
 
 ### 🐠 Fish (小鱼) Sub-Agent System
 - Define custom sub-agents via `FISH.toml` with their own persona, tool permissions, and configuration
-- Fish are **stateless, ephemeral workers**: the main Agent delegates sub-tasks via the `call_fish` tool; the Fish returns only the final result
-- **Key benefit**: intermediate reasoning and tool calls inside the Fish do NOT pollute the main Agent's context, effectively saving context window budget
+- Fish are **stateless, ephemeral workers**: the main Agent or a Koi delegates sub-tasks via the `call_fish` tool; the Fish returns only the final result
+- **Key benefit**: intermediate reasoning and tool calls inside the Fish do NOT pollute the main Agent or Koi context, effectively saving context window budget
 - User Fish definitions live in `%APPDATA%\com.pisci.desktop\fish\`
-- Ideal for batch file processing, data collection, code scanning, and other multi-step tasks
+- Ideal for batch file processing, data collection, code scanning, and other focused multi-step tasks, not long-running project collaboration
 
 ### ⚡ Skills System
 - Skills are defined in `SKILL.md` format: YAML frontmatter (name, description, tool list, etc.) + Markdown body (instructions)
@@ -269,6 +330,11 @@ OpenPisci
 ---
 
 ## 📋 Changelog
+
+### v0.5.3
+- **Expanded multi-agent docs**: added clear explanations of Pisci / Koi / Fish, Pond components, and the collaboration lifecycle
+- **Fixed Pisci heartbeat false-finish behavior**: follow-up or waiting signals without active todos no longer allow `HEARTBEAT_OK`
+- **Expanded collaboration coverage**: the multi-agent integration suite now covers heartbeat guardrails, short `pool_id` resolution, and stale-state recovery
 
 ### v0.4.1
 - **New `plan_todo` tool**: the Agent can now maintain a Cursor-style visible task plan with `pending / in_progress / completed / cancelled` states during complex work

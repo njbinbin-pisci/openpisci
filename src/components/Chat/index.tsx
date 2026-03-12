@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { Component, useEffect, useRef, useState, useCallback, useMemo, type ErrorInfo, type ReactNode } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -11,12 +11,40 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import mermaid from "mermaid";
+import InteractiveCard from "./InteractiveCard";
+import ConfirmDialog from "../ConfirmDialog";
 import "./Chat.css";
 
 // ─── Mermaid diagram block ────────────────────────────────────────────────────
 mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
 
 let mermaidIdCounter = 0;
+
+class RenderErrorBoundary extends Component<
+  { fallback: ReactNode; children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("[Chat] render boundary caught error:", error, info);
+  }
+
+  componentDidUpdate(prevProps: { fallback: ReactNode; children: ReactNode }) {
+    if (this.state.hasError && prevProps.children !== this.props.children) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) return this.props.fallback;
+    return this.props.children;
+  }
+}
 
 function MermaidBlock({ code }: { code: string }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -25,15 +53,30 @@ function MermaidBlock({ code }: { code: string }) {
 
   useEffect(() => {
     if (!ref.current) return;
+    let cancelled = false;
     const id = idRef.current;
     setError(null);
-    mermaid.render(id, code)
-      .then(({ svg }) => {
-        if (ref.current) ref.current.innerHTML = svg;
-      })
-      .catch((e) => {
-        setError(String(e));
-      });
+    ref.current.innerHTML = "";
+
+    const render = async () => {
+      try {
+        await mermaid.parse(code, { suppressErrors: false });
+        const { svg } = await mermaid.render(id, code);
+        if (!cancelled && ref.current) {
+          ref.current.innerHTML = svg;
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn("[Chat] Mermaid render failed, falling back to code block:", e);
+          setError(String(e));
+        }
+      }
+    };
+
+    render();
+    return () => {
+      cancelled = true;
+    };
   }, [code]);
 
   if (error) {
@@ -51,16 +94,31 @@ function MermaidBlock({ code }: { code: string }) {
 
 type SessionKind = "chat" | "im";
 
-function classifySession(source: string | undefined | null): SessionKind {
-  if (!source || source === "chat") return "chat";
+type SessionLike = { source?: string | null; id?: string | null };
+
+function isInternalSession(session: SessionLike | undefined | null): boolean {
+  if (!session) return false;
+  return session.source === "heartbeat"
+    || session.source === "heartbeat_pool"
+    || session.source === "pisci_inbox_global"
+    || session.source === "pisci_inbox_pool"
+    || session.source === "pisci_internal"
+    || session.id === "heartbeat"
+    || session.id === "pisci_inbox_global"
+    || session.id?.startsWith("pisci_pool_") === true;
+}
+
+function classifySession(session: SessionLike | undefined | null): SessionKind {
+  if (isInternalSession(session)) return "chat";
+  if (!session?.source || session.source === "chat") return "chat";
   return "im";
 }
 
 /** Map a session.source value to a compact display emoji/label. */
 function sourceIcon(source: string): string {
-  if (source === "chat" || !source) return "";
+  if (source === "chat" || !source) return "👤";
   if (source.includes("telegram")) return "✈";
-  if (source.includes("feishu") || source.includes("lark")) return "🪶";
+  if (source.includes("feishu") || source.includes("lark")) return "📘";
   if (source.includes("wecom") || source.includes("wechat")) return "💬";
   if (source.includes("dingtalk")) return "📎";
   if (source.includes("slack")) return "⚡";
@@ -90,6 +148,8 @@ export default function Chat() {
   const [gatewayChannels, setGatewayChannels] = useState<ChannelInfo[]>([]);
   const [gatewayConnecting, setGatewayConnecting] = useState(false);
   const [gatewayDisconnecting, setGatewayDisconnecting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
+  const [deletingSession, setDeletingSession] = useState(false);
   // History pagination for IM sessions: how many messages have been loaded
   const [historyLimit, setHistoryLimit] = useState(100);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
@@ -99,6 +159,11 @@ export default function Chat() {
     toolInput: any;
     description: string;
   } | null>(null);
+
+  // Interactive UI cards from chat_ui tool
+  const [interactiveCards, setInteractiveCards] = useState<
+    Record<string, { requestId: string; uiDefinition: any; submitted?: boolean }>
+  >({});
 
   // Context debug preview
   type ContextPreviewBlock =
@@ -176,12 +241,64 @@ export default function Chat() {
     };
   }, [dispatch]);
 
-  const activeMessages = (activeSessionId ? messagesBySession[activeSessionId] ?? [] : [])
+  const rawMessages = activeSessionId ? messagesBySession[activeSessionId] ?? [] : [];
+
+  // Extract historical interactive cards from chat_ui tool calls in persisted messages
+  const historicalCards = useMemo(() => {
+    const cards: Record<string, { requestId: string; uiDefinition: any; submittedValues: Record<string, unknown> | null; afterMessageId: string }> = {};
+    for (let i = 0; i < rawMessages.length; i++) {
+      const m = rawMessages[i];
+      if (m.role !== "assistant" || !m.tool_calls_json) continue;
+      try {
+        const calls = JSON.parse(m.tool_calls_json);
+        for (const call of Array.isArray(calls) ? calls : []) {
+          if (call.name !== "chat_ui") continue;
+          const uiDef = call.input?.ui_definition;
+          if (!uiDef) continue;
+          // Find matching tool result in subsequent messages
+          let submittedValues: Record<string, unknown> | null = null;
+          for (let j = i + 1; j < rawMessages.length && j <= i + 3; j++) {
+            const rm = rawMessages[j];
+            if (!rm.tool_results_json) continue;
+            try {
+              const results = JSON.parse(rm.tool_results_json);
+              for (const r of Array.isArray(results) ? results : []) {
+                if (r.tool_use_id === call.id && !r.is_error) {
+                  try { submittedValues = JSON.parse(r.content.replace(/^User submitted.*?Selections:\n/, "")); } catch { /* text result */ }
+                }
+              }
+            } catch { /* ignore parse errors */ }
+          }
+          cards[call.id] = { requestId: call.id, uiDefinition: uiDef, submittedValues, afterMessageId: m.id };
+        }
+      } catch { /* ignore parse errors */ }
+    }
+    return cards;
+  }, [rawMessages]);
+
+  // Check if a message is a chat_ui tool call or its result (should be rendered as a card, not filtered entirely)
+  const chatUiToolCallIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const m of rawMessages) {
+      if (m.role === "assistant" && m.tool_calls_json) {
+        try {
+          const calls = JSON.parse(m.tool_calls_json);
+          for (const c of Array.isArray(calls) ? calls : []) {
+            if (c.name === "chat_ui") ids.add(m.id);
+          }
+        } catch { /* ignore */ }
+      }
+    }
+    return ids;
+  }, [rawMessages]);
+
+  const activeMessages = rawMessages
     // Filter out tool-result carrier messages (role=user, no text content, only tool_results_json)
     .filter((m) => !(m.role === "user" && !m.content.trim() && m.tool_results_json))
     // Filter out pure tool-call assistant messages (no text content, only tool_calls_json).
     // Keep assistant messages that have actual text content even if they also have tool_calls_json.
-    .filter((m) => !(m.role === "assistant" && !m.content.trim() && m.tool_calls_json))
+    // BUT keep chat_ui tool calls since they render as interactive cards.
+    .filter((m) => !(m.role === "assistant" && !m.content.trim() && m.tool_calls_json && !chatUiToolCallIds.has(m.id)))
     // Filter out duplicate consecutive messages with same role and content
     .filter((m, i, arr) => {
       if (i === 0) return true;
@@ -210,7 +327,7 @@ export default function Chat() {
     }
     prevRunningRef.current = running;
   }, [running]);
-  const activeSessionKind = classifySession(activeSession?.source);
+  const activeSessionKind = classifySession(activeSession);
   const isImSession = activeSessionKind === "im";
   isImSessionRef.current = isImSession;
 
@@ -267,20 +384,17 @@ export default function Chat() {
     }).catch(() => { loadingMoreRef.current = false; });
   }, [activeSessionId, historyLimit, dispatch]);
 
-  // When the active session changes, ensure the filter includes it.
-  // Only switch filter if the active session would be hidden under the current filter.
+  // When the filter changes, if the active session is not visible under the new
+  // filter, switch to the first visible session (or null).
   useEffect(() => {
-    if (!activeSessionId) return;
-    const s = sessions.find((x) => x.id === activeSessionId);
-    if (!s) return;
-    const kind = classifySession(s.source);
-    // "all" always shows everything — no need to switch
-    if (sessionFilter === "all") return;
-    // If the current filter already matches the session kind, no change needed
-    if (sessionFilter === kind) return;
-    // The active session is hidden by the current filter — switch to "all"
-    setSessionFilter("all");
-  }, [activeSessionId, sessions, sessionFilter]);
+    const visibleSessions = sessions.filter((x) => !isInternalSession(x) && (
+      sessionFilter === "all" || classifySession(x) === sessionFilter
+    ));
+    const s = activeSessionId ? sessions.find((x) => x.id === activeSessionId) : null;
+    if (s && visibleSessions.some((x) => x.id === s.id)) return;
+    const first = visibleSessions[0];
+    dispatch(sessionsActions.setActiveSession(first ? first.id : null));
+  }, [activeSessionId, sessions, sessionFilter, dispatch]);
 
   // Subscribe to agent events — use ref to avoid stale closure over activeSessionId
   useEffect(() => {
@@ -339,6 +453,15 @@ export default function Chat() {
             toolInput: event.tool_input,
             description: event.description,
           });
+          break;
+        case "interactive_ui":
+          setInteractiveCards((prev) => ({
+            ...prev,
+            [event.request_id]: {
+              requestId: event.request_id,
+              uiDefinition: event.ui_definition,
+            },
+          }));
           break;
         case "done":
           console.log('[Chat] agent done event, sid=', sid, 'isImSession=', isImSessionRef.current);
@@ -460,16 +583,16 @@ export default function Chat() {
     }
   }, []);
 
-  const handleDeleteSession = useCallback(async (e: React.MouseEvent, sessionId: string) => {
-    e.stopPropagation();
+  const handleDeleteSession = useCallback(async (sessionId: string) => {
     try {
       await sessionsApi.delete(sessionId);
       dispatch(sessionsActions.removeSession(sessionId));
       if (activeSessionId === sessionId) {
         const remaining = sessions.filter((s) => {
           if (s.id === sessionId) return false;
+          if (isInternalSession(s)) return false;
           if (sessionFilter === "all") return true;
-          return classifySession(s.source) === sessionFilter;
+          return classifySession(s) === sessionFilter;
         });
         dispatch(sessionsActions.setActiveSession(remaining.length > 0 ? remaining[0].id : null));
       }
@@ -477,6 +600,22 @@ export default function Chat() {
       setSendError(t("chat.failedDelete", { error: String(e) }));
     }
   }, [activeSessionId, sessions, sessionFilter, dispatch, t]);
+
+  const requestDeleteSession = useCallback((e: React.MouseEvent, sessionId: string, title: string) => {
+    e.stopPropagation();
+    setDeleteTarget({ id: sessionId, title });
+  }, []);
+
+  const confirmDeleteSession = useCallback(async () => {
+    if (!deleteTarget) return;
+    try {
+      setDeletingSession(true);
+      await handleDeleteSession(deleteTarget.id);
+      setDeleteTarget(null);
+    } finally {
+      setDeletingSession(false);
+    }
+  }, [deleteTarget, handleDeleteSession]);
 
   const handleAttach = useCallback(async () => {
     try {
@@ -701,8 +840,9 @@ export default function Chat() {
 
   // ── Filtered session list (single source of truth) ───────────────────────
   const filteredSessions = sessions.filter((s) => {
+    if (isInternalSession(s)) return false;
     if (sessionFilter === "all") return true;
-    return classifySession(s.source) === sessionFilter;
+    return classifySession(s) === sessionFilter;
   });
 
   return (
@@ -739,6 +879,7 @@ export default function Chat() {
         <div style={{ flex: 1, overflowY: "auto" }}>
           {filteredSessions.map((s) => {
               const icon = sourceIcon(s.source);
+              const sessionTitle = (s.title ?? t("chat.defaultTitle")).replace(/^🐠\s*/, "");
               return (
                 <div
                   key={s.id}
@@ -747,14 +888,14 @@ export default function Chat() {
                 >
                   <span className="session-title">
                     {icon && <span style={{ marginRight: 4, fontSize: 12 }}>{icon}</span>}
-                    {(s.title ?? t("chat.defaultTitle")).replace(/^🐠\s*/, "")}
+                    {sessionTitle}
                   </span>
                   <span className="session-item-right">
                     <span className="session-count">{s.message_count}</span>
                     <button
                       className="session-delete-btn"
                       title={t("chat.deleteChat")}
-                      onClick={(e) => handleDeleteSession(e, s.id)}
+                      onClick={(e) => requestDeleteSession(e, s.id, sessionTitle)}
                     >✕</button>
                   </span>
                 </div>
@@ -845,16 +986,37 @@ export default function Chat() {
                   </button>
                 </div>
               )}
-              {activeMessages.map((msg) => (
-                <div key={msg.id} className={`message message-${msg.role}`}>
-                  <div className="message-role">
-                    {msg.role === "user" ? t("chat.you") : t("chat.pisci")}
+              {activeMessages.map((msg) => {
+                // Render historical chat_ui tool calls as interactive cards
+                if (chatUiToolCallIds.has(msg.id)) {
+                  const cards = Object.values(historicalCards).filter((c) => c.afterMessageId === msg.id);
+                  if (cards.length > 0) {
+                    return cards.map((card) => (
+                      <div key={card.requestId} className="message message-assistant">
+                        <div className="message-role">{t("chat.pisci")}</div>
+                        <div className="message-content">
+                          {msg.content.trim() && <MessageContent content={msg.content} />}
+                          <InteractiveCard
+                            requestId={card.requestId}
+                            uiDefinition={card.uiDefinition}
+                            submittedValues={card.submittedValues}
+                          />
+                        </div>
+                      </div>
+                    ));
+                  }
+                }
+                return (
+                  <div key={msg.id} className={`message message-${msg.role}`}>
+                    <div className="message-role">
+                      {msg.role === "user" ? t("chat.you") : t("chat.pisci")}
+                    </div>
+                    <div className="message-content">
+                      <MessageContent content={msg.content} />
+                    </div>
                   </div>
-                  <div className="message-content">
-                    <MessageContent content={msg.content} />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
 
               {activePlan.length > 0 && (
                 <div className="tool-steps-container plan-steps-container">
@@ -923,6 +1085,20 @@ export default function Chat() {
                   )}
                 </div>
               )}
+
+              {/* Interactive UI cards from chat_ui tool */}
+              {Object.values(interactiveCards).map((card) => (
+                <div key={card.requestId} className="message message-assistant">
+                  <div className="message-role">{t("chat.pisci")}</div>
+                  <div className="message-content">
+                    <InteractiveCard
+                      requestId={card.requestId}
+                      uiDefinition={card.uiDefinition}
+                      submittedValues={card.submitted ? undefined : null}
+                    />
+                  </div>
+                </div>
+              ))}
 
               {/* Single streaming bubble — shows thinking dots until first text arrives,
                   then displays the latest streamed text. Disappears when running stops.
@@ -1215,6 +1391,17 @@ export default function Chat() {
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title={t("chat.confirmDeleteTitle")}
+        message={t("chat.confirmDeleteMessage", { name: deleteTarget?.title ?? "" })}
+        confirmLabel={t("common.delete")}
+        cancelLabel={t("common.cancel")}
+        variant="danger"
+        loading={deletingSession}
+        onConfirm={confirmDeleteSession}
+        onCancel={() => !deletingSession && setDeleteTarget(null)}
+      />
     </div>
   );
 }
@@ -1246,74 +1433,82 @@ function isLocalPath(href: string | undefined): boolean {
 // Renders message content with full Markdown support (GFM: tables, strikethrough, task lists, etc.)
 function MessageContent({ content }: { content: string }) {
   const processed = linkifyPaths(content);
+  const fallback = (
+    <pre className="code-block">
+      <span className="code-lang">text</span>
+      <code>{content}</code>
+    </pre>
+  );
   return (
     <div className="markdown-body">
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        // Local paths → shell.open(); web URLs → new tab
-        a: ({ href, children }) => {
-          if (isLocalPath(href)) {
-            // Decode file:///C:/path → C:\path for shell.open
-            const toNativePath = (uri: string) => {
-              if (uri.startsWith("file:///")) {
-                return decodeURIComponent(uri.slice(8)).replace(/\//g, "\\");
+      <RenderErrorBoundary fallback={fallback}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            // Local paths → shell.open(); web URLs → new tab
+            a: ({ href, children }) => {
+              if (isLocalPath(href)) {
+                // Decode file:///C:/path → C:\path for shell.open
+                const toNativePath = (uri: string) => {
+                  if (uri.startsWith("file:///")) {
+                    return decodeURIComponent(uri.slice(8)).replace(/\//g, "\\");
+                  }
+                  if (uri.startsWith("file://")) {
+                    return decodeURIComponent(uri.slice(7));
+                  }
+                  return uri; // already a plain path
+                };
+                return (
+                  <a
+                    href="#"
+                    title={href}
+                    style={{ cursor: "pointer" }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      shellOpen(toNativePath(href!)).catch(console.error);
+                    }}
+                  >
+                    {children}
+                  </a>
+                );
               }
-              if (uri.startsWith("file://")) {
-                return decodeURIComponent(uri.slice(7));
+              return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+            },
+            // Code blocks with language label; mermaid gets special rendering
+            code: ({ className, children, ...props }) => {
+              const isBlock = !!className;
+              const lang = className?.replace("language-", "") ?? "";
+              if (isBlock) {
+                if (lang === "mermaid") {
+                  return <MermaidBlock code={String(children).trimEnd()} />;
+                }
+                return (
+                  <pre className="code-block">
+                    {lang && <span className="code-lang">{lang}</span>}
+                    <code>{children}</code>
+                  </pre>
+                );
               }
-              return uri; // already a plain path
-            };
-            return (
-              <a
-                href="#"
-                title={href}
-                style={{ cursor: "pointer" }}
+              return <code className="inline-code" {...props}>{children}</code>;
+            },
+            // Inline images — clickable for full-size view
+            img: ({ src, alt }) => (
+              <img
+                src={src}
+                alt={alt || "image"}
+                className="message-image"
                 onClick={(e) => {
-                  e.preventDefault();
-                  shellOpen(toNativePath(href!)).catch(console.error);
+                  const w = window.open();
+                  if (w) { w.document.write(`<img src="${src}" style="max-width:100%">`); }
+                  e.stopPropagation();
                 }}
-              >
-                {children}
-              </a>
-            );
-          }
-          return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
-        },
-        // Code blocks with language label; mermaid gets special rendering
-        code: ({ className, children, ...props }) => {
-          const isBlock = !!className;
-          const lang = className?.replace("language-", "") ?? "";
-          if (isBlock) {
-            if (lang === "mermaid") {
-              return <MermaidBlock code={String(children).trimEnd()} />;
-            }
-            return (
-              <pre className="code-block">
-                {lang && <span className="code-lang">{lang}</span>}
-                <code>{children}</code>
-              </pre>
-            );
-          }
-          return <code className="inline-code" {...props}>{children}</code>;
-        },
-        // Inline images — clickable for full-size view
-        img: ({ src, alt }) => (
-          <img
-            src={src}
-            alt={alt || "image"}
-            className="message-image"
-            onClick={(e) => {
-              const w = window.open();
-              if (w) { w.document.write(`<img src="${src}" style="max-width:100%">`); }
-              e.stopPropagation();
-            }}
-          />
-        ),
-      }}
-    >
-      {processed}
-    </ReactMarkdown>
+              />
+            ),
+          }}
+        >
+          {processed}
+        </ReactMarkdown>
+      </RenderErrorBoundary>
     </div>
   );
 }

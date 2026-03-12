@@ -2,7 +2,7 @@
 use crate::koi::{KoiDefinition, KOI_COLORS, KOI_ICONS};
 use crate::store::AppState;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Emitter, State};
 
 #[derive(Serialize)]
 pub struct KoiWithStats {
@@ -37,6 +37,7 @@ pub async fn get_koi(state: State<'_, AppState>, id: String) -> Result<Option<Ko
 #[derive(Deserialize)]
 pub struct CreateKoiInput {
     pub name: String,
+    pub role: String,
     pub icon: String,
     pub color: String,
     pub system_prompt: String,
@@ -46,7 +47,16 @@ pub struct CreateKoiInput {
 #[tauri::command]
 pub async fn create_koi(state: State<'_, AppState>, input: CreateKoiInput) -> Result<KoiDefinition, String> {
     let db = state.db.lock().await;
-    db.create_koi(&input.name, &input.icon, &input.color, &input.system_prompt, &input.description)
+    let existing = db.list_kois().map_err(|e| e.to_string())?;
+    const MAX_KOIS: usize = 5;
+    if existing.len() >= MAX_KOIS {
+        return Err(format!(
+            "已达到 Koi 数量上限 ({}/{}). 请删除或编辑现有 Koi.",
+            existing.len(),
+            MAX_KOIS
+        ));
+    }
+    db.create_koi(&input.name, &input.role, &input.icon, &input.color, &input.system_prompt, &input.description)
         .map_err(|e| e.to_string())
 }
 
@@ -54,6 +64,7 @@ pub async fn create_koi(state: State<'_, AppState>, input: CreateKoiInput) -> Re
 pub struct UpdateKoiInput {
     pub id: String,
     pub name: Option<String>,
+    pub role: Option<String>,
     pub icon: Option<String>,
     pub color: Option<String>,
     pub system_prompt: Option<String>,
@@ -66,6 +77,7 @@ pub async fn update_koi(state: State<'_, AppState>, input: UpdateKoiInput) -> Re
     db.update_koi(
         &input.id,
         input.name.as_deref(),
+        input.role.as_deref(),
         input.icon.as_deref(),
         input.color.as_deref(),
         input.system_prompt.as_deref(),
@@ -86,9 +98,67 @@ pub struct KoiPalette {
 }
 
 #[tauri::command]
+pub async fn dedup_kois(state: State<'_, AppState>) -> Result<usize, String> {
+    let db = state.db.lock().await;
+    db.dedup_kois().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_koi_palette() -> Result<KoiPalette, String> {
     Ok(KoiPalette {
         colors: KOI_COLORS.iter().map(|(c, n)| (c.to_string(), n.to_string())).collect(),
         icons: KOI_ICONS.iter().map(|s| s.to_string()).collect(),
     })
+}
+
+/// Activate or deactivate (vacation) a Koi.
+/// When deactivated: status becomes "offline", all uncompleted todos are cancelled,
+/// and a notification is posted to related project pools.
+#[tauri::command]
+pub async fn set_koi_active(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    active: bool,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    let koi = db.get_koi(&id).map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Koi '{}' not found", id))?;
+
+    if active {
+        if koi.status != "offline" {
+            return Ok(());
+        }
+        db.update_koi_status(&id, "idle").map_err(|e| e.to_string())?;
+        let _ = app.emit("koi_status_changed", serde_json::json!({ "id": id, "status": "idle" }));
+    } else {
+        if koi.status == "offline" {
+            return Ok(());
+        }
+        db.update_koi_status(&id, "offline").map_err(|e| e.to_string())?;
+        let _ = app.emit("koi_status_changed", serde_json::json!({ "id": id, "status": "offline" }));
+
+        // Cancel all uncompleted todos owned by this Koi
+        let todos = db.list_koi_todos(Some(&id)).unwrap_or_default();
+        for todo in &todos {
+            if todo.status == "todo" || todo.status == "in_progress" {
+                let _ = db.update_koi_todo(&todo.id, None, None, Some("cancelled"), None);
+                // Notify project pool if attached
+                if let Some(ref psid) = todo.pool_session_id {
+                    let _ = db.insert_pool_message(
+                        psid,
+                        "system",
+                        &format!("{} {} 已进入休假状态，任务「{}」已自动取消。", koi.icon, koi.name, todo.title),
+                        "status_update",
+                        &serde_json::json!({ "event": "koi_vacation", "koi_id": id, "todo_id": todo.id }).to_string(),
+                    );
+                    let _ = app.emit(
+                        &format!("pool_message_{}", psid),
+                        serde_json::json!({ "event": "koi_vacation", "koi_id": id }),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }

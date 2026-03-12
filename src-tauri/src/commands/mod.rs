@@ -16,3 +16,6 @@ pub mod system;
 pub mod tools;
 pub mod user_tools;
 pub mod window;
+pub mod test_runner;
+pub mod collab_trial;
+pub mod interactive;

@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { useSelector, useDispatch } from "react-redux";
-import { koiApi, KoiWithStats, KoiPalette } from "../../../services/tauri";
+import { boardApi, koiApi, KoiWithStats, KoiPalette } from "../../../services/tauri";
 import { RootState, koiActions } from "../../../store";
+import ConfirmDialog from "../../ConfirmDialog";
 import "./KoiManager.css";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -13,6 +15,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 interface KoiFormData {
   name: string;
+  role: string;
   icon: string;
   color: string;
   description: string;
@@ -21,6 +24,7 @@ interface KoiFormData {
 
 const EMPTY_FORM: KoiFormData = {
   name: "",
+  role: "",
   icon: "🐟",
   color: "#7c3aed",
   description: "",
@@ -32,15 +36,27 @@ function KoiCard({
   t,
   onEdit,
   onDelete,
+  onToggleActive,
 }: {
   koi: KoiWithStats;
   t: (key: string) => string;
   onEdit: () => void;
   onDelete: () => void;
+  onToggleActive: () => void;
 }) {
-  const statusKey = koi.status === "idle" ? "koi.statusIdle"
-    : koi.status === "busy" ? "koi.statusBusy"
-    : "koi.statusOffline";
+  const hasActiveTodos = koi.active_todo_count > 0;
+  const displayStatus = koi.status === "busy" ? "busy"
+    : hasActiveTodos ? "has_tasks"
+    : koi.status === "idle" ? "idle"
+    : "offline";
+  const statusKey = displayStatus === "busy" ? "koi.statusBusy"
+    : displayStatus === "has_tasks" ? "koi.statusHasTasks"
+    : displayStatus === "idle" ? "koi.statusIdle"
+    : "koi.statusVacation";
+  const dotColor = displayStatus === "busy" ? "#f59e0b"
+    : displayStatus === "has_tasks" ? "#3b82f6"
+    : displayStatus === "idle" ? "#22c55e"
+    : "#6b7280";
 
   return (
     <div className="koi-card" style={{ borderLeftColor: koi.color }}>
@@ -48,10 +64,11 @@ function KoiCard({
         <span className="koi-card-icon">{koi.icon}</span>
         <div className="koi-card-info">
           <span className="koi-card-name">{koi.name}</span>
+          {koi.role && <span className="koi-card-role">{koi.role}</span>}
           <span className="koi-card-status">
             <span
               className="koi-status-dot"
-              style={{ background: STATUS_COLORS[koi.status] || "#6b7280" }}
+              style={{ background: dotColor }}
             />
             {t(statusKey)}
           </span>
@@ -62,15 +79,21 @@ function KoiCard({
       )}
       <div className="koi-card-stats">
         <span className="koi-stat">
-          <span className="koi-stat-icon">🧠</span>
+          <span className="koi-stat-icon koi-stat-icon--memory" />
           {t("koi.memoryCount")} {koi.memory_count}
         </span>
         <span className="koi-stat">
-          <span className="koi-stat-icon">📝</span>
-          {t("koi.todoCount")} {koi.todo_count}
+          <span className="koi-stat-icon koi-stat-icon--todo" />
+          {t("koi.todoCount")} {koi.active_todo_count}
         </span>
       </div>
       <div className="koi-card-actions">
+        <button
+          className={`koi-btn ${koi.status === "offline" ? "koi-btn-primary" : "koi-btn-secondary"}`}
+          onClick={onToggleActive}
+        >
+          {koi.status === "offline" ? t("koi.activate") : t("koi.deactivate")}
+        </button>
         <button className="koi-btn koi-btn-secondary" onClick={onEdit}>
           {t("koi.editBtn")}
         </button>
@@ -137,6 +160,16 @@ function KoiDialog({
             onChange={(e) => set("name", e.target.value)}
             placeholder={t("koi.namePlaceholder")}
             autoFocus
+          />
+        </div>
+
+        <div className="koi-form-field">
+          <label className="koi-form-label">{t("koi.role")}</label>
+          <input
+            className="koi-input"
+            value={form.role}
+            onChange={(e) => set("role", e.target.value)}
+            placeholder={t("koi.rolePlaceholder")}
           />
         </div>
 
@@ -210,6 +243,7 @@ function KoiDialog({
             placeholder={t("koi.systemPromptPlaceholder")}
             rows={5}
           />
+          <p className="koi-form-help">{t("koi.systemPromptHelp")}</p>
         </div>
 
         <div className="koi-modal-actions">
@@ -249,6 +283,8 @@ export default function KoiManager() {
   const [dialogInit, setDialogInit] = useState<KoiFormData>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<KoiWithStats | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const loadKois = useCallback(async () => {
     try {
@@ -267,6 +303,30 @@ export default function KoiManager() {
     koiApi.palette().then(setPalette).catch(() => {});
   }, [loadKois]);
 
+  // Keep Koi stats in sync with the board/chat by reloading whenever todo or status
+  // events fire. Otherwise the management panel can show stale todo counts.
+  useEffect(() => {
+    let unlistenTodo: (() => void) | null = null;
+    let unlistenStatus: (() => void) | null = null;
+
+    boardApi.onTodoUpdated(() => {
+      loadKois();
+    }).then((fn) => {
+      unlistenTodo = fn;
+    });
+
+    listen("koi_status_changed", () => {
+      loadKois();
+    }).then((fn) => {
+      unlistenStatus = fn;
+    });
+
+    return () => {
+      unlistenTodo?.();
+      unlistenStatus?.();
+    };
+  }, [loadKois]);
+
   const openCreate = () => {
     setDialogInit(EMPTY_FORM);
     setEditingId(null);
@@ -276,6 +336,7 @@ export default function KoiManager() {
   const openEdit = (koi: KoiWithStats) => {
     setDialogInit({
       name: koi.name,
+      role: koi.role,
       icon: koi.icon,
       color: koi.color,
       description: koi.description,
@@ -303,19 +364,26 @@ export default function KoiManager() {
       }
       setDialogMode(null);
     } catch (e) {
-      setError(String(e));
+      const msg = String(e);
+      setError(msg.includes("数量上限") || msg.includes("limit reached")
+        ? t("koi.maxKoisReached")
+        : msg);
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDelete = async (koi: KoiWithStats) => {
-    if (!window.confirm(t("koi.confirmDelete"))) return;
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
     try {
-      await koiApi.delete(koi.id);
-      dispatch(koiActions.removeKoi(koi.id));
+      setDeleting(true);
+      await koiApi.delete(deleteTarget.id);
+      dispatch(koiActions.removeKoi(deleteTarget.id));
+      setDeleteTarget(null);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -350,7 +418,15 @@ export default function KoiManager() {
               koi={koi}
               t={t}
               onEdit={() => openEdit(koi)}
-              onDelete={() => handleDelete(koi)}
+              onDelete={() => setDeleteTarget(koi)}
+              onToggleActive={async () => {
+                try {
+                  await koiApi.setActive(koi.id, koi.status === "offline");
+                  loadKois();
+                } catch (e) {
+                  console.error("toggle active error:", e);
+                }
+              }}
             />
           ))}
         </div>
@@ -367,6 +443,18 @@ export default function KoiManager() {
           onCancel={() => setDialogMode(null)}
         />
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title={t("koi.deleteBtn")}
+        message={t("koi.confirmDelete")}
+        confirmLabel={t("common.delete")}
+        cancelLabel={t("common.cancel")}
+        variant="danger"
+        loading={deleting}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

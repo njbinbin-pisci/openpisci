@@ -85,6 +85,12 @@ pub enum AgentEvent {
     Error { message: String },
     /// Visible plan/todo list for the current task
     PlanUpdate { items: Vec<PlanTodoItem> },
+    /// Interactive UI card for the user to fill in (chat_ui tool).
+    /// Frontend renders a structured form; user response is sent back via respond_interactive_ui.
+    InteractiveUi {
+        request_id: String,
+        ui_definition: serde_json::Value,
+    },
     /// A sub-agent (Fish) is executing — forwarded to the parent session so the user
     /// can see real-time progress without switching sessions.
     FishProgress {

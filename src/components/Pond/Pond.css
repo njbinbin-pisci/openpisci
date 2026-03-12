@@ -4,6 +4,7 @@
   height: 100%;
   padding: 20px 24px;
   gap: 16px;
+  overflow: hidden;
 }
 
 .pond-header {
@@ -60,4 +61,6 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }

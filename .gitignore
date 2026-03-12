@@ -33,3 +33,10 @@ Thumbs.db
 # Windows installer artifacts
 *.msi
 
+# Local release / test helpers
+.tmp-gh/
+src-tauri/target-test/
+examples/__pycache__/
+examples/string_utils.py
+test_output.txt
+

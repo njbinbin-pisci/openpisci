@@ -297,6 +297,7 @@ pub async fn execute_task(
             confirm_file_write: false,
         },
         vision_override: None,
+        notification_rx: None,
     };
 
     let ctx = ToolContext {
@@ -305,6 +306,8 @@ pub async fn execute_task(
         bypass_permissions: false,
         settings: tool_settings,
         max_iterations: Some(max_iterations),
+        memory_owner_id: "pisci".to_string(),
+        pool_session_id: None,
     };
 
     let messages = vec![LlmMessage {

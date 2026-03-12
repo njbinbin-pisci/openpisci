@@ -50,6 +50,14 @@ pub struct Memory {
     pub confidence: f64,
     pub source_session_id: Option<String>,
     pub memory_type: String,
+    /// Who owns this memory: "pisci" or a koi_id
+    pub owner_id: String,
+    /// "private" | "project" | "global"
+    pub scope_type: String,
+    /// For project scope: pool_session_id; for private: same as owner_id; for global: "global"
+    pub scope_id: String,
+    /// For private memories: the pool_session_id where this memory was created (NULL = cross-project skill/preference)
+    pub project_scope_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -110,7 +118,7 @@ pub struct TaskState {
 // ---------------------------------------------------------------------------
 
 pub struct Database {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl Database {
@@ -121,6 +129,17 @@ impl Database {
         // Enable WAL mode for better concurrent read performance
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
 
+        let db = Self { conn };
+        db.migrate()?;
+        Ok(db)
+    }
+
+    /// Open an in-memory database for testing.
+    /// Uses the same schema migration as production.
+    pub fn open_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()
+            .context("Failed to open in-memory database")?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
@@ -296,6 +315,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS kois (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT '',
                 icon TEXT NOT NULL DEFAULT '🐡',
                 color TEXT NOT NULL DEFAULT '#7c6af7',
                 system_prompt TEXT NOT NULL DEFAULT '',
@@ -317,18 +337,39 @@ impl Database {
                 priority TEXT DEFAULT 'medium',
                 assigned_by TEXT DEFAULT '',
                 pool_session_id TEXT,
+                claimed_by TEXT,
+                claimed_at TEXT,
+                depends_on TEXT,
+                blocked_reason TEXT,
+                result_message_id INTEGER,
+                source_type TEXT NOT NULL DEFAULT 'user',
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(owner_id) REFERENCES kois(id) ON DELETE CASCADE,
+                FOREIGN KEY(pool_session_id) REFERENCES pool_sessions(id) ON DELETE CASCADE,
+                FOREIGN KEY(claimed_by) REFERENCES kois(id) ON DELETE SET NULL
             );
             CREATE INDEX IF NOT EXISTS idx_koi_todos_owner ON koi_todos(owner_id);
             CREATE INDEX IF NOT EXISTS idx_koi_todos_status ON koi_todos(status);
         ");
+        // Migrate existing koi_todos table with new columns
+        for col in &[
+            "ALTER TABLE koi_todos ADD COLUMN claimed_by TEXT",
+            "ALTER TABLE koi_todos ADD COLUMN claimed_at TEXT",
+            "ALTER TABLE koi_todos ADD COLUMN depends_on TEXT",
+            "ALTER TABLE koi_todos ADD COLUMN blocked_reason TEXT",
+            "ALTER TABLE koi_todos ADD COLUMN result_message_id INTEGER",
+            "ALTER TABLE koi_todos ADD COLUMN source_type TEXT NOT NULL DEFAULT 'user'",
+        ] {
+            let _ = self.conn.execute(col, []);
+        }
 
         // Chat Pool sessions and messages
         let _ = self.conn.execute_batch("
             CREATE TABLE IF NOT EXISTS pool_sessions (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                org_spec TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -340,15 +381,127 @@ impl Database {
                 content TEXT NOT NULL,
                 msg_type TEXT DEFAULT 'text',
                 metadata TEXT DEFAULT '{}',
-                created_at TEXT NOT NULL
+                todo_id TEXT,
+                reply_to_message_id INTEGER,
+                event_type TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(pool_session_id) REFERENCES pool_sessions(id) ON DELETE CASCADE,
+                FOREIGN KEY(todo_id) REFERENCES koi_todos(id) ON DELETE SET NULL,
+                FOREIGN KEY(reply_to_message_id) REFERENCES pool_messages(id) ON DELETE SET NULL
             );
             CREATE INDEX IF NOT EXISTS idx_pool_messages_session ON pool_messages(pool_session_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_pool_messages_todo ON pool_messages(todo_id);
+        ");
+        // Migrate existing pool_messages table with new columns
+        for col in &[
+            "ALTER TABLE pool_messages ADD COLUMN todo_id TEXT",
+            "ALTER TABLE pool_messages ADD COLUMN reply_to_message_id INTEGER",
+            "ALTER TABLE pool_messages ADD COLUMN event_type TEXT",
+        ] {
+            let _ = self.conn.execute(col, []);
+        }
+        // Migrate pool_sessions with org_spec
+        let _ = self.conn.execute(
+            "ALTER TABLE pool_sessions ADD COLUMN org_spec TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        // Migrate pool_sessions with status, last_active_at, project_dir
+        for col in &[
+            "ALTER TABLE pool_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+            "ALTER TABLE pool_sessions ADD COLUMN last_active_at TEXT",
+            "ALTER TABLE pool_sessions ADD COLUMN project_dir TEXT DEFAULT NULL",
+        ] {
+            let _ = self.conn.execute(col, []);
+        }
+        let _ = self.conn.execute(
+            "ALTER TABLE kois ADD COLUMN role TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+
+        if let Ok(normalized) = self.normalize_identifier_references() {
+            if normalized > 0 {
+                tracing::info!("Database startup: normalized {} legacy identifier references", normalized);
+            }
+        }
+
+        // Clean up orphaned Koi / pool records from older schemas that lacked FK constraints.
+        let _ = self.conn.execute_batch("
+            DELETE FROM koi_todos
+            WHERE owner_id NOT IN (SELECT id FROM kois);
+
+            DELETE FROM koi_todos
+            WHERE pool_session_id IS NOT NULL
+              AND pool_session_id NOT IN (SELECT id FROM pool_sessions);
+
+            UPDATE koi_todos
+            SET claimed_by = NULL, claimed_at = NULL
+            WHERE claimed_by IS NOT NULL
+              AND claimed_by NOT IN (SELECT id FROM kois);
+
+            DELETE FROM pool_messages
+            WHERE pool_session_id NOT IN (SELECT id FROM pool_sessions);
+
+            UPDATE pool_messages
+            SET todo_id = NULL
+            WHERE todo_id IS NOT NULL
+              AND todo_id NOT IN (SELECT id FROM koi_todos);
+
+            UPDATE pool_messages
+            SET reply_to_message_id = NULL
+            WHERE reply_to_message_id IS NOT NULL
+              AND reply_to_message_id NOT IN (SELECT id FROM pool_messages);
         ");
 
-        // Memory isolation: add owner_id to memories (default 'pisci' for existing records)
+        // Triggers provide cascade-like cleanup for existing databases created before FK support.
+        let _ = self.conn.execute_batch("
+            CREATE TRIGGER IF NOT EXISTS trg_pool_sessions_delete_cleanup
+            AFTER DELETE ON pool_sessions
+            BEGIN
+                DELETE FROM pool_messages WHERE pool_session_id = OLD.id;
+                DELETE FROM koi_todos WHERE pool_session_id = OLD.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_kois_delete_cleanup
+            AFTER DELETE ON kois
+            BEGIN
+                DELETE FROM koi_todos WHERE owner_id = OLD.id;
+                UPDATE koi_todos SET claimed_by = NULL, claimed_at = NULL WHERE claimed_by = OLD.id;
+                DELETE FROM memories WHERE owner_id = OLD.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_koi_todos_delete_cleanup
+            AFTER DELETE ON koi_todos
+            BEGIN
+                UPDATE pool_messages SET todo_id = NULL WHERE todo_id = OLD.id;
+            END;
+        ");
+
+        // Memory isolation: add owner_id, scope_type, scope_id to memories
         let _ = self.conn.execute(
             "ALTER TABLE memories ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'pisci'",
             [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE memories ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'private'",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE memories ADD COLUMN scope_id TEXT NOT NULL DEFAULT 'pisci'",
+            [],
+        );
+        let _ = self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories(owner_id);
+             CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope_type, scope_id);"
+        );
+
+        // Memory project tagging: allows private memories to be tagged with the project they were
+        // created in, enabling project-priority search while still falling back to cross-project skills.
+        let _ = self.conn.execute(
+            "ALTER TABLE memories ADD COLUMN project_scope_id TEXT",  // NULL = cross-project skill/preference
+            [],
+        );
+        let _ = self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_memories_project_scope ON memories(owner_id, scope_type, project_scope_id);"
         );
 
         // One-time deduplication: remove duplicate messages caused by a previous bug where
@@ -423,22 +576,12 @@ impl Database {
         })
     }
 
-    /// Idempotent: create a session with a fixed `id` for IM routing.
-    /// If it already exists, return it as-is (updating `updated_at` is skipped
-    /// to preserve chronological ordering in the session list).
-    pub fn ensure_im_session(&self, session_id: &str, title: &str, source: &str) -> Result<Session> {
-        let now = Utc::now();
-        let now_str = now.to_rfc3339();
-        // INSERT OR IGNORE — no-op if the session already exists
-        self.conn.execute(
-            "INSERT OR IGNORE INTO sessions (id, title, status, source, created_at, updated_at, message_count) VALUES (?1, ?2, 'idle', ?3, ?4, ?4, 0)",
-            params![session_id, title, source, now_str],
+    pub fn get_session(&self, id: &str) -> Result<Option<Session>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, status, COALESCE(source, 'chat'), created_at, updated_at, message_count FROM sessions WHERE id = ?1"
         )?;
-        // Fetch current record (may have been created just now or earlier)
-        let session = self.conn.query_row(
-            "SELECT id, title, status, source, created_at, updated_at, message_count FROM sessions WHERE id = ?1",
-            params![session_id],
-            |r| Ok(Session {
+        let mut rows = stmt.query_map(params![id], |r| {
+            Ok(Session {
                 id: r.get(0)?,
                 title: r.get(1)?,
                 status: r.get(2)?,
@@ -446,9 +589,27 @@ impl Database {
                 created_at: r.get::<_, String>(4)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
                 updated_at: r.get::<_, String>(5)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
                 message_count: r.get(6)?,
-            }),
+            })
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn ensure_fixed_session(&self, session_id: &str, title: &str, source: &str) -> Result<Session> {
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+        self.conn.execute(
+            "INSERT OR IGNORE INTO sessions (id, title, status, source, created_at, updated_at, message_count) VALUES (?1, ?2, 'idle', ?3, ?4, ?4, 0)",
+            params![session_id, title, source, now_str],
         )?;
-        Ok(session)
+        self.get_session(session_id)?
+            .ok_or_else(|| anyhow::anyhow!("Session '{}' missing after ensure", session_id))
+    }
+
+    /// Idempotent: create a session with a fixed `id` for IM routing.
+    /// If it already exists, return it as-is (updating `updated_at` is skipped
+    /// to preserve chronological ordering in the session list).
+    pub fn ensure_im_session(&self, session_id: &str, title: &str, source: &str) -> Result<Session> {
+        self.ensure_fixed_session(session_id, title, source)
     }
 
     pub fn list_sessions(&self, limit: i64, offset: i64) -> Result<Vec<Session>> {
@@ -589,28 +750,57 @@ impl Database {
 
     pub fn list_memories(&self) -> Result<Vec<Memory>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content, category, confidence, source_session_id, created_at, updated_at FROM memories ORDER BY confidence DESC, updated_at DESC"
+            "SELECT id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at \
+             FROM memories ORDER BY confidence DESC, updated_at DESC"
         )?;
-        let rows = stmt.query_map([], |r| {
-            Ok(Memory {
-                id: r.get(0)?,
-                content: r.get(1)?,
-                category: r.get(2)?,
-                confidence: r.get(3)?,
-                source_session_id: r.get(4)?,
-                memory_type: "personal".to_string(),
-                created_at: r.get::<_, String>(5)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(6)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-            })
-        })?;
+        let rows = stmt.query_map([], Self::map_memory)?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
     }
 
-    /// Save a memory with dedup: if a very similar memory already exists (same category,
+    /// List memories filtered by owner_id.
+    pub fn list_memories_for_owner(&self, owner_id: &str) -> Result<Vec<Memory>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at \
+             FROM memories WHERE owner_id = ?1 ORDER BY confidence DESC, updated_at DESC"
+        )?;
+        let rows = stmt.query_map(params![owner_id], Self::map_memory)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    fn map_memory(r: &rusqlite::Row) -> rusqlite::Result<Memory> {
+        Ok(Memory {
+            id: r.get(0)?,
+            content: r.get(1)?,
+            category: r.get(2)?,
+            confidence: r.get(3)?,
+            source_session_id: r.get(4)?,
+            memory_type: "personal".to_string(),
+            owner_id: r.get::<_, String>(5).unwrap_or_else(|_| "pisci".to_string()),
+            scope_type: r.get::<_, String>(6).unwrap_or_else(|_| "private".to_string()),
+            scope_id: r.get::<_, String>(7).unwrap_or_else(|_| "pisci".to_string()),
+            project_scope_id: r.get::<_, Option<String>>(8).unwrap_or(None),
+            created_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            updated_at: r.get::<_, String>(10)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+        })
+    }
+
+    /// Save a memory with dedup: if a very similar memory already exists (same category + owner,
     /// high content overlap), update it instead of creating a duplicate.
-    pub fn save_memory(&self, content: &str, category: &str, confidence: f64, source_session_id: Option<&str>) -> Result<Memory> {
-        // Dedup: check for existing memories in the same category with high content overlap
-        if let Some(existing) = self.find_similar_memory(content, category)? {
+    ///
+    /// `project_scope_id`: for private memories, the pool_session_id where this memory was created.
+    /// NULL means it is a cross-project skill or preference (visible in all projects as a fallback).
+    pub fn save_memory(
+        &self,
+        content: &str,
+        category: &str,
+        confidence: f64,
+        source_session_id: Option<&str>,
+        owner_id: &str,
+        scope_type: &str,
+        scope_id: &str,
+        project_scope_id: Option<&str>,
+    ) -> Result<Memory> {
+        if let Some(existing) = self.find_similar_memory(content, category, owner_id)? {
             let now_str = Utc::now().to_rfc3339();
             let new_confidence = confidence.max(existing.confidence);
             self.conn.execute(
@@ -625,6 +815,10 @@ impl Database {
                 confidence: new_confidence,
                 source_session_id: existing.source_session_id,
                 memory_type: existing.memory_type,
+                owner_id: existing.owner_id,
+                scope_type: existing.scope_type,
+                scope_id: existing.scope_id,
+                project_scope_id: existing.project_scope_id,
                 created_at: existing.created_at,
                 updated_at: Utc::now(),
             });
@@ -634,8 +828,9 @@ impl Database {
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO memories (id, content, category, confidence, source_session_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-            params![id, content, category, confidence, source_session_id, now_str],
+            "INSERT INTO memories (id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+            params![id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, now_str],
         )?;
         Ok(Memory {
             id,
@@ -644,30 +839,23 @@ impl Database {
             confidence,
             source_session_id: source_session_id.map(String::from),
             memory_type: "personal".to_string(),
+            owner_id: owner_id.to_string(),
+            scope_type: scope_type.to_string(),
+            scope_id: scope_id.to_string(),
+            project_scope_id: project_scope_id.map(String::from),
             created_at: now,
             updated_at: now,
         })
     }
 
-    /// Find a memory in the same category that has high content overlap with the given text.
+    /// Find a memory in the same category+owner that has high content overlap with the given text.
     /// Uses word-level Jaccard similarity (threshold: 0.6).
-    fn find_similar_memory(&self, content: &str, category: &str) -> Result<Option<Memory>> {
+    fn find_similar_memory(&self, content: &str, category: &str, owner_id: &str) -> Result<Option<Memory>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content, category, confidence, source_session_id, memory_type, created_at, updated_at \
-             FROM memories WHERE category = ?1 ORDER BY updated_at DESC LIMIT 50"
+            "SELECT id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at \
+             FROM memories WHERE category = ?1 AND owner_id = ?2 ORDER BY updated_at DESC LIMIT 50"
         )?;
-        let rows = stmt.query_map(params![category], |r| {
-            Ok(Memory {
-                id: r.get(0)?,
-                content: r.get(1)?,
-                category: r.get(2)?,
-                confidence: r.get(3)?,
-                source_session_id: r.get(4)?,
-                memory_type: r.get::<_, String>(5).unwrap_or_else(|_| "personal".to_string()),
-                created_at: r.get::<_, String>(6)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(7)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-            })
-        })?;
+        let rows = stmt.query_map(params![category, owner_id], Self::map_memory)?;
 
         let new_words: std::collections::HashSet<&str> = content.split_whitespace().collect();
         if new_words.is_empty() { return Ok(None); }
@@ -712,11 +900,12 @@ impl Database {
     /// Retrieve all memories that have an embedding stored.
     pub fn list_memories_with_embeddings(&self) -> Result<Vec<(Memory, Vec<f32>)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content, category, confidence, source_session_id, created_at, updated_at, embedding \
+            "SELECT id, content, category, confidence, source_session_id, \
+             owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at, embedding \
              FROM memories WHERE embedding IS NOT NULL"
         )?;
         let rows = stmt.query_map([], |r| {
-            let embedding_bytes: Vec<u8> = r.get(7)?;
+            let embedding_bytes: Vec<u8> = r.get(11)?;
             Ok((
                 Memory {
                     id: r.get(0)?,
@@ -725,10 +914,14 @@ impl Database {
                     confidence: r.get(3)?,
                     source_session_id: r.get(4)?,
                     memory_type: "personal".to_string(),
-                    created_at: r.get::<_, String>(5)?
+                    owner_id: r.get::<_, String>(5).unwrap_or_else(|_| "pisci".to_string()),
+                    scope_type: r.get::<_, String>(6).unwrap_or_else(|_| "private".to_string()),
+                    scope_id: r.get::<_, String>(7).unwrap_or_else(|_| "pisci".to_string()),
+                    project_scope_id: r.get::<_, Option<String>>(8).unwrap_or(None),
+                    created_at: r.get::<_, String>(9)?
                         .parse::<DateTime<Utc>>()
                         .unwrap_or_else(|_| Utc::now()),
-                    updated_at: r.get::<_, String>(6)?
+                    updated_at: r.get::<_, String>(10)?
                         .parse::<DateTime<Utc>>()
                         .unwrap_or_else(|_| Utc::now()),
                 },
@@ -1022,28 +1215,128 @@ impl Database {
     // Memory FTS & Embeddings
     // ------------------------------------------------------------------
 
+    /// Full-text search across all memories (global, no owner filter).
     pub fn search_memories_fts(&self, query: &str, limit: i64) -> Result<Vec<Memory>> {
         let mut stmt = self.conn.prepare(
-            "SELECT m.id, m.content, m.category, m.confidence, m.source_session_id, m.created_at, m.updated_at \
+            "SELECT m.id, m.content, m.category, m.confidence, m.source_session_id, \
+             m.owner_id, m.scope_type, m.scope_id, m.project_scope_id, m.created_at, m.updated_at \
              FROM memories m \
              JOIN memories_fts f ON m.rowid = f.rowid \
              WHERE memories_fts MATCH ?1 \
              ORDER BY rank \
              LIMIT ?2"
         )?;
-        let rows = stmt.query_map(params![query, limit], |r| {
-            Ok(Memory {
-                id: r.get(0)?,
-                content: r.get(1)?,
-                category: r.get(2)?,
-                confidence: r.get(3)?,
-                source_session_id: r.get(4)?,
-                memory_type: "personal".to_string(),
-                created_at: r.get::<_, String>(5)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(6)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-            })
-        })?;
+        let rows = stmt.query_map(params![query, limit], Self::map_memory)?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    /// Scoped memory search: retrieves memories in priority order (4 layers) for the given owner.
+    ///
+    /// Layer 1: private memories tagged to the current project (project_scope_id = pool_session_id)
+    /// Layer 2: private memories with no project tag (cross-project skills/preferences)
+    /// Layer 3: project-shared memories (scope_type = 'project', scope_id = pool_session_id)
+    /// Layer 4: global memories
+    pub fn search_memories_scoped(
+        &self,
+        query: &str,
+        owner_id: &str,
+        pool_session_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<Memory>> {
+        let mut results = Vec::new();
+
+        let dedupe = |results: &Vec<Memory>| -> std::collections::HashSet<String> {
+            results.iter().map(|m| m.id.clone()).collect()
+        };
+
+        // Layer 1: project-specific private memories (highest priority)
+        if let Some(psid) = pool_session_id {
+            let mut stmt = self.conn.prepare(
+                "SELECT m.id, m.content, m.category, m.confidence, m.source_session_id, \
+                 m.owner_id, m.scope_type, m.scope_id, m.project_scope_id, m.created_at, m.updated_at \
+                 FROM memories m \
+                 JOIN memories_fts f ON m.rowid = f.rowid \
+                 WHERE memories_fts MATCH ?1 AND m.owner_id = ?2 AND m.scope_type = 'private' \
+                 AND m.project_scope_id = ?3 \
+                 ORDER BY rank \
+                 LIMIT ?4"
+            )?;
+            let rows = stmt.query_map(params![query, owner_id, psid, limit], Self::map_memory)?;
+            results.extend(rows.flatten());
+        }
+
+        // Layer 2: cross-project private memories (skills, preferences — project_scope_id IS NULL)
+        {
+            let remaining = (limit - results.len() as i64).max(0);
+            if remaining > 0 {
+                let mut stmt = self.conn.prepare(
+                    "SELECT m.id, m.content, m.category, m.confidence, m.source_session_id, \
+                     m.owner_id, m.scope_type, m.scope_id, m.project_scope_id, m.created_at, m.updated_at \
+                     FROM memories m \
+                     JOIN memories_fts f ON m.rowid = f.rowid \
+                     WHERE memories_fts MATCH ?1 AND m.owner_id = ?2 AND m.scope_type = 'private' \
+                     AND m.project_scope_id IS NULL \
+                     ORDER BY rank \
+                     LIMIT ?3"
+                )?;
+                let rows = stmt.query_map(params![query, owner_id, remaining], Self::map_memory)?;
+                let seen = dedupe(&results);
+                for mem in rows.flatten() {
+                    if !seen.contains(&mem.id) {
+                        results.push(mem);
+                    }
+                }
+            }
+        }
+
+        // Layer 3: project-shared memories
+        if let Some(psid) = pool_session_id {
+            let remaining = (limit - results.len() as i64).max(0);
+            if remaining > 0 {
+                let mut stmt = self.conn.prepare(
+                    "SELECT m.id, m.content, m.category, m.confidence, m.source_session_id, \
+                     m.owner_id, m.scope_type, m.scope_id, m.project_scope_id, m.created_at, m.updated_at \
+                     FROM memories m \
+                     JOIN memories_fts f ON m.rowid = f.rowid \
+                     WHERE memories_fts MATCH ?1 AND m.scope_type = 'project' AND m.scope_id = ?2 \
+                     ORDER BY rank \
+                     LIMIT ?3"
+                )?;
+                let rows = stmt.query_map(params![query, psid, remaining], Self::map_memory)?;
+                let seen = dedupe(&results);
+                for mem in rows.flatten() {
+                    if !seen.contains(&mem.id) {
+                        results.push(mem);
+                    }
+                }
+            }
+        }
+
+        // Layer 4: global memories
+        {
+            let remaining = (limit - results.len() as i64).max(0);
+            if remaining > 0 {
+                let mut stmt = self.conn.prepare(
+                    "SELECT m.id, m.content, m.category, m.confidence, m.source_session_id, \
+                     m.owner_id, m.scope_type, m.scope_id, m.project_scope_id, m.created_at, m.updated_at \
+                     FROM memories m \
+                     JOIN memories_fts f ON m.rowid = f.rowid \
+                     WHERE memories_fts MATCH ?1 AND m.scope_type = 'global' \
+                     ORDER BY rank \
+                     LIMIT ?2"
+                )?;
+                let rows = stmt.query_map(params![query, remaining], Self::map_memory)?;
+                let seen = dedupe(&results);
+                for mem in rows.flatten() {
+                    if !seen.contains(&mem.id) {
+                        results.push(mem);
+                    }
+                }
+            }
+        }
+
+        results.truncate(limit as usize);
+        Ok(results)
     }
 
     pub fn save_embedding_cache(&self, content_hash: &str, embedding: &[u8]) -> Result<()> {
@@ -1237,6 +1530,7 @@ impl Database {
     pub fn create_koi(
         &self,
         name: &str,
+        role: &str,
         icon: &str,
         color: &str,
         system_prompt: &str,
@@ -1246,13 +1540,14 @@ impl Database {
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO kois (id, name, icon, color, system_prompt, description, status, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'idle', ?7, ?7)",
-            params![id, name, icon, color, system_prompt, description, now_str],
+            "INSERT INTO kois (id, name, role, icon, color, system_prompt, description, status, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'idle', ?8, ?8)",
+            params![id, name, role, icon, color, system_prompt, description, now_str],
         )?;
         Ok(crate::koi::KoiDefinition {
             id,
             name: name.to_string(),
+            role: role.to_string(),
             icon: icon.to_string(),
             color: color.to_string(),
             system_prompt: system_prompt.to_string(),
@@ -1263,52 +1558,96 @@ impl Database {
         })
     }
 
+    pub fn ensure_starter_kois(&self) -> Result<Vec<crate::koi::KoiDefinition>> {
+        if !self.list_kois()?.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut created = Vec::new();
+        for spec in crate::koi::STARTER_KOI_SPECS {
+            created.push(self.create_koi(
+                spec.name,
+                spec.role,
+                spec.icon,
+                spec.color,
+                spec.system_prompt,
+                spec.description,
+            )?);
+        }
+        Ok(created)
+    }
+
     pub fn list_kois(&self) -> Result<Vec<crate::koi::KoiDefinition>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, icon, color, system_prompt, description, status, created_at, updated_at \
+            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at \
              FROM kois ORDER BY created_at ASC"
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(crate::koi::KoiDefinition {
                 id: r.get(0)?,
                 name: r.get(1)?,
-                icon: r.get(2)?,
-                color: r.get(3)?,
-                system_prompt: r.get(4)?,
-                description: r.get(5)?,
-                status: r.get(6)?,
-                created_at: r.get::<_, String>(7)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                role: r.get::<_, String>(2).unwrap_or_default(),
+                icon: r.get(3)?,
+                color: r.get(4)?,
+                system_prompt: r.get(5)?,
+                description: r.get(6)?,
+                status: r.get(7)?,
+                created_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                updated_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
     }
 
     pub fn get_koi(&self, id: &str) -> Result<Option<crate::koi::KoiDefinition>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, icon, color, system_prompt, description, status, created_at, updated_at \
-             FROM kois WHERE id = ?1"
-        )?;
-        let mut rows = stmt.query_map(params![id], |r| {
+        let koi_row = |r: &rusqlite::Row| -> rusqlite::Result<crate::koi::KoiDefinition> {
             Ok(crate::koi::KoiDefinition {
                 id: r.get(0)?,
                 name: r.get(1)?,
-                icon: r.get(2)?,
-                color: r.get(3)?,
-                system_prompt: r.get(4)?,
-                description: r.get(5)?,
-                status: r.get(6)?,
-                created_at: r.get::<_, String>(7)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                role: r.get::<_, String>(2).unwrap_or_default(),
+                icon: r.get(3)?,
+                color: r.get(4)?,
+                system_prompt: r.get(5)?,
+                description: r.get(6)?,
+                status: r.get(7)?,
+                created_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                updated_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
             })
-        })?;
-        Ok(rows.next().transpose()?)
+        };
+
+        // Exact match first
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at \
+             FROM kois WHERE id = ?1"
+        )?;
+        let mut rows = stmt.query_map(params![id], koi_row)?;
+        if let Some(row) = rows.next() {
+            return Ok(Some(row?));
+        }
+
+        // Prefix match fallback (for short IDs like "4b80c3e1")
+        if id.len() >= 6 {
+            let pattern = format!("{}%", id);
+            let mut stmt2 = self.conn.prepare(
+                "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at \
+                 FROM kois WHERE id LIKE ?1"
+            )?;
+            let matches: Vec<crate::koi::KoiDefinition> = stmt2.query_map(params![pattern], koi_row)?
+                .filter_map(|r| r.ok())
+                .collect();
+            if matches.len() == 1 {
+                return Ok(Some(matches.into_iter().next().unwrap()));
+            }
+        }
+
+        Ok(None)
     }
 
     pub fn update_koi(
         &self,
         id: &str,
         name: Option<&str>,
+        role: Option<&str>,
         icon: Option<&str>,
         color: Option<&str>,
         system_prompt: Option<&str>,
@@ -1318,13 +1657,14 @@ impl Database {
         self.conn.execute(
             "UPDATE kois SET \
              name = COALESCE(?2, name), \
-             icon = COALESCE(?3, icon), \
-             color = COALESCE(?4, color), \
-             system_prompt = COALESCE(?5, system_prompt), \
-             description = COALESCE(?6, description), \
-             updated_at = ?7 \
+             role = COALESCE(?3, role), \
+             icon = COALESCE(?4, icon), \
+             color = COALESCE(?5, color), \
+             system_prompt = COALESCE(?6, system_prompt), \
+             description = COALESCE(?7, description), \
+             updated_at = ?8 \
              WHERE id = ?1",
-            params![id, name, icon, color, system_prompt, description, now],
+            params![id, name, role, icon, color, system_prompt, description, now],
         )?;
         Ok(())
     }
@@ -1336,6 +1676,64 @@ impl Database {
             params![id, status, now],
         )?;
         Ok(())
+    }
+
+    pub fn find_koi_by_name(&self, name: &str) -> Result<Option<crate::koi::KoiDefinition>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at \
+             FROM kois WHERE name = ?1 ORDER BY created_at ASC LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![name], |r| {
+            Ok(crate::koi::KoiDefinition {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                role: r.get::<_, String>(2).unwrap_or_default(),
+                icon: r.get(3)?,
+                color: r.get(4)?,
+                system_prompt: r.get(5)?,
+                description: r.get(6)?,
+                status: r.get(7)?,
+                created_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+                updated_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn resolve_koi_identifier(&self, value: &str) -> Result<Option<crate::koi::KoiDefinition>> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Ok(None);
+        }
+        if let Some(koi) = self.get_koi(value)? {
+            return Ok(Some(koi));
+        }
+        let matches: Vec<crate::koi::KoiDefinition> = self.list_kois()?
+            .into_iter()
+            .filter(|k| k.name == value)
+            .collect();
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(matches.into_iter().next()),
+            _ => Err(anyhow::anyhow!("Koi identifier '{}' is ambiguous", value)),
+        }
+    }
+
+    /// Remove duplicate Koi entries, keeping the oldest one per name.
+    /// Returns the number of duplicates removed.
+    pub fn dedup_kois(&self) -> Result<usize> {
+        let all = self.list_kois()?;
+        let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut removed = 0usize;
+        for koi in &all {
+            if let Some(_kept_id) = seen.get(&koi.name) {
+                self.delete_koi(&koi.id)?;
+                removed += 1;
+            } else {
+                seen.insert(koi.name.clone(), koi.id.clone());
+            }
+        }
+        Ok(removed)
     }
 
     pub fn delete_koi(&self, id: &str) -> Result<()> {
@@ -1367,14 +1765,16 @@ impl Database {
         priority: &str,
         assigned_by: &str,
         pool_session_id: Option<&str>,
+        source_type: &str,
+        depends_on: Option<&str>,
     ) -> Result<crate::koi::KoiTodo> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO koi_todos (id, owner_id, title, description, status, priority, assigned_by, pool_session_id, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, 'todo', ?5, ?6, ?7, ?8, ?8)",
-            params![id, owner_id, title, description, priority, assigned_by, pool_session_id, now_str],
+            "INSERT INTO koi_todos (id, owner_id, title, description, status, priority, assigned_by, pool_session_id, source_type, depends_on, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, 'todo', ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+            params![id, owner_id, title, description, priority, assigned_by, pool_session_id, source_type, depends_on, now_str],
         )?;
         Ok(crate::koi::KoiTodo {
             id,
@@ -1385,26 +1785,41 @@ impl Database {
             priority: priority.to_string(),
             assigned_by: assigned_by.to_string(),
             pool_session_id: pool_session_id.map(String::from),
+            claimed_by: None,
+            claimed_at: None,
+            depends_on: depends_on.map(String::from),
+            blocked_reason: None,
+            result_message_id: None,
+            source_type: source_type.to_string(),
             created_at: now,
             updated_at: now,
         })
     }
 
+    const KOI_TODO_COLS: &'static str = "id, owner_id, title, description, status, priority, assigned_by, \
+        pool_session_id, claimed_by, claimed_at, depends_on, blocked_reason, result_message_id, source_type, \
+        created_at, updated_at";
+
     pub fn list_koi_todos(&self, owner_id: Option<&str>) -> Result<Vec<crate::koi::KoiTodo>> {
         let sql = if owner_id.is_some() {
-            "SELECT id, owner_id, title, description, status, priority, assigned_by, pool_session_id, created_at, updated_at \
-             FROM koi_todos WHERE owner_id = ?1 ORDER BY created_at DESC"
+            format!("SELECT {} FROM koi_todos WHERE owner_id = ?1 ORDER BY created_at DESC", Self::KOI_TODO_COLS)
         } else {
-            "SELECT id, owner_id, title, description, status, priority, assigned_by, pool_session_id, created_at, updated_at \
-             FROM koi_todos ORDER BY created_at DESC"
+            format!("SELECT {} FROM koi_todos ORDER BY created_at DESC", Self::KOI_TODO_COLS)
         };
-        let mut stmt = self.conn.prepare(sql)?;
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = if let Some(oid) = owner_id {
             stmt.query_map(params![oid], Self::map_koi_todo)?
         } else {
             stmt.query_map([], Self::map_koi_todo)?
         };
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    pub fn get_koi_todo(&self, id: &str) -> Result<Option<crate::koi::KoiTodo>> {
+        let sql = format!("SELECT {} FROM koi_todos WHERE id = ?1", Self::KOI_TODO_COLS);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(params![id], Self::map_koi_todo)?;
+        Ok(rows.next().transpose()?)
     }
 
     fn map_koi_todo(r: &rusqlite::Row) -> rusqlite::Result<crate::koi::KoiTodo> {
@@ -1417,8 +1832,15 @@ impl Database {
             priority: r.get(5)?,
             assigned_by: r.get(6)?,
             pool_session_id: r.get(7)?,
-            created_at: r.get::<_, String>(8)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-            updated_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            claimed_by: r.get(8)?,
+            claimed_at: r.get::<_, Option<String>>(9)?
+                .and_then(|s| s.parse::<DateTime<Utc>>().ok()),
+            depends_on: r.get(10)?,
+            blocked_reason: r.get(11)?,
+            result_message_id: r.get(12)?,
+            source_type: r.get::<_, String>(13).unwrap_or_else(|_| "user".to_string()),
+            created_at: r.get::<_, String>(14)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            updated_at: r.get::<_, String>(15)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
         })
     }
 
@@ -1444,9 +1866,47 @@ impl Database {
         Ok(())
     }
 
+    /// Claim a todo (a Koi starts working on it)
+    pub fn claim_koi_todo(&self, id: &str, claimed_by: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE koi_todos SET claimed_by = ?2, claimed_at = ?3, status = 'in_progress', updated_at = ?3 WHERE id = ?1",
+            params![id, claimed_by, now],
+        )?;
+        Ok(())
+    }
+
+    /// Block a todo with a reason
+    pub fn block_koi_todo(&self, id: &str, reason: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE koi_todos SET status = 'blocked', blocked_reason = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, reason, now],
+        )?;
+        Ok(())
+    }
+
+    /// Complete a todo with a link to the result message
+    pub fn complete_koi_todo(&self, id: &str, result_message_id: Option<i64>) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE koi_todos SET status = 'done', result_message_id = COALESCE(?2, result_message_id), updated_at = ?3 WHERE id = ?1",
+            params![id, result_message_id, now],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_koi_todo(&self, id: &str) -> Result<()> {
         self.conn.execute("DELETE FROM koi_todos WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    pub fn delete_todos_by_pool(&self, pool_session_id: &str) -> Result<u32> {
+        let count = self.conn.execute(
+            "DELETE FROM koi_todos WHERE pool_session_id = ?1",
+            params![pool_session_id],
+        )?;
+        Ok(count as u32)
     }
 
     // ------------------------------------------------------------------
@@ -1454,37 +1914,276 @@ impl Database {
     // ------------------------------------------------------------------
 
     pub fn create_pool_session(&self, name: &str) -> Result<crate::koi::PoolSession> {
+        self.create_pool_session_with_dir(name, None)
+    }
+
+    pub fn create_pool_session_with_dir(&self, name: &str, project_dir: Option<&str>) -> Result<crate::koi::PoolSession> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO pool_sessions (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
-            params![id, name, now_str],
+            "INSERT INTO pool_sessions (id, name, org_spec, status, project_dir, last_active_at, created_at, updated_at) \
+             VALUES (?1, ?2, '', 'active', ?3, ?4, ?4, ?4)",
+            params![id, name, project_dir, now_str],
         )?;
         Ok(crate::koi::PoolSession {
             id,
             name: name.to_string(),
+            org_spec: String::new(),
+            status: "active".to_string(),
+            project_dir: project_dir.map(String::from),
+            last_active_at: Some(now),
             created_at: now,
             updated_at: now,
         })
     }
 
+    fn map_pool_session(r: &rusqlite::Row) -> rusqlite::Result<crate::koi::PoolSession> {
+        Ok(crate::koi::PoolSession {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            org_spec: r.get::<_, String>(2).unwrap_or_default(),
+            status: r.get::<_, String>(3).unwrap_or_else(|_| "active".to_string()),
+            project_dir: r.get::<_, Option<String>>(4)?,
+            last_active_at: r.get::<_, Option<String>>(5)?
+                .and_then(|s| s.parse::<DateTime<Utc>>().ok()),
+            created_at: r.get::<_, String>(6)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+            updated_at: r.get::<_, String>(7)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+        })
+    }
+
     pub fn list_pool_sessions(&self) -> Result<Vec<crate::koi::PoolSession>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, created_at, updated_at FROM pool_sessions ORDER BY updated_at DESC"
+            "SELECT id, name, org_spec, status, project_dir, last_active_at, created_at, updated_at \
+             FROM pool_sessions ORDER BY updated_at DESC"
         )?;
-        let rows = stmt.query_map([], |r| {
-            Ok(crate::koi::PoolSession {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                created_at: r.get::<_, String>(2)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-                updated_at: r.get::<_, String>(3)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-            })
-        })?;
+        let rows = stmt.query_map([], Self::map_pool_session)?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
     }
 
+    pub fn get_pool_session(&self, id: &str) -> Result<Option<crate::koi::PoolSession>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, org_spec, status, project_dir, last_active_at, created_at, updated_at \
+             FROM pool_sessions WHERE id = ?1"
+        )?;
+        let mut rows = stmt.query_map(params![id], Self::map_pool_session)?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn get_pool_session_by_prefix(&self, prefix: &str) -> Result<Option<crate::koi::PoolSession>> {
+        if prefix.trim().is_empty() {
+            return Ok(None);
+        }
+        if let Some(session) = self.get_pool_session(prefix)? {
+            return Ok(Some(session));
+        }
+        let like = format!("{}%", prefix);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, org_spec, status, project_dir, last_active_at, created_at, updated_at \
+             FROM pool_sessions WHERE id LIKE ?1 ORDER BY updated_at DESC"
+        )?;
+        let rows = stmt.query_map(params![like], Self::map_pool_session)?;
+        let matches = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(matches.into_iter().next()),
+            _ => Err(anyhow::anyhow!("Pool id prefix '{}' is ambiguous", prefix)),
+        }
+    }
+
+    pub fn resolve_pool_session_identifier(&self, value: &str) -> Result<Option<crate::koi::PoolSession>> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Ok(None);
+        }
+        if let Some(session) = self.get_pool_session_by_prefix(value)? {
+            return Ok(Some(session));
+        }
+        let matches: Vec<crate::koi::PoolSession> = self.list_pool_sessions()?
+            .into_iter()
+            .filter(|session| session.name == value)
+            .collect();
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(matches.into_iter().next()),
+            _ => Err(anyhow::anyhow!("Pool identifier '{}' is ambiguous", value)),
+        }
+    }
+
+    pub fn normalize_identifier_references(&self) -> Result<u32> {
+        let mut updated = 0u32;
+
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, owner_id, claimed_by, pool_session_id FROM koi_todos"
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            })?;
+            let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+
+            for row in rows {
+                let (todo_id, owner_id, claimed_by, pool_session_id) = row;
+
+                if let Some(koi) = self.resolve_koi_identifier(&owner_id)? {
+                    if koi.id != owner_id {
+                        self.conn.execute(
+                            "UPDATE koi_todos SET owner_id = ?2 WHERE id = ?1",
+                            params![todo_id, koi.id],
+                        )?;
+                        updated += 1;
+                    }
+                }
+
+                if let Some(claimed_by) = claimed_by {
+                    if let Some(koi) = self.resolve_koi_identifier(&claimed_by)? {
+                        if koi.id != claimed_by {
+                            self.conn.execute(
+                                "UPDATE koi_todos SET claimed_by = ?2 WHERE id = ?1",
+                                params![todo_id, koi.id],
+                            )?;
+                            updated += 1;
+                        }
+                    }
+                }
+
+                if let Some(pool_session_id) = pool_session_id {
+                    if let Some(session) = self.resolve_pool_session_identifier(&pool_session_id)? {
+                        if session.id != pool_session_id {
+                            self.conn.execute(
+                                "UPDATE koi_todos SET pool_session_id = ?2 WHERE id = ?1",
+                                params![todo_id, session.id],
+                            )?;
+                            updated += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, owner_id, scope_type, scope_id, project_scope_id FROM memories"
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                ))
+            })?;
+            let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+
+            for row in rows {
+                let (memory_id, owner_id, scope_type, scope_id, project_scope_id) = row;
+
+                if let Some(koi) = self.resolve_koi_identifier(&owner_id)? {
+                    if koi.id != owner_id {
+                        self.conn.execute(
+                            "UPDATE memories SET owner_id = ?2 WHERE id = ?1",
+                            params![memory_id, koi.id],
+                        )?;
+                        updated += 1;
+                    }
+
+                    if scope_type == "private" && scope_id != koi.id {
+                        self.conn.execute(
+                            "UPDATE memories SET scope_id = ?2 WHERE id = ?1",
+                            params![memory_id, koi.id],
+                        )?;
+                        updated += 1;
+                    }
+                }
+
+                if scope_type == "project" {
+                    if let Some(session) = self.resolve_pool_session_identifier(&scope_id)? {
+                        if session.id != scope_id {
+                            self.conn.execute(
+                                "UPDATE memories SET scope_id = ?2 WHERE id = ?1",
+                                params![memory_id, session.id],
+                            )?;
+                            updated += 1;
+                        }
+                    }
+                }
+
+                if let Some(project_scope_id) = project_scope_id {
+                    if let Some(session) = self.resolve_pool_session_identifier(&project_scope_id)? {
+                        if session.id != project_scope_id {
+                            self.conn.execute(
+                                "UPDATE memories SET project_scope_id = ?2 WHERE id = ?1",
+                                params![memory_id, session.id],
+                            )?;
+                            updated += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(updated)
+    }
+
+    pub fn update_pool_session_status(&self, id: &str, status: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE pool_sessions SET status = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, status, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn touch_pool_session_active(&self, id: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE pool_sessions SET last_active_at = ?2, updated_at = ?2 WHERE id = ?1",
+            params![id, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn find_related_pool_sessions(&self, keywords: &str) -> Result<Vec<crate::koi::PoolSession>> {
+        let kw_lower = keywords.to_lowercase();
+        let terms: Vec<&str> = kw_lower.split_whitespace().collect();
+        if terms.is_empty() {
+            return self.list_pool_sessions();
+        }
+        let all = self.list_pool_sessions()?;
+        let mut results: Vec<(usize, crate::koi::PoolSession)> = Vec::new();
+        for session in all {
+            let haystack = format!(
+                "{} {} {}",
+                session.name.to_lowercase(),
+                session.org_spec.to_lowercase(),
+                session.status,
+            );
+            let score = terms.iter().filter(|t| haystack.contains(*t)).count();
+            if score > 0 {
+                results.push((score, session));
+            }
+        }
+        results.sort_by(|a, b| b.0.cmp(&a.0));
+        Ok(results.into_iter().map(|(_, s)| s).collect())
+    }
+
+    pub fn update_pool_org_spec(&self, id: &str, org_spec: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE pool_sessions SET org_spec = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, org_spec, now],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_pool_session(&self, id: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM koi_todos WHERE pool_session_id = ?1", params![id])?;
         self.conn.execute("DELETE FROM pool_messages WHERE pool_session_id = ?1", params![id])?;
         self.conn.execute("DELETE FROM pool_sessions WHERE id = ?1", params![id])?;
         Ok(())
@@ -1498,17 +2197,30 @@ impl Database {
         msg_type: &str,
         metadata: &str,
     ) -> Result<crate::koi::PoolMessage> {
+        self.insert_pool_message_ext(pool_session_id, sender_id, content, msg_type, metadata, None, None, None)
+    }
+
+    pub fn insert_pool_message_ext(
+        &self,
+        pool_session_id: &str,
+        sender_id: &str,
+        content: &str,
+        msg_type: &str,
+        metadata: &str,
+        todo_id: Option<&str>,
+        reply_to_message_id: Option<i64>,
+        event_type: Option<&str>,
+    ) -> Result<crate::koi::PoolMessage> {
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO pool_messages (pool_session_id, sender_id, content, msg_type, metadata, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![pool_session_id, sender_id, content, msg_type, metadata, now_str],
+            "INSERT INTO pool_messages (pool_session_id, sender_id, content, msg_type, metadata, todo_id, reply_to_message_id, event_type, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![pool_session_id, sender_id, content, msg_type, metadata, todo_id, reply_to_message_id, event_type, now_str],
         )?;
         let id = self.conn.last_insert_rowid();
-        // Touch pool_session updated_at
         self.conn.execute(
-            "UPDATE pool_sessions SET updated_at = ?1 WHERE id = ?2",
+            "UPDATE pool_sessions SET updated_at = ?1, last_active_at = ?1 WHERE id = ?2",
             params![now_str, pool_session_id],
         )?;
         Ok(crate::koi::PoolMessage {
@@ -1518,6 +2230,9 @@ impl Database {
             content: content.to_string(),
             msg_type: msg_type.to_string(),
             metadata: metadata.to_string(),
+            todo_id: todo_id.map(String::from),
+            reply_to_message_id,
+            event_type: event_type.map(String::from),
             created_at: now,
         })
     }
@@ -1529,21 +2244,111 @@ impl Database {
         offset: i64,
     ) -> Result<Vec<crate::koi::PoolMessage>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, pool_session_id, sender_id, content, msg_type, metadata, created_at \
+            "SELECT id, pool_session_id, sender_id, content, msg_type, metadata, \
+             todo_id, reply_to_message_id, event_type, created_at \
              FROM pool_messages WHERE pool_session_id = ?1 \
              ORDER BY created_at ASC LIMIT ?2 OFFSET ?3"
         )?;
-        let rows = stmt.query_map(params![pool_session_id, limit, offset], |r| {
-            Ok(crate::koi::PoolMessage {
-                id: r.get(0)?,
-                pool_session_id: r.get(1)?,
-                sender_id: r.get(2)?,
-                content: r.get(3)?,
-                msg_type: r.get(4)?,
-                metadata: r.get(5)?,
-                created_at: r.get::<_, String>(6)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
-            })
-        })?;
+        let rows = stmt.query_map(params![pool_session_id, limit, offset], Self::map_pool_message)?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    /// Get pool messages linked to a specific todo
+    pub fn get_pool_messages_for_todo(&self, todo_id: &str) -> Result<Vec<crate::koi::PoolMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, pool_session_id, sender_id, content, msg_type, metadata, \
+             todo_id, reply_to_message_id, event_type, created_at \
+             FROM pool_messages WHERE todo_id = ?1 \
+             ORDER BY created_at ASC"
+        )?;
+        let rows = stmt.query_map(params![todo_id], Self::map_pool_message)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    fn map_pool_message(r: &rusqlite::Row) -> rusqlite::Result<crate::koi::PoolMessage> {
+        Ok(crate::koi::PoolMessage {
+            id: r.get(0)?,
+            pool_session_id: r.get(1)?,
+            sender_id: r.get(2)?,
+            content: r.get(3)?,
+            msg_type: r.get(4)?,
+            metadata: r.get(5)?,
+            todo_id: r.get(6)?,
+            reply_to_message_id: r.get(7)?,
+            event_type: r.get(8)?,
+            created_at: r.get::<_, String>(9)?.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now()),
+        })
+    }
+
+    /// Reset all "busy" Koi back to "idle" — called on startup to fix stale state from crashes.
+    pub fn recover_stale_koi_status(&self) -> Result<u32> {
+        let count = self.conn.execute(
+            "UPDATE kois SET status = 'idle', updated_at = datetime('now') WHERE status = 'busy'",
+            [],
+        )?;
+        if count > 0 {
+            tracing::info!("Startup recovery: reset {} stale busy Koi to idle", count);
+        }
+        Ok(count as u32)
+    }
+
+    /// Reset all "in_progress" todos back to "todo" — called on startup.
+    /// These were being worked on when the app crashed.
+    pub fn recover_stale_todos(&self) -> Result<u32> {
+        let count = self.conn.execute(
+            "UPDATE koi_todos SET status = 'todo', claimed_by = NULL, claimed_at = NULL, updated_at = datetime('now') WHERE status = 'in_progress'",
+            [],
+        )?;
+        if count > 0 {
+            tracing::info!("Startup recovery: reset {} stale in_progress todos to todo", count);
+        }
+        Ok(count as u32)
+    }
+
+    /// Reset Koi that have been "busy" longer than max_age_secs — for runtime watchdog.
+    pub fn recover_stale_busy_kois(&self, max_age_secs: i64) -> Result<u32> {
+        let count = if max_age_secs <= 0 {
+            self.conn.execute(
+                "UPDATE kois SET status = 'idle', updated_at = datetime('now') WHERE status = 'busy'",
+                [],
+            )?
+        } else {
+            self.conn.execute(
+                "UPDATE kois SET status = 'idle', updated_at = datetime('now') WHERE status = 'busy' AND updated_at < datetime('now', ?)",
+                rusqlite::params![format!("-{} seconds", max_age_secs)],
+            )?
+        };
+        Ok(count as u32)
+    }
+
+    /// Reset "in_progress" todos older than max_age_secs — for runtime watchdog.
+    pub fn recover_stale_in_progress_todos(&self, max_age_secs: i64) -> Result<u32> {
+        let count = if max_age_secs <= 0 {
+            self.conn.execute(
+                "UPDATE koi_todos SET status = 'todo', claimed_by = NULL, claimed_at = NULL, updated_at = datetime('now') WHERE status = 'in_progress'",
+                [],
+            )?
+        } else {
+            self.conn.execute(
+                "UPDATE koi_todos SET status = 'todo', claimed_by = NULL, claimed_at = NULL, updated_at = datetime('now') WHERE status = 'in_progress' AND updated_at < datetime('now', ?)",
+                rusqlite::params![format!("-{} seconds", max_age_secs)],
+            )?
+        };
+        Ok(count as u32)
+    }
+
+    pub fn recover_stale_running_sessions(&self, max_age_secs: i64) -> Result<u32> {
+        let count = if max_age_secs <= 0 {
+            self.conn.execute(
+                "UPDATE sessions SET status = 'idle', updated_at = datetime('now') WHERE status = 'running'",
+                [],
+            )?
+        } else {
+            self.conn.execute(
+                "UPDATE sessions SET status = 'idle', updated_at = datetime('now') WHERE status = 'running' AND updated_at < datetime('now', ?)",
+                rusqlite::params![format!("-{} seconds", max_age_secs)],
+            )?
+        };
+        Ok(count as u32)
     }
 }

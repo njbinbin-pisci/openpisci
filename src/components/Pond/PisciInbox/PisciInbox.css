@@ -1,0 +1,181 @@
+.pisci-inbox {
+  display: flex;
+  gap: 16px;
+  min-height: 0;
+  height: 100%;
+}
+
+.pisci-inbox-sidebar {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+
+.pisci-inbox-sidebar-header,
+.pisci-inbox-main-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pisci-inbox-title,
+.pisci-inbox-main-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.pisci-inbox-subtitle,
+.pisci-inbox-main-meta,
+.pisci-inbox-session-meta,
+.pisci-inbox-message-time {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.pisci-inbox-refresh {
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.pisci-inbox-refresh:hover {
+  background: var(--bg-hover);
+}
+
+.pisci-inbox-session-list,
+.pisci-inbox-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.pisci-inbox-session {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+
+.pisci-inbox-session:hover {
+  background: var(--bg-hover);
+}
+
+.pisci-inbox-session.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.18);
+}
+
+.pisci-inbox-session-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.pisci-inbox-session-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pisci-inbox-session-kind {
+  font-size: 0.75rem;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.pisci-inbox-session-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pisci-inbox-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+
+.pisci-inbox-main-empty,
+.pisci-inbox-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  min-height: 120px;
+  text-align: center;
+}
+
+.pisci-inbox-main-empty {
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pisci-inbox-main-empty-icon {
+  font-size: 2rem;
+}
+
+.pisci-inbox-message {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.pisci-inbox-message--assistant {
+  border-left: 3px solid #7c3aed;
+}
+
+.pisci-inbox-message--user {
+  border-left: 3px solid #0ea5e9;
+}
+
+.pisci-inbox-message-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.pisci-inbox-message-role {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-transform: uppercase;
+}
+
+.pisci-inbox-message-content {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--text-primary);
+}

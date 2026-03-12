@@ -96,6 +96,7 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
   const [runtimes, setRuntimes] = useState<RuntimeCheckItem[]>([]);
   const [runtimesLoading, setRuntimesLoading] = useState(false);
   const [runtimesSettingKey, setRuntimesSettingKey] = useState<string | null>(null);
+  const [defaultWorkspace, setDefaultWorkspace] = useState<string>("");
 
   // SSH Servers
   const [sshServers, setSshServers] = useState<SshServerConfig[]>([]);
@@ -103,12 +104,22 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
   const [sshEditForm, setSshEditForm] = useState<SshServerConfig>({ id: "", label: "", host: "", port: 22, username: "", password: "", private_key: "" });
   const [sshShowPassword, setSshShowPassword] = useState(false);
 
+  // Load default workspace path from backend on mount
+  useEffect(() => {
+    settingsApi.getDefaultWorkspace().then(setDefaultWorkspace).catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (settings) {
-      setForm({ ...DEFAULT_SETTINGS, ...settings });
+      const merged = { ...DEFAULT_SETTINGS, ...settings };
+      // If workspace_root is empty, fill with default
+      if (!merged.workspace_root?.trim() && defaultWorkspace) {
+        merged.workspace_root = defaultWorkspace;
+      }
+      setForm(merged);
       setSshServers(settings.ssh_servers ?? []);
     }
-  }, [settings]);
+  }, [settings, defaultWorkspace]);
 
   // Refresh gateway status on mount and whenever settings change (catches post-restart state)
   useEffect(() => {
@@ -196,10 +207,14 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
   };
 
   const handleSave = async () => {
-    // Validate: workspace_root is required unless allow_outside_workspace is enabled
-    if (!form.allow_outside_workspace && !(form.workspace_root ?? "").trim()) {
-      setSaveError(t("settings.workspaceRootRequired"));
-      return;
+    // workspace_root is always required — fill with default if blank
+    if (!(form.workspace_root ?? "").trim()) {
+      if (defaultWorkspace) {
+        update("workspace_root", defaultWorkspace);
+      } else {
+        setSaveError(t("settings.workspaceRootRequired"));
+        return;
+      }
     }
     setSaving(true);
     setSaveError(null);
@@ -407,26 +422,27 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
             {t("settings.workspace")}
           </h2>
           <div className="form-group">
-            <label className="label">{t("settings.workspaceRoot")}</label>
+            <label className="label">{t("settings.workspaceRoot")} <span style={{ color: "var(--color-error, #ef4444)", marginLeft: 2 }}>*</span></label>
             <input
               className="input"
               value={form.workspace_root ?? ""}
               onChange={(e) => update("workspace_root", e.target.value)}
-              placeholder={t("settings.workspaceRootPlaceholder")}
-              style={!form.allow_outside_workspace && !(form.workspace_root ?? "").trim()
+              placeholder={defaultWorkspace || t("settings.workspaceRootPlaceholder")}
+              style={!(form.workspace_root ?? "").trim()
                 ? { borderColor: "var(--color-warning, #f59e0b)" }
                 : undefined}
             />
-            {!form.allow_outside_workspace && !(form.workspace_root ?? "").trim() && (
+            {!(form.workspace_root ?? "").trim() && (
               <p style={{ fontSize: 12, color: "var(--color-warning, #f59e0b)", marginTop: 4 }}>
                 {t("settings.workspaceRootRequired")}
               </p>
             )}
-            {form.allow_outside_workspace && (form.workspace_root ?? "").trim() && (
-              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{t("settings.workspaceRootHelp")}</p>
-            )}
-            {!form.allow_outside_workspace && (form.workspace_root ?? "").trim() && (
-              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{t("settings.workspaceRootHelp")}</p>
+            {(form.workspace_root ?? "").trim() && (
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                {form.allow_outside_workspace
+                  ? t("settings.workspaceRootHelpOutside")
+                  : t("settings.workspaceRootHelp")}
+              </p>
             )}
           </div>
           <div className="form-group" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>

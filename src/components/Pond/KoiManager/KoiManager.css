@@ -72,7 +72,7 @@
 /* Card */
 .koi-card {
   background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-left: 4px solid;
   border-radius: 12px;
   padding: 16px;
@@ -115,6 +115,17 @@
   white-space: nowrap;
 }
 
+.koi-card-role {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-dim, rgba(124, 58, 237, 0.15));
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
 .koi-card-status {
   display: flex;
   align-items: center;
@@ -155,7 +166,23 @@
 }
 
 .koi-stat-icon {
-  font-size: 13px;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.koi-stat-icon--memory {
+  background: var(--accent, #7c3aed);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V10h4V8.5A4 4 0 0 0 8 1zM6 11v1a2 2 0 1 0 4 0v-1H6z'/%3E%3C/svg%3E") center/contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V10h4V8.5A4 4 0 0 0 8 1zM6 11v1a2 2 0 1 0 4 0v-1H6z'/%3E%3C/svg%3E") center/contain no-repeat;
+}
+
+.koi-stat-icon--todo {
+  background: #f59e0b;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 2h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zm1 3v1h8V5H4zm0 3v1h8V8H4zm0 3v1h5v-1H4z'/%3E%3C/svg%3E") center/contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 2h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zm1 3v1h8V5H4zm0 3v1h8V8H4zm0 3v1h5v-1H4z'/%3E%3C/svg%3E") center/contain no-repeat;
 }
 
 .koi-card-actions {
@@ -163,7 +190,7 @@
   gap: 8px;
   margin-top: auto;
   padding-top: 6px;
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid var(--border);
 }
 
 /* Buttons */
@@ -187,18 +214,18 @@
 }
 
 .koi-btn-primary {
-  background: var(--accent-color);
+  background: var(--accent, #7c3aed);
   color: white;
 }
 
 .koi-btn-primary:hover:not(:disabled) {
-  opacity: 0.9;
+  filter: brightness(1.15);
 }
 
 .koi-btn-secondary {
   background: var(--bg-tertiary);
   color: var(--text-primary);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
 }
 
 .koi-btn-secondary:hover:not(:disabled) {
@@ -234,7 +261,7 @@
 
 .koi-modal {
   background: var(--bg-primary);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 14px;
   padding: 24px;
   width: 480px;
@@ -268,6 +295,14 @@
   margin-bottom: 16px;
 }
 
+.koi-form-help {
+  font-size: 11px;
+  color: var(--text-muted, var(--text-secondary));
+  margin-top: 4px;
+  line-height: 1.4;
+  opacity: 0.75;
+}
+
 .koi-form-label {
   display: block;
   font-size: 12px;
@@ -280,7 +315,7 @@
   width: 100%;
   padding: 8px 12px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text-primary);
   font-size: 13px;
@@ -290,14 +325,14 @@
 
 .koi-input:focus {
   outline: none;
-  border-color: var(--accent-color);
+  border-color: var(--accent);
 }
 
 .koi-textarea {
   width: 100%;
   padding: 8px 12px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text-primary);
   font-size: 13px;
@@ -310,7 +345,7 @@
 
 .koi-textarea:focus {
   outline: none;
-  border-color: var(--accent-color);
+  border-color: var(--accent);
 }
 
 .koi-textarea-lg {
@@ -331,12 +366,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid transparent;
+  border: 2.5px solid transparent;
   border-radius: 8px;
   background: var(--bg-secondary);
   font-size: 18px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s, box-shadow 0.15s;
 }
 
 .koi-icon-option:hover {
@@ -345,8 +380,9 @@
 }
 
 .koi-icon-option.selected {
-  border-color: var(--accent-color);
-  background: var(--accent-dim, rgba(124, 58, 237, 0.1));
+  border-color: #fff;
+  box-shadow: 0 0 0 2px var(--accent, #7c3aed);
+  background: var(--accent-dim, rgba(124, 58, 237, 0.15));
 }
 
 .koi-icon-custom {
@@ -395,5 +431,5 @@
   gap: 8px;
   margin-top: 24px;
   padding-top: 16px;
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid var(--border);
 }
