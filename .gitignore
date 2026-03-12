@@ -36,6 +36,7 @@ Thumbs.db
 # Local release / test helpers
 .tmp-gh/
 src-tauri/target-test/
+src-tauri/target-test-archive/
 examples/__pycache__/
 examples/string_utils.py
 test_output.txt

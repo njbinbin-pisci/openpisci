@@ -12,9 +12,12 @@
 /// a pool with an org_spec, assign Koi roles, and start execution.
 
 use crate::agent::tool::{Tool, ToolContext, ToolResult};
+use crate::koi::runtime::KOI_SESSIONS;
 use crate::store::Database;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
@@ -144,6 +147,92 @@ impl Tool for PoolOrgTool {
 }
 
 impl PoolOrgTool {
+    fn ensure_pool_accepts_new_work(
+        session: &crate::koi::PoolSession,
+        action: &str,
+    ) -> anyhow::Result<()> {
+        if session.status == "active" {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "Pool '{}' is {}. Action '{}' is disabled until the pool is resumed.",
+            session.name,
+            session.status,
+            action
+        ))
+    }
+
+    async fn list_active_pool_todos(&self, pool_id: &str) -> anyhow::Result<Vec<crate::koi::KoiTodo>> {
+        let db = self.db.lock().await;
+        Ok(db.list_koi_todos(None)?
+            .into_iter()
+            .filter(|todo| {
+                todo.pool_session_id.as_deref() == Some(pool_id)
+                    && !matches!(todo.status.as_str(), "done" | "cancelled")
+            })
+            .collect())
+    }
+
+    async fn cancel_running_pool_kois(&self, pool_id: &str) -> anyhow::Result<usize> {
+        let state = self.app.state::<crate::store::AppState>();
+        let mut affected_koi_ids: HashSet<String> = HashSet::new();
+
+        {
+            let flags = state.cancel_flags.lock().await;
+            for (key, flag) in flags.iter() {
+                if let Some(koi_id) = Self::koi_id_from_cancel_key(key, pool_id) {
+                    flag.store(true, Ordering::Relaxed);
+                    affected_koi_ids.insert(koi_id.to_string());
+                }
+            }
+        }
+
+        let active_other_sessions: HashSet<String> = {
+            let mut sessions = KOI_SESSIONS.lock().await;
+            let keys_to_remove: Vec<String> = sessions
+                .keys()
+                .filter(|key| key.ends_with(&format!(":{}", pool_id)))
+                .cloned()
+                .collect();
+            for key in keys_to_remove {
+                if let Some(koi_id) = key.split(':').next() {
+                    affected_koi_ids.insert(koi_id.to_string());
+                }
+                sessions.remove(&key);
+            }
+            sessions.keys()
+                .filter_map(|key| key.split(':').next().map(str::to_string))
+                .collect()
+        };
+
+        let koi_ids_to_idle: Vec<String> = affected_koi_ids
+            .into_iter()
+            .filter(|koi_id| !active_other_sessions.contains(koi_id))
+            .collect();
+
+        if koi_ids_to_idle.is_empty() {
+            return Ok(0);
+        }
+
+        let db = self.db.lock().await;
+        for koi_id in &koi_ids_to_idle {
+            let _ = db.update_koi_status(koi_id, "idle");
+        }
+        drop(db);
+
+        for koi_id in &koi_ids_to_idle {
+            let _ = self.app.emit("koi_status_changed", json!({ "id": koi_id, "status": "idle" }));
+        }
+
+        Ok(koi_ids_to_idle.len())
+    }
+
+    fn koi_id_from_cancel_key<'a>(key: &'a str, pool_id: &str) -> Option<&'a str> {
+        let suffix = format!("_{}", pool_id);
+        key.strip_prefix("koi_")
+            .and_then(|rest| rest.strip_suffix(&suffix))
+    }
+
     async fn resolve_pool_session(
         &self,
         input: &Value,
@@ -355,9 +444,41 @@ impl PoolOrgTool {
             Err(err) => return Ok(ToolResult::err(err.to_string())),
         };
 
+        if session.status == new_status {
+            return Ok(ToolResult::ok(format!(
+                "Project '{}' is already {}.",
+                session.name, new_status
+            )));
+        }
+
+        if new_status == "archived" {
+            let active_todos = self.list_active_pool_todos(&session.id).await?;
+            if !active_todos.is_empty() {
+                let todo_preview = active_todos.iter()
+                    .take(3)
+                    .map(|todo| format!("{} [{}]", &todo.id[..8.min(todo.id.len())], todo.status))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Ok(ToolResult::err(format!(
+                    "Pool '{}' still has {} active todo(s): {}. Finish, block, or cancel them before archiving.",
+                    session.name,
+                    active_todos.len(),
+                    todo_preview
+                )));
+            }
+        }
+
         let old_status = session.status.clone();
-        let db = self.db.lock().await;
-        db.update_pool_session_status(&session.id, new_status)?;
+        {
+            let db = self.db.lock().await;
+            db.update_pool_session_status(&session.id, new_status)?;
+        }
+
+        let halted_koi_count = if new_status == "archived" {
+            self.cancel_running_pool_kois(&session.id).await?
+        } else {
+            0
+        };
 
         let status_label = match new_status {
             "paused" => "已暂停",
@@ -366,19 +487,33 @@ impl PoolOrgTool {
             _ => new_status,
         };
 
+        let db = self.db.lock().await;
         let _ = db.insert_pool_message_ext(
             &session.id, "pisci",
             &format!("项目状态变更: {} → {}", old_status, new_status),
             "status_update",
-            &json!({ "event": "status_changed", "old": old_status, "new": new_status }).to_string(),
+            &json!({
+                "event": "status_changed",
+                "old": old_status,
+                "new": new_status,
+                "halted_koi_count": halted_koi_count
+            }).to_string(),
             None, None, Some("status_changed"),
         );
+        drop(db);
 
         let _ = self.app.emit("pool_session_updated", json!({ "id": session.id, "status": new_status }));
 
         Ok(ToolResult::ok(format!(
-            "Project '{}' {status_label} (status: {} → {}).",
-            session.name, old_status, new_status
+            "Project '{}' {status_label} (status: {} → {}).{}",
+            session.name,
+            old_status,
+            new_status,
+            if halted_koi_count > 0 {
+                format!(" Halted {} running Koi session(s).", halted_koi_count)
+            } else {
+                String::new()
+            }
         )))
     }
 
@@ -422,6 +557,9 @@ impl PoolOrgTool {
             Ok(session) => session,
             Err(err) => return Ok(ToolResult::err(err.to_string())),
         };
+        if let Err(err) = Self::ensure_pool_accepts_new_work(&pool, "assign_koi") {
+            return Ok(ToolResult::err(err.to_string()));
+        }
         let pool_id = pool.id.clone();
         let koi_id = match input["koi_id"].as_str() {
             Some(id) if !id.trim().is_empty() => id.trim().to_string(),

@@ -126,6 +126,7 @@ pub async fn run_multi_agent_tests() -> Result<TestSuiteResult, String> {
     results.push(test_pool_session_prefix_lookup().await);
     results.push(test_headless_session_scope_isolation().await);
     results.push(test_runtime_identifier_canonicalization().await);
+    results.push(test_archived_pool_blocks_runtime_work().await);
     results.push(test_recover_stale_running_sessions().await);
 
     let passed = results.iter().filter(|r| r.passed).count();
@@ -1576,4 +1577,63 @@ async fn test_recover_stale_running_sessions() -> TestResult {
         ok()
     }.await;
     finish_test("recover_stale_running_sessions", r, start)
+}
+
+async fn test_archived_pool_blocks_runtime_work() -> TestResult {
+    let start = std::time::Instant::now();
+    let r: Result<(), LocalizedError> = async {
+        let (db, _, runtime) = setup();
+
+        let (koi, pool) = {
+            let db = db.lock().await;
+            let koi = db.create_koi("Archivist", "Archive guard", "🗄️", "#888888", "Protect archived pools.", "Archive guard")
+                .map_err(backend_err)?;
+            let pool = db.create_pool_session("Archive Guard Pool").map_err(backend_err)?;
+            db.update_pool_session_status(&pool.id, "archived").map_err(backend_err)?;
+            (koi, pool)
+        };
+
+        let assign_err = match runtime.assign_task(
+            &koi.id,
+            "This should be rejected",
+            "pisci",
+            Some(&pool.id),
+            "medium",
+        ).await {
+            Ok(_) => {
+                return Err(fail(
+                    "debug.multiAgentErrUnexpectedSome",
+                    "archived pool unexpectedly accepted a runtime assignment",
+                ));
+            }
+            Err(err) => err,
+        };
+        if !assign_err.to_string().contains("cannot accept new task assignments") {
+            return Err(fail_with_params(
+                "debug.multiAgentErrExpectedActual",
+                json!({"subject":"archived assign_task error","actual":assign_err.to_string()}),
+                "archived pool did not reject task assignment with the expected reason",
+            ));
+        }
+
+        let activate_err = match runtime.activate_for_messages(&koi.id, &pool.id).await {
+            Ok(_) => {
+                return Err(fail(
+                    "debug.multiAgentErrUnexpectedSome",
+                    "archived pool unexpectedly activated a Koi from a mention",
+                ));
+            }
+            Err(err) => err,
+        };
+        if !activate_err.to_string().contains("cannot activate Koi message handling") {
+            return Err(fail_with_params(
+                "debug.multiAgentErrExpectedActual",
+                json!({"subject":"archived activate_for_messages error","actual":activate_err.to_string()}),
+                "archived pool did not reject mention activation with the expected reason",
+            ));
+        }
+
+        ok()
+    }.await;
+    finish_test("archived_pool_blocks_runtime_work", r, start)
 }

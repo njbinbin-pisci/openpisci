@@ -55,6 +55,21 @@ impl KoiRuntime {
         self.bus.db()
     }
 
+    fn ensure_pool_allows_runtime_work(
+        pool: &crate::koi::PoolSession,
+        action: &str,
+    ) -> anyhow::Result<()> {
+        if pool.status == "active" {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "Pool '{}' is {} and cannot {} until it is resumed",
+            pool.name,
+            pool.status,
+            action
+        ))
+    }
+
     /// Load the org spec for a pool session (if any).
     pub async fn load_org_spec(&self, pool_session_id: Option<&str>) -> String {
         if let Some(psid) = pool_session_id {
@@ -84,11 +99,12 @@ impl KoiRuntime {
             let koi_def = db.resolve_koi_identifier(koi_id)?
                 .ok_or_else(|| anyhow::anyhow!("Koi '{}' not found", koi_id))?;
             let pool_session_id = match pool_session_id {
-                Some(value) => Some(
-                    db.resolve_pool_session_identifier(value)?
-                        .ok_or_else(|| anyhow::anyhow!("Pool '{}' not found", value))?
-                        .id
-                ),
+                Some(value) => Some({
+                    let pool = db.resolve_pool_session_identifier(value)?
+                        .ok_or_else(|| anyhow::anyhow!("Pool '{}' not found", value))?;
+                    Self::ensure_pool_allows_runtime_work(&pool, "accept new task assignments")?;
+                    pool.id
+                }),
                 None => None,
             };
             (koi_def, pool_session_id)
@@ -140,11 +156,12 @@ impl KoiRuntime {
             };
             let pool_value = pool_session_id.or(todo.pool_session_id.as_deref());
             let pool_session_id = match pool_value {
-                Some(value) => Some(
-                    db.resolve_pool_session_identifier(value)?
-                        .ok_or_else(|| anyhow::anyhow!("Pool '{}' not found", value))?
-                        .id
-                ),
+                Some(value) => Some({
+                    let pool = db.resolve_pool_session_identifier(value)?
+                        .ok_or_else(|| anyhow::anyhow!("Pool '{}' not found", value))?;
+                    Self::ensure_pool_allows_runtime_work(&pool, "run Koi work")?;
+                    pool.id
+                }),
                 None => None,
             };
             (koi_def, pool_session_id)
@@ -293,6 +310,7 @@ impl KoiRuntime {
                 .ok_or_else(|| anyhow::anyhow!("Koi '{}' not found", koi_id))?;
             let pool_session = db.resolve_pool_session_identifier(pool_session_id)?
                 .ok_or_else(|| anyhow::anyhow!("Pool '{}' not found", pool_session_id))?;
+            Self::ensure_pool_allows_runtime_work(&pool_session, "activate Koi message handling")?;
             (koi_def, pool_session.id)
         };
         let koi_id = koi_def.id.as_str();

@@ -82,7 +82,11 @@ impl Tool for PoolChatTool {
 }
 
 impl PoolChatTool {
-    async fn resolve_pool_id(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<String> {
+    async fn resolve_pool_session(
+        &self,
+        input: &Value,
+        ctx: &ToolContext,
+    ) -> anyhow::Result<crate::koi::PoolSession> {
         let requested = input["pool_id"].as_str()
             .map(str::trim)
             .filter(|id| !id.is_empty() && *id != "current")
@@ -94,9 +98,25 @@ impl PoolChatTool {
 
         let db = self.db.lock().await;
         match db.resolve_pool_session_identifier(&requested)? {
-            Some(session) => Ok(session.id),
+            Some(session) => Ok(session),
             None => Err(anyhow::anyhow!("Pool '{}' not found", requested)),
         }
+    }
+
+    fn ensure_pool_writable(
+        &self,
+        pool: &crate::koi::PoolSession,
+        action: &str,
+    ) -> anyhow::Result<()> {
+        if pool.status == "active" {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "Pool '{}' is {}. Action '{}' is disabled until the pool is resumed.",
+            pool.name,
+            pool.status,
+            action
+        ))
     }
 
     async fn send_message(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
@@ -104,10 +124,14 @@ impl PoolChatTool {
             Some(c) if !c.trim().is_empty() => c.trim(),
             _ => return Ok(ToolResult::err("'content' is required for action 'send'")),
         };
-        let pool_id = match self.resolve_pool_id(input, ctx).await {
-            Ok(id) => id,
+        let pool = match self.resolve_pool_session(input, ctx).await {
+            Ok(pool) => pool,
             Err(err) => return Ok(ToolResult::err(err.to_string())),
         };
+        if let Err(err) = self.ensure_pool_writable(&pool, "send") {
+            return Ok(ToolResult::err(err.to_string()));
+        }
+        let pool_id = pool.id;
 
         let msg = {
             let db = self.db.lock().await;
@@ -127,8 +151,8 @@ impl PoolChatTool {
     }
 
     async fn read_messages(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
-        let pool_id = match self.resolve_pool_id(input, ctx).await {
-            Ok(id) => id,
+        let pool_id = match self.resolve_pool_session(input, ctx).await {
+            Ok(pool) => pool.id,
             Err(err) => return Ok(ToolResult::err(err.to_string())),
         };
         let limit = input["limit"].as_i64().unwrap_or(20);
@@ -181,10 +205,14 @@ impl PoolChatTool {
             Some(id) => id,
             None => return Ok(ToolResult::err("'message_id' is required for action 'reply'")),
         };
-        let pool_id = match self.resolve_pool_id(input, ctx).await {
-            Ok(id) => id,
+        let pool = match self.resolve_pool_session(input, ctx).await {
+            Ok(pool) => pool,
             Err(err) => return Ok(ToolResult::err(err.to_string())),
         };
+        if let Err(err) = self.ensure_pool_writable(&pool, "reply") {
+            return Ok(ToolResult::err(err.to_string()));
+        }
+        let pool_id = pool.id;
 
         let msg = {
             let db = self.db.lock().await;
