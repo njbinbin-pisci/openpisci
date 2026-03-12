@@ -674,24 +674,23 @@ fn add_watermark(input: &Value, workspace: &Path) -> Result<ToolResult> {
         if let Ok(page_id) = doc.get_pages().get(page_num).copied().ok_or(()) {
             if let Ok(Object::Dictionary(dict)) = doc.get_object_mut(page_id) {
                 match dict.get_mut(b"Contents") {
-                        Ok(contents) => {
-                            let existing = contents.clone();
-                            *contents = match existing {
-                                Object::Array(mut arr) => {
-                                    arr.push(Object::Reference(wm_id));
-                                    Object::Array(arr)
-                                }
-                                Object::Reference(r) => Object::Array(vec![
-                                    Object::Reference(r),
-                                    Object::Reference(wm_id),
-                                ]),
-                                _ => Object::Array(vec![Object::Reference(wm_id)]),
-                            };
-                        }
-                        Err(_) => {
-                            dict.set(b"Contents", Object::Reference(wm_id));
-                        }
+                    Ok(contents) => {
+                        let existing = contents.clone();
+                        *contents = match existing {
+                            Object::Array(mut arr) => {
+                                arr.push(Object::Reference(wm_id));
+                                Object::Array(arr)
+                            }
+                            Object::Reference(r) => {
+                                Object::Array(vec![Object::Reference(r), Object::Reference(wm_id)])
+                            }
+                            _ => Object::Array(vec![Object::Reference(wm_id)]),
+                        };
                     }
+                    Err(_) => {
+                        dict.set(b"Contents", Object::Reference(wm_id));
+                    }
+                }
             }
         }
     }
