@@ -1411,18 +1411,37 @@ export default function Chat() {
 // UNC:      \\server\share\file.txt
 // Unix/Mac: /home/user/file.txt  /Users/foo/bar.md
 // The character class excludes whitespace and Markdown-special chars but allows CJK and other Unicode.
+// Matches a Windows or Unix local path (bare, not inside a markdown link)
 const LOCAL_PATH_RE =
   /(?<!\]\()(?<![`\w/\\])(((?:[A-Za-z]:[\\/]|\\\\)[^\s`"'<>[\]()（）【】]+)|(?:\/(?:home|Users|tmp|var|etc|opt|srv|mnt|data)\/[^\s`"'<>[\]()（）【】]+))/g;
 
+// Matches a path wrapped in backticks: `C:\...` or `/home/user/...`
+const BACKTICK_PATH_RE =
+  /`(((?:[A-Za-z]:[\\/]|\\\\)[^\s`"'<>[\]()（）【】]+)|(?:\/(?:home|Users|tmp|var|etc|opt|srv|mnt|data)\/[^\s`"'<>[\]()（）【】]+))`/g;
+
+function pathToUri(p: string): string {
+  const forward = p.replace(/\\/g, "/");
+  // encodeURI keeps : / \ . but encodes spaces and CJK
+  return forward.startsWith("//")
+    ? `file:${encodeURI(forward)}`              // UNC \\server\share
+    : `file:///${encodeURI(forward.replace(/^\//, ""))}`; // C:/... or /home/...
+}
+
+// Splits text on markdown links so we can skip already-linked segments
+const EXISTING_LINK_RE = /(\[[^\]]*\]\([^)]*\))/g;
+
 function linkifyPaths(text: string): string {
-  return text.replace(LOCAL_PATH_RE, (match) => {
-    const encoded = match.replace(/\\/g, "/");
-    // encodeURI preserves /:\. but encodes spaces, CJK and other non-ASCII chars
-    const uri = encoded.startsWith("//")
-      ? `file:${encodeURI(encoded)}`          // UNC \\server\share
-      : `file:///${encodeURI(encoded.replace(/^\//, ""))}`; // Windows C:/... or Unix /home/...
-    return `[${match}](${uri})`;
-  });
+  // Pass 1: replace backtick-wrapped paths in non-linked segments
+  const pass1 = text.split(EXISTING_LINK_RE).map((part, i) => {
+    if (i % 2 === 1) return part; // already a markdown link — leave alone
+    return part.replace(BACKTICK_PATH_RE, (_m, p) => `[${p}](${pathToUri(p)})`);
+  }).join("");
+
+  // Pass 2: replace bare paths, again skipping already-linked segments (including those from pass1)
+  return pass1.split(EXISTING_LINK_RE).map((part, i) => {
+    if (i % 2 === 1) return part;
+    return part.replace(LOCAL_PATH_RE, (match) => `[${match}](${pathToUri(match)})`);
+  }).join("");
 }
 
 function isLocalPath(href: string | undefined): boolean {
