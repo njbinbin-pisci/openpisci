@@ -225,6 +225,9 @@ pub async fn dispatch_heartbeat(
     base_prompt: &str,
     channel: &str,
 ) -> Result<(), String> {
+    if base_prompt.trim().is_empty() {
+        return Ok(());
+    }
     let attentions = scan_attention_pools(state).await?;
     if attentions.is_empty() {
         ensure_heartbeat_session(

@@ -346,7 +346,7 @@ fn default_max_iterations() -> u32 {
 fn default_heartbeat_interval() -> u32 {
     30
 }
-fn default_heartbeat_prompt() -> String {
+pub fn default_heartbeat_prompt() -> String {
     "这是你的例行心跳巡查。按以下清单逐项完成，然后回复 HEARTBEAT_OK。\n\
      \n\
      ## 1. 活跃项目巡查\n\

@@ -465,7 +465,13 @@ pub fn run() {
                     loop {
                         let (enabled, interval_mins, prompt) = {
                             let s = settings_arc.lock().await;
-                            (s.heartbeat_enabled, s.heartbeat_interval_mins, s.heartbeat_prompt.clone())
+                            let raw_prompt = s.heartbeat_prompt.clone();
+                            let prompt = if raw_prompt.trim().is_empty() {
+                                crate::store::settings::default_heartbeat_prompt()
+                            } else {
+                                raw_prompt
+                            };
+                            (s.heartbeat_enabled, s.heartbeat_interval_mins, prompt)
                         };
                         if !enabled || interval_mins == 0 {
                             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
