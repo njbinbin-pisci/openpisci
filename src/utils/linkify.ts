@@ -62,13 +62,21 @@ export function isLocalPath(href: string | undefined): boolean {
 
 /**
  * Convert a file:// URI back to a native OS path for shell.open().
+ * On Windows, ShellExecute accepts both C:\path and file:///C:/path,
+ * but native paths are more reliable (avoids encoding issues).
  */
 export function uriToNativePath(uri: string): string {
   if (uri.startsWith("file:///")) {
-    return decodeURIComponent(uri.slice(8)).replace(/\//g, "\\");
+    // file:///C:/Users/... → C:\Users\...
+    const decoded = decodeURIComponent(uri.slice(8));
+    // On Windows keep backslashes; on Unix keep forward slashes
+    return decoded.includes("\\") || /^[A-Za-z]:/.test(decoded)
+      ? decoded.replace(/\//g, "\\")
+      : decoded;
   }
   if (uri.startsWith("file://")) {
     return decodeURIComponent(uri.slice(7));
   }
+  // Already a native path
   return uri;
 }

@@ -17,9 +17,16 @@ function InboxMessageContent({ content }: { content: string }) {
       components={{
         a: ({ href, children }) => {
           if (isLocalPath(href)) {
+            const nativePath = uriToNativePath(href!);
             return (
-              <a href="#" title={href} style={{ cursor: "pointer" }}
-                onClick={(e) => { e.preventDefault(); shellOpen(uriToNativePath(href!)).catch(console.error); }}>
+              <a href="#" title={nativePath}
+                onClick={(e) => {
+                  e.preventDefault();
+                  shellOpen(nativePath).catch((err) => {
+                    console.error("[inbox] shellOpen failed:", nativePath, err);
+                  });
+                }}
+              >
                 {children}
               </a>
             );

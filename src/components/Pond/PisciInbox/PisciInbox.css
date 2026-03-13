@@ -172,10 +172,79 @@
 
 .pisci-inbox-message-content {
   margin: 0;
-  white-space: pre-wrap;
   word-break: break-word;
   font-family: inherit;
   font-size: 0.92rem;
   line-height: 1.55;
   color: var(--text-primary);
+}
+
+.pisci-inbox-message-content p {
+  margin: 0 0 6px;
+}
+.pisci-inbox-message-content p:last-child {
+  margin-bottom: 0;
+}
+.pisci-inbox-message-content ul,
+.pisci-inbox-message-content ol {
+  padding-left: 1.4em;
+  margin: 2px 0 6px;
+}
+.pisci-inbox-message-content li {
+  margin: 2px 0;
+}
+.pisci-inbox-message-content h1,
+.pisci-inbox-message-content h2,
+.pisci-inbox-message-content h3,
+.pisci-inbox-message-content h4 {
+  margin: 8px 0 4px;
+  font-weight: 600;
+  font-size: 1em;
+}
+.pisci-inbox-message-content pre {
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-size: 0.85em;
+  margin: 4px 0;
+}
+.pisci-inbox-message-content code {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.88em;
+}
+.pisci-inbox-message-content a {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.pisci-inbox-message-content a:hover {
+  text-decoration: underline;
+}
+.pisci-inbox-message-content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 8px 0;
+}
+.pisci-inbox-message-content blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 4px 0;
+  padding: 2px 8px;
+  color: var(--text-secondary);
+}
+.pisci-inbox-message-content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9em;
+  margin: 4px 0;
+}
+.pisci-inbox-message-content th,
+.pisci-inbox-message-content td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+}
+.pisci-inbox-message-content th {
+  background: rgba(0,0,0,0.1);
+  font-weight: 600;
 }
