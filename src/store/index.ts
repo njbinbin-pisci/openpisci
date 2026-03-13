@@ -374,12 +374,14 @@ interface PoolState {
   sessions: PoolSession[];
   activeSessionId: string | null;
   messagesBySession: Record<string, PoolMessage[]>;
+  /** Whether there are older messages on the server not yet loaded, keyed by sessionId */
+  hasMoreBySession: Record<string, boolean>;
   loading: boolean;
 }
 
 const poolSlice = createSlice({
   name: "pool",
-  initialState: { sessions: [], activeSessionId: null, messagesBySession: {}, loading: false } as PoolState,
+  initialState: { sessions: [], activeSessionId: null, messagesBySession: {}, hasMoreBySession: {}, loading: false } as PoolState,
   reducers: {
     setPoolSessions: (state, action: PayloadAction<PoolSession[]>) => {
       state.sessions = action.payload;
@@ -390,6 +392,7 @@ const poolSlice = createSlice({
         for (const key of Object.keys(state.messagesBySession)) {
           if (!validIds.has(key)) {
             delete state.messagesBySession[key];
+            delete state.hasMoreBySession[key];
           }
         }
       }
@@ -400,6 +403,7 @@ const poolSlice = createSlice({
     removePoolSession: (state, action: PayloadAction<string>) => {
       state.sessions = state.sessions.filter((s) => s.id !== action.payload);
       delete state.messagesBySession[action.payload];
+      delete state.hasMoreBySession[action.payload];
       if (state.activeSessionId === action.payload) {
         state.activeSessionId = state.sessions[0]?.id ?? null;
       }
@@ -407,8 +411,20 @@ const poolSlice = createSlice({
     setActivePoolSession: (state, action: PayloadAction<string | null>) => {
       state.activeSessionId = action.payload;
     },
-    setPoolMessages: (state, action: PayloadAction<{ sessionId: string; messages: PoolMessage[] }>) => {
+    setPoolMessages: (state, action: PayloadAction<{ sessionId: string; messages: PoolMessage[]; hasMore?: boolean }>) => {
       state.messagesBySession[action.payload.sessionId] = action.payload.messages;
+      if (action.payload.hasMore !== undefined) {
+        state.hasMoreBySession[action.payload.sessionId] = action.payload.hasMore;
+      }
+    },
+    /** Prepend older messages fetched from the server (for scroll-up pagination) */
+    prependPoolMessages: (state, action: PayloadAction<{ sessionId: string; messages: PoolMessage[]; hasMore: boolean }>) => {
+      const { sessionId, messages, hasMore } = action.payload;
+      const existing = state.messagesBySession[sessionId] ?? [];
+      const existingIds = new Set(existing.map((m) => m.id));
+      const newOnes = messages.filter((m) => !existingIds.has(m.id));
+      state.messagesBySession[sessionId] = [...newOnes, ...existing];
+      state.hasMoreBySession[sessionId] = hasMore;
     },
     appendPoolMessage: (state, action: PayloadAction<PoolMessage>) => {
       const sid = action.payload.pool_session_id;

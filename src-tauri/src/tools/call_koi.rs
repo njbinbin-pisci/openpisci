@@ -289,10 +289,14 @@ impl CallKoiTool {
              - To see what other Koi are working on or have completed, use pool_org(action=\"get_todos\", pool_id=\"...\") or pool_chat(action=\"read\").\n\
              - Focus on your assigned scope. Do not modify files outside the directories relevant to your task.\n\
              \n\n## Task Lifecycle\n\
+             - Whenever you receive real work — whether assigned by Pisci, handed off by another Koi via @mention, or self-identified — create a todo for it FIRST: pool_org(action=\"create\", pool_id=\"...\", title=\"...\", description=\"...\"). Then claim it: pool_org(action=\"claim_todo\", todo_id=\"...\"). This keeps the kanban board accurate and your work visible.\n\
+             - If you are @mentioned with only a status update, acknowledgement, or notification that the project is done — no new work is implied — you do NOT need to create a todo.\n\
+             - Mark a task complete ONLY when the actual deliverable exists and is verifiable: code is written and tested, a file is created, a review is posted, etc. Do NOT mark done just because you wrote a plan, had a discussion, or described what should be done.\n\
              - When you finish a task, mark it complete: pool_org(action=\"complete_todo\", todo_id=\"...\"). Always do this — leaving tasks unmarked pollutes the kanban board.\n\
+             - Before marking done, ask yourself: \"Could another agent pick up the project right now and find the actual output of this task?\" If no, the task is not done.\n\
              - If you realize a task is no longer needed, cancel your own: pool_org(action=\"cancel_todo\", todo_id=\"...\", reason=\"...\").\n\
              - You can ONLY complete or cancel your own tasks. To request cancellation of another agent's task, @pisci in pool_chat and explain why.\n\
-             - If your task is blocked, update its status: pool_org(action=\"update_todo_status\", todo_id=\"...\", status=\"blocked\") and notify @pisci.\n\
+             - If your task is blocked, update its status: pool_org(action=\"update_todo_status\", todo_id=\"...\", status=\"blocked\") and notify @pisci. Do NOT mark it done.\n\
              - Use pool_org(action=\"get_todos\", pool_id=\"...\") to see the current task board before starting work.\n\
              - In significant pool_chat updates, prefer including a structured status signal so Pisci can reason about project state: `[ProjectStatus] follow_up_needed`, `[ProjectStatus] waiting`, or `[ProjectStatus] ready_for_pisci_review`.\n\
              - Use `[ProjectStatus] follow_up_needed` when another agent must continue the work. @mention the next agent or @pisci.\n\

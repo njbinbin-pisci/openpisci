@@ -127,6 +127,8 @@ function MessageBubble({
   );
 }
 
+const PAGE_SIZE = 100;
+
 export default function ChatPool() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -134,14 +136,15 @@ export default function ChatPool() {
   const sessions = useSelector((s: RootState) => s.pool.sessions);
   const activeSessionId = useSelector((s: RootState) => s.pool.activeSessionId);
   const messagesBySession = useSelector((s: RootState) => s.pool.messagesBySession);
+  const hasMoreBySession = useSelector((s: RootState) => s.pool.hasMoreBySession);
   const loading = useSelector((s: RootState) => s.pool.loading);
   const kois = useSelector((s: RootState) => s.koi.kois);
 
-  const allMessages = activeSessionId ? messagesBySession[activeSessionId] ?? [] : [];
+  const messages = activeSessionId ? messagesBySession[activeSessionId] ?? [] : [];
+  const hasMore = activeSessionId ? hasMoreBySession[activeSessionId] ?? false : false;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const PAGE_SIZE = 100;
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newName, setNewName] = useState("");
@@ -167,14 +170,45 @@ export default function ChatPool() {
     }
   }, [dispatch, activeSessionId]);
 
+  /** Load the latest PAGE_SIZE messages for a session (initial load) */
   const loadMessages = useCallback(async (sessionId: string) => {
     try {
-      const msgs = await poolApi.getMessages({ session_id: sessionId, limit: 200 });
-      dispatch(poolActions.setPoolMessages({ sessionId, messages: msgs }));
+      const msgs = await poolApi.getMessages({ session_id: sessionId, limit: PAGE_SIZE });
+      dispatch(poolActions.setPoolMessages({
+        sessionId,
+        messages: msgs,
+        hasMore: msgs.length === PAGE_SIZE,
+      }));
     } catch {
       // silently ignore
     }
   }, [dispatch]);
+
+  /** Load older messages when user scrolls to the top */
+  const loadOlderMessages = useCallback(async (sessionId: string, currentCount: number) => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const msgs = await poolApi.getMessages({
+        session_id: sessionId,
+        limit: PAGE_SIZE,
+        offset: currentCount,
+      });
+      if (msgs.length > 0) {
+        dispatch(poolActions.prependPoolMessages({
+          sessionId,
+          messages: msgs,
+          hasMore: msgs.length === PAGE_SIZE,
+        }));
+      } else {
+        dispatch(poolActions.prependPoolMessages({ sessionId, messages: [], hasMore: false }));
+      }
+    } catch {
+      // silently ignore
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [dispatch, loadingMore]);
 
   useEffect(() => {
     loadSessions();
@@ -204,26 +238,22 @@ export default function ChatPool() {
     return () => { unlisten?.(); };
   }, [activeSessionId, loadMessages, dispatch]);
 
-  const messages = useMemo(
-    () => allMessages.slice(-visibleCount),
-    [allMessages, visibleCount],
-  );
-  const hasMore = allMessages.length > visibleCount;
-
-  useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-  }, [activeSessionId]);
-
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [allMessages.length]);
+  }, [messages.length]);
 
   const handleMessagesScroll = useCallback((e: UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
-    if (el.scrollTop < 40 && hasMore) {
-      setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, allMessages.length));
+    if (el.scrollTop < 60 && hasMore && activeSessionId && !loadingMore) {
+      const prevScrollHeight = el.scrollHeight;
+      loadOlderMessages(activeSessionId, messages.length).then(() => {
+        // Restore scroll position so the view doesn't jump to the top
+        requestAnimationFrame(() => {
+          el.scrollTop = el.scrollHeight - prevScrollHeight;
+        });
+      });
     }
-  }, [hasMore, allMessages.length]);
+  }, [hasMore, activeSessionId, loadingMore, loadOlderMessages, messages.length]);
 
   const handleCreateSession = async () => {
     const name = newName.trim();
@@ -429,7 +459,9 @@ export default function ChatPool() {
             onScroll={handleMessagesScroll}
           >
             {hasMore && (
-              <div className="chatpool-load-more">{t("common.loadMore")}</div>
+              <div className="chatpool-load-more">
+                {loadingMore ? t("common.loading") : t("common.loadMore")}
+              </div>
             )}
             {messages.map((msg) => (
               <MessageBubble key={msg.id} msg={msg} kois={kois} />

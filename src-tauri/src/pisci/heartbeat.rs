@@ -85,10 +85,14 @@ pub(crate) fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAt
         }
         ProjectDecision::ReadyForPisciReview => {
             lines.push(
-                "- The pool may be ready for Pisci review, but HEARTBEAT_OK is still not automatic.".to_string(),
+                "- All todos are done or cancelled. The project appears complete.".to_string(),
             );
             lines.push(
-                "- Review the latest work, decide whether follow-up is still needed, and only treat the project as complete if the overall state truly supports wrap-up."
+                "- Review the pool chat to confirm there is no outstanding work, then execute pool_org(action=\"archive\", pool_id=...) to archive the project and post a wrap-up summary in pool_chat."
+                    .to_string(),
+            );
+            lines.push(
+                "- Only skip archiving if you find clear evidence of unresolved work not captured in todos."
                     .to_string(),
             );
         }
@@ -116,11 +120,14 @@ pub fn collect_pool_attention(
         .iter()
         .filter(|m| m.id > last_seen_message_id && is_attention_event(m, koi_ids))
         .collect();
-    if new_attention_messages.is_empty() {
-        return None;
-    }
 
     let assessment = assess_project_state(messages, todos, koi_ids);
+
+    // Always wake Pisci when all todos are done — even if no new attention events arrived
+    // (the last complete_todo event may have already been consumed by a prior heartbeat)
+    if new_attention_messages.is_empty() && assessment.decision != ProjectDecision::ReadyForPisciReview {
+        return None;
+    }
     let mut lines = vec![
         format!("Pool: {} ({})", pool.name, pool.id),
         format!("Status: {}", pool.status),

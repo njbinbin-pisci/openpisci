@@ -353,8 +353,13 @@ pub fn default_heartbeat_prompt() -> String {
      用 pool_org(action=\"list\") 列出所有项目池。对每个 active 的池：\n\
      - pool_org(action=\"get_todos\", pool_id=...) — 查看任务板状态\n\
      - pool_chat(action=\"read\", pool_id=...) — 阅读最新消息\n\
-     判断：项目是否卡住？Koi 是否在空转讨论而无产出？是否有 blocked 任务需要你解除？\
-     是否已全部完成可以收尾？根据判断主动介入或在 pool_chat 推动下一步。\n\
+     \n\
+     根据任务板状态判断并执行：\n\
+     - 若所有 todo 状态均为 done 或 cancelled（无 todo/in_progress/blocked）：\n\
+       立即执行 pool_org(action=\"archive\", pool_id=...) 归档项目，并在 pool_chat 发送收尾总结。\n\
+     - 若有 blocked 任务：主动解除阻塞或重新分配。\n\
+     - 若 Koi 在空转讨论无产出：在 pool_chat 推动下一步或分配具体任务。\n\
+     - 若项目卡住无进展：介入协调。\n\
      \n\
      ## 2. Koi 状态检查\n\
      查看是否有 Koi 异常（长时间 busy 但无活跃 todo）。如有，在对应 pool_chat 通知或分配新任务。\n\

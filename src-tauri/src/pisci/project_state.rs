@@ -143,6 +143,20 @@ pub fn assess_project_state(
         };
     }
 
+    // All todos are done/cancelled and no follow-up signals — project is ready for review
+    if !todos.is_empty() && active_todo_count == 0 {
+        return ProjectAssessment {
+            decision: ProjectDecision::ReadyForPisciReview,
+            active_todo_count,
+            blocked_todo_count,
+            follow_up_signal_count,
+            ready_signal_count,
+            explicit_pisci_handoff_count,
+            summary: "All todos are done or cancelled and no follow-up signals remain. Pisci should archive the project."
+                .to_string(),
+        };
+    }
+
     let summary = if ready_signal_count > 0 {
         format!(
             "{} ready-for-review signal(s) were observed, but none explicitly handed off to @pisci yet.",

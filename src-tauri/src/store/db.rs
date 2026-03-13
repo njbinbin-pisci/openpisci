@@ -2586,11 +2586,17 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<crate::koi::PoolMessage>> {
+        // Fetch the newest `limit` rows starting at `offset` from the end,
+        // then re-sort ascending so callers always receive chronological order.
         let mut stmt = self.conn.prepare(
             "SELECT id, pool_session_id, sender_id, content, msg_type, metadata, \
              todo_id, reply_to_message_id, event_type, created_at \
-             FROM pool_messages WHERE pool_session_id = ?1 \
-             ORDER BY created_at ASC LIMIT ?2 OFFSET ?3",
+             FROM ( \
+               SELECT id, pool_session_id, sender_id, content, msg_type, metadata, \
+                      todo_id, reply_to_message_id, event_type, created_at \
+               FROM pool_messages WHERE pool_session_id = ?1 \
+               ORDER BY created_at DESC LIMIT ?2 OFFSET ?3 \
+             ) ORDER BY created_at ASC",
         )?;
         let rows = stmt.query_map(
             params![pool_session_id, limit, offset],
