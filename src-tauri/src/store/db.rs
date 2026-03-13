@@ -1743,6 +1743,7 @@ impl Database {
     // Koi (persistent Agents)
     // ------------------------------------------------------------------
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_koi(
         &self,
         name: &str,
