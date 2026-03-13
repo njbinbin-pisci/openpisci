@@ -627,6 +627,7 @@
 .message-content .markdown-body a {
   color: var(--accent);
   text-decoration: none;
+  cursor: pointer;
 }
 
 .message-content .markdown-body a:hover {

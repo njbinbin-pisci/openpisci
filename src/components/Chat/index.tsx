@@ -1422,6 +1422,7 @@ function MessageContent({ content }: { content: string }) {
       <RenderErrorBoundary fallback={fallback}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
+          urlTransform={(url) => url.startsWith("file://") ? url : (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("mailto:") || url.startsWith("#") || url.startsWith("/") || !url.includes(":")) ? url : ""}
           components={{
             // Local paths → shell.open(); web URLs → new tab
             a: ({ href, children }) => {
