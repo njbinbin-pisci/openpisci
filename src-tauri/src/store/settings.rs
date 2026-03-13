@@ -347,7 +347,22 @@ fn default_heartbeat_interval() -> u32 {
     30
 }
 fn default_heartbeat_prompt() -> String {
-    "检查是否仍有未完成工作。只有在没有 active todo、没有 `[ProjectStatus] follow_up_needed` / `[ProjectStatus] waiting` 信号、并且有人明确用 `[ProjectStatus] ready_for_pisci_review @pisci` 把判断权交回时，才可回复 HEARTBEAT_OK；否则应继续协调项目。".into()
+    "这是你的例行心跳巡查。按以下清单逐项完成，然后回复 HEARTBEAT_OK。\n\
+     \n\
+     ## 1. 活跃项目巡查\n\
+     用 pool_org(action=\"list\") 列出所有项目池。对每个 active 的池：\n\
+     - pool_org(action=\"get_todos\", pool_id=...) — 查看任务板状态\n\
+     - pool_chat(action=\"read\", pool_id=...) — 阅读最新消息\n\
+     判断：项目是否卡住？Koi 是否在空转讨论而无产出？是否有 blocked 任务需要你解除？\
+     是否已全部完成可以收尾？根据判断主动介入或在 pool_chat 推动下一步。\n\
+     \n\
+     ## 2. Koi 状态检查\n\
+     查看是否有 Koi 异常（长时间 busy 但无活跃 todo）。如有，在对应 pool_chat 通知或分配新任务。\n\
+     \n\
+     ## 3. 定时任务检查\n\
+     用 app_control(action=\"list_scheduled_tasks\") 查看是否有应运行的计划任务，按需处理。\n\
+     \n\
+     完成以上全部巡查后，回复 HEARTBEAT_OK。".into()
 }
 
 fn default_provider() -> String {

@@ -44,6 +44,7 @@ fn is_attention_event(msg: &PoolMessage, koi_ids: &[String]) -> bool {
     )
 }
 
+
 pub(crate) fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAttention) -> String {
     let assessment = &attention.assessment;
     let mut lines = vec![
