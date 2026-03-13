@@ -1250,6 +1250,11 @@ pub async fn run_agent_headless(
                 "run_agent_headless: user message already pre-inserted for {}, skipping",
                 session_id
             );
+        } else if effective_user_message.trim().is_empty() {
+            tracing::warn!(
+                "run_agent_headless: skipping empty user message for {}",
+                session_id
+            );
         } else {
             tracing::info!(
                 "run_agent_headless: inserting user message for {}",

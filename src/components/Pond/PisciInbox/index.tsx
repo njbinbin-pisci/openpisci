@@ -242,7 +242,7 @@ export default function PisciInbox() {
               {!loadingMessages && messages.length === 0 && (
                 <div className="pisci-inbox-empty">{t("pond.inboxNoMessages")}</div>
               )}
-              {messages.map((message) => (
+              {messages.filter((m) => m.content.trim()).map((message) => (
                 <div key={message.id} className={`pisci-inbox-message pisci-inbox-message--${message.role}`}>
                   <div className="pisci-inbox-message-header">
                     <span className="pisci-inbox-message-role">
