@@ -311,7 +311,7 @@ impl CallKoiTool {
             content: MessageContent::text(&task),
         }];
 
-        // Read settings
+        // Read settings, applying per-Koi LLM provider override when configured
         let (
             provider,
             model,
@@ -327,13 +327,49 @@ impl CallKoiTool {
             vision_enabled,
         ) = {
             let settings = state.settings.lock().await;
+            // Resolve per-Koi LLM provider: if the koi has a provider_id and it exists in settings, use it
+            let (provider, model, api_key, base_url, max_tokens) =
+                if let Some(ref pid) = koi_def.llm_provider_id {
+                    if let Some(p) = settings.find_llm_provider(pid) {
+                        let key = p.api_key.clone();
+                        let mt = if p.max_tokens > 0 {
+                            p.max_tokens
+                        } else {
+                            settings.max_tokens
+                        };
+                        (
+                            p.provider.clone(),
+                            p.model.clone(),
+                            key,
+                            p.base_url.clone(),
+                            mt,
+                        )
+                    } else {
+                        // Provider id set but not found — fall back to global
+                        (
+                            settings.provider.clone(),
+                            settings.model.clone(),
+                            settings.active_api_key().to_string(),
+                            settings.custom_base_url.clone(),
+                            settings.max_tokens,
+                        )
+                    }
+                } else {
+                    (
+                        settings.provider.clone(),
+                        settings.model.clone(),
+                        settings.active_api_key().to_string(),
+                        settings.custom_base_url.clone(),
+                        settings.max_tokens,
+                    )
+                };
             (
-                settings.provider.clone(),
-                settings.model.clone(),
-                settings.active_api_key().to_string(),
-                settings.custom_base_url.clone(),
+                provider,
+                model,
+                api_key,
+                base_url,
                 settings.workspace_root.clone(),
-                settings.max_tokens,
+                max_tokens,
                 settings.policy_mode.clone(),
                 settings.tool_rate_limit_per_minute,
                 Arc::new(ToolSettings::from_settings(&settings)),

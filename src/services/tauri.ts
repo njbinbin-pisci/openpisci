@@ -143,6 +143,10 @@ export interface Settings {
   vision_enabled: boolean;
   // SSH Servers
   ssh_servers?: SshServerConfig[];
+  // Named LLM Providers
+  llm_providers?: LlmProviderConfig[];
+  /** When true, multiple app instances may run simultaneously. Default false. */
+  allow_multiple_instances?: boolean;
 }
 
 export interface SshServerConfig {
@@ -155,6 +159,21 @@ export interface SshServerConfig {
   password: string;
   /** PEM private key — empty string means "unchanged" when saving */
   private_key: string;
+}
+
+/** A named LLM provider configuration. Multiple can be stored in Settings.llm_providers. */
+export interface LlmProviderConfig {
+  id: string;
+  label: string;
+  /** "anthropic" | "openai" | "deepseek" | "qwen" | "minimax" | "zhipu" | "kimi" | "custom" */
+  provider: string;
+  model: string;
+  /** API key — empty string means "unchanged" when saving */
+  api_key: string;
+  /** Custom base URL (only used when provider = "custom") */
+  base_url: string;
+  /** Max output tokens; 0 = inherit from global settings */
+  max_tokens: number;
 }
 
 export interface ConfigFieldSchema {
@@ -536,6 +555,8 @@ export interface KoiDefinition {
   status: string;
   created_at: string;
   updated_at: string;
+  /** Optional named LLM provider id. Empty/undefined = use global default. */
+  llm_provider_id?: string;
 }
 
 export interface KoiWithStats {
@@ -552,6 +573,7 @@ export interface KoiWithStats {
   memory_count: number;
   todo_count: number;
   active_todo_count: number;
+  llm_provider_id?: string;
 }
 
 export interface KoiTodo {
@@ -611,6 +633,8 @@ export const koiApi = {
     color: string;
     system_prompt: string;
     description: string;
+    /** Optional named LLM provider id; empty/undefined = use global default */
+    llm_provider_id?: string;
   }) => invoke<KoiDefinition>("create_koi", { input }),
   update: (input: {
     id: string;
@@ -620,6 +644,8 @@ export const koiApi = {
     color?: string;
     system_prompt?: string;
     description?: string;
+    /** Pass empty string to clear (use global default); undefined = don't change */
+    llm_provider_id?: string;
   }) => invoke<void>("update_koi", { input }),
   delete: (id: string) => invoke<void>("delete_koi", { id }),
   setActive: (id: string, active: boolean) => invoke<void>("set_koi_active", { id, active }),

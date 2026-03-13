@@ -53,6 +53,9 @@ pub struct CreateKoiInput {
     pub color: String,
     pub system_prompt: String,
     pub description: String,
+    /// Optional named LLM provider id (empty string = use global default)
+    #[serde(default)]
+    pub llm_provider_id: Option<String>,
 }
 
 #[tauri::command]
@@ -70,6 +73,7 @@ pub async fn create_koi(
             MAX_KOIS
         ));
     }
+    let provider_id = input.llm_provider_id.as_deref().filter(|s| !s.is_empty());
     db.create_koi(
         &input.name,
         &input.role,
@@ -77,6 +81,7 @@ pub async fn create_koi(
         &input.color,
         &input.system_prompt,
         &input.description,
+        provider_id,
     )
     .map_err(|e| e.to_string())
 }
@@ -90,11 +95,20 @@ pub struct UpdateKoiInput {
     pub color: Option<String>,
     pub system_prompt: Option<String>,
     pub description: Option<String>,
+    /// `None` = don't touch the field; `Some("")` = clear (use global); `Some("id")` = set
+    #[serde(default)]
+    pub llm_provider_id: Option<String>,
 }
 
 #[tauri::command]
 pub async fn update_koi(state: State<'_, AppState>, input: UpdateKoiInput) -> Result<(), String> {
     let db = state.db.lock().await;
+    // Convert Option<String> → Option<Option<&str>> for db.update_koi
+    let provider_update: Option<Option<&str>> =
+        input
+            .llm_provider_id
+            .as_ref()
+            .map(|s| if s.is_empty() { None } else { Some(s.as_str()) });
     db.update_koi(
         &input.id,
         input.name.as_deref(),
@@ -103,6 +117,7 @@ pub async fn update_koi(state: State<'_, AppState>, input: UpdateKoiInput) -> Re
         input.color.as_deref(),
         input.system_prompt.as_deref(),
         input.description.as_deref(),
+        provider_update,
     )
     .map_err(|e| e.to_string())
 }

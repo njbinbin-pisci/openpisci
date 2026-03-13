@@ -1,6 +1,6 @@
 [package]
 name = "pisci-desktop"
-version = "0.5.4"
+version = "0.5.5"
 description = "OpenPisci — Open-source Windows AI Agent Desktop"
 authors = ["Pisci Team"]
 license = "Apache-2.0"
@@ -84,6 +84,7 @@ russh = { version = "0.57", default-features = false, features = ["ring"] }
 # PDF read/write
 lopdf = { version = "0.34", features = ["nom_parser"] }
 pdf-extract = "0.7"
+tauri-plugin-single-instance = "2.4.0"
 
 # Windows-specific (conditional)
 [target.'cfg(target_os = "windows")'.dependencies]

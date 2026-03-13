@@ -70,8 +70,17 @@ fn ensure_trial_koi(
 
     if let Some(existing) = all_kois.iter().find(|k| k.name == spec.name).cloned() {
         if existing.role != spec.role {
-            db.update_koi(&existing.id, None, Some(spec.role), None, None, None, None)
-                .map_err(|e| e.to_string())?;
+            db.update_koi(
+                &existing.id,
+                None,
+                Some(spec.role),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .map_err(|e| e.to_string())?;
 
             let mut updated = existing.clone();
             updated.role = spec.role.to_string();
@@ -91,6 +100,7 @@ fn ensure_trial_koi(
             spec.color,
             spec.system_prompt,
             spec.description,
+            None,
         )
         .map_err(|e| e.to_string())?;
     all_kois.push(created.clone());

@@ -37,6 +37,10 @@ pub struct KoiDefinition {
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Optional named LLM provider id. When set, this Koi uses the matching
+    /// `LlmProviderConfig` from `Settings.llm_providers` instead of the global defaults.
+    #[serde(default)]
+    pub llm_provider_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

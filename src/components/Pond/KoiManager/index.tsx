@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { useSelector, useDispatch } from "react-redux";
-import { boardApi, koiApi, KoiWithStats, KoiPalette } from "../../../services/tauri";
+import { boardApi, koiApi, KoiWithStats, KoiPalette, LlmProviderConfig } from "../../../services/tauri";
 import { RootState, koiActions } from "../../../store";
 import ConfirmDialog from "../../ConfirmDialog";
 import "./KoiManager.css";
@@ -20,6 +20,8 @@ interface KoiFormData {
   color: string;
   description: string;
   system_prompt: string;
+  /** Empty string = use global default */
+  llm_provider_id: string;
 }
 
 const EMPTY_FORM: KoiFormData = {
@@ -29,6 +31,7 @@ const EMPTY_FORM: KoiFormData = {
   color: "#7c3aed",
   description: "",
   system_prompt: "",
+  llm_provider_id: "",
 };
 
 function KoiCard({
@@ -109,6 +112,7 @@ function KoiDialog({
   mode,
   initial,
   palette,
+  llmProviders,
   saving,
   t,
   onSave,
@@ -117,6 +121,7 @@ function KoiDialog({
   mode: "create" | "edit";
   initial: KoiFormData;
   palette: KoiPalette | null;
+  llmProviders: LlmProviderConfig[];
   saving: boolean;
   t: (key: string) => string;
   onSave: (data: KoiFormData) => void;
@@ -246,6 +251,27 @@ function KoiDialog({
           <p className="koi-form-help">{t("koi.systemPromptHelp")}</p>
         </div>
 
+        <div className="koi-form-field">
+          <label className="koi-form-label">🤖 LLM 供应商</label>
+          <select
+            className="koi-input"
+            value={form.llm_provider_id}
+            onChange={(e) => set("llm_provider_id", e.target.value)}
+          >
+            <option value="">全局默认（继承系统设置）</option>
+            {llmProviders.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label || p.id} — {p.provider} / {p.model}
+              </option>
+            ))}
+          </select>
+          {llmProviders.length === 0 && (
+            <p className="koi-form-help" style={{ color: "var(--text-muted)" }}>
+              在"设置 → LLM 供应商管理"中添加命名供应商后，可在此为每个 Koi 单独选择。
+            </p>
+          )}
+        </div>
+
         <div className="koi-modal-actions">
           <button
             className="koi-btn koi-btn-secondary"
@@ -276,8 +302,10 @@ export default function KoiManager() {
   const dispatch = useDispatch();
   const kois = useSelector((s: RootState) => s.koi.kois);
   const loading = useSelector((s: RootState) => s.koi.loading);
+  const settings = useSelector((s: RootState) => s.settings.settings);
 
   const [palette, setPalette] = useState<KoiPalette | null>(null);
+  const [llmProviders, setLlmProviders] = useState<LlmProviderConfig[]>([]);
   const [dialogMode, setDialogMode] = useState<"create" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [dialogInit, setDialogInit] = useState<KoiFormData>(EMPTY_FORM);
@@ -302,6 +330,10 @@ export default function KoiManager() {
     loadKois();
     koiApi.palette().then(setPalette).catch(() => {});
   }, [loadKois]);
+
+  useEffect(() => {
+    setLlmProviders(settings?.llm_providers ?? []);
+  }, [settings]);
 
   // Keep Koi stats in sync with the board/chat by reloading whenever todo or status
   // events fire. Otherwise the management panel can show stale todo counts.
@@ -341,6 +373,7 @@ export default function KoiManager() {
       color: koi.color,
       description: koi.description,
       system_prompt: koi.system_prompt,
+      llm_provider_id: koi.llm_provider_id ?? "",
     });
     setEditingId(koi.id);
     setDialogMode("edit");
@@ -350,8 +383,10 @@ export default function KoiManager() {
     try {
       setSaving(true);
       setError(null);
+      // Normalize: empty string → undefined for create, keep as-is for update (empty = clear)
+      const providerIdForCreate = data.llm_provider_id || undefined;
       if (dialogMode === "create") {
-        const created = await koiApi.create(data);
+        const created = await koiApi.create({ ...data, llm_provider_id: providerIdForCreate });
         dispatch(koiActions.addKoi({
           ...created,
           memory_count: 0,
@@ -437,6 +472,7 @@ export default function KoiManager() {
           mode={dialogMode}
           initial={dialogInit}
           palette={palette}
+          llmProviders={llmProviders}
           saving={saving}
           t={t}
           onSave={handleSave}

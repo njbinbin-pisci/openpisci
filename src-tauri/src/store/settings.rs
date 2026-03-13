@@ -4,6 +4,43 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// A named LLM provider configuration that can be assigned to individual Koi.
+/// Multiple entries allow different Koi to use different models/keys.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmProviderConfig {
+    /// Unique identifier (user-chosen, e.g. "gpt4-work", "claude-pro")
+    pub id: String,
+    /// Human-readable display label shown in dropdowns
+    pub label: String,
+    /// Provider type: "anthropic" | "openai" | "deepseek" | "qwen" | "minimax" | "zhipu" | "kimi" | "custom"
+    pub provider: String,
+    /// Model name (e.g. "gpt-4o", "claude-opus-4-5")
+    pub model: String,
+    /// API key (encrypted at rest, same scheme as global keys)
+    #[serde(default)]
+    pub api_key: String,
+    /// Custom base URL for OpenAI-compatible endpoints (only used when provider = "custom")
+    #[serde(default)]
+    pub base_url: String,
+    /// Max output tokens; 0 means inherit from global settings
+    #[serde(default)]
+    pub max_tokens: u32,
+}
+
+impl Default for LlmProviderConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            label: String::new(),
+            provider: "anthropic".into(),
+            model: "claude-sonnet-4-5".into(),
+            api_key: String::new(),
+            base_url: String::new(),
+            max_tokens: 0,
+        }
+    }
+}
+
 /// A pre-configured SSH server entry.
 /// The password / private_key is stored encrypted on disk (same hex-AES scheme as API keys).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -253,6 +290,12 @@ pub struct Settings {
     #[serde(default)]
     pub ssh_servers: Vec<SshServerConfig>,
 
+    // ── Named LLM Providers ──────────────────────────────────────────────────
+    /// Named LLM provider configurations. Each Koi can reference one by id.
+    /// When a Koi has no provider assigned, the global provider/model/key is used.
+    #[serde(default)]
+    pub llm_providers: Vec<LlmProviderConfig>,
+
     // ── Runtime Paths ───────────────────────────────────────────────────────
     /// User-specified executable paths for runtimes not found on PATH.
     /// Keys: "node", "npm", "python", "pip", "git"
@@ -276,6 +319,12 @@ pub struct Settings {
     /// Last saved Y position of the overlay window (physical pixels).
     #[serde(default)]
     pub overlay_y: Option<i32>,
+
+    /// When true, multiple instances of the app may run simultaneously.
+    /// When false (default), launching a second instance will focus the existing window
+    /// and exit the new process immediately.
+    #[serde(default)]
+    pub allow_multiple_instances: bool,
 
     /// Internal: path to the config file (not serialized)
     #[serde(skip)]
@@ -401,10 +450,12 @@ impl Default for Settings {
             builtin_tool_enabled: HashMap::new(),
             mcp_servers: Vec::new(),
             ssh_servers: Vec::new(),
+            llm_providers: Vec::new(),
             runtime_paths: HashMap::new(),
             vision_enabled: false,
             overlay_x: None,
             overlay_y: None,
+            allow_multiple_instances: false,
             config_path: PathBuf::new(),
         }
     }
@@ -458,6 +509,10 @@ impl Settings {
                 Self::try_decrypt_field(&store, &mut srv.password);
                 Self::try_decrypt_field(&store, &mut srv.private_key);
             }
+            // Decrypt named LLM provider API keys
+            for p in &mut settings.llm_providers {
+                Self::try_decrypt_field(&store, &mut p.api_key);
+            }
         }
         Ok(settings)
     }
@@ -487,6 +542,10 @@ impl Settings {
             for srv in &mut clone.ssh_servers {
                 Self::encrypt_field(&store, &mut srv.password);
                 Self::encrypt_field(&store, &mut srv.private_key);
+            }
+            // Encrypt named LLM provider API keys
+            for p in &mut clone.llm_providers {
+                Self::encrypt_field(&store, &mut p.api_key);
             }
         }
         let json = serde_json::to_string_pretty(&clone)?;
@@ -541,5 +600,23 @@ impl Settings {
             "kimi" | "moonshot" => &self.kimi_api_key,
             _ => &self.anthropic_api_key,
         }
+    }
+
+    /// Look up a named LLM provider by its id.
+    /// Returns `None` if no provider with that id exists.
+    pub fn find_llm_provider(&self, id: &str) -> Option<&LlmProviderConfig> {
+        self.llm_providers.iter().find(|p| p.id == id)
+    }
+
+    /// Returns the default config file path used by the app before Tauri's AppHandle is available.
+    /// Mirrors the path that `AppState::new_sync` computes via `app.path().app_data_dir()`.
+    /// On Windows this is `%APPDATA%\com.pisci.desktop\config.json`.
+    pub fn default_config_path() -> PathBuf {
+        // Tauri v2 uses `<data_dir>/<bundle_identifier>` on Windows (APPDATA\<id>).
+        // The bundle identifier is "com.pisci.desktop" (from tauri.conf.json).
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("com.pisci.desktop")
+            .join("config.json")
     }
 }

@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { RootState, settingsActions } from "../../store";
-import { settingsApi, gatewayApi, systemApi, Settings as SettingsData, ChannelInfo, RuntimeCheckItem, SshServerConfig } from "../../services/tauri";
+import { settingsApi, gatewayApi, systemApi, Settings as SettingsData, ChannelInfo, RuntimeCheckItem, SshServerConfig, LlmProviderConfig } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
 
 const DEFAULT_SETTINGS: SettingsData = {
@@ -73,6 +73,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   heartbeat_prompt: "检查是否有待处理任务，如无则回复 HEARTBEAT_OK",
   vision_enabled: false,
   ssh_servers: [],
+  allow_multiple_instances: false,
 };
 
 interface SettingsProps {
@@ -104,6 +105,13 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
   const [sshEditForm, setSshEditForm] = useState<SshServerConfig>({ id: "", label: "", host: "", port: 22, username: "", password: "", private_key: "" });
   const [sshShowPassword, setSshShowPassword] = useState(false);
 
+  // Named LLM Providers
+  const EMPTY_LLM_PROVIDER: LlmProviderConfig = { id: "", label: "", provider: "anthropic", model: "", api_key: "", base_url: "", max_tokens: 0 };
+  const [llmProviders, setLlmProviders] = useState<LlmProviderConfig[]>([]);
+  const [llmEditIdx, setLlmEditIdx] = useState<number | null>(null);
+  const [llmEditForm, setLlmEditForm] = useState<LlmProviderConfig>(EMPTY_LLM_PROVIDER);
+  const [llmShowKey, setLlmShowKey] = useState(false);
+
   // Load default workspace path from backend on mount
   useEffect(() => {
     settingsApi.getDefaultWorkspace().then(setDefaultWorkspace).catch(() => {});
@@ -118,6 +126,7 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
       }
       setForm(merged);
       setSshServers(settings.ssh_servers ?? []);
+      setLlmProviders(settings.llm_providers ?? []);
     }
   }, [settings, defaultWorkspace]);
 
@@ -219,7 +228,7 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
     setSaving(true);
     setSaveError(null);
     try {
-      const updated = await settingsApi.save({ ...form, ssh_servers: sshServers });
+      const updated = await settingsApi.save({ ...form, ssh_servers: sshServers, llm_providers: llmProviders });
       dispatch(settingsActions.setSettings(updated));
       dispatch(settingsActions.setConfigured(updated.is_configured ?? !!(updated.anthropic_api_key || updated.openai_api_key || updated.deepseek_api_key || updated.qwen_api_key)));
       // 立即切换语言
@@ -489,6 +498,15 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{t("settings.browserHeadlessDesc")}</div>
             </div>
             <input type="checkbox" checked={form.browser_headless ?? true} onChange={(e) => update("browser_headless", e.target.checked)} />
+          </div>
+          <div className="form-group" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div>
+              <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>允许多开</div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                开启后可同时运行多个 OpenPisci 实例；关闭时再次启动会激活已有窗口（重启后生效）
+              </div>
+            </div>
+            <input type="checkbox" checked={form.allow_multiple_instances ?? false} onChange={(e) => update("allow_multiple_instances", e.target.checked)} />
           </div>
         </section>
 
@@ -1069,6 +1087,145 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
             <button className="btn" style={{ fontSize: 12, padding: "6px 14px", border: "1px solid var(--border)" }}
               onClick={() => { setSshEditIdx(-1); setSshEditForm({ id: "", label: "", host: "", port: 22, username: "", password: "", private_key: "" }); setSshShowPassword(false); }}>
               + {t("settings.sshAddServer")}
+            </button>
+          )}
+        </section>
+
+        {/* ── Named LLM Providers ──────────────────────────────────────── */}
+        <section className="settings-section">
+          <h3 className="settings-section-title">🤖 LLM 供应商管理</h3>
+          <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>
+            配置多个命名 LLM 供应商，每个 Koi 可在编辑界面独立选择使用哪个供应商。未选择时使用上方全局默认配置。
+          </p>
+
+          {/* Provider list */}
+          {llmProviders.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+              {llmProviders.map((p, idx) => (
+                <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-secondary)" }}>
+                  <span style={{ fontSize: 16 }}>🔑</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }}>
+                      {p.label || p.id}
+                      <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 11, marginLeft: 8 }}>[{p.id}]</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                      {p.provider} · {p.model || "（未设置模型）"}
+                      {p.base_url ? ` · ${p.base_url}` : ""}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button className="btn" style={{ fontSize: 11, padding: "3px 10px", border: "1px solid var(--border)" }}
+                      onClick={() => { setLlmEditIdx(idx); setLlmEditForm({ ...p, api_key: "" }); setLlmShowKey(false); }}>
+                      编辑
+                    </button>
+                    <button className="btn" style={{ fontSize: 11, padding: "3px 10px", border: "1px solid #dc3545", color: "#dc3545" }}
+                      onClick={() => setLlmProviders(prev => prev.filter((_, i) => i !== idx))}>
+                      删除
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add / Edit form */}
+          {llmEditIdx !== null ? (
+            <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-secondary)" }}>
+              <div style={{ fontWeight: 600, marginBottom: 12, fontSize: 13 }}>
+                {llmEditIdx === -1 ? "添加供应商" : "编辑供应商"}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="label">ID（唯一标识）*</label>
+                  <input className="input" value={llmEditForm.id} onChange={e => setLlmEditForm(f => ({ ...f, id: e.target.value }))}
+                    placeholder="my-gpt4" disabled={llmEditIdx !== -1} />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="label">显示名称</label>
+                  <input className="input" value={llmEditForm.label} onChange={e => setLlmEditForm(f => ({ ...f, label: e.target.value }))}
+                    placeholder="工作用 GPT-4" />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="label">供应商类型 *</label>
+                  <select className="input" value={llmEditForm.provider} onChange={e => setLlmEditForm(f => ({ ...f, provider: e.target.value }))}>
+                    <option value="anthropic">Anthropic (Claude)</option>
+                    <option value="openai">OpenAI (GPT)</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="qwen">阿里百炼（Qwen）</option>
+                    <option value="minimax">MiniMax</option>
+                    <option value="zhipu">智谱 AI（GLM）</option>
+                    <option value="kimi">Kimi（Moonshot）</option>
+                    <option value="custom">自定义（OpenAI 兼容）</option>
+                  </select>
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="label">模型名称 *</label>
+                  <input className="input" value={llmEditForm.model} onChange={e => setLlmEditForm(f => ({ ...f, model: e.target.value }))}
+                    placeholder={
+                      llmEditForm.provider === "anthropic" ? "claude-opus-4-5" :
+                      llmEditForm.provider === "openai" ? "gpt-4o" :
+                      llmEditForm.provider === "deepseek" ? "deepseek-chat" :
+                      llmEditForm.provider === "qwen" ? "qwen3-max" :
+                      llmEditForm.provider === "minimax" ? "MiniMax-M2.5" :
+                      llmEditForm.provider === "zhipu" ? "glm-5" :
+                      llmEditForm.provider === "kimi" ? "kimi-k2.5" :
+                      "model-name"
+                    } />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0, gridColumn: "1 / -1" }}>
+                  <label className="label">
+                    API Key
+                    {llmEditIdx !== -1 && <span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 6 }}>留空表示不修改</span>}
+                  </label>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input className="input" style={{ flex: 1 }} type={llmShowKey ? "text" : "password"}
+                      value={llmEditForm.api_key} onChange={e => setLlmEditForm(f => ({ ...f, api_key: e.target.value }))}
+                      placeholder={llmEditIdx !== -1 ? "（保持不变）" : "sk-..."} />
+                    <button className="btn" style={{ padding: "0 10px", border: "1px solid var(--border)" }}
+                      onClick={() => setLlmShowKey(v => !v)}>
+                      {llmShowKey ? "🙈" : "👁️"}
+                    </button>
+                  </div>
+                </div>
+                {llmEditForm.provider === "custom" && (
+                  <div className="form-group" style={{ marginBottom: 0, gridColumn: "1 / -1" }}>
+                    <label className="label">Base URL *</label>
+                    <input className="input" value={llmEditForm.base_url} onChange={e => setLlmEditForm(f => ({ ...f, base_url: e.target.value }))}
+                      placeholder="https://api.example.com/v1" />
+                  </div>
+                )}
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="label">最大输出 Token（0 = 继承全局）</label>
+                  <input className="input" type="number" value={llmEditForm.max_tokens}
+                    onChange={e => setLlmEditForm(f => ({ ...f, max_tokens: parseInt(e.target.value) || 0 }))} />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <button className="btn btn-primary" style={{ fontSize: 12 }}
+                  onClick={() => {
+                    if (!llmEditForm.id.trim() || !llmEditForm.model.trim()) return;
+                    if (llmEditIdx === -1) {
+                      // Check for duplicate id
+                      if (llmProviders.some(p => p.id === llmEditForm.id.trim())) return;
+                      setLlmProviders(prev => [...prev, llmEditForm]);
+                    } else {
+                      setLlmProviders(prev => prev.map((p, i) => i === llmEditIdx ? { ...llmEditForm } : p));
+                    }
+                    setLlmEditIdx(null);
+                  }}>
+                  保存
+                </button>
+                <button className="btn" style={{ fontSize: 12, border: "1px solid var(--border)" }}
+                  onClick={() => setLlmEditIdx(null)}>
+                  取消
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button className="btn" style={{ fontSize: 12, padding: "6px 14px", border: "1px solid var(--border)" }}
+              onClick={() => { setLlmEditIdx(-1); setLlmEditForm(EMPTY_LLM_PROVIDER); setLlmShowKey(false); }}>
+              + 添加供应商
             </button>
           )}
         </section>

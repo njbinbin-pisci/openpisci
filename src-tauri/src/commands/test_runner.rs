@@ -171,6 +171,7 @@ async fn test_koi_crud() -> TestResult {
                 "#7c6af7",
                 "Design systems.",
                 "System architect",
+                None,
             )
             .map_err(backend_err)?;
         if koi.name != "Architect" {
@@ -502,7 +503,7 @@ async fn test_pisci_heartbeat_attention_scan() -> TestResult {
         let now = Utc::now();
         let (pool, reviewer) = {
             let db = db.lock().await;
-            let reviewer = db.create_koi("Reviewer", "代码审查员", "🔍", "#26de81", "Review.", "Reviewer")
+            let reviewer = db.create_koi("Reviewer", "代码审查员", "🔍", "#26de81", "Review.", "Reviewer", None)
                 .map_err(backend_err)?;
             let pool = db.create_pool_session("HeartbeatPool").map_err(backend_err)?;
             (pool, reviewer)
@@ -600,6 +601,7 @@ async fn test_pisci_heartbeat_prompt_guardrails() -> TestResult {
                     "#26de81",
                     "Review.",
                     "Reviewer",
+                    None,
                 )
                 .map_err(backend_err)?;
             let pool = db
@@ -684,7 +686,15 @@ async fn test_todo_lifecycle() -> TestResult {
         let (db, _, _) = setup();
         let db = db.lock().await;
         let koi = db
-            .create_koi("Worker", "通用助理", "⚡", "#45b7d1", "Work", "Worker")
+            .create_koi(
+                "Worker",
+                "通用助理",
+                "⚡",
+                "#45b7d1",
+                "Work",
+                "Worker",
+                None,
+            )
             .map_err(backend_err)?;
         let pool = db.create_pool_session("WorkPool").map_err(backend_err)?;
         let todo = db
@@ -759,7 +769,7 @@ async fn test_pool_messages() -> TestResult {
         let (db, _, _) = setup();
         let db = db.lock().await;
         let pool = db.create_pool_session("Test").map_err(backend_err)?;
-        let koi = db.create_koi("W", "通用助理", "⚡", "#45b7d1", "Work", "W").map_err(backend_err)?;
+        let koi = db.create_koi("W", "通用助理", "⚡", "#45b7d1", "Work", "W", None).map_err(backend_err)?;
         let todo = db.create_koi_todo(&koi.id, "Build", "", "medium", "pisci", Some(&pool.id), "pisci", None).map_err(backend_err)?;
         let m1 = db.insert_pool_message(&pool.id, "pisci", "@W Build", "task_assign", "{}").map_err(backend_err)?;
         let _m2 = db.insert_pool_message_ext(&pool.id, &koi.id, "OK", "task_claimed", "{}", Some(&todo.id), Some(m1.id), Some("task_claimed")).map_err(backend_err)?;
@@ -797,6 +807,7 @@ async fn test_route_to_koi() -> TestResult {
                 status: "idle".into(),
                 created_at: now,
                 updated_at: now,
+                llm_provider_id: None,
             },
             KoiDefinition {
                 id: "be".into(),
@@ -809,6 +820,7 @@ async fn test_route_to_koi() -> TestResult {
                 status: "idle".into(),
                 created_at: now,
                 updated_at: now,
+                llm_provider_id: None,
             },
             KoiDefinition {
                 id: "qa".into(),
@@ -821,6 +833,7 @@ async fn test_route_to_koi() -> TestResult {
                 status: "offline".into(),
                 created_at: now,
                 updated_at: now,
+                llm_provider_id: None,
             },
         ];
         let r = HostAgent::route_to_koi("Create a React component with TypeScript", &kois);
@@ -866,7 +879,15 @@ async fn test_runtime_assign_execute() -> TestResult {
         let (koi, pool) = {
             let db = db.lock().await;
             let koi = db
-                .create_koi("Builder", "程序员", "🏗️", "#7c6af7", "Build.", "Builder")
+                .create_koi(
+                    "Builder",
+                    "程序员",
+                    "🏗️",
+                    "#7c6af7",
+                    "Build.",
+                    "Builder",
+                    None,
+                )
                 .map_err(backend_err)?;
             let pool = db.create_pool_session("Build").map_err(backend_err)?;
             (koi, pool)
@@ -968,7 +989,15 @@ async fn test_runtime_mention() -> TestResult {
         let (koi, pool) = {
             let db = db.lock().await;
             let koi = db
-                .create_koi("Rev", "代码审查员", "🔍", "#26de81", "Review.", "Reviewer")
+                .create_koi(
+                    "Rev",
+                    "代码审查员",
+                    "🔍",
+                    "#26de81",
+                    "Review.",
+                    "Reviewer",
+                    None,
+                )
                 .map_err(backend_err)?;
             let pool = db.create_pool_session("Review").map_err(backend_err)?;
             (koi, pool)
@@ -1036,6 +1065,7 @@ async fn test_at_all_mention() -> TestResult {
                     "#45b7d1",
                     "Frontend.",
                     "FE_All",
+                    None,
                 )
                 .map_err(backend_err)?;
             let be = db
@@ -1046,6 +1076,7 @@ async fn test_at_all_mention() -> TestResult {
                     "#7c6af7",
                     "Backend.",
                     "BE_All",
+                    None,
                 )
                 .map_err(backend_err)?;
             let qa = db
@@ -1056,6 +1087,7 @@ async fn test_at_all_mention() -> TestResult {
                     "#26de81",
                     "Testing.",
                     "QA_All",
+                    None,
                 )
                 .map_err(backend_err)?;
             let pool = db.create_pool_session("AtAllTest").map_err(backend_err)?;
@@ -1124,9 +1156,9 @@ async fn test_pool_chat_conversation() -> TestResult {
         let (db, bus, runtime) = setup();
         let (_pisci_koi, arch, dev, pool) = {
             let db = db.lock().await;
-            let arch = db.create_koi("Architect", "架构师", "🏛️", "#f7b731", "Architecture design.", "Architect")
+            let arch = db.create_koi("Architect", "架构师", "🏛️", "#f7b731", "Architecture design.", "Architect", None)
                 .map_err(backend_err)?;
-            let dev = db.create_koi("Developer", "开发者", "💻", "#45b7d1", "Full-stack development.", "Developer")
+            let dev = db.create_koi("Developer", "开发者", "💻", "#45b7d1", "Full-stack development.", "Developer", None)
                 .map_err(backend_err)?;
             let pool = db.create_pool_session("OpenClawLobster").map_err(backend_err)?;
             ((), arch, dev, pool)
@@ -1303,9 +1335,9 @@ async fn test_full_e2e() -> TestResult {
         let (db, bus, runtime) = setup();
         let (fe, be, qa, pool) = {
             let db = db.lock().await;
-            let fe = db.create_koi("FE", "前端工程师", "🎨", "#45b7d1", "Frontend React.", "FE").map_err(backend_err)?;
-            let be = db.create_koi("BE", "后端工程师", "⚡", "#7c6af7", "Backend Rust API.", "BE").map_err(backend_err)?;
-            let qa = db.create_koi("QA", "测试工程师", "🔍", "#26de81", "Testing QA.", "QA").map_err(backend_err)?;
+            let fe = db.create_koi("FE", "前端工程师", "🎨", "#45b7d1", "Frontend React.", "FE", None).map_err(backend_err)?;
+            let be = db.create_koi("BE", "后端工程师", "⚡", "#7c6af7", "Backend Rust API.", "BE", None).map_err(backend_err)?;
+            let qa = db.create_koi("QA", "测试工程师", "🔍", "#26de81", "Testing QA.", "QA", None).map_err(backend_err)?;
             let pool = db.create_pool_session("E-Commerce").map_err(backend_err)?;
             db.update_pool_org_spec(&pool.id, "## Goal\nBuild e-commerce MVP").map_err(backend_err)?;
             (fe, be, qa, pool)
@@ -1390,6 +1422,7 @@ async fn test_koi_limit() -> TestResult {
                 "#45b7d1",
                 &format!("Worker {}.", i),
                 &format!("K{}", i),
+                None,
             )
             .map_err(backend_err)?;
         }
@@ -1420,6 +1453,7 @@ async fn test_vacation_cancels_todos() -> TestResult {
                 "#f7b731",
                 "Work.",
                 "Vacationer",
+                None,
             )
             .map_err(backend_err)?;
         let _t1 = db
@@ -1474,7 +1508,9 @@ async fn test_watchdog_recover() -> TestResult {
         {
             let db = db.lock().await;
             let koi = db
-                .create_koi("StaleKoi", "worker", "⏰", "#fc5c65", "Work.", "StaleKoi")
+                .create_koi(
+                    "StaleKoi", "worker", "⏰", "#fc5c65", "Work.", "StaleKoi", None,
+                )
                 .map_err(backend_err)?;
             db.update_koi_status(&koi.id, "busy").map_err(backend_err)?;
             // Backdate updated_at to simulate a stale entry (30 min ago)
@@ -1556,7 +1592,7 @@ async fn test_activate_pending_todos_no_duplicates() -> TestResult {
         let koi_id;
         {
             let db = db.lock().await;
-            let koi = db.create_koi("PatrolKoi", "worker", "🧭", "#5b8def", "Work.", "PatrolKoi")
+            let koi = db.create_koi("PatrolKoi", "worker", "🧭", "#5b8def", "Work.", "PatrolKoi", None)
                 .map_err(backend_err)?;
             koi_id = koi.id.clone();
             let _todo = db.create_koi_todo(&koi.id, "Resume existing todo", "", "medium", "pisci", None, "pisci", None)
@@ -1652,7 +1688,7 @@ async fn test_watchdog_recover_zero_threshold() -> TestResult {
         let todo_id;
         {
             let db = db.lock().await;
-            let koi = db.create_koi("ZeroWatchdog", "worker", "⏱", "#7c4dff", "Recover immediately.", "ZeroWatchdog")
+            let koi = db.create_koi("ZeroWatchdog", "worker", "⏱", "#7c4dff", "Recover immediately.", "ZeroWatchdog", None)
                 .map_err(backend_err)?;
             koi_id = koi.id.clone();
             db.update_koi_status(&koi_id, "busy").map_err(backend_err)?;
@@ -1835,7 +1871,7 @@ async fn test_runtime_identifier_canonicalization() -> TestResult {
         let (db, _, runtime) = setup();
         let (koi, pool, prefix) = {
             let db = db.lock().await;
-            let koi = db.create_koi("CanonicalWorker", "worker", "🧪", "#4b7bec", "Work.", "CanonicalWorker")
+            let koi = db.create_koi("CanonicalWorker", "worker", "🧪", "#4b7bec", "Work.", "CanonicalWorker", None)
                 .map_err(backend_err)?;
             let pool = db.create_pool_session("Canonical Project").map_err(backend_err)?;
             let prefix = koi.id[..8.min(koi.id.len())].to_string();
@@ -1930,7 +1966,7 @@ async fn test_archived_pool_blocks_runtime_work() -> TestResult {
 
         let (koi, pool) = {
             let db = db.lock().await;
-            let koi = db.create_koi("Archivist", "Archive guard", "🗄️", "#888888", "Protect archived pools.", "Archive guard")
+            let koi = db.create_koi("Archivist", "Archive guard", "🗄️", "#888888", "Protect archived pools.", "Archive guard", None)
                 .map_err(backend_err)?;
             let pool = db.create_pool_session("Archive Guard Pool").map_err(backend_err)?;
             db.update_pool_session_status(&pool.id, "archived").map_err(backend_err)?;

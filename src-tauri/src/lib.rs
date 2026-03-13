@@ -185,13 +185,40 @@ pub fn run() {
     let _log_guard = init_logging();
     install_crash_reporter();
 
-    tauri::Builder::default()
+    // Read allow_multiple_instances before building the Tauri app so we can
+    // conditionally register the single-instance plugin.
+    let allow_multiple = {
+        let config_path = store::settings::Settings::default_config_path();
+        store::settings::Settings::load(&config_path)
+            .map(|s| s.allow_multiple_instances)
+            .unwrap_or(false)
+    };
+
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_process::init());
+
+    // Register single-instance guard unless the user explicitly allows multiple windows.
+    if !allow_multiple {
+        builder = builder.plugin(
+            tauri_plugin_single_instance::Builder::new()
+                .callback(|app, _args, _cwd| {
+                    // A second instance was launched — focus the existing main window.
+                    if let Some(win) = app.get_webview_window("main") {
+                        let _ = win.show();
+                        let _ = win.unminimize();
+                        let _ = win.set_focus();
+                    }
+                })
+                .build(),
+        );
+    }
+
+    builder
         .setup(|app| {
             let app_handle = app.handle().clone();
 
