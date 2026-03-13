@@ -3,8 +3,9 @@ import { useTranslation } from "react-i18next";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ChatMessage, Session, sessionsApi } from "../../../services/tauri";
+import { ChatMessage, Session, sessionsApi, poolApi } from "../../../services/tauri";
 import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
+import ConfirmDialog from "../../ConfirmDialog";
 import "./PisciInbox.css";
 
 function InboxMessageContent({ content }: { content: string }) {
@@ -72,6 +73,7 @@ export default function PisciInbox() {
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<{ id: string; title: string; blocked: boolean } | null>(null);
 
   const internalSessions = useMemo(
     () => sessions.filter(isInternalSession),
@@ -115,25 +117,39 @@ export default function PisciInbox() {
     loadMessages(activeSessionId).catch(console.error);
   }, [activeSessionId, loadMessages]);
 
-  const handleDeleteSession = useCallback(async (e: React.MouseEvent, sessionId: string) => {
+  const requestDeleteSession = useCallback(async (e: React.MouseEvent, session: Session) => {
     e.stopPropagation();
-    setDeletingId(sessionId);
+    // Check if this inbox session is linked to an active pool
+    let blocked = false;
+    if (session.id.startsWith("pisci_pool_")) {
+      const poolId = session.id.replace("pisci_pool_", "");
+      try {
+        const pools = await poolApi.listSessions();
+        const pool = pools.find((p) => p.id === poolId);
+        if (pool && pool.status === "active") blocked = true;
+      } catch { /* ignore */ }
+    }
+    setConfirmTarget({ id: session.id, title: session.title || session.id, blocked });
+  }, []);
+
+  const confirmDeleteSession = useCallback(async () => {
+    if (!confirmTarget) return;
+    setDeletingId(confirmTarget.id);
     try {
-      await sessionsApi.delete(sessionId);
-      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-      if (activeSessionId === sessionId) {
-        setActiveSessionId((prev) => {
-          const remaining = sessions.filter((s) => s.id !== sessionId && isInternalSession(s));
-          return remaining.length > 0 ? remaining[0].id : null;
-        });
+      await sessionsApi.delete(confirmTarget.id);
+      setSessions((prev) => prev.filter((s) => s.id !== confirmTarget.id));
+      if (activeSessionId === confirmTarget.id) {
+        const remaining = sessions.filter((s) => s.id !== confirmTarget.id && isInternalSession(s));
+        setActiveSessionId(remaining.length > 0 ? remaining[0].id : null);
         setMessages([]);
       }
-    } catch (e) {
-      console.error("Failed to delete session:", e);
+      setConfirmTarget(null);
+    } catch (err) {
+      console.error("Failed to delete session:", err);
     } finally {
       setDeletingId(null);
     }
-  }, [activeSessionId, sessions]);
+  }, [confirmTarget, activeSessionId, sessions]);
 
   const activeSession = internalSessions.find((session) => session.id === activeSessionId) ?? null;
 
@@ -171,7 +187,7 @@ export default function PisciInbox() {
                   <button
                     title={t("common.delete")}
                     disabled={deletingId === session.id}
-                    onClick={(e) => handleDeleteSession(e, session.id)}
+                    onClick={(e) => requestDeleteSession(e, session)}
                     style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: 12, padding: "0 2px", lineHeight: 1, opacity: 0.6 }}
                     onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
                     onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.6")}
@@ -234,6 +250,21 @@ export default function PisciInbox() {
           </>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!confirmTarget}
+        title={confirmTarget?.blocked ? t("pond.inboxDeleteActiveTitle") : t("pond.inboxDeleteTitle")}
+        message={
+          confirmTarget?.blocked
+            ? t("pond.inboxDeleteActiveMessage", { name: confirmTarget.title })
+            : t("pond.inboxDeleteMessage", { name: confirmTarget?.title ?? "" })
+        }
+        confirmLabel={t("common.delete")}
+        variant="danger"
+        loading={deletingId !== null}
+        onConfirm={confirmDeleteSession}
+        onCancel={() => setConfirmTarget(null)}
+      />
     </div>
   );
 }

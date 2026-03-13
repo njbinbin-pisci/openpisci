@@ -363,8 +363,79 @@
   font-size: 13px;
   color: var(--text-primary);
   line-height: 1.55;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Markdown content inside pool messages */
+.pool-msg-text p,
+.pool-msg-result-card p,
+.pool-msg-mention p,
+.pool-msg-status-line p {
+  margin: 0 0 6px;
+}
+.pool-msg-text p:last-child,
+.pool-msg-result-card p:last-child,
+.pool-msg-mention p:last-child,
+.pool-msg-status-line p:last-child {
+  margin-bottom: 0;
+}
+.pool-msg-text ul,
+.pool-msg-text ol,
+.pool-msg-result-card ul,
+.pool-msg-result-card ol,
+.pool-msg-mention ul,
+.pool-msg-mention ol {
+  padding-left: 1.4em;
+  margin: 2px 0 6px;
+}
+.pool-msg-text li,
+.pool-msg-result-card li,
+.pool-msg-mention li {
+  margin: 2px 0;
+}
+.pool-msg-text h1, .pool-msg-text h2, .pool-msg-text h3, .pool-msg-text h4,
+.pool-msg-result-card h1, .pool-msg-result-card h2, .pool-msg-result-card h3, .pool-msg-result-card h4,
+.pool-msg-mention h1, .pool-msg-mention h2, .pool-msg-mention h3, .pool-msg-mention h4 {
+  margin: 8px 0 4px;
+  font-weight: 600;
+  font-size: 1em;
+}
+.pool-msg-text pre,
+.pool-msg-result-card pre,
+.pool-msg-mention pre {
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-size: 12px;
+  margin: 4px 0;
+}
+.pool-msg-text code,
+.pool-msg-result-card code,
+.pool-msg-mention code {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9em;
+}
+.pool-msg-text a,
+.pool-msg-result-card a,
+.pool-msg-mention a {
+  color: var(--accent);
+  cursor: pointer;
+}
+.pool-msg-text hr,
+.pool-msg-result-card hr,
+.pool-msg-mention hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 8px 0;
+}
+.pool-msg-text blockquote,
+.pool-msg-result-card blockquote,
+.pool-msg-mention blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 4px 0;
+  padding: 2px 8px;
+  color: var(--text-secondary);
 }
 
 /* task_assign card */

@@ -77,6 +77,10 @@ const en = {
     inboxGlobal: "Global Heartbeat",
     inboxProject: "Project Coordination",
     inboxMessageCount: "{{count}} msgs",
+    inboxDeleteTitle: "Delete Coordination Session",
+    inboxDeleteMessage: "Delete coordination history for \"{{name}}\"? This cannot be undone.",
+    inboxDeleteActiveTitle: "Delete Active Project Session",
+    inboxDeleteActiveMessage: "The project linked to \"{{name}}\" is still active. Deleting will clear Pisci's coordination history but won't stop the project. Continue?",
   },
 
   // Koi management

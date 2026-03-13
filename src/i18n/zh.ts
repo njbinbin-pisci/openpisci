@@ -77,6 +77,10 @@ const zh = {
     inboxGlobal: "全局心跳",
     inboxProject: "项目协调",
     inboxMessageCount: "{{count}} 条",
+    inboxDeleteTitle: "删除协调会话",
+    inboxDeleteMessage: "确定删除「{{name}}」的协调记录吗？此操作不可撤销。",
+    inboxDeleteActiveTitle: "删除进行中项目的协调会话",
+    inboxDeleteActiveMessage: "「{{name}}」关联的项目仍在进行中，删除协调记录不会停止项目，但会清除 Pisci 的处理历史。确定删除吗？",
   },
 
   // Koi 管理
