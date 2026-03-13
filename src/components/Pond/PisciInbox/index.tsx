@@ -1,7 +1,37 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { ChatMessage, Session, sessionsApi } from "../../../services/tauri";
+import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
 import "./PisciInbox.css";
+
+function InboxMessageContent({ content }: { content: string }) {
+  const processed = linkifyPaths(content);
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      urlTransform={(url) => url.startsWith("file://") ? url : (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("mailto:") || url.startsWith("#") || url.startsWith("/") || !url.includes(":")) ? url : ""}
+      components={{
+        a: ({ href, children }) => {
+          if (isLocalPath(href)) {
+            return (
+              <a href="#" title={href} style={{ cursor: "pointer" }}
+                onClick={(e) => { e.preventDefault(); shellOpen(uriToNativePath(href!)).catch(console.error); }}>
+                {children}
+              </a>
+            );
+          }
+          if (!href) return <span>{children}</span>;
+          return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+        },
+      }}
+    >
+      {processed}
+    </ReactMarkdown>
+  );
+}
 
 function isInternalSession(session: Session): boolean {
   return session.source === "heartbeat"
@@ -41,6 +71,7 @@ export default function PisciInbox() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const internalSessions = useMemo(
     () => sessions.filter(isInternalSession),
@@ -84,6 +115,26 @@ export default function PisciInbox() {
     loadMessages(activeSessionId).catch(console.error);
   }, [activeSessionId, loadMessages]);
 
+  const handleDeleteSession = useCallback(async (e: React.MouseEvent, sessionId: string) => {
+    e.stopPropagation();
+    setDeletingId(sessionId);
+    try {
+      await sessionsApi.delete(sessionId);
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      if (activeSessionId === sessionId) {
+        setActiveSessionId((prev) => {
+          const remaining = sessions.filter((s) => s.id !== sessionId && isInternalSession(s));
+          return remaining.length > 0 ? remaining[0].id : null;
+        });
+        setMessages([]);
+      }
+    } catch (e) {
+      console.error("Failed to delete session:", e);
+    } finally {
+      setDeletingId(null);
+    }
+  }, [activeSessionId, sessions]);
+
   const activeSession = internalSessions.find((session) => session.id === activeSessionId) ?? null;
 
   return (
@@ -107,22 +158,31 @@ export default function PisciInbox() {
             <div className="pisci-inbox-empty">{t("pond.inboxEmpty")}</div>
           )}
           {internalSessions.map((session) => (
-            <button
+            <div
               key={session.id}
               className={`pisci-inbox-session ${session.id === activeSessionId ? "active" : ""}`}
               onClick={() => setActiveSessionId(session.id)}
+              style={{ cursor: "pointer" }}
             >
               <div className="pisci-inbox-session-top">
                 <span className="pisci-inbox-session-name">{session.title || session.id}</span>
-                <span className="pisci-inbox-session-kind">
-                  {sessionKindLabel(t, session)}
+                <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <span className="pisci-inbox-session-kind">{sessionKindLabel(t, session)}</span>
+                  <button
+                    title={t("common.delete")}
+                    disabled={deletingId === session.id}
+                    onClick={(e) => handleDeleteSession(e, session.id)}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: 12, padding: "0 2px", lineHeight: 1, opacity: 0.6 }}
+                    onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+                    onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.6")}
+                  >✕</button>
                 </span>
               </div>
               <div className="pisci-inbox-session-meta">
                 <span>{formatTime(session.updated_at)}</span>
                 <span>{t("pond.inboxMessageCount", { count: session.message_count })}</span>
               </div>
-            </button>
+            </div>
           ))}
         </div>
       </div>
@@ -167,7 +227,7 @@ export default function PisciInbox() {
                     </span>
                     <span className="pisci-inbox-message-time">{formatTime(message.created_at)}</span>
                   </div>
-                  <pre className="pisci-inbox-message-content">{message.content}</pre>
+                  <div className="pisci-inbox-message-content"><InboxMessageContent content={message.content} /></div>
                 </div>
               ))}
             </div>
