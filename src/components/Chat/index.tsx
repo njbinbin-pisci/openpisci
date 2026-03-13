@@ -1458,6 +1458,24 @@ function MessageContent({ content }: { content: string }) {
                   </pre>
                 );
               }
+              // Inline code: if it looks like a local file path, render as clickable link
+              const text = String(children);
+              if (isLocalPath(text)) {
+                const uri = `file:///${text.replace(/\\/g, "/").replace(/^\//, "")}`;
+                return (
+                  <a
+                    href="#"
+                    title={text}
+                    style={{ cursor: "pointer" }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      shellOpen(uriToNativePath(uri)).catch(console.error);
+                    }}
+                  >
+                    {text}
+                  </a>
+                );
+              }
               return <code className="inline-code" {...props}>{children}</code>;
             },
             // Inline images — clickable for full-size view
