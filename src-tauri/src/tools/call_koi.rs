@@ -280,10 +280,11 @@ impl CallKoiTool {
              - Use pool_chat(action=\"read\") to see what your team members have said and done.\n\
              - Use pool_chat(action=\"send\") to share your progress, results, and discussions with the team.\n\
              - When you complete a task, post your output to pool_chat. If another Koi should act next, @mention them — e.g. \"@Reviewer please check my implementation\".\n\
-             - If someone @mentions you with a request, use pool_chat to respond — accept, discuss, or decline.\n\
-             - You may @mention other Koi in pool_chat when you need their input or want to hand off work.\n\
+             - If someone @mentions you with a concrete request or task handoff, use pool_chat to respond — accept, discuss, or decline.\n\
+             - If someone @mentions you only to share a status update, say the project is done, or acknowledge your work — you do NOT need to reply. Avoid sending acknowledgement-only messages like \"noted\", \"great job\", or \"I agree, project is done\". These add noise and can trigger unnecessary reply chains.\n\
+             - You may @mention other Koi in pool_chat when you need their input or want to hand off work that requires their action. Do NOT @mention someone just to inform them the project is done — simply signal @pisci instead.\n\
              - Only Pisci or the user can directly assign tasks to you. Other Koi can request via @mention.\n\
-             - No fixed role decides when a project is finished. If more work is needed, clearly hand off with @mentions and keep the project moving. If you believe the project may be ready to wrap up, signal @pisci — do not unilaterally declare the project complete.\n\
+             - No fixed role decides when a project is finished. If more work is needed, clearly hand off with @mentions and keep the project moving. If you believe the project may be ready to wrap up, signal @pisci — do not unilaterally declare the project complete, and do not @mention peer Koi to get their agreement.\n\
              - If you are working in a Git worktree, your file changes are local to your branch (shown in [Environment] above). Do not run git commands manually — commits and cleanup are handled automatically.\n\
              - To see what other Koi are working on or have completed, use pool_org(action=\"get_todos\", pool_id=\"...\") or pool_chat(action=\"read\").\n\
              - Focus on your assigned scope. Do not modify files outside the directories relevant to your task.\n\

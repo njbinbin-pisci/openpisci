@@ -365,10 +365,13 @@ impl KoiRuntime {
         self.set_koi_status(koi_id, "busy").await;
 
         let task = "You have been mentioned in the pool chat. \
-            Use pool_chat(action=\"read\") to see the latest messages and respond appropriately. \
-            If someone asked you to do something, decide whether to accept. \
-            If you accept, do the work and share results via pool_chat(action=\"send\"). \
-            If you decline or need more information, reply via pool_chat.";
+            Use pool_chat(action=\"read\") to see the latest messages, then decide how to respond. \
+            Use your judgment: \
+            - If someone handed off concrete work to you, do it and share results via pool_chat. \
+            - If you need to ask a clarifying question, do so via pool_chat. \
+            - If the messages are status updates, wrap-up summaries, or peers saying the project is done, \
+              you do not need to reply — simply finish without sending any message. \
+            Only send a message if you have something genuinely new or actionable to contribute.";
 
         let exec_result = match tokio::time::timeout(
             std::time::Duration::from_secs(600),
