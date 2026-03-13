@@ -1406,58 +1406,7 @@ export default function Chat() {
   );
 }
 
-// Matches bare local paths not already inside a Markdown link or code span.
-// Windows:  C:\foo\bar.txt  or  C:/foo/bar.txt
-// UNC:      \\server\share\file.txt
-// Unix/Mac: /home/user/file.txt  /Users/foo/bar.md
-// The character class excludes whitespace and Markdown-special chars but allows CJK and other Unicode.
-// Matches a Windows or Unix local path (bare, not inside a markdown link)
-const LOCAL_PATH_RE =
-  /(?<!\]\()(?<![`\w/\\])(((?:[A-Za-z]:[\\/]|\\\\)[^\s`"'<>[\]()（）【】]+)|(?:\/(?:home|Users|tmp|var|etc|opt|srv|mnt|data)\/[^\s`"'<>[\]()（）【】]+))/g;
-
-// Matches a path wrapped in backticks: `C:\...` or `/home/user/...`
-const BACKTICK_PATH_RE =
-  /`(((?:[A-Za-z]:[\\/]|\\\\)[^\s`"'<>[\]()（）【】]+)|(?:\/(?:home|Users|tmp|var|etc|opt|srv|mnt|data)\/[^\s`"'<>[\]()（）【】]+))`/g;
-
-function pathToUri(p: string): string {
-  const forward = p.replace(/\\/g, "/");
-  // encodeURI keeps : / \ . but encodes spaces and CJK
-  return forward.startsWith("//")
-    ? `file:${encodeURI(forward)}`              // UNC \\server\share
-    : `file:///${encodeURI(forward.replace(/^\//, ""))}`; // C:/... or /home/...
-}
-
-// Splits text on markdown links so we can skip already-linked segments
-const EXISTING_LINK_RE = /(\[[^\]]*\]\([^)]*\))/g;
-
-function linkifyPaths(text: string): string {
-  // Pass 1: replace backtick-wrapped paths in non-linked segments
-  const pass1 = text.split(EXISTING_LINK_RE).map((part, i) => {
-    if (i % 2 === 1) return part; // already a markdown link — leave alone
-    return part.replace(BACKTICK_PATH_RE, (_m, p) => `[${p}](${pathToUri(p)})`);
-  }).join("");
-
-  // Pass 2: replace bare paths, again skipping already-linked segments (including those from pass1)
-  return pass1.split(EXISTING_LINK_RE).map((part, i) => {
-    if (i % 2 === 1) return part;
-    return part.replace(LOCAL_PATH_RE, (match) => `[${match}](${pathToUri(match)})`);
-  }).join("");
-}
-
-function isLocalPath(href: string | undefined): boolean {
-  if (!href) return false;
-  return href.startsWith("file://") || /^[A-Za-z]:[\\/]/.test(href) || href.startsWith("\\\\");
-}
-
-// Strip SEND_FILE: / SEND_IMAGE: marker lines from the display text (they are
-// consumed by the backend for file dispatch and should not be shown to the user).
-function stripSendMarkers(text: string): string {
-  return text
-    .split("\n")
-    .filter((line) => !/^\s*SEND_(FILE|IMAGE):/i.test(line))
-    .join("\n")
-    .trim();
-}
+import { linkifyPaths, stripSendMarkers, isLocalPath, uriToNativePath } from "../../utils/linkify";
 
 // Renders message content with full Markdown support (GFM: tables, strikethrough, task lists, etc.)
 function MessageContent({ content }: { content: string }) {
@@ -1477,16 +1426,6 @@ function MessageContent({ content }: { content: string }) {
             // Local paths → shell.open(); web URLs → new tab
             a: ({ href, children }) => {
               if (isLocalPath(href)) {
-                // Decode file:///C:/path → C:\path for shell.open
-                const toNativePath = (uri: string) => {
-                  if (uri.startsWith("file:///")) {
-                    return decodeURIComponent(uri.slice(8)).replace(/\//g, "\\");
-                  }
-                  if (uri.startsWith("file://")) {
-                    return decodeURIComponent(uri.slice(7));
-                  }
-                  return uri; // already a plain path
-                };
                 return (
                   <a
                     href="#"
@@ -1494,7 +1433,7 @@ function MessageContent({ content }: { content: string }) {
                     style={{ cursor: "pointer" }}
                     onClick={(e) => {
                       e.preventDefault();
-                      shellOpen(toNativePath(href!)).catch(console.error);
+                      shellOpen(uriToNativePath(href!)).catch(console.error);
                     }}
                   >
                     {children}

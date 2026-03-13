@@ -2,10 +2,46 @@ import { useState, useEffect, useRef, useCallback, useMemo, UIEvent } from "reac
 import { useTranslation } from "react-i18next";
 import { useSelector, useDispatch } from "react-redux";
 import { listen } from "@tauri-apps/api/event";
+import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { poolApi, koiApi, PoolMessage, KoiWithStats } from "../../../services/tauri";
 import { RootState, poolActions, koiActions } from "../../../store";
 import ConfirmDialog from "../../ConfirmDialog";
+import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
 import "./ChatPool.css";
+
+/** Render pool message content with Markdown + clickable local file paths */
+function PoolMessageContent({ content }: { content: string }) {
+  const processed = linkifyPaths(content);
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        a: ({ href, children }) => {
+          if (isLocalPath(href)) {
+            return (
+              <a
+                href="#"
+                title={href}
+                style={{ cursor: "pointer", color: "var(--accent)" }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  shellOpen(uriToNativePath(href!)).catch(console.error);
+                }}
+              >
+                {children}
+              </a>
+            );
+          }
+          return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+        },
+      }}
+    >
+      {processed}
+    </ReactMarkdown>
+  );
+}
 
 const STATUS_COLORS: Record<string, string> = {
   idle: "#6b7280",
@@ -78,13 +114,13 @@ function MessageBubble({
             ✅ {msg.content}
           </div>
         ) : msg.msg_type === "status_update" ? (
-          <div className="pool-msg-status-line">{msg.content}</div>
+          <div className="pool-msg-status-line"><PoolMessageContent content={msg.content} /></div>
         ) : msg.msg_type === "result" ? (
-          <div className="pool-msg-result-card">{msg.content}</div>
+          <div className="pool-msg-result-card"><PoolMessageContent content={msg.content} /></div>
         ) : msg.msg_type === "mention" ? (
-          <div className="pool-msg-mention">{msg.content}</div>
+          <div className="pool-msg-mention"><PoolMessageContent content={msg.content} /></div>
         ) : (
-          <div className="pool-msg-text">{msg.content}</div>
+          <div className="pool-msg-text"><PoolMessageContent content={msg.content} /></div>
         )}
       </div>
     </div>
