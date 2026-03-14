@@ -269,7 +269,7 @@ export default function ChatPool() {
   // otherwise increment unread counter to show the "new messages" badge.
   // We distinguish real-time appends from prepend (load-older) by tracking the
   // last known bottom message id — if the tail changed, it's a real new message.
-  const prevLastIdRef = useRef<string | null>(null);
+  const prevLastIdRef = useRef<number | null>(null);
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el || messages.length === 0) return;
