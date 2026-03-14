@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import ReactMarkdown from "react-markdown";
@@ -7,6 +7,8 @@ import { ChatMessage, Session, sessionsApi, poolApi } from "../../../services/ta
 import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
 import ConfirmDialog from "../../ConfirmDialog";
 import "./PisciInbox.css";
+
+const INBOX_PAGE_SIZE = 100;
 
 function InboxMessageContent({ content }: { content: string }) {
   const processed = linkifyPaths(content);
@@ -77,10 +79,16 @@ export default function PisciInbox() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [hasMore, setHasMore] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<{ id: string; title: string; blocked: boolean } | null>(null);
+
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const initialLoadDoneRef = useRef<string | null>(null);
 
   const internalSessions = useMemo(
     () => sessions.filter(isInternalSession),
@@ -105,12 +113,34 @@ export default function PisciInbox() {
   const loadMessages = useCallback(async (sessionId: string) => {
     setLoadingMessages(true);
     try {
-      const result = await sessionsApi.getMessages(sessionId, 200, 0);
+      const result = await sessionsApi.getMessages(sessionId, INBOX_PAGE_SIZE, 0);
       setMessages(result);
+      setHasMore(result.length === INBOX_PAGE_SIZE);
+      initialLoadDoneRef.current = sessionId;
     } finally {
       setLoadingMessages(false);
     }
   }, []);
+
+  const loadOlderMessages = useCallback(async (sessionId: string, currentCount: number) => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const result = await sessionsApi.getMessages(sessionId, INBOX_PAGE_SIZE, currentCount);
+      if (result.length > 0) {
+        setMessages((prev) => {
+          const existingIds = new Set(prev.map((m) => m.id));
+          const newOnes = result.filter((m) => !existingIds.has(m.id));
+          return [...newOnes, ...prev];
+        });
+        setHasMore(result.length === INBOX_PAGE_SIZE);
+      } else {
+        setHasMore(false);
+      }
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore]);
 
   useEffect(() => {
     loadSessions().catch(console.error);
@@ -119,10 +149,34 @@ export default function PisciInbox() {
   useEffect(() => {
     if (!activeSessionId) {
       setMessages([]);
+      setHasMore(false);
       return;
     }
     loadMessages(activeSessionId).catch(console.error);
   }, [activeSessionId, loadMessages]);
+
+  // After initial load: immediately jump to bottom
+  useLayoutEffect(() => {
+    if (initialLoadDoneRef.current === activeSessionId && messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      initialLoadDoneRef.current = null;
+    }
+  });
+
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollTop < 60 && hasMore && activeSessionId && !loadingMore) {
+      const prevScrollHeight = el.scrollHeight;
+      loadOlderMessages(activeSessionId, messages.length).then(() => {
+        requestAnimationFrame(() => {
+          if (messagesContainerRef.current) {
+            messagesContainerRef.current.scrollTop =
+              messagesContainerRef.current.scrollHeight - prevScrollHeight;
+          }
+        });
+      });
+    }
+  }, [hasMore, activeSessionId, loadingMore, loadOlderMessages, messages.length]);
 
   const requestDeleteSession = useCallback(async (e: React.MouseEvent, session: Session) => {
     e.stopPropagation();
@@ -235,12 +289,25 @@ export default function PisciInbox() {
               </button>
             </div>
 
-            <div className="pisci-inbox-messages">
+            <div
+              className="pisci-inbox-messages"
+              ref={messagesContainerRef}
+              onScroll={handleScroll}
+            >
               {loadingMessages && messages.length === 0 && (
                 <div className="pisci-inbox-empty">{t("common.loading")}</div>
               )}
               {!loadingMessages && messages.length === 0 && (
                 <div className="pisci-inbox-empty">{t("pond.inboxNoMessages")}</div>
+              )}
+              {messages.length > 0 && (
+                <div className="pisci-inbox-load-more">
+                  {loadingMore
+                    ? t("common.loading")
+                    : hasMore
+                      ? t("common.loadMore")
+                      : null}
+                </div>
               )}
               {messages.filter((m) => m.content.trim()).map((message) => (
                 <div key={message.id} className={`pisci-inbox-message pisci-inbox-message--${message.role}`}>
@@ -253,6 +320,7 @@ export default function PisciInbox() {
                   <div className="pisci-inbox-message-content"><InboxMessageContent content={message.content} /></div>
                 </div>
               ))}
+              <div ref={messagesEndRef} />
             </div>
           </>
         )}

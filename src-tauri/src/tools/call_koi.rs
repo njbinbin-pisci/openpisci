@@ -296,11 +296,20 @@ impl CallKoiTool {
              - Before marking done, ask yourself: \"Could another agent pick up the project right now and find the actual output of this task?\" If no, the task is not done.\n\
              - If you realize a task is no longer needed, cancel your own: pool_org(action=\"cancel_todo\", todo_id=\"...\", reason=\"...\").\n\
              - You can ONLY complete or cancel your own tasks. To request cancellation of another agent's task, @pisci in pool_chat and explain why.\n\
-             - If your task is blocked, update its status: pool_org(action=\"update_todo_status\", todo_id=\"...\", status=\"blocked\") and notify @pisci. Do NOT mark it done.\n\
+             - If your task is blocked, you MUST update its status immediately — do NOT keep retrying indefinitely. \
+               A task is blocked when: \
+               (a) it depends on output from another agent that has not arrived yet, \
+               (b) you lack the permissions, credentials, or access needed to proceed, \
+               (c) you have tried at least twice and hit an unresolvable obstacle, \
+               (d) you are waiting for a decision that only Pisci or the user can make. \
+               Call pool_org(action=\"update_todo_status\", todo_id=\"...\", status=\"blocked\"), \
+               then immediately post to pool_chat @pisci with a one-line reason. Do NOT mark it done.\n\
              - Use pool_org(action=\"get_todos\", pool_id=\"...\") to see the current task board before starting work.\n\
              - In significant pool_chat updates, prefer including a structured status signal so Pisci can reason about project state: `[ProjectStatus] follow_up_needed`, `[ProjectStatus] waiting`, or `[ProjectStatus] ready_for_pisci_review`.\n\
              - Use `[ProjectStatus] follow_up_needed` when another agent must continue the work. @mention the next agent or @pisci.\n\
-             - Use `[ProjectStatus] ready_for_pisci_review` only when you believe your branch of work has no remaining known follow-up and Pisci should decide whether the project can conclude.\n\
+             - Use `[ProjectStatus] ready_for_pisci_review` ONLY AFTER you have called complete_todo for your task. \
+               Never send this signal while your todo is still in_progress. \
+               Required sequence: complete_todo first → then post [ProjectStatus] ready_for_pisci_review @pisci in pool_chat.\n\
              \n\n## Knowledge Base (kb/)\n\
              - The workspace contains a shared `kb/` directory for accumulated project knowledge. Always check it before starting work: use file_list to browse `<workspace>/kb/`, then file_read to read relevant files.\n\
              - When you discover something worth preserving — architecture decisions, API specs, tricky bugs, lessons learned, useful data — write it to `kb/`. Use subdirectories to organize: `kb/decisions/`, `kb/architecture/`, `kb/api/`, `kb/bugs/`, `kb/research/`.\n\

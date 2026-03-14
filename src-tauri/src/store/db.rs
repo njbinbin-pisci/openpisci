@@ -835,6 +835,41 @@ impl Database {
             .map_err(Into::into)
     }
 
+    /// Fetch `limit` messages older than the newest `offset` messages, in chronological order.
+    /// Used for scroll-up pagination: skip the newest `offset` rows, return the next `limit` older rows.
+    pub fn get_messages_older(
+        &self,
+        session_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ChatMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index \
+             FROM ( \
+               SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index \
+               FROM messages WHERE session_id = ?1 \
+               ORDER BY created_at DESC, rowid DESC LIMIT ?2 OFFSET ?3 \
+             ) ORDER BY created_at ASC, rowid ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit, offset], |r| {
+            Ok(ChatMessage {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                role: r.get(2)?,
+                content: r.get(3)?,
+                created_at: r
+                    .get::<_, String>(4)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
+                tool_calls_json: r.get(5)?,
+                tool_results_json: r.get(6)?,
+                turn_index: r.get(7)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     /// Fetch the latest `limit` messages for a session, ordered chronologically (oldest first).
     /// Unlike `get_messages`, this always includes the most recent messages rather than the oldest,
     /// which is critical for building LLM context when a session has many messages.

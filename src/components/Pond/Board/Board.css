@@ -120,9 +120,11 @@
   border-radius: var(--radius);
   transition: box-shadow 0.2s, transform 0.15s;
   cursor: pointer;
-  height: 200px;
-  min-height: 200px;
+  height: 140px;
   overflow: hidden;
+  width: 100%;
+  box-sizing: border-box;
+  flex-shrink: 0;
 }
 
 .board-card:hover {
@@ -177,10 +179,16 @@
   color: var(--text-primary);
   line-height: 1.4;
   word-break: break-word;
+  overflow-wrap: break-word;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
 
 .board-card-body {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   padding-right: 2px;
@@ -190,20 +198,31 @@
   font-size: 11px;
   color: var(--text-secondary);
   line-height: 1.5;
-  white-space: pre-wrap;
+  white-space: pre-line;
   word-break: break-word;
-  margin-top: 6px;
+  overflow-wrap: break-word;
+  margin-top: 4px;
 }
 
 .board-card-footer {
   padding-top: 4px;
   border-top: 1px solid var(--border);
   margin-top: auto;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .board-card-assigned {
   font-size: 10px;
   color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 /* ── Empty state ── */
@@ -411,7 +430,8 @@
 
 .board-card--blocked {
   opacity: 0.85;
-  border-left: 2px solid #eb3b5a;
+  height: auto;
+  min-height: 140px;
 }
 
 .board-card-blocked-reason {
@@ -421,6 +441,10 @@
   background: rgba(235, 59, 90, 0.06);
   border-radius: var(--radius);
   margin-top: 4px;
+  max-height: 60px;
+  overflow-y: auto;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .board-card-source {
@@ -485,9 +509,10 @@
 }
 
 .board-card-claimer {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
-  margin-left: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* ── Modal actions ── */

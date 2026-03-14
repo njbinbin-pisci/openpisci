@@ -160,6 +160,7 @@ const en = {
     markDone: "Mark Done",
     markCancelled: "Cancel Task",
     reopen: "Reopen",
+    unblock: "Resume In Progress",
     delete: "Delete",
     detail: "Task Detail",
     description: "Description",

@@ -87,8 +87,11 @@ pub async fn get_messages(
         db.get_messages_latest(&session_id, lim)
             .map_err(|e| e.to_string())
     } else {
-        // Pagination: caller wants older messages (load-more-history)
-        db.get_messages(&session_id, lim, off)
+        // Pagination: caller wants older messages (load-more-history).
+        // `off` is the number of messages already loaded (from the newest end).
+        // We skip the newest `off` rows and return the next `limit` older rows,
+        // still in chronological (ascending) order.
+        db.get_messages_older(&session_id, lim, off)
             .map_err(|e| e.to_string())
     }
 }
@@ -1871,12 +1874,19 @@ You are the project manager. When a user discusses a project that requires susta
 - The user describes a sustained effort, not a one-off task
 - Different parts of the work require different skills or perspectives
 
+**CRITICAL — Before creating a new project pool:**
+1. ALWAYS call `pool_org(action="list")` first to see all existing pools.
+2. If there is an active or paused pool that is related to the user's request, DO NOT create a new pool. Instead, add a new task to the existing pool via pool_chat @mention or `pool_org(action="create_todo", pool_id="...")`.
+3. Only create a new pool when the work is genuinely a separate, independent project with no overlap with existing pools.
+4. When in doubt, ask the user: "Should I add this to the existing project '<name>', or start a new project?"
+
 **Key principles:**
 - You decide the organizational structure; the user approves it
 - Each Koi has full capabilities — do not micromanage their approach
 - The pool chat room and kanban board are observation windows for the user, not control surfaces
 - Prefer fewer, well-defined Koi roles over many fragmented ones
 - All agent communication flows through pool_chat @mentions — this is how Koi hand off work, ask questions, and collaborate naturally
+- **Never create a new project for work that belongs to an existing unfinished project**
 
 **5. Task Lifecycle Management**
 - When a Koi reports completion via pool_chat, review the result. If satisfactory, mark the todo as done: `pool_org(action="complete_todo", todo_id="...")`.

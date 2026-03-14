@@ -30,6 +30,17 @@ const SOURCE_ICONS: Record<string, string> = {
   system: "⚙️",
 };
 
+/** Resolve assigned_by (UUID, "pisci", "user", "system") to a display label */
+function resolveAssignedBy(assignedBy: string, kois: KoiWithStats[]): string {
+  if (!assignedBy) return "—";
+  if (assignedBy === "pisci") return "🐋 Pisci";
+  if (assignedBy === "user") return "👤 User";
+  if (assignedBy === "system") return "⚙️ System";
+  const koi = kois.find((k) => k.id === assignedBy);
+  if (koi) return `${koi.icon} ${koi.name}`;
+  return assignedBy;
+}
+
 function TaskCard({
   todo,
   kois,
@@ -49,6 +60,7 @@ function TaskCard({
   const menuRef = useRef<HTMLDivElement>(null);
   const owner = kois.find((k) => k.id === todo.owner_id);
   const claimer = todo.claimed_by ? kois.find((k) => k.id === todo.claimed_by) : null;
+  const barColor = todo.status === "blocked" ? "#eb3b5a" : (owner?.color ?? "#6b7280");
   const color = owner?.color ?? "#6b7280";
   const icon = owner?.icon ?? "🐟";
   const priorityColor = PRIORITY_COLORS[todo.priority] ?? PRIORITY_COLORS.low;
@@ -77,7 +89,7 @@ function TaskCard({
       className={`board-card ${todo.blocked_reason ? "board-card--blocked" : ""}${menuOpen ? " menu-open" : ""}`}
       onClick={() => onDetail(todo)}
     >
-      <div className="board-card-bar" style={{ background: color }} />
+      <div className="board-card-bar" style={{ background: barColor }} />
       <div className="board-card-content">
         <div className="board-card-top">
           <span className="board-card-icon">{icon}</span>
@@ -87,7 +99,6 @@ function TaskCard({
           >
             {t(priorityKey)}
           </span>
-          <span className="board-card-source" title={`Source: ${todo.source_type}`}>{sourceIcon}</span>
           <span
             ref={triggerRef}
             className="board-card-menu-trigger"
@@ -110,6 +121,9 @@ function TaskCard({
               style={{ top: menuPos.top, left: menuPos.left }}
               onClick={(e) => e.stopPropagation()}
             >
+              {todo.status === "blocked" && (
+                <button onClick={(e) => { e.stopPropagation(); handleAction("unblock"); }}>{t("board.unblock")}</button>
+              )}
               {todo.status !== "done" && (
                 <button onClick={(e) => { e.stopPropagation(); handleAction("complete"); }}>{t("board.markDone")}</button>
               )}
@@ -134,7 +148,7 @@ function TaskCard({
         </div>
         <div className="board-card-footer">
           <span className="board-card-assigned">
-            {t("board.assignedBy")}: {todo.assigned_by || "—"}
+            {t("board.assignedBy")}: {resolveAssignedBy(todo.assigned_by, kois)}
           </span>
           {claimer && (
             <span className="board-card-claimer" style={{ color: claimer.color }}>
@@ -199,7 +213,7 @@ function TaskDetailModal({
           )}
           <div className="board-detail-row">
             <span className="board-detail-label">{t("board.assignedBy")}:</span>
-            <span>{todo.assigned_by || "—"}</span>
+            <span>{resolveAssignedBy(todo.assigned_by, kois)}</span>
           </div>
           {todo.created_at && (
             <div className="board-detail-row">
@@ -224,6 +238,11 @@ function TaskDetailModal({
         )}
 
         <div className="board-modal-actions">
+          {todo.status === "blocked" && (
+            <button className="board-btn board-btn-secondary" onClick={() => { onAction("unblock", todo.id); onClose(); }}>
+              {t("board.unblock")}
+            </button>
+          )}
           {todo.status !== "done" && (
             <button className="board-btn board-btn-primary" onClick={() => { onAction("complete", todo.id); onClose(); }}>
               {t("board.markDone")}
@@ -442,6 +461,9 @@ export default function Board() {
           break;
         case "reopen":
           await boardApi.updateTodo({ id: todoId, status: "todo" });
+          break;
+        case "unblock":
+          await boardApi.updateTodo({ id: todoId, status: "in_progress" });
           break;
         case "delete":
           await boardApi.deleteTodo(todoId);

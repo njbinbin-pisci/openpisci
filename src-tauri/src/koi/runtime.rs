@@ -221,12 +221,14 @@ impl KoiRuntime {
         // Append todo_id and identity reminder to task
         let task_with_meta = format!(
             "{}\n\n[System: You are {name}. Your todo ID for this task is `{id}`. \
+             Before starting work, call pool_chat(action=\"read\") to check if a teammate has already done related work or left relevant context. \
              When reading pool chat, focus on what is addressed to you ({name}) specifically — \
              do not confuse other team members' statuses or roles with your own. \
              Mark this todo done ONLY after the actual deliverable is complete and verifiable \
              (code written, file created, review posted, etc.). \
              Writing a plan or having a discussion does NOT count as done. \
-             Call pool_org(action=\"complete_todo\", todo_id=\"{id}\") when the real output exists.]",
+             Call pool_org(action=\"complete_todo\", todo_id=\"{id}\") when the real output exists. \
+             After completing, if your branch of work is fully done, post [ProjectStatus] ready_for_pisci_review @pisci in pool_chat.]",
             task,
             name = koi_def.name,
             id = &todo.id[..8.min(todo.id.len())]
@@ -372,19 +374,24 @@ impl KoiRuntime {
         self.set_koi_status(koi_id, "busy").await;
 
         let task = format!(
-            "You have been mentioned in the pool chat. \
+            "You have been mentioned in the pool chat (pool_id: \"{pool_id}\"). \
             IMPORTANT: You are {name} — keep your own identity in mind while reading messages from others. \
             Use pool_chat(action=\"read\") to see the latest messages, then decide how to respond. \
             When reading the chat, focus on what is addressed TO YOU specifically (your name or @{name}). \
             Do not confuse descriptions of other team members' roles or statuses with your own. \
             Use your judgment: \
-            - If someone handed off concrete work to you ({name}): first create a todo for it with pool_org(action=\"create_todo\", pool_id=\"...\", title=\"...\"), \
-              claim it with pool_org(action=\"claim_todo\", todo_id=\"...\"), then do the work, then mark it complete. \
+            - If someone handed off concrete work to you ({name}): \
+              (1) First call pool_org(action=\"get_todos\", pool_id=\"{pool_id}\") to check if a similar unclaimed todo already exists for this work. \
+              (2) If no matching todo exists, create one: pool_org(action=\"create_todo\", pool_id=\"{pool_id}\", title=\"...\"). \
+              (3) Claim it: pool_org(action=\"claim_todo\", todo_id=\"...\"). \
+              (4) Do the work, then mark it complete: pool_org(action=\"complete_todo\", todo_id=\"...\"). \
+              (5) After completing, post [ProjectStatus] ready_for_pisci_review @pisci if your branch of work is done. \
             - If you need to ask a clarifying question, do so via pool_chat. \
             - If the messages are status updates, acknowledgements, or peers saying the project is done, \
               you do not need to reply and you do NOT need to create a todo — simply finish. \
             Only send a message if you have something genuinely new or actionable to contribute.",
-            name = koi_def.name
+            name = koi_def.name,
+            pool_id = pool_session_id
         );
 
         let exec_result = match tokio::time::timeout(

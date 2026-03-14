@@ -88,11 +88,16 @@ pub(crate) fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAt
                     .to_string(),
             );
             lines.push(
-                "- Review the pool chat to confirm there is no outstanding work, then execute pool_org(action=\"archive\", pool_id=...) to archive the project and post a wrap-up summary in pool_chat."
+                "- Required sequence: (1) Read pool_chat to confirm no outstanding work exists. \
+                 (2) If confirmed complete, call pool_org(action=\"archive\", pool_id=...) to archive the project. \
+                 (3) Post a wrap-up summary in pool_chat. \
+                 (4) Only THEN reply HEARTBEAT_OK. \
+                 Do NOT emit HEARTBEAT_OK before archiving."
                     .to_string(),
             );
             lines.push(
-                "- Only skip archiving if you find clear evidence of unresolved work not captured in todos."
+                "- Only skip archiving if you find clear evidence of unresolved work not captured in todos. \
+                 In that case, treat the project as Continue and assign the missing work."
                     .to_string(),
             );
         }
@@ -279,7 +284,12 @@ pub async fn dispatch_heartbeat(
                 Some(HeadlessRunOptions {
                     pool_session_id: Some(attention.pool_id.clone()),
                     extra_system_context: Some(format!(
-                        "You are reviewing the project pool '{}' ({}) during a heartbeat-triggered inbox scan.\nCurrent assessment: {}\nDecision: {:?}\nIf the decision is Continue, you must not emit HEARTBEAT_OK or describe the project as complete.",
+                        "You are reviewing the project pool '{}' ({}) during a heartbeat-triggered inbox scan.\n\
+                         Current assessment: {}\nDecision: {:?}\n\
+                         HEARTBEAT_OK rules: \
+                         If decision is Continue — do NOT emit HEARTBEAT_OK or describe the project as complete. \
+                         If decision is ReadyForPisciReview — you MUST archive the project first (pool_org archive), \
+                         then post a wrap-up in pool_chat, and only then emit HEARTBEAT_OK.",
                         attention.pool_name, attention.pool_id, attention.assessment.summary, attention.assessment.decision
                     )),
                     session_title: Some(format!("Pisci · {}", attention.pool_name)),

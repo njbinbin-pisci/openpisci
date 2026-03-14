@@ -54,9 +54,12 @@ impl Tool for PoolOrgTool {
          - 'update_todo_status': Update a todo's status (requires todo_id, status). Pisci can change any; Koi can only change their own. Valid statuses: todo, in_progress, blocked. \
          - 'merge_branches': Merge all Koi worktree branches back into main (requires pool_id with project_dir). \
          \
-         Workflow: Use 'find_related' to check for existing projects before creating new ones. \
-         After understanding the user's project goals, use 'create' to set up the pool, \
-         then 'assign_koi' to kick off work."
+         Workflow: ALWAYS call 'list' first to see all existing pools. \
+         Then use 'find_related' to search for related projects by keywords. \
+         Only call 'create' if no existing pool covers the requested work — \
+         if an active or paused pool is related, add tasks to it instead of creating a new pool. \
+         After creating a new pool, use 'assign_koi' or pool_chat @mention to kick off work. \
+         During heartbeat/routine checks: NEVER create new pools — only manage existing ones."
     }
 
     fn input_schema(&self) -> Value {

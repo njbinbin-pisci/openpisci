@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, UIEvent } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, UIEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useSelector, useDispatch } from "react-redux";
 import { listen } from "@tauri-apps/api/event";
@@ -145,6 +145,8 @@ export default function ChatPool() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  // Track whether the current session's initial load is done so we can scroll to bottom
+  const initialLoadDoneRef = useRef<string | null>(null);
 
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newName, setNewName] = useState("");
@@ -179,6 +181,7 @@ export default function ChatPool() {
         messages: msgs,
         hasMore: msgs.length === PAGE_SIZE,
       }));
+      initialLoadDoneRef.current = sessionId;
     } catch {
       // silently ignore
     }
@@ -238,8 +241,27 @@ export default function ChatPool() {
     return () => { unlisten?.(); };
   }, [activeSessionId, loadMessages, dispatch]);
 
+  // After initial load for a session: immediately jump to bottom (no animation)
+  useLayoutEffect(() => {
+    if (initialLoadDoneRef.current === activeSessionId && messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      initialLoadDoneRef.current = null;
+    }
+  });
+
+  // When a new message arrives (real-time append): smooth scroll to bottom only if
+  // the user is already near the bottom (within 200px), so we don't hijack manual scrolling.
+  const prevMessageCountRef = useRef(0);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const isNewMessage = messages.length > prevMessageCountRef.current;
+    prevMessageCountRef.current = messages.length;
+    if (!isNewMessage) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 200) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages.length]);
 
   const handleMessagesScroll = useCallback((e: UIEvent<HTMLDivElement>) => {

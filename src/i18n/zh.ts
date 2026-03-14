@@ -160,6 +160,7 @@ const zh = {
     markDone: "标记完成",
     markCancelled: "取消任务",
     reopen: "重新打开",
+    unblock: "恢复进行中",
     delete: "删除",
     detail: "任务详情",
     description: "描述",

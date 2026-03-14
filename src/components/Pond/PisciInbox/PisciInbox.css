@@ -62,6 +62,14 @@
   padding: 10px;
 }
 
+.pisci-inbox-load-more {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 6px 0 2px;
+  min-height: 18px;
+}
+
 .pisci-inbox-session {
   width: 100%;
   text-align: left;
