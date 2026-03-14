@@ -387,6 +387,12 @@
   opacity: 0.75;
 }
 
+.koi-form-warn {
+  color: #f59e0b;
+  opacity: 1;
+  font-weight: 500;
+}
+
 .koi-form-label {
   display: block;
   font-size: 12px;

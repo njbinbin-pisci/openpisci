@@ -222,7 +222,7 @@ pub async fn scan_attention_pools(state: &AppState) -> Result<Vec<PoolAttention>
     Ok(attentions)
 }
 
-async fn ensure_heartbeat_session(
+pub async fn ensure_heartbeat_session(
     state: &AppState,
     session_id: &str,
     title: &str,

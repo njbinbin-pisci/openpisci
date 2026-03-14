@@ -648,7 +648,13 @@ export const koiApi = {
     llm_provider_id?: string;
   }) => invoke<void>("update_koi", { input }),
   delete: (id: string) => invoke<void>("delete_koi", { id }),
-  setActive: (id: string, active: boolean) => invoke<void>("set_koi_active", { id, active }),
+  getDeleteInfo: (id: string) =>
+    invoke<{ name: string; icon: string; todo_count: number; memory_count: number; is_busy: boolean }>(
+      "get_koi_delete_info",
+      { id }
+    ),
+  setActive: (id: string, active: boolean, force?: boolean) =>
+    invoke<void>("set_koi_active", { id, active, force }),
   palette: () => invoke<KoiPalette>("get_koi_palette"),
   listMemories: (koiId: string) =>
     invoke<{ memories: Memory[]; total: number }>("list_memories_for_koi", { koiId }),

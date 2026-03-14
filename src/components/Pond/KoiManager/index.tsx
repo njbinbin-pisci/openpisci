@@ -26,7 +26,25 @@ interface TooltipState {
   anchorRect: DOMRect;
 }
 
-function StatTooltip({ koiId, kind, anchorRect }: TooltipState) {
+const TODO_STATUS_ORDER: Record<string, number> = {
+  in_progress: 0, todo: 1, blocked: 2, done: 3, cancelled: 4,
+};
+
+function sortTodos(todos: KoiTodo[]): KoiTodo[] {
+  return [...todos].sort((a, b) => {
+    const oa = TODO_STATUS_ORDER[a.status] ?? 9;
+    const ob = TODO_STATUS_ORDER[b.status] ?? 9;
+    if (oa !== ob) return oa - ob;
+    return a.created_at < b.created_at ? 1 : -1;
+  });
+}
+
+interface StatTooltipProps extends TooltipState {
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}
+
+function StatTooltip({ koiId, kind, anchorRect, onMouseEnter, onMouseLeave }: StatTooltipProps) {
   const [memories, setMemories] = useState<Memory[] | null>(null);
   const [todos, setTodos] = useState<KoiTodo[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -39,7 +57,7 @@ function StatTooltip({ koiId, kind, anchorRect }: TooltipState) {
         .catch(() => { setMemories([]); setLoading(false); });
     } else {
       koiApi.listTodos(koiId)
-        .then((r) => { setTodos(r); setLoading(false); })
+        .then((r) => { setTodos(sortTodos(r)); setLoading(false); })
         .catch(() => { setTodos([]); setLoading(false); });
     }
   }, [koiId, kind]);
@@ -69,6 +87,8 @@ function StatTooltip({ koiId, kind, anchorRect }: TooltipState) {
     <div
       className="koi-stat-tooltip"
       style={{ top, left, width: tooltipW }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <div className="koi-stat-tooltip-title">
         {kind === "memory" ? "📚 记忆详情" : "📋 待办详情"}
@@ -148,18 +168,33 @@ function KoiCard({
     : "#6b7280";
 
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
-  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelClose = () => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+
+  const scheduleClose = () => {
+    cancelClose();
+    closeTimerRef.current = setTimeout(() => setTooltip(null), 150);
+  };
 
   const handleStatEnter = (e: React.MouseEvent, kind: TooltipKind) => {
+    cancelClose();
+    if (openTimerRef.current) clearTimeout(openTimerRef.current);
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    hoverTimerRef.current = setTimeout(() => {
+    openTimerRef.current = setTimeout(() => {
       setTooltip({ koiId: koi.id, kind, anchorRect: rect });
     }, 300);
   };
 
   const handleStatLeave = () => {
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    setTooltip(null);
+    if (openTimerRef.current) clearTimeout(openTimerRef.current);
+    scheduleClose();
   };
 
   return (
@@ -204,16 +239,22 @@ function KoiCard({
           className={`koi-btn ${koi.status === "offline" ? "koi-btn-primary" : "koi-btn-secondary"}`}
           onClick={onToggleActive}
         >
-          {koi.status === "offline" ? t("koi.activate") : t("koi.deactivate")}
+          {koi.status === "offline" ? t("koi.returnFromVacation") : t("koi.deactivate")}
         </button>
         <button className="koi-btn koi-btn-secondary" onClick={onEdit}>
           {t("koi.editBtn")}
         </button>
         <button className="koi-btn koi-btn-danger" onClick={onDelete}>
-          {t("koi.deleteBtn")}
+          {t("koi.fire")}
         </button>
       </div>
-      {tooltip && <StatTooltip {...tooltip} />}
+      {tooltip && (
+        <StatTooltip
+          {...tooltip}
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
+        />
+      )}
     </div>
   );
 }
@@ -221,6 +262,7 @@ function KoiCard({
 function KoiDialog({
   mode,
   initial,
+  originalKoi,
   palette,
   llmProviders,
   saving,
@@ -230,6 +272,7 @@ function KoiDialog({
 }: {
   mode: "create" | "edit";
   initial: KoiFormData;
+  originalKoi?: KoiWithStats | null;
   palette: KoiPalette | null;
   llmProviders: LlmProviderConfig[];
   saving: boolean;
@@ -239,6 +282,9 @@ function KoiDialog({
 }) {
   const [form, setForm] = useState<KoiFormData>(initial);
   const [customIcon, setCustomIcon] = useState("");
+
+  const nameChanged = mode === "edit" && originalKoi && form.name !== originalKoi.name;
+  const promptChanged = mode === "edit" && originalKoi && form.system_prompt !== originalKoi.system_prompt;
 
   const icons = palette?.icons ?? [
     "🐟", "🐠", "🐡", "🦈", "🐋", "🐳", "🦑", "🐙",
@@ -276,6 +322,11 @@ function KoiDialog({
             placeholder={t("koi.namePlaceholder")}
             autoFocus
           />
+          {nameChanged && originalKoi && (
+            <p className="koi-form-help koi-form-warn">
+              {t("koi.editRenameWarning").replace("{{oldName}}", originalKoi.name)}
+            </p>
+          )}
         </div>
 
         <div className="koi-form-field">
@@ -359,6 +410,9 @@ function KoiDialog({
             rows={5}
           />
           <p className="koi-form-help">{t("koi.systemPromptHelp")}</p>
+          {promptChanged && (
+            <p className="koi-form-help koi-form-warn">{t("koi.editPromptWarning")}</p>
+          )}
         </div>
 
         <div className="koi-form-field">
@@ -418,11 +472,15 @@ export default function KoiManager() {
   const [llmProviders, setLlmProviders] = useState<LlmProviderConfig[]>([]);
   const [dialogMode, setDialogMode] = useState<"create" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingKoi, setEditingKoi] = useState<KoiWithStats | null>(null);
   const [dialogInit, setDialogInit] = useState<KoiFormData>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<KoiWithStats | null>(null);
+  const [deleteInfo, setDeleteInfo] = useState<{ name: string; icon: string; todo_count: number; memory_count: number; is_busy: boolean } | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Busy confirmation for vacation
+  const [vacationBusyTarget, setVacationBusyTarget] = useState<KoiWithStats | null>(null);
 
   const loadKois = useCallback(async () => {
     try {
@@ -486,6 +544,7 @@ export default function KoiManager() {
       llm_provider_id: koi.llm_provider_id ?? "",
     });
     setEditingId(koi.id);
+    setEditingKoi(koi);
     setDialogMode("edit");
   };
 
@@ -518,6 +577,16 @@ export default function KoiManager() {
     }
   };
 
+  const handleDeleteRequest = async (koi: KoiWithStats) => {
+    try {
+      const info = await koiApi.getDeleteInfo(koi.id);
+      setDeleteInfo(info);
+      setDeleteTarget(koi);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
     try {
@@ -525,10 +594,37 @@ export default function KoiManager() {
       await koiApi.delete(deleteTarget.id);
       dispatch(koiActions.removeKoi(deleteTarget.id));
       setDeleteTarget(null);
+      setDeleteInfo(null);
     } catch (e) {
       setError(String(e));
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleToggleActive = async (koi: KoiWithStats) => {
+    try {
+      await koiApi.setActive(koi.id, koi.status === "offline");
+      loadKois();
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("BUSY:")) {
+        // Backend returned BUSY sentinel — show confirmation
+        setVacationBusyTarget(koi);
+      } else {
+        setError(msg);
+      }
+    }
+  };
+
+  const handleForceVacation = async () => {
+    if (!vacationBusyTarget) return;
+    try {
+      await koiApi.setActive(vacationBusyTarget.id, false, true);
+      setVacationBusyTarget(null);
+      loadKois();
+    } catch (e) {
+      setError(String(e));
     }
   };
 
@@ -563,15 +659,8 @@ export default function KoiManager() {
               koi={koi}
               t={t}
               onEdit={() => openEdit(koi)}
-              onDelete={() => setDeleteTarget(koi)}
-              onToggleActive={async () => {
-                try {
-                  await koiApi.setActive(koi.id, koi.status === "offline");
-                  loadKois();
-                } catch (e) {
-                  console.error("toggle active error:", e);
-                }
-              }}
+              onDelete={() => handleDeleteRequest(koi)}
+              onToggleActive={() => handleToggleActive(koi)}
             />
           ))}
         </div>
@@ -581,25 +670,74 @@ export default function KoiManager() {
         <KoiDialog
           mode={dialogMode}
           initial={dialogInit}
+          originalKoi={editingKoi}
           palette={palette}
           llmProviders={llmProviders}
           saving={saving}
           t={t}
           onSave={handleSave}
-          onCancel={() => setDialogMode(null)}
+          onCancel={() => { setDialogMode(null); setEditingKoi(null); }}
         />
       )}
 
       <ConfirmDialog
         open={!!deleteTarget}
-        title={t("koi.deleteBtn")}
-        message={t("koi.confirmDelete")}
-        confirmLabel={t("common.delete")}
+        title={t("koi.confirmFireTitle")}
+        message={
+          deleteInfo
+            ? [
+                t("koi.confirmFireMessage")
+                  .replace("{{icon}}", deleteInfo.icon)
+                  .replace("{{name}}", deleteInfo.name),
+                deleteInfo.is_busy
+                  ? t("koi.confirmFireBusyWarning").replace("{{name}}", deleteInfo.name)
+                  : "",
+                deleteInfo.todo_count > 0
+                  ? t("koi.confirmFireTodosWarning")
+                      .replace("{{name}}", deleteInfo.name)
+                      .replace("{{count}}", String(deleteInfo.todo_count))
+                  : "",
+                deleteInfo.memory_count > 0
+                  ? t("koi.confirmFireMemoryWarning")
+                      .replace("{{name}}", deleteInfo.name)
+                      .replace("{{count}}", String(deleteInfo.memory_count))
+                  : "",
+              ]
+                .filter(Boolean)
+                .join("\n")
+            : t("koi.confirmDelete")
+        }
+        confirmLabel={t("koi.fire")}
         cancelLabel={t("common.cancel")}
         variant="danger"
         loading={deleting}
         onConfirm={handleDeleteConfirm}
-        onCancel={() => setDeleteTarget(null)}
+        onCancel={() => { setDeleteTarget(null); setDeleteInfo(null); }}
+      />
+
+      <ConfirmDialog
+        open={!!vacationBusyTarget}
+        title={t("koi.confirmVacationTitle")}
+        message={
+          vacationBusyTarget
+            ? [
+                t("koi.confirmVacationBusyWarning").replace("{{name}}", vacationBusyTarget.name),
+                vacationBusyTarget.active_todo_count > 0
+                  ? t("koi.confirmVacationTodosWarning")
+                      .replace("{{name}}", vacationBusyTarget.name)
+                      .replace("{{count}}", String(vacationBusyTarget.active_todo_count))
+                  : "",
+              ]
+                .filter(Boolean)
+                .join("\n")
+            : ""
+        }
+        confirmLabel={t("koi.deactivate")}
+        cancelLabel={t("common.cancel")}
+        variant="danger"
+        loading={false}
+        onConfirm={handleForceVacation}
+        onCancel={() => setVacationBusyTarget(null)}
       />
     </div>
   );

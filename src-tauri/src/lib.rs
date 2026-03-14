@@ -843,6 +843,7 @@ pub fn run() {
             commands::koi::create_koi,
             commands::koi::update_koi,
             commands::koi::delete_koi,
+            commands::koi::get_koi_delete_info,
             commands::koi::set_koi_active,
             commands::koi::get_koi_palette,
             commands::koi::dedup_kois,
