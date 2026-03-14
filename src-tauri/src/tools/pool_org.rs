@@ -47,6 +47,8 @@ impl Tool for PoolOrgTool {
          - 'find_related': Search for existing projects by keywords. \
          - 'get_messages': Read recent messages for a project pool (requires pool_id, optional limit). \
          - 'get_todos': Read koi_todos associated with a project pool (requires pool_id). \
+         - 'create_todo': Create a new todo for yourself (requires pool_id, title; optional description, priority). Use this when you receive real work via @mention or self-identify a task. \
+         - 'claim_todo': Claim an existing unclaimed todo (requires todo_id). Marks it in_progress and assigns it to you. \
          - 'complete_todo': Mark a todo as done (requires todo_id). Pisci can complete any todo; Koi can only complete their own. \
          - 'cancel_todo': Cancel a todo (requires todo_id, optional reason). Pisci can cancel any todo; Koi can only cancel their own — to cancel someone else's, @pisci in pool_chat. \
          - 'update_todo_status': Update a todo's status (requires todo_id, status). Pisci can change any; Koi can only change their own. Valid statuses: todo, in_progress, blocked. \
@@ -63,7 +65,7 @@ impl Tool for PoolOrgTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["create", "read", "update", "list", "assign_koi", "pause", "resume", "archive", "find_related", "get_messages", "get_todos", "complete_todo", "cancel_todo", "update_todo_status", "merge_branches"],
+                    "enum": ["create", "read", "update", "list", "assign_koi", "pause", "resume", "archive", "find_related", "get_messages", "get_todos", "create_todo", "claim_todo", "complete_todo", "cancel_todo", "update_todo_status", "merge_branches"],
                     "description": "Action to perform"
                 },
                 "project_dir": {
@@ -104,9 +106,17 @@ impl Tool for PoolOrgTool {
                     "enum": ["low", "medium", "high", "urgent"],
                     "description": "For assign_koi: task priority (default: medium)"
                 },
+                "title": {
+                    "type": "string",
+                    "description": "For create_todo: the todo title"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "For create_todo: optional description of the work"
+                },
                 "todo_id": {
                     "type": "string",
-                    "description": "For complete_todo/cancel_todo/update_todo_status: the todo ID (full or prefix)"
+                    "description": "For claim_todo/complete_todo/cancel_todo/update_todo_status: the todo ID (full or prefix)"
                 },
                 "status": {
                     "type": "string",
@@ -140,11 +150,13 @@ impl Tool for PoolOrgTool {
             "find_related" => self.find_related(&input).await,
             "get_messages" => self.get_messages(&input, ctx).await,
             "get_todos" => self.get_todos(&input, ctx).await,
+            "create_todo" => self.create_todo(&input, ctx).await,
+            "claim_todo" => self.claim_todo(&input, ctx).await,
             "complete_todo" => self.complete_todo(&input, ctx).await,
             "cancel_todo" => self.cancel_todo(&input, ctx).await,
             "update_todo_status" => self.update_todo_status(&input, ctx).await,
             "merge_branches" => self.merge_branches(&input, ctx).await,
-            _ => Ok(ToolResult::err(format!("Unknown action '{}'. Use: create, read, update, list, assign_koi, pause, resume, archive, find_related, get_messages, get_todos, complete_todo, cancel_todo, update_todo_status, merge_branches", action))),
+            _ => Ok(ToolResult::err(format!("Unknown action '{}'. Use: create, read, update, list, assign_koi, pause, resume, archive, find_related, get_messages, get_todos, create_todo, claim_todo, complete_todo, cancel_todo, update_todo_status, merge_branches", action))),
         }
     }
 }
@@ -860,6 +872,105 @@ impl PoolOrgTool {
             )));
         }
         Ok(())
+    }
+
+    async fn create_todo(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        let pool_id = match input["pool_id"].as_str() {
+            Some(id) if !id.is_empty() => id.to_string(),
+            _ => return Ok(ToolResult::err("'pool_id' is required for action 'create_todo'")),
+        };
+        let title = match input["title"].as_str() {
+            Some(t) if !t.is_empty() => t.to_string(),
+            _ => return Ok(ToolResult::err("'title' is required for action 'create_todo'")),
+        };
+        let description = input["description"].as_str().unwrap_or("").to_string();
+        let priority = input["priority"].as_str().unwrap_or("medium").to_string();
+        let owner_id = ctx.memory_owner_id.clone();
+
+        let session = match self.resolve_pool_session(input, ctx, "create_todo").await {
+            Ok(s) => s,
+            Err(e) => return Ok(ToolResult::err(e.to_string())),
+        };
+        if let Err(e) = Self::ensure_pool_accepts_new_work(&session, "create_todo") {
+            return Ok(ToolResult::err(e.to_string()));
+        }
+
+        let todo = {
+            let db = self.db.lock().await;
+            db.create_koi_todo(
+                &owner_id,
+                &title,
+                &description,
+                &priority,
+                &owner_id,
+                Some(&pool_id),
+                "koi",
+                None,
+            )
+            .map_err(|e| anyhow::anyhow!(e))?
+        };
+
+        let _ = self.app.emit(
+            "koi_todo_updated",
+            serde_json::json!({ "id": todo.id, "action": "created", "by": owner_id }),
+        );
+
+        Ok(ToolResult::ok(format!(
+            "Todo '{}' created with ID `{}`. Use claim_todo to start working on it.",
+            todo.title,
+            &todo.id[..8.min(todo.id.len())]
+        )))
+    }
+
+    async fn claim_todo(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        let todo_id = match Self::resolve_todo_id(input) {
+            Some(id) => id,
+            None => return Ok(ToolResult::err("'todo_id' is required for action 'claim_todo'")),
+        };
+
+        let todo = match self.find_todo_by_prefix(todo_id).await? {
+            Some(t) => t,
+            None => return Ok(ToolResult::err(format!("Todo '{}' not found", todo_id))),
+        };
+
+        if todo.status == "done" || todo.status == "cancelled" {
+            return Ok(ToolResult::err(format!(
+                "Cannot claim a todo with status '{}'.",
+                todo.status
+            )));
+        }
+        if todo.claimed_by.is_some() && todo.claimed_by.as_deref() != Some(&ctx.memory_owner_id) {
+            return Ok(ToolResult::err(format!(
+                "Todo '{}' is already claimed by '{}'.",
+                &todo.id[..8.min(todo.id.len())],
+                todo.claimed_by.as_deref().unwrap_or("unknown")
+            )));
+        }
+
+        // Koi can only claim their own todos (or Pisci can claim any)
+        if !Self::is_pisci(ctx) && todo.owner_id != ctx.memory_owner_id {
+            return Ok(ToolResult::err(format!(
+                "Permission denied. You can only claim your own todos. This todo belongs to '{}'.",
+                todo.owner_id
+            )));
+        }
+
+        {
+            let db = self.db.lock().await;
+            db.claim_koi_todo(&todo.id, &ctx.memory_owner_id)
+                .map_err(|e| anyhow::anyhow!(e))?;
+        }
+
+        let _ = self.app.emit(
+            "koi_todo_updated",
+            serde_json::json!({ "id": todo.id, "action": "claimed", "claimed_by": ctx.memory_owner_id }),
+        );
+
+        Ok(ToolResult::ok(format!(
+            "Todo '{}' ({}) claimed. Status is now in_progress.",
+            &todo.id[..8.min(todo.id.len())],
+            todo.title
+        )))
     }
 
     async fn complete_todo(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {

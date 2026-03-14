@@ -289,7 +289,7 @@ impl CallKoiTool {
              - To see what other Koi are working on or have completed, use pool_org(action=\"get_todos\", pool_id=\"...\") or pool_chat(action=\"read\").\n\
              - Focus on your assigned scope. Do not modify files outside the directories relevant to your task.\n\
              \n\n## Task Lifecycle\n\
-             - Whenever you receive real work — whether assigned by Pisci, handed off by another Koi via @mention, or self-identified — create a todo for it FIRST: pool_org(action=\"create\", pool_id=\"...\", title=\"...\", description=\"...\"). Then claim it: pool_org(action=\"claim_todo\", todo_id=\"...\"). This keeps the kanban board accurate and your work visible.\n\
+             - Whenever you receive real work — whether assigned by Pisci, handed off by another Koi via @mention, or self-identified — create a todo for it FIRST: pool_org(action=\"create_todo\", pool_id=\"...\", title=\"...\", description=\"...\"). Then claim it: pool_org(action=\"claim_todo\", todo_id=\"...\"). This keeps the kanban board accurate and your work visible.\n\
              - If you are @mentioned with only a status update, acknowledgement, or notification that the project is done — no new work is implied — you do NOT need to create a todo.\n\
              - Mark a task complete ONLY when the actual deliverable exists and is verifiable: code is written and tested, a file is created, a review is posted, etc. Do NOT mark done just because you wrote a plan, had a discussion, or described what should be done.\n\
              - When you finish a task, mark it complete: pool_org(action=\"complete_todo\", todo_id=\"...\"). Always do this — leaving tasks unmarked pollutes the kanban board.\n\

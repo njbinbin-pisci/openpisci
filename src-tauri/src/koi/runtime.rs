@@ -378,8 +378,8 @@ impl KoiRuntime {
             When reading the chat, focus on what is addressed TO YOU specifically (your name or @{name}). \
             Do not confuse descriptions of other team members' roles or statuses with your own. \
             Use your judgment: \
-            - If someone handed off concrete work to you ({name}): first create a todo for it with pool_org(action=\"create\"), \
-              claim it with pool_org(action=\"claim_todo\"), then do the work, then mark it complete. \
+            - If someone handed off concrete work to you ({name}): first create a todo for it with pool_org(action=\"create_todo\", pool_id=\"...\", title=\"...\"), \
+              claim it with pool_org(action=\"claim_todo\", todo_id=\"...\"), then do the work, then mark it complete. \
             - If you need to ask a clarifying question, do so via pool_chat. \
             - If the messages are status updates, acknowledgements, or peers saying the project is done, \
               you do not need to reply and you do NOT need to create a todo — simply finish. \
