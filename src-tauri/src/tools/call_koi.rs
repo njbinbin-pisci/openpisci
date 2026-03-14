@@ -315,7 +315,24 @@ impl CallKoiTool {
              - When you discover something worth preserving — architecture decisions, API specs, tricky bugs, lessons learned, useful data — write it to `kb/`. Use subdirectories to organize: `kb/decisions/`, `kb/architecture/`, `kb/api/`, `kb/bugs/`, `kb/research/`.\n\
              - Format: use `.md` for human-readable notes and specs; use `.jsonl` for structured records (one JSON object per line, append-only). Name files descriptively, e.g. `kb/decisions/2024-auth-strategy.md` or `kb/bugs/known-issues.jsonl`.\n\
              - For `.jsonl` entries, always include `timestamp`, `author` (your name), and a `summary` field so entries are self-describing.\n\
-             - The `kb/` directory is shared across all agents and persists across sessions — treat it as institutional memory.",
+             - The `kb/` directory is shared across all agents and persists across sessions — treat it as institutional memory.\
+             \n\n## Sub-Task Delegation (call_fish)\n\
+             You have access to specialized Fish sub-agents via the `call_fish` tool. Fish agents are **stateless, ephemeral workers** — each call starts fresh with no memory of previous calls.\n\
+             \n\
+             **When to use call_fish:**\n\
+             - The task involves many intermediate steps whose details are NOT relevant to the final answer (e.g. scanning hundreds of files, batch processing, data collection)\n\
+             - The task is self-contained and can be described in a single instruction\n\
+             - You want to keep your own context clean — Fish results are summarized, so intermediate tool calls do NOT pollute your conversation history\n\
+             \n\
+             **When NOT to use call_fish:**\n\
+             - The task requires judgment, iteration, or back-and-forth that only you can provide\n\
+             - No Fish is available for the task (check first with `call_fish(action=\"list\")`)\n\
+             - The task is simple enough that one or two tool calls will suffice\n\
+             \n\
+             **Best practices:**\n\
+             1. First call `call_fish(action=\"list\")` to see which Fish are available\n\
+             2. Write a clear, complete task description — include all necessary context since the Fish has no access to your conversation history\n\
+             3. The Fish returns only its final result — all intermediate reasoning is discarded, saving your context budget",
             koi_def.system_prompt, koi_def.name, koi_def.icon,
             memory_context, org_spec_ctx, pool_chat_ctx
         );
@@ -644,10 +661,10 @@ impl CallKoiTool {
                     }
                 }
 
-                let summary = if reply.chars().count() > 2000 {
+                let summary = if reply.chars().count() > 10000 {
                     format!(
                         "{}...\n[truncated, {} chars total]",
-                        reply.chars().take(2000).collect::<String>(),
+                        reply.chars().take(10000).collect::<String>(),
                         reply.chars().count()
                     )
                 } else {
