@@ -636,16 +636,11 @@ impl CallKoiTool {
                     .map(|m| m.content.as_text())
                     .unwrap_or_default();
 
-                // Record result in Chat Pool
+                // Record result in Chat Pool (full content, no truncation)
                 if !self.managed_externally {
                     if let Some(ref pool_sid) = pool_session_id {
                         let db = state.db.lock().await;
-                        let summary = if reply.chars().count() > 500 {
-                            reply.chars().take(500).collect::<String>()
-                        } else {
-                            reply.clone()
-                        };
-                        let _ = db.insert_pool_message(pool_sid, &koi_id, &summary, "result", "{}");
+                        let _ = db.insert_pool_message(pool_sid, &koi_id, &reply, "result", "{}");
                     }
                 }
 
