@@ -84,7 +84,8 @@ pub(crate) fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAt
         }
         ProjectDecision::ReadyForPisciReview => {
             lines.push(
-                "- All todos are done or cancelled. The project appears complete.".to_string(),
+                "- All todos are done or cancelled. The project appears complete. HEARTBEAT_OK is still not automatic."
+                    .to_string(),
             );
             lines.push(
                 "- Review the pool chat to confirm there is no outstanding work, then execute pool_org(action=\"archive\", pool_id=...) to archive the project and post a wrap-up summary in pool_chat."
