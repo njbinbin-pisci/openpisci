@@ -123,6 +123,22 @@ const chatSlice = createSlice({
       }
       state.messagesBySession[sessionId].push(message);
     },
+    /** Trim oldest messages beyond capacity for a session, marking hasMore in the component. */
+    trimChatMessages: (state, action: PayloadAction<{ sessionId: string; capacity: number }>) => {
+      const { sessionId, capacity } = action.payload;
+      const msgs = state.messagesBySession[sessionId];
+      if (msgs && msgs.length > capacity) {
+        state.messagesBySession[sessionId] = msgs.slice(-capacity);
+      }
+    },
+    /** Prepend older messages fetched from the server (for scroll-up pagination). */
+    prependChatMessages: (state, action: PayloadAction<{ sessionId: string; messages: ChatMessage[] }>) => {
+      const { sessionId, messages } = action.payload;
+      const existing = state.messagesBySession[sessionId] ?? [];
+      const existingIds = new Set(existing.map((m) => m.id));
+      const newOnes = messages.filter((m) => !existingIds.has(m.id));
+      state.messagesBySession[sessionId] = [...newOnes, ...existing];
+    },
     /** Remove all optimistic placeholder messages (id starts with "optimistic_") for a session */
     removeOptimisticMessages: (state, action: PayloadAction<string>) => {
       const msgs = state.messagesBySession[action.payload];
@@ -368,6 +384,10 @@ const koiSlice = createSlice({
 // Pool (Chat Pool) slice
 // ---------------------------------------------------------------------------
 
+/** Default capacity of pool messages kept in memory per session.
+ *  The component manages the actual capacity (starts at this value, grows on lazy-load). */
+export const POOL_DEFAULT_CAPACITY = 100;
+
 export type PondSubTab = "kois" | "pool" | "board";
 
 interface PoolState {
@@ -430,7 +450,19 @@ const poolSlice = createSlice({
       const sid = action.payload.pool_session_id;
       if (!state.messagesBySession[sid]) state.messagesBySession[sid] = [];
       const exists = state.messagesBySession[sid].some((m) => m.id === action.payload.id);
-      if (!exists) state.messagesBySession[sid].push(action.payload);
+      if (!exists) {
+        state.messagesBySession[sid].push(action.payload);
+        // Trimming is handled by the component which knows the current capacity.
+      }
+    },
+    /** Trim the oldest messages for a session to the given capacity, marking hasMore if trimmed. */
+    trimPoolMessages: (state, action: PayloadAction<{ sessionId: string; capacity: number }>) => {
+      const { sessionId, capacity } = action.payload;
+      const msgs = state.messagesBySession[sessionId];
+      if (msgs && msgs.length > capacity) {
+        state.messagesBySession[sessionId] = msgs.slice(-capacity);
+        state.hasMoreBySession[sessionId] = true;
+      }
     },
     setLoading: (state, action: PayloadAction<boolean>) => {
       state.loading = action.payload;

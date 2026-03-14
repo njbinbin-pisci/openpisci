@@ -781,6 +781,7 @@ pub fn run() {
             commands::chat::get_context_preview,
             // Memory
             commands::memory::list_memories,
+            commands::memory::list_memories_for_koi,
             commands::memory::add_memory,
             commands::memory::delete_memory,
             commands::memory::clear_memories,

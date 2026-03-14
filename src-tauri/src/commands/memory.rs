@@ -17,6 +17,19 @@ pub async fn list_memories(state: State<'_, AppState>) -> Result<MemoryList, Str
 }
 
 #[tauri::command]
+pub async fn list_memories_for_koi(
+    state: State<'_, AppState>,
+    koi_id: String,
+) -> Result<MemoryList, String> {
+    let db = state.db.lock().await;
+    let memories = db
+        .list_memories_for_owner(&koi_id)
+        .map_err(|e| e.to_string())?;
+    let total = memories.len();
+    Ok(MemoryList { memories, total })
+}
+
+#[tauri::command]
 pub async fn add_memory(
     state: State<'_, AppState>,
     content: String,

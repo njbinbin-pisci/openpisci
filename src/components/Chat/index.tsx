@@ -150,9 +150,12 @@ export default function Chat() {
   const [gatewayDisconnecting, setGatewayDisconnecting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [deletingSession, setDeletingSession] = useState(false);
-  // History pagination for IM sessions: how many messages have been loaded
-  const [historyLimit, setHistoryLimit] = useState(100);
+  // History pagination: capacity starts at CHAT_INITIAL_SIZE, grows by CHAT_LAZY_STEP on each lazy-load
+  const CHAT_INITIAL_SIZE = 200;
+  const CHAT_LAZY_STEP = 10;
+  const [capacity, setCapacity] = useState(CHAT_INITIAL_SIZE);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [permissionRequest, setPermissionRequest] = useState<{
     requestId: string;
     toolName: string;
@@ -335,17 +338,22 @@ export default function Chat() {
   // Also sync running state from DB to fix stale state if im_session_done was missed.
   useEffect(() => {
     if (!activeSessionId) return;
-    setHistoryLimit(100);
+    setCapacity(CHAT_INITIAL_SIZE);
+    setUnreadCount(0);
+    prevLastChatIdRef.current = null;
     isNearBottomRef.current = true;
 
     const load = async () => {
       try {
         const [messages, { sessions: fresh }] = await Promise.all([
-          sessionsApi.getMessages(activeSessionId, 100, 0),
+          sessionsApi.getMessages(activeSessionId, CHAT_INITIAL_SIZE, 0),
           sessionsApi.list(),
         ]);
         dispatch(chatActions.setMessages({ sessionId: activeSessionId, messages }));
-        setHasMoreHistory(messages.length >= 100);
+        setHasMoreHistory(messages.length >= CHAT_INITIAL_SIZE);
+        if (messages.length > 0) {
+          prevLastChatIdRef.current = messages[messages.length - 1].id;
+        }
         // Correct stale running state from DB
         const s = fresh.find((x) => x.id === activeSessionId);
         if (s && s.status !== "running") {
@@ -360,29 +368,29 @@ export default function Chat() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, dispatch]);
 
-  // Load more history (older messages) for IM sessions
+  // Load CHAT_LAZY_STEP older messages (incremental prepend), triggered by scrolling to top
   const loadMoreHistory = useCallback(() => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || loadingMoreRef.current) return;
     const el = messagesAreaRef.current;
-    // Snapshot scroll position before loading so we can restore it after
-    const scrollHeightBefore = el?.scrollHeight ?? 0;
-    const scrollTopBefore = el?.scrollTop ?? 0;
+    const currentCount = rawMessages.length;
     loadingMoreRef.current = true;
-    const newLimit = historyLimit + 100;
-    setHistoryLimit(newLimit);
-    sessionsApi.getMessages(activeSessionId, newLimit, 0).then((messages) => {
-      dispatch(chatActions.setMessages({ sessionId: activeSessionId, messages }));
-      setHasMoreHistory(messages.length >= newLimit);
-      // After React re-renders, restore scroll so the user stays at the same visual position
+    sessionsApi.getMessages(activeSessionId, CHAT_LAZY_STEP, currentCount).then((older) => {
+      if (older.length > 0) {
+        dispatch(chatActions.prependChatMessages({ sessionId: activeSessionId, messages: older }));
+        setHasMoreHistory(older.length === CHAT_LAZY_STEP);
+        setCapacity((c) => c + CHAT_LAZY_STEP);
+      } else {
+        setHasMoreHistory(false);
+      }
+      // Restore scroll position so the view doesn't jump to the top
       requestAnimationFrame(() => {
         if (el) {
-          const added = el.scrollHeight - scrollHeightBefore;
-          el.scrollTop = scrollTopBefore + added;
+          el.scrollTop = el.scrollHeight - (el.scrollHeight - (el.scrollTop));
         }
         loadingMoreRef.current = false;
       });
     }).catch(() => { loadingMoreRef.current = false; });
-  }, [activeSessionId, historyLimit, dispatch]);
+  }, [activeSessionId, rawMessages.length, dispatch]);
 
   // When the filter changes, if the active session is not visible under the new
   // filter, switch to the first visible session (or null).
@@ -512,24 +520,53 @@ export default function Chat() {
     };
   }, [activeSessionId, dispatch]);
 
-  // Track whether user is near the bottom of the messages area
+  // Track whether user is near the bottom (bottom 10%) and trigger lazy-load on scroll to top
   useEffect(() => {
     const el = messagesAreaRef.current;
     if (!el) return;
     const onScroll = () => {
-      const threshold = 120;
-      isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+      const scrollable = el.scrollHeight - el.clientHeight;
+      isNearBottomRef.current = scrollable <= 0 || el.scrollTop >= scrollable * 0.9;
+      if (isNearBottomRef.current) setUnreadCount(0);
+      // Trigger lazy-load when scrolled near the top
+      if (el.scrollTop < 60 && hasMoreHistory && !loadingMoreRef.current) {
+        const prevScrollHeight = el.scrollHeight;
+        loadMoreHistory();
+        requestAnimationFrame(() => {
+          el.scrollTop = el.scrollHeight - prevScrollHeight;
+        });
+      }
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [hasMoreHistory, loadMoreHistory]);
 
-  // Auto-scroll to bottom only when user is near the bottom and not loading history
+  // Detect real-time appends (tail id changed), apply FIFO trim, auto-scroll or show unread badge
+  const prevLastChatIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (loadingMoreRef.current) return;
-    if (!isNearBottomRef.current) return;
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeMessages, streamingCurrent]);
+    if (loadingMoreRef.current || rawMessages.length === 0) return;
+    const lastId = rawMessages[rawMessages.length - 1].id;
+    const isAppend = lastId !== prevLastChatIdRef.current && prevLastChatIdRef.current !== null;
+    prevLastChatIdRef.current = lastId;
+    if (!isAppend) {
+      // Still auto-scroll for streaming updates (streamingCurrent changes)
+      if (isNearBottomRef.current) {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
+      return;
+    }
+    // FIFO trim: evict oldest messages beyond current capacity
+    if (activeSessionId && rawMessages.length > capacity) {
+      dispatch(chatActions.trimChatMessages({ sessionId: activeSessionId, capacity }));
+      setHasMoreHistory(true);
+    }
+    if (isNearBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      setUnreadCount(0);
+    } else {
+      setUnreadCount((n) => n + 1);
+    }
+  }, [rawMessages, streamingCurrent, capacity, activeSessionId, dispatch]);
 
   // Scroll the tool-steps area to the bottom when a new step is added or toggled open
   useEffect(() => {
@@ -976,14 +1013,9 @@ export default function Chat() {
             )}
 
             <div className="messages-area" ref={messagesAreaRef}>
-              {isImSession && hasMoreHistory && (
-                <div style={{ textAlign: "center", padding: "8px 0" }}>
-                  <button
-                    className="load-more-btn"
-                    onClick={loadMoreHistory}
-                  >
-                    {t("chat.loadMoreHistory")}
-                  </button>
+              {hasMoreHistory && (
+                <div style={{ textAlign: "center", padding: "8px 0", fontSize: 11, color: "var(--text-muted)" }}>
+                  {loadingMoreRef.current ? t("common.loading") : t("chat.loadMoreHistory")}
                 </div>
               )}
               {activeMessages.map((msg) => {
@@ -1123,6 +1155,18 @@ export default function Chat() {
 
               <div ref={messagesEndRef} />
             </div>
+
+            {unreadCount > 0 && (
+              <button
+                className="chat-unread-badge"
+                onClick={() => {
+                  messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+                  setUnreadCount(0);
+                }}
+              >
+                ↓ {unreadCount} 条新消息
+              </button>
+            )}
 
             {isImSession && (
               <div style={{ padding: "8px 16px", fontSize: 12, color: "var(--text-muted)", borderTop: "1px solid var(--border)", textAlign: "center" }}>

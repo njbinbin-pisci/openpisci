@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { useSelector, useDispatch } from "react-redux";
-import { boardApi, koiApi, KoiWithStats, KoiPalette, LlmProviderConfig } from "../../../services/tauri";
+import { boardApi, koiApi, KoiWithStats, KoiPalette, LlmProviderConfig, Memory, KoiTodo } from "../../../services/tauri";
 import { RootState, koiActions } from "../../../store";
 import ConfirmDialog from "../../ConfirmDialog";
 import "./KoiManager.css";
@@ -12,6 +13,91 @@ const STATUS_COLORS: Record<string, string> = {
   busy: "#f59e0b",
   offline: "#6b7280",
 };
+
+// ---------------------------------------------------------------------------
+// StatTooltip — hover popup for memory / todo details
+// ---------------------------------------------------------------------------
+
+type TooltipKind = "memory" | "todo";
+
+interface TooltipState {
+  koiId: string;
+  kind: TooltipKind;
+  anchorRect: DOMRect;
+}
+
+function StatTooltip({ koiId, kind, anchorRect }: TooltipState) {
+  const [memories, setMemories] = useState<Memory[] | null>(null);
+  const [todos, setTodos] = useState<KoiTodo[] | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    if (kind === "memory") {
+      koiApi.listMemories(koiId)
+        .then((r) => { setMemories(r.memories); setLoading(false); })
+        .catch(() => { setMemories([]); setLoading(false); });
+    } else {
+      koiApi.listTodos(koiId)
+        .then((r) => { setTodos(r); setLoading(false); })
+        .catch(() => { setTodos([]); setLoading(false); });
+    }
+  }, [koiId, kind]);
+
+  // Position: prefer below the anchor, flip up if not enough space
+  const vpH = window.innerHeight;
+  const vpW = window.innerWidth;
+  const tooltipW = 280;
+  const tooltipMaxH = 240;
+  const gap = 6;
+
+  let top = anchorRect.bottom + gap;
+  if (top + tooltipMaxH > vpH - 8) {
+    top = anchorRect.top - tooltipMaxH - gap;
+  }
+  let left = anchorRect.left;
+  if (left + tooltipW > vpW - 8) {
+    left = vpW - tooltipW - 8;
+  }
+
+  const statusLabel: Record<string, string> = {
+    todo: "待办", in_progress: "进行中", done: "已完成",
+    cancelled: "已取消", blocked: "阻塞",
+  };
+
+  return createPortal(
+    <div
+      className="koi-stat-tooltip"
+      style={{ top, left, width: tooltipW }}
+    >
+      <div className="koi-stat-tooltip-title">
+        {kind === "memory" ? "📚 记忆详情" : "📋 待办详情"}
+      </div>
+      <div className="koi-stat-tooltip-body">
+        {loading && <div className="koi-stat-tooltip-empty">加载中…</div>}
+        {!loading && kind === "memory" && (
+          memories && memories.length > 0 ? memories.map((m) => (
+            <div key={m.id} className="koi-stat-tooltip-item">
+              <span className="koi-stat-tooltip-tag">{m.category}</span>
+              <span className="koi-stat-tooltip-text">{m.content}</span>
+            </div>
+          )) : <div className="koi-stat-tooltip-empty">暂无记忆</div>
+        )}
+        {!loading && kind === "todo" && (
+          todos && todos.length > 0 ? todos.map((td) => (
+            <div key={td.id} className="koi-stat-tooltip-item">
+              <span className={`koi-stat-tooltip-tag koi-stat-tooltip-tag--${td.status}`}>
+                {statusLabel[td.status] ?? td.status}
+              </span>
+              <span className="koi-stat-tooltip-text">{td.title}</span>
+            </div>
+          )) : <div className="koi-stat-tooltip-empty">暂无待办</div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
 
 interface KoiFormData {
   name: string;
@@ -61,6 +147,21 @@ function KoiCard({
     : displayStatus === "idle" ? "#22c55e"
     : "#6b7280";
 
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleStatEnter = (e: React.MouseEvent, kind: TooltipKind) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    hoverTimerRef.current = setTimeout(() => {
+      setTooltip({ koiId: koi.id, kind, anchorRect: rect });
+    }, 300);
+  };
+
+  const handleStatLeave = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    setTooltip(null);
+  };
+
   return (
     <div className="koi-card" style={{ borderLeftColor: koi.color }}>
       <div className="koi-card-header">
@@ -81,11 +182,19 @@ function KoiCard({
         <p className="koi-card-desc">{koi.description}</p>
       )}
       <div className="koi-card-stats">
-        <span className="koi-stat">
+        <span
+          className="koi-stat koi-stat--hoverable"
+          onMouseEnter={(e) => handleStatEnter(e, "memory")}
+          onMouseLeave={handleStatLeave}
+        >
           <span className="koi-stat-icon koi-stat-icon--memory" />
           {t("koi.memoryCount")} {koi.memory_count}
         </span>
-        <span className="koi-stat">
+        <span
+          className="koi-stat koi-stat--hoverable"
+          onMouseEnter={(e) => handleStatEnter(e, "todo")}
+          onMouseLeave={handleStatLeave}
+        >
           <span className="koi-stat-icon koi-stat-icon--todo" />
           {t("koi.todoCount")} {koi.active_todo_count}
         </span>
@@ -104,6 +213,7 @@ function KoiCard({
           {t("koi.deleteBtn")}
         </button>
       </div>
+      {tooltip && <StatTooltip {...tooltip} />}
     </div>
   );
 }

@@ -165,6 +165,90 @@
   color: var(--text-secondary);
 }
 
+.koi-stat--hoverable {
+  cursor: default;
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.koi-stat--hoverable:hover {
+  background: var(--bg-hover, rgba(124, 106, 247, 0.12));
+  color: var(--accent, #7c6af7);
+}
+
+/* ── Stat Tooltip (rendered via portal into body) ── */
+.koi-stat-tooltip {
+  position: fixed;
+  z-index: 9999;
+  background: var(--bg-secondary, #1e1e2e);
+  border: 1px solid var(--border, #2e2e3e);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.koi-stat-tooltip-title {
+  padding: 8px 12px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border, #2e2e3e);
+  background: var(--bg-tertiary, #16161e);
+}
+
+.koi-stat-tooltip-body {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.koi-stat-tooltip-empty {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.koi-stat-tooltip-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.04));
+}
+
+.koi-stat-tooltip-item:last-child {
+  border-bottom: none;
+}
+
+.koi-stat-tooltip-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-hover, rgba(124,106,247,0.15));
+  color: var(--accent, #7c6af7);
+  margin-top: 1px;
+}
+
+.koi-stat-tooltip-tag--in_progress { background: rgba(34,197,94,0.15); color: #22c55e; }
+.koi-stat-tooltip-tag--done        { background: rgba(107,114,128,0.15); color: #9ca3af; }
+.koi-stat-tooltip-tag--cancelled   { background: rgba(107,114,128,0.12); color: #6b7280; }
+.koi-stat-tooltip-tag--blocked     { background: rgba(235,59,90,0.15); color: #eb3b5a; }
+.koi-stat-tooltip-tag--todo        { background: rgba(245,158,11,0.15); color: #f59e0b; }
+
+.koi-stat-tooltip-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
 .koi-stat-icon {
   display: inline-block;
   width: 14px;

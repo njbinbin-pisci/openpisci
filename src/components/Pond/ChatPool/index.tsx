@@ -6,7 +6,7 @@ import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { poolApi, koiApi, PoolMessage, KoiWithStats } from "../../../services/tauri";
-import { RootState, poolActions, koiActions } from "../../../store";
+import { RootState, poolActions, koiActions, POOL_DEFAULT_CAPACITY } from "../../../store";
 import ConfirmDialog from "../../ConfirmDialog";
 import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
 import "./ChatPool.css";
@@ -127,7 +127,10 @@ function MessageBubble({
   );
 }
 
-const PAGE_SIZE = 100;
+/** Initial load: fetch the latest N messages */
+const INITIAL_LOAD_SIZE = 100;
+/** How many older messages to load per lazy-load trigger */
+const LAZY_LOAD_STEP = 10;
 
 export default function ChatPool() {
   const { t } = useTranslation();
@@ -145,6 +148,9 @@ export default function ChatPool() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+  /** Current FIFO capacity for this session. Starts at POOL_DEFAULT_CAPACITY, grows by LAZY_LOAD_STEP on each lazy-load. */
+  const [capacity, setCapacity] = useState(POOL_DEFAULT_CAPACITY);
   // Track whether the current session's initial load is done so we can scroll to bottom
   const initialLoadDoneRef = useRef<string | null>(null);
 
@@ -172,37 +178,44 @@ export default function ChatPool() {
     }
   }, [dispatch, activeSessionId]);
 
-  /** Load the latest PAGE_SIZE messages for a session (initial load) */
+  /** Load the latest INITIAL_LOAD_SIZE messages for a session (initial load) */
   const loadMessages = useCallback(async (sessionId: string) => {
     try {
-      const msgs = await poolApi.getMessages({ session_id: sessionId, limit: PAGE_SIZE });
+      const msgs = await poolApi.getMessages({ session_id: sessionId, limit: INITIAL_LOAD_SIZE });
       dispatch(poolActions.setPoolMessages({
         sessionId,
         messages: msgs,
-        hasMore: msgs.length === PAGE_SIZE,
+        hasMore: msgs.length === INITIAL_LOAD_SIZE,
       }));
+      // Seed the last-id tracker so the first real-time message after load
+      // is correctly detected as an append (not a false positive).
+      if (msgs.length > 0) {
+        prevLastIdRef.current = msgs[msgs.length - 1].id;
+      }
       initialLoadDoneRef.current = sessionId;
     } catch {
       // silently ignore
     }
   }, [dispatch]);
 
-  /** Load older messages when user scrolls to the top */
+  /** Load LAZY_LOAD_STEP older messages when user scrolls to the top, expanding capacity. */
   const loadOlderMessages = useCallback(async (sessionId: string, currentCount: number) => {
     if (loadingMore) return;
     setLoadingMore(true);
     try {
       const msgs = await poolApi.getMessages({
         session_id: sessionId,
-        limit: PAGE_SIZE,
+        limit: LAZY_LOAD_STEP,
         offset: currentCount,
       });
       if (msgs.length > 0) {
         dispatch(poolActions.prependPoolMessages({
           sessionId,
           messages: msgs,
-          hasMore: msgs.length === PAGE_SIZE,
+          hasMore: msgs.length === LAZY_LOAD_STEP,
         }));
+        // Expand capacity so the new older messages are not immediately evicted on next append
+        setCapacity((c) => c + LAZY_LOAD_STEP);
       } else {
         dispatch(poolActions.prependPoolMessages({ sessionId, messages: [], hasMore: false }));
       }
@@ -231,6 +244,9 @@ export default function ChatPool() {
 
   useEffect(() => {
     if (!activeSessionId) return;
+    setUnreadCount(0);
+    setCapacity(POOL_DEFAULT_CAPACITY);
+    prevLastIdRef.current = null;
     loadMessages(activeSessionId);
 
     let unlisten: (() => void) | null = null;
@@ -249,23 +265,48 @@ export default function ChatPool() {
     }
   });
 
-  // When a new message arrives (real-time append): smooth scroll to bottom only if
-  // the user is already near the bottom (within 200px), so we don't hijack manual scrolling.
-  const prevMessageCountRef = useRef(0);
+  // When a new message arrives (real-time append): trim FIFO, auto-scroll if near bottom,
+  // otherwise increment unread counter to show the "new messages" badge.
+  // We distinguish real-time appends from prepend (load-older) by tracking the
+  // last known bottom message id — if the tail changed, it's a real new message.
+  const prevLastIdRef = useRef<string | null>(null);
   useEffect(() => {
     const el = messagesContainerRef.current;
-    if (!el) return;
-    const isNewMessage = messages.length > prevMessageCountRef.current;
-    prevMessageCountRef.current = messages.length;
-    if (!isNewMessage) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distanceFromBottom < 200) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!el || messages.length === 0) return;
+    const lastId = messages[messages.length - 1].id;
+    const isAppend = lastId !== prevLastIdRef.current && prevLastIdRef.current !== null;
+    prevLastIdRef.current = lastId;
+    if (!isAppend) return;
+
+    // FIFO trim: evict oldest messages beyond current capacity
+    if (activeSessionId && messages.length > capacity) {
+      dispatch(poolActions.trimPoolMessages({ sessionId: activeSessionId, capacity }));
     }
-  }, [messages.length]);
+
+    // Auto-scroll only if user is within the bottom 10% of the scroll area
+    const scrollable = el.scrollHeight - el.clientHeight;
+    const nearBottom = scrollable <= 0 || el.scrollTop >= scrollable * 0.9;
+    if (nearBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      setUnreadCount(0);
+    } else {
+      setUnreadCount((n) => n + 1);
+    }
+  }, [messages, capacity, activeSessionId, dispatch]);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    setUnreadCount(0);
+  }, []);
 
   const handleMessagesScroll = useCallback((e: UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
+    // Clear unread badge when user manually scrolls to bottom 10%
+    const scrollable = el.scrollHeight - el.clientHeight;
+    const nearBottom = scrollable <= 0 || el.scrollTop >= scrollable * 0.9;
+    if (nearBottom) {
+      setUnreadCount(0);
+    }
     if (el.scrollTop < 60 && hasMore && activeSessionId && !loadingMore) {
       const prevScrollHeight = el.scrollHeight;
       loadOlderMessages(activeSessionId, messages.length).then(() => {
@@ -490,6 +531,11 @@ export default function ChatPool() {
             ))}
             <div ref={messagesEndRef} />
           </div>
+        )}
+        {unreadCount > 0 && (
+          <button className="chatpool-unread-badge" onClick={scrollToBottom}>
+            ↓ {unreadCount} 条新消息
+          </button>
         )}
         <div className="chatpool-readonly-bar">
           {t("pool.readonlyHint")}

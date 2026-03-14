@@ -8,7 +8,8 @@ import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linki
 import ConfirmDialog from "../../ConfirmDialog";
 import "./PisciInbox.css";
 
-const INBOX_PAGE_SIZE = 100;
+const INBOX_INITIAL_SIZE = 200;
+const INBOX_LAZY_STEP = 10;
 
 function InboxMessageContent({ content }: { content: string }) {
   const processed = linkifyPaths(content);
@@ -113,9 +114,9 @@ export default function PisciInbox() {
   const loadMessages = useCallback(async (sessionId: string) => {
     setLoadingMessages(true);
     try {
-      const result = await sessionsApi.getMessages(sessionId, INBOX_PAGE_SIZE, 0);
+      const result = await sessionsApi.getMessages(sessionId, INBOX_INITIAL_SIZE, 0);
       setMessages(result);
-      setHasMore(result.length === INBOX_PAGE_SIZE);
+      setHasMore(result.length === INBOX_INITIAL_SIZE);
       initialLoadDoneRef.current = sessionId;
     } finally {
       setLoadingMessages(false);
@@ -126,14 +127,14 @@ export default function PisciInbox() {
     if (loadingMore) return;
     setLoadingMore(true);
     try {
-      const result = await sessionsApi.getMessages(sessionId, INBOX_PAGE_SIZE, currentCount);
+      const result = await sessionsApi.getMessages(sessionId, INBOX_LAZY_STEP, currentCount);
       if (result.length > 0) {
         setMessages((prev) => {
           const existingIds = new Set(prev.map((m) => m.id));
           const newOnes = result.filter((m) => !existingIds.has(m.id));
           return [...newOnes, ...prev];
         });
-        setHasMore(result.length === INBOX_PAGE_SIZE);
+        setHasMore(result.length === INBOX_LAZY_STEP);
       } else {
         setHasMore(false);
       }

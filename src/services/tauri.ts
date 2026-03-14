@@ -650,6 +650,9 @@ export const koiApi = {
   delete: (id: string) => invoke<void>("delete_koi", { id }),
   setActive: (id: string, active: boolean) => invoke<void>("set_koi_active", { id, active }),
   palette: () => invoke<KoiPalette>("get_koi_palette"),
+  listMemories: (koiId: string) =>
+    invoke<{ memories: Memory[]; total: number }>("list_memories_for_koi", { koiId }),
+  listTodos: (koiId: string) => invoke<KoiTodo[]>("list_koi_todos", { ownerId: koiId }),
 };
 
 export const poolApi = {

@@ -760,6 +760,26 @@
   color: var(--text-primary);
 }
 
+.chat-unread-badge {
+  align-self: center;
+  margin: 4px auto 0;
+  padding: 5px 16px;
+  background: var(--accent, #7c6af7);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: 14px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  transition: opacity 0.15s, transform 0.15s;
+  display: block;
+}
+.chat-unread-badge:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
 .tool-steps-header-clickable {
   cursor: pointer;
   user-select: none;
