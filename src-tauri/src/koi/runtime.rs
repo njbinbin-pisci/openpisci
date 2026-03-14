@@ -389,7 +389,7 @@ impl KoiRuntime {
 
         let exec_result = match tokio::time::timeout(
             std::time::Duration::from_secs(600),
-            self.execute_koi_agent(&koi_def, task, Some(&pool_session_id), None),
+            self.execute_koi_agent(&koi_def, &task, Some(&pool_session_id), None),
         )
         .await
         {
