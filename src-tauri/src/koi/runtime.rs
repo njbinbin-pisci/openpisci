@@ -218,13 +218,17 @@ impl KoiRuntime {
             None
         };
 
-        // Append todo_id to task so Koi can reference it for complete_todo / cancel_todo
+        // Append todo_id and identity reminder to task
         let task_with_meta = format!(
-            "{}\n\n[System: Your todo ID for this task is `{id}`. \
-             Mark it done ONLY after the actual deliverable is complete and verifiable (code written, file created, review posted, etc.). \
+            "{}\n\n[System: You are {name}. Your todo ID for this task is `{id}`. \
+             When reading pool chat, focus on what is addressed to you ({name}) specifically — \
+             do not confuse other team members' statuses or roles with your own. \
+             Mark this todo done ONLY after the actual deliverable is complete and verifiable \
+             (code written, file created, review posted, etc.). \
              Writing a plan or having a discussion does NOT count as done. \
              Call pool_org(action=\"complete_todo\", todo_id=\"{id}\") when the real output exists.]",
             task,
+            name = koi_def.name,
             id = &todo.id[..8.min(todo.id.len())]
         );
 
@@ -367,15 +371,21 @@ impl KoiRuntime {
 
         self.set_koi_status(koi_id, "busy").await;
 
-        let task = "You have been mentioned in the pool chat. \
+        let task = format!(
+            "You have been mentioned in the pool chat. \
+            IMPORTANT: You are {name} — keep your own identity in mind while reading messages from others. \
             Use pool_chat(action=\"read\") to see the latest messages, then decide how to respond. \
+            When reading the chat, focus on what is addressed TO YOU specifically (your name or @{name}). \
+            Do not confuse descriptions of other team members' roles or statuses with your own. \
             Use your judgment: \
-            - If someone handed off concrete work to you: first create a todo for it with pool_org(action=\"create\"), \
+            - If someone handed off concrete work to you ({name}): first create a todo for it with pool_org(action=\"create\"), \
               claim it with pool_org(action=\"claim_todo\"), then do the work, then mark it complete. \
             - If you need to ask a clarifying question, do so via pool_chat. \
             - If the messages are status updates, acknowledgements, or peers saying the project is done, \
               you do not need to reply and you do NOT need to create a todo — simply finish. \
-            Only send a message if you have something genuinely new or actionable to contribute.";
+            Only send a message if you have something genuinely new or actionable to contribute.",
+            name = koi_def.name
+        );
 
         let exec_result = match tokio::time::timeout(
             std::time::Duration::from_secs(600),
