@@ -880,11 +880,19 @@ impl PoolOrgTool {
     async fn create_todo(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let pool_id = match input["pool_id"].as_str() {
             Some(id) if !id.is_empty() => id.to_string(),
-            _ => return Ok(ToolResult::err("'pool_id' is required for action 'create_todo'")),
+            _ => {
+                return Ok(ToolResult::err(
+                    "'pool_id' is required for action 'create_todo'",
+                ))
+            }
         };
         let title = match input["title"].as_str() {
             Some(t) if !t.is_empty() => t.to_string(),
-            _ => return Ok(ToolResult::err("'title' is required for action 'create_todo'")),
+            _ => {
+                return Ok(ToolResult::err(
+                    "'title' is required for action 'create_todo'",
+                ))
+            }
         };
         let description = input["description"].as_str().unwrap_or("").to_string();
         let priority = input["priority"].as_str().unwrap_or("medium").to_string();
@@ -928,7 +936,11 @@ impl PoolOrgTool {
     async fn claim_todo(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let todo_id = match Self::resolve_todo_id(input) {
             Some(id) => id,
-            None => return Ok(ToolResult::err("'todo_id' is required for action 'claim_todo'")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'todo_id' is required for action 'claim_todo'",
+                ))
+            }
         };
 
         let todo = match self.find_todo_by_prefix(todo_id).await? {

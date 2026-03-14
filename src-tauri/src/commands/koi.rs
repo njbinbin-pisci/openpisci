@@ -130,10 +130,11 @@ pub async fn update_koi(
 
     {
         let db = state.db.lock().await;
-        let provider_update: Option<Option<&str>> = input
-            .llm_provider_id
-            .as_ref()
-            .map(|s| if s.is_empty() { None } else { Some(s.as_str()) });
+        let provider_update: Option<Option<&str>> =
+            input
+                .llm_provider_id
+                .as_ref()
+                .map(|s| if s.is_empty() { None } else { Some(s.as_str()) });
         db.update_koi(
             &input.id,
             input.name.as_deref(),
@@ -347,10 +348,7 @@ pub async fn delete_koi(
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Koi '{}' not found", id))?;
         if koi.status == "busy" {
-            return Err(format!(
-                "BUSY:{}:{}",
-                koi.name, koi.role
-            ));
+            return Err(format!("BUSY:{}:{}", koi.name, koi.role));
         }
         let todos = db.list_koi_todos(Some(&id)).unwrap_or_default();
         let pools: Vec<(String, String)> = todos

@@ -229,7 +229,8 @@ impl KoiRuntime {
              Writing a plan or having a discussion does NOT count as done. \
              Call pool_org(action=\"complete_todo\", todo_id=\"{id}\") when the real output exists. \
              After completing, if your branch of work is fully done, post [ProjectStatus] ready_for_pisci_review @pisci in pool_chat. \
-             Always end with a concise summary of what was accomplished — never end mid-sentence or with a phrase like \"now I will...\".]",
+             Always end with a concise summary of what was accomplished — never end mid-sentence or with a phrase like \"now I will...\". \
+             If your result is longer than ~500 words, write it to a file (e.g. kb/reports/<date>-<topic>.md) and post only the file path + a 3-5 sentence summary to pool_chat.]",
             task,
             name = koi_def.name,
             id = &todo.id[..8.min(todo.id.len())]
@@ -391,7 +392,8 @@ impl KoiRuntime {
             - If the messages are status updates, acknowledgements, or peers saying the project is done, \
               you do not need to reply and you do NOT need to create a todo — simply finish. \
             Only send a message if you have something genuinely new or actionable to contribute. \
-            Always end with a concise summary of what was accomplished — never end mid-sentence or with a phrase like \"now I will...\".",
+            Always end with a concise summary of what was accomplished — never end mid-sentence or with a phrase like \"now I will...\". \
+            If your response is longer than ~500 words, write the full content to a file (e.g. kb/reports/<date>-<topic>.md) and post only the file path + a 3-5 sentence summary to pool_chat.",
             name = koi_def.name,
             pool_id = pool_session_id
         );

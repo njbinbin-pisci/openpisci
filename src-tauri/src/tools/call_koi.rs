@@ -315,7 +315,14 @@ impl CallKoiTool {
              - When you discover something worth preserving — architecture decisions, API specs, tricky bugs, lessons learned, useful data — write it to `kb/`. Use subdirectories to organize: `kb/decisions/`, `kb/architecture/`, `kb/api/`, `kb/bugs/`, `kb/research/`.\n\
              - Format: use `.md` for human-readable notes and specs; use `.jsonl` for structured records (one JSON object per line, append-only). Name files descriptively, e.g. `kb/decisions/2024-auth-strategy.md` or `kb/bugs/known-issues.jsonl`.\n\
              - For `.jsonl` entries, always include `timestamp`, `author` (your name), and a `summary` field so entries are self-describing.\n\
-             - The `kb/` directory is shared across all agents and persists across sessions — treat it as institutional memory.\
+             - The `kb/` directory is shared across all agents and persists across sessions — treat it as institutional memory.\n\
+             \n\n## Long-Output Rule\n\
+             When your result, report, or deliverable is longer than ~500 words, do NOT paste it all into pool_chat or return it as a raw message. Instead:\n\
+             1. Write the full content to a file: use `kb/reports/<YYYY-MM-DD>-<topic>.md` for general reports, or the appropriate project subdirectory for code/specs.\n\
+             2. In pool_chat, post only a brief summary (3–5 sentences) and the exact file path so teammates can read it.\n\
+                Example: \"Full analysis written to `kb/reports/2024-03-auth-review.md`. Summary: Found 3 critical issues in the auth module...\"\n\
+             3. When delegating to another Koi via call_koi, pass the file path in the task description instead of the full content — the receiving Koi will read the file directly.\n\
+             This rule prevents message truncation and keeps pool_chat readable.\
              \n\n## Sub-Task Delegation (call_fish)\n\
              You have access to specialized Fish sub-agents via the `call_fish` tool. Fish agents are **stateless, ephemeral workers** — each call starts fresh with no memory of previous calls.\n\
              \n\
