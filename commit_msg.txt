@@ -1,8 +1,0 @@
-feat: improve kanban accuracy and pool chat pagination (v0.5.7)
-
-- fix: project_state returns ReadyForPisciReview when all todos done
-- fix: heartbeat always wakes Pisci when project is ready for review
-- fix: heartbeat prompt explicitly instructs Pisci to archive completed projects
-- fix: pool chat uses real backend pagination (scroll-up loads older messages)
-- feat: koi prompt now requires creating a todo before starting any real work
-- feat: koi prompt clarifies that complete_todo requires a verifiable deliverable
