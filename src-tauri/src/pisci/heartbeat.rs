@@ -44,7 +44,6 @@ fn is_attention_event(msg: &PoolMessage, koi_ids: &[String]) -> bool {
     )
 }
 
-
 pub(crate) fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAttention) -> String {
     let assessment = &attention.assessment;
     let mut lines = vec![
@@ -125,7 +124,9 @@ pub fn collect_pool_attention(
 
     // Always wake Pisci when all todos are done — even if no new attention events arrived
     // (the last complete_todo event may have already been consumed by a prior heartbeat)
-    if new_attention_messages.is_empty() && assessment.decision != ProjectDecision::ReadyForPisciReview {
+    if new_attention_messages.is_empty()
+        && assessment.decision != ProjectDecision::ReadyForPisciReview
+    {
         return None;
     }
     let mut lines = vec![

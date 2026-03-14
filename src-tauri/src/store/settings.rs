@@ -367,7 +367,8 @@ pub fn default_heartbeat_prompt() -> String {
      ## 3. 定时任务检查\n\
      用 app_control(action=\"list_scheduled_tasks\") 查看是否有应运行的计划任务，按需处理。\n\
      \n\
-     完成以上全部巡查后，回复 HEARTBEAT_OK。".into()
+     完成以上全部巡查后，回复 HEARTBEAT_OK。"
+        .into()
 }
 
 fn default_provider() -> String {
