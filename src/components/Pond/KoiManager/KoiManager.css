@@ -182,12 +182,25 @@
 .koi-stat-tooltip {
   position: fixed;
   z-index: 9999;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  overflow: visible;
+  pointer-events: auto;
+}
+
+/* Inner wrapper holds the visible box; the outer element provides a transparent
+   hover bridge that covers the gap between the anchor and the visible tooltip. */
+.koi-stat-tooltip-inner {
   background: var(--bg-secondary, #1e1e2e);
   border: 1px solid var(--border, #2e2e3e);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   overflow: hidden;
-  pointer-events: none;
+  margin-top: 6px; /* gap bridge when tooltip is below anchor */
+}
+
+.koi-stat-tooltip-inner--flip {
+  margin-top: 0;
+  margin-bottom: 6px; /* gap bridge when tooltip is above anchor */
 }
 
 .koi-stat-tooltip-title {

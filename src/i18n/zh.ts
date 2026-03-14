@@ -87,7 +87,7 @@ const zh = {
   koi: {
     title: "Koi 管理",
     createBtn: "创建新 Koi",
-    editBtn: "编辑",
+    editBtn: "换岗",
     deleteBtn: "删除",
     name: "名称",
     role: "角色",
@@ -108,7 +108,7 @@ const zh = {
     todoCount: "待办",
     confirmDelete: "确定要删除这个 Koi 吗？其记忆和待办也会一并删除。",
     createTitle: "创建新 Koi",
-    editTitle: "编辑 Koi",
+    editTitle: "换岗 Koi",
     save: "保存",
     cancel: "取消",
     create: "创建",

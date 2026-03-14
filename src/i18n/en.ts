@@ -87,7 +87,7 @@ const en = {
   koi: {
     title: "Koi Management",
     createBtn: "Create Koi",
-    editBtn: "Edit",
+    editBtn: "Reassign",
     deleteBtn: "Delete",
     name: "Name",
     role: "Role",
@@ -108,7 +108,7 @@ const en = {
     todoCount: "Todos",
     confirmDelete: "Delete this Koi? Its memories and todos will also be removed.",
     createTitle: "Create Koi",
-    editTitle: "Edit Koi",
+    editTitle: "Reassign Koi",
     save: "Save",
     cancel: "Cancel",
     create: "Create",

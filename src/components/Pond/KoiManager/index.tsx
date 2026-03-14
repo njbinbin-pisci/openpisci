@@ -62,17 +62,16 @@ function StatTooltip({ koiId, kind, anchorRect, onMouseEnter, onMouseLeave }: St
     }
   }, [koiId, kind]);
 
-  // Position: prefer below the anchor, flip up if not enough space
+  // Position: place outer wrapper at anchor bottom (gap bridged by CSS margin-top on inner)
   const vpH = window.innerHeight;
   const vpW = window.innerWidth;
   const tooltipW = 280;
-  const tooltipMaxH = 240;
+  const tooltipMaxH = 260; // inner height + 6px gap
   const gap = 6;
 
-  let top = anchorRect.bottom + gap;
-  if (top + tooltipMaxH > vpH - 8) {
-    top = anchorRect.top - tooltipMaxH - gap;
-  }
+  // Determine if we should flip above the anchor
+  const flipUp = anchorRect.bottom + tooltipMaxH > vpH - 8;
+  const top = flipUp ? anchorRect.top - tooltipMaxH : anchorRect.bottom;
   let left = anchorRect.left;
   if (left + tooltipW > vpW - 8) {
     left = vpW - tooltipW - 8;
@@ -90,29 +89,31 @@ function StatTooltip({ koiId, kind, anchorRect, onMouseEnter, onMouseLeave }: St
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      <div className="koi-stat-tooltip-title">
-        {kind === "memory" ? "📚 记忆详情" : "📋 待办详情"}
-      </div>
-      <div className="koi-stat-tooltip-body">
-        {loading && <div className="koi-stat-tooltip-empty">加载中…</div>}
-        {!loading && kind === "memory" && (
-          memories && memories.length > 0 ? memories.map((m) => (
-            <div key={m.id} className="koi-stat-tooltip-item">
-              <span className="koi-stat-tooltip-tag">{m.category}</span>
-              <span className="koi-stat-tooltip-text">{m.content}</span>
-            </div>
-          )) : <div className="koi-stat-tooltip-empty">暂无记忆</div>
-        )}
-        {!loading && kind === "todo" && (
-          todos && todos.length > 0 ? todos.map((td) => (
-            <div key={td.id} className="koi-stat-tooltip-item">
-              <span className={`koi-stat-tooltip-tag koi-stat-tooltip-tag--${td.status}`}>
-                {statusLabel[td.status] ?? td.status}
-              </span>
-              <span className="koi-stat-tooltip-text">{td.title}</span>
-            </div>
-          )) : <div className="koi-stat-tooltip-empty">暂无待办</div>
-        )}
+      <div className={`koi-stat-tooltip-inner${flipUp ? " koi-stat-tooltip-inner--flip" : ""}`}>
+        <div className="koi-stat-tooltip-title">
+          {kind === "memory" ? "📚 记忆详情" : "📋 待办详情"}
+        </div>
+        <div className="koi-stat-tooltip-body">
+          {loading && <div className="koi-stat-tooltip-empty">加载中…</div>}
+          {!loading && kind === "memory" && (
+            memories && memories.length > 0 ? memories.map((m) => (
+              <div key={m.id} className="koi-stat-tooltip-item">
+                <span className="koi-stat-tooltip-tag">{m.category}</span>
+                <span className="koi-stat-tooltip-text">{m.content}</span>
+              </div>
+            )) : <div className="koi-stat-tooltip-empty">暂无记忆</div>
+          )}
+          {!loading && kind === "todo" && (
+            todos && todos.length > 0 ? todos.map((td) => (
+              <div key={td.id} className="koi-stat-tooltip-item">
+                <span className={`koi-stat-tooltip-tag koi-stat-tooltip-tag--${td.status}`}>
+                  {statusLabel[td.status] ?? td.status}
+                </span>
+                <span className="koi-stat-tooltip-text">{td.title}</span>
+              </div>
+            )) : <div className="koi-stat-tooltip-empty">暂无待办</div>
+          )}
+        </div>
       </div>
     </div>,
     document.body,
@@ -180,7 +181,7 @@ function KoiCard({
 
   const scheduleClose = () => {
     cancelClose();
-    closeTimerRef.current = setTimeout(() => setTooltip(null), 150);
+    closeTimerRef.current = setTimeout(() => setTooltip(null), 400);
   };
 
   const handleStatEnter = (e: React.MouseEvent, kind: TooltipKind) => {
