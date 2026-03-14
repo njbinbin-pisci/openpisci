@@ -661,10 +661,10 @@ impl CallKoiTool {
                     }
                 }
 
-                let summary = if reply.chars().count() > 10000 {
+                let summary = if reply.chars().count() > 2000 {
                     format!(
                         "{}...\n[truncated, {} chars total]",
-                        reply.chars().take(10000).collect::<String>(),
+                        reply.chars().take(2000).collect::<String>(),
                         reply.chars().count()
                     )
                 } else {

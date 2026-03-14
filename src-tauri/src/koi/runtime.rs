@@ -228,7 +228,8 @@ impl KoiRuntime {
              (code written, file created, review posted, etc.). \
              Writing a plan or having a discussion does NOT count as done. \
              Call pool_org(action=\"complete_todo\", todo_id=\"{id}\") when the real output exists. \
-             After completing, if your branch of work is fully done, post [ProjectStatus] ready_for_pisci_review @pisci in pool_chat.]",
+             After completing, if your branch of work is fully done, post [ProjectStatus] ready_for_pisci_review @pisci in pool_chat. \
+             Always end with a concise summary of what was accomplished — never end mid-sentence or with a phrase like \"now I will...\".]",
             task,
             name = koi_def.name,
             id = &todo.id[..8.min(todo.id.len())]
@@ -389,7 +390,8 @@ impl KoiRuntime {
             - If you need to ask a clarifying question, do so via pool_chat. \
             - If the messages are status updates, acknowledgements, or peers saying the project is done, \
               you do not need to reply and you do NOT need to create a todo — simply finish. \
-            Only send a message if you have something genuinely new or actionable to contribute.",
+            Only send a message if you have something genuinely new or actionable to contribute. \
+            Always end with a concise summary of what was accomplished — never end mid-sentence or with a phrase like \"now I will...\".",
             name = koi_def.name,
             pool_id = pool_session_id
         );
