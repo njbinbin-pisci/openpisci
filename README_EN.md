@@ -1,4 +1,4 @@
-# 🐟 OpenPisci
+﻿# 🐟 OpenPisci
 
 **Open-source Windows AI Agent Desktop**
 
@@ -100,7 +100,8 @@ A typical pond project follows this mechanism:
 | `office` | Automate Word, Excel, PowerPoint, Outlook via COM |
 | `email` | Send/receive email (SMTP/IMAP) |
 | `ssh` | SSH remote connection and command execution |
-| `pdf` | PDF read/write |
+| `pdf` | PDF read/write, page rendering to image (`render_page_image` / `render_region_image`) |
+|| `vision_context` | Visual context management: save and select images across turns for agent-driven visual decision-making |
 | `memory_store` | Write information to long-term memory |
 | `plan_todo` | Maintain a visible execution plan and todo state for complex tasks |
 | User-defined tools | TypeScript plugins with custom configuration interfaces |
@@ -116,7 +117,9 @@ A typical pond project follows this mechanism:
 ### ⚡ Skills System
 - Skills are defined in `SKILL.md` format: YAML frontmatter (name, description, tool list, etc.) + Markdown body (instructions)
 - Skill content is injected into the system prompt on every agent call, guiding the agent to use specific tools and workflows
-- Install skills from a URL or local path
+- **Auto-trigger**: the agent calls `skill_search` at the start of every task to find matching skills and follows their instructions automatically
+- **Zip package install**: install a skill as a `.zip` bundle (local path or URL) containing `SKILL.md` + `reference.md` + `examples.md` and other supporting files
+- **Skill persistence**: installed skills are written to disk and synced to the database; they survive restarts
 - Built-in skills: Office Automation, File Management, Web Automation, System Administration, Desktop Control
 
 > **Note**: SKILL.md is OpenPisci's own skill format. It is **not** the same as Anthropic's MCP (Model Context Protocol) — they are two separate specifications.
@@ -330,6 +333,35 @@ OpenPisci
 ---
 
 ## 📋 Changelog
+
+### v0.5.8
+- **Project pause / resume / archive**: users can now pause, resume, or archive projects directly from the Pond UI without going through Pisci; pausing automatically cancels running Koi tasks and resets in-progress todos
+- **`complete_todo` required summary**: the `complete_todo` tool now requires a `summary` parameter, ensuring a concise completion summary is always shown in the chat after a Koi finishes a task — no more empty Result messages
+- **Koi limit raised to 10**: the maximum number of Koi agents is increased from 5 to 10
+- **Pisci can manage Koi**: `app_control` gains `koi_list` / `koi_create` / `koi_delete` actions so Pisci can create or delete Koi when explicitly asked (the prompt instructs Pisci never to do this proactively)
+- **Strict Koi worktree isolation**: when a Koi is working inside a Git worktree, `allow_outside_workspace` is always forced to `false`, preventing accidental writes to the main project directory
+
+### v0.5.7
+- **Improved Kanban accuracy**: fixed todo state sync issues and improved Pool Chat message pagination
+- **Koi state management improvements**: reinforced Koi identity in task and mention prompts to prevent role confusion
+- **Message pagination and UI improvements**: Pool Chat and Coordinator Inbox now support paginated loading; new Koi tooltip panel added
+- **Raised Koi result truncation limit**: `call_koi` result truncation limit significantly increased to avoid cutting off summaries
+- **Suppressed empty Inbox messages**: fixed empty heartbeat messages appearing in the Coordinator Inbox
+
+### v0.5.6
+- **Pool Chat Markdown rendering**: pool chat messages now render Markdown; local file paths are auto-converted to clickable links
+- **Coordinator Inbox enhancements**: added delete button, Markdown rendering, and a confirmation dialog for session deletion
+- **`file://` protocol support**: fixed `file://` links not being clickable in ReactMarkdown
+
+### v0.5.5
+- **Per-Koi LLM configuration**: each Koi can now have its own LLM provider and model instead of sharing the global setting
+- **Single-instance lock**: the app now detects if another instance is already running and prevents duplicate launches
+- **LLM provider management relocated**: LLM provider management moved into the AI Provider settings section
+
+### v0.5.4
+- **Relative-path-aware file tools**: `file_read` / `file_write` and related tools now correctly resolve relative paths inside Koi worktrees, preventing Koi from bypassing worktree isolation
+- **Git collaboration flow fix**: fixed the workflow for Koi working on isolated branches and Pisci merging their work
+- **Heartbeat and collaboration prompt rewrite**: rewrote heartbeat and Koi collaboration prompts to fix Pisci incorrectly treating active projects as finished
 
 ### v0.5.3
 - **Expanded multi-agent docs**: added clear explanations of Pisci / Koi / Fish, Pond components, and the collaboration lifecycle

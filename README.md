@@ -337,6 +337,35 @@ OpenPisci
 
 ## 📋 更新日志
 
+### v0.5.8
+- **项目暂停 / 恢复 / 归档**：用户可直接在鱼池 UI 中暂停、恢复、归档项目，无需通过 Pisci 对话操作；暂停时自动取消正在运行的 Koi 任务并重置进行中的待办
+- **`complete_todo` 强制摘要**：`complete_todo` 工具现在必须传入 `summary` 参数，确保 Koi 完成任务后聊天界面始终显示简洁的完成摘要，不再出现空白 Result 消息
+- **Koi 上限提升至 10**：最大 Koi 数量从 5 提升至 10
+- **Pisci 可管理 Koi**：`app_control` 工具新增 `koi_list` / `koi_create` / `koi_delete` 动作，Pisci 可在用户明确要求时帮助创建或删除 Koi（提示词要求不主动创建）
+- **Koi worktree 严格隔离**：Koi 在 Git worktree 中工作时，`allow_outside_workspace` 始终为 `false`，防止意外写入主项目目录
+
+### v0.5.7
+- **看板精度提升**：修复看板 todo 状态同步问题，改善 Pool Chat 消息分页加载
+- **Koi 状态管理改进**：Koi 身份强化、任务提示词优化，防止角色混淆
+- **消息分页与 UI 改进**：Pool Chat 和 Coordinator Inbox 支持分页加载，新增 Koi tooltip 面板
+- **Koi 结果截断上限提升**：`call_koi` 结果截断上限大幅提高，避免摘要被截断
+- **Inbox 空消息抑制**：修复 Coordinator Inbox 中出现空心跳消息的问题
+
+### v0.5.6
+- **Pool Chat Markdown 渲染**：鱼池聊天消息支持 Markdown 渲染，本地文件路径自动转为可点击链接
+- **Coordinator Inbox 增强**：新增删除按钮、Markdown 渲染、会话删除确认对话框
+- **`file://` 协议支持**：修复 ReactMarkdown 中 `file://` 链接无法点击的问题
+
+### v0.5.5
+- **每个 Koi 独立 LLM 配置**：每个 Koi 可单独选择 LLM 提供商和模型，不再共享全局设置
+- **单实例锁**：应用启动时检测已运行实例，防止重复启动
+- **LLM 提供商管理入口调整**：LLM 提供商管理移入 AI Provider 设置区
+
+### v0.5.4
+- **文件工具相对路径感知**：`file_read` / `file_write` 等工具在 Koi worktree 场景下正确处理相对路径，防止 Koi 绕过 worktree 隔离
+- **Git 协作流程修复**：修复 Koi 与 Pisci 通过 Git 分支协作的流程，确保 Koi 在独立分支工作、Pisci 负责合并
+- **心跳与协作提示词重写**：重写心跳和 Koi 协作提示词，修复 Pisci 误判项目结束的问题
+
 ### v0.5.3
 - **补充多 Agent 文档**：新增 Pisci / Koi / Fish 分层说明，以及鱼池组件与协同机制说明
 - **修复 Pisci 心跳误判**：有 `follow_up_needed / waiting` 但无 active todo 时，不再误报 `HEARTBEAT_OK`，而是要求继续协调
