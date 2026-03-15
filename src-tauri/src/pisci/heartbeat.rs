@@ -88,11 +88,13 @@ pub(crate) fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAt
                     .to_string(),
             );
             lines.push(
-                "- Required sequence: (1) Read pool_chat to confirm no outstanding work exists. \
-                 (2) If confirmed complete, call pool_org(action=\"archive\", pool_id=...) to archive the project. \
-                 (3) Post a wrap-up summary in pool_chat. \
-                 (4) Only THEN reply HEARTBEAT_OK. \
-                 Do NOT emit HEARTBEAT_OK before archiving."
+                "- Required sequence: \
+                 (1) Read pool_chat to confirm no outstanding work exists. \
+                 (2) If the project has a project_dir, call pool_org(action=\"merge_branches\", pool_id=...) to integrate all Koi branches into master. \
+                 (3) Call pool_org(action=\"archive\", pool_id=...) to archive the project. \
+                 (4) Post a wrap-up summary in pool_chat including the merge result. \
+                 (5) Only THEN reply HEARTBEAT_OK. \
+                 Do NOT emit HEARTBEAT_OK before merging and archiving."
                     .to_string(),
             );
             lines.push(
@@ -286,11 +288,23 @@ pub async fn dispatch_heartbeat(
                     extra_system_context: Some(format!(
                         "You are reviewing the project pool '{}' ({}) during a heartbeat-triggered inbox scan.\n\
                          Current assessment: {}\nDecision: {:?}\n\
+                         \n\
+                         ## Git Branch Integration Check\n\
+                         If this pool has a project_dir, check whether any Koi have signalled their branch is ready to merge \
+                         (look for messages like 'branch koi/xxx is ready', 'ready to merge', or task_completed events). \
+                         If so, call pool_org(action=\"merge_branches\", pool_id=\"{}\") BEFORE assigning any new tasks that depend on that code. \
+                         After merging, post the merge result summary in pool_chat so all Koi know the integrated state.\n\
+                         \n\
                          HEARTBEAT_OK rules: \
                          If decision is Continue — do NOT emit HEARTBEAT_OK or describe the project as complete. \
-                         If decision is ReadyForPisciReview — you MUST archive the project first (pool_org archive), \
-                         then post a wrap-up in pool_chat, and only then emit HEARTBEAT_OK.",
-                        attention.pool_name, attention.pool_id, attention.assessment.summary, attention.assessment.decision
+                         If decision is ReadyForPisciReview — you MUST: \
+                         (1) call pool_org(action=\"merge_branches\", pool_id=\"{}\") to integrate all remaining branches, \
+                         (2) archive the project with pool_org(action=\"archive\", pool_id=\"{}\"), \
+                         (3) post a wrap-up summary in pool_chat, \
+                         (4) only THEN emit HEARTBEAT_OK.",
+                        attention.pool_name, attention.pool_id, attention.assessment.summary, attention.assessment.decision,
+                        attention.pool_id,
+                        attention.pool_id, attention.pool_id
                     )),
                     session_title: Some(format!("Pisci · {}", attention.pool_name)),
                     session_source: Some(HEARTBEAT_POOL_SOURCE.into()),
