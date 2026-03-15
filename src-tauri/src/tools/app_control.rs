@@ -127,6 +127,12 @@ impl Tool for AppControlTool {
          \n- 'skill_toggle': Enable or disable an installed skill. Required: skill_id, enabled (bool).\
          \n- 'skill_uninstall': Remove an installed skill by name. Required: skill_name.\
          \
+         \n\nACTIONS — Koi Agents:\
+         \n- 'koi_list': List all Koi agents with their id, name, role, icon, status, and description.\
+         \n- 'koi_create': Create a new Koi agent. Required: name, role, system_prompt. Optional: icon (emoji), color (hex), description.\
+         \n  Only create a Koi when the user explicitly requests it. Do NOT create Koi proactively.\
+         \n- 'koi_delete': Delete a Koi agent by id. Required: koi_id. Use with caution — this permanently removes the Koi and all its memories.\
+         \
          \n\nCron format (5 fields): <min> <hour> <day> <month> <weekday>\
          \nExamples: '0 * * * *'=every hour, '0 9 * * 1-5'=9am weekdays, '*/30 * * * *'=every 30min"
     }
@@ -146,9 +152,16 @@ impl Tool for AppControlTool {
                         "ui_set_theme", "ui_set_theme_border", "ui_enter_minimal_mode", "ui_exit_minimal_mode", "window_move",
                         "builtin_tool_list", "builtin_tool_toggle",
                         "user_tool_list", "user_tool_config_get", "user_tool_config_set",
-                        "skill_list", "skill_search", "skill_install", "skill_toggle", "skill_uninstall"
+                        "skill_list", "skill_search", "skill_install", "skill_toggle", "skill_uninstall",
+                        "koi_list", "koi_create", "koi_delete"
                     ]
                 },
+                // Koi fields
+                "koi_id": { "type": "string", "description": "Koi agent ID (for koi_delete)" },
+                "icon": { "type": "string", "description": "Emoji icon for the Koi (e.g. '🐬'). Defaults to '🐟' if omitted." },
+                "color": { "type": "string", "description": "Hex color for the Koi (e.g. '#22c55e'). Defaults to a random color if omitted." },
+                "role": { "type": "string", "description": "Short role label for the Koi (e.g. 'Backend Engineer')" },
+                "system_prompt": { "type": "string", "description": "System prompt defining the Koi's behavior and expertise" },
                 // Task fields
                 "id": { "type": "string", "description": "Task ID (for task_update/delete/run_now)" },
                 "name": { "type": "string", "description": "Task name (required for task_create)" },
@@ -275,8 +288,11 @@ impl Tool for AppControlTool {
             "skill_install"   => self.skill_install(&input).await,
             "skill_toggle"    => self.skill_toggle(&input).await,
             "skill_uninstall" => self.skill_uninstall(&input).await,
+            "koi_list"        => self.koi_list().await,
+            "koi_create"      => self.koi_create(&input).await,
+            "koi_delete"      => self.koi_delete(&input).await,
             other => Ok(ToolResult::err(format!(
-                "Unknown action '{}'. Valid actions: task_list, task_create, task_update, task_delete, task_run_now, settings_get, settings_set, runtime_check, runtime_set_path, ssh_list, ssh_upsert, ssh_delete, ui_set_theme, ui_set_theme_border, ui_enter_minimal_mode, ui_exit_minimal_mode, window_move, builtin_tool_list, builtin_tool_toggle, user_tool_list, user_tool_config_get, user_tool_config_set, skill_list, skill_search, skill_install, skill_toggle, skill_uninstall",
+                "Unknown action '{}'. Valid actions: task_list, task_create, task_update, task_delete, task_run_now, settings_get, settings_set, runtime_check, runtime_set_path, ssh_list, ssh_upsert, ssh_delete, ui_set_theme, ui_set_theme_border, ui_enter_minimal_mode, ui_exit_minimal_mode, window_move, builtin_tool_list, builtin_tool_toggle, user_tool_list, user_tool_config_get, user_tool_config_set, skill_list, skill_search, skill_install, skill_toggle, skill_uninstall, koi_list, koi_create, koi_delete",
                 other
             ))),
         }
@@ -1965,6 +1981,100 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
             windows_only: true,
         },
     ]
+}
+
+// ── Koi Agent Management ──────────────────────────────────────────────────────
+
+impl AppControlTool {
+    async fn koi_list(&self) -> anyhow::Result<ToolResult> {
+        let db = self.db.lock().await;
+        let kois = db.list_kois().map_err(|e| anyhow::anyhow!(e))?;
+        if kois.is_empty() {
+            return Ok(ToolResult::ok("No Koi agents configured yet."));
+        }
+        let lines: Vec<String> = kois.iter().map(|k| {
+            format!(
+                "ID: {}\n  Name: {} {}\n  Role: {}\n  Status: {}\n  Description: {}",
+                k.id, k.icon, k.name, k.role, k.status,
+                if k.description.is_empty() { "(none)" } else { &k.description }
+            )
+        }).collect();
+        Ok(ToolResult::ok(format!("Koi agents ({}):\n\n{}", kois.len(), lines.join("\n\n"))))
+    }
+
+    async fn koi_create(&self, input: &Value) -> anyhow::Result<ToolResult> {
+        let name = match input["name"].as_str().filter(|s| !s.trim().is_empty()) {
+            Some(n) => n.trim().to_string(),
+            None => return Ok(ToolResult::err("'name' is required for koi_create")),
+        };
+        let role = match input["role"].as_str().filter(|s| !s.trim().is_empty()) {
+            Some(r) => r.trim().to_string(),
+            None => return Ok(ToolResult::err("'role' is required for koi_create")),
+        };
+        let system_prompt = match input["system_prompt"].as_str().filter(|s| !s.trim().is_empty()) {
+            Some(p) => p.trim().to_string(),
+            None => return Ok(ToolResult::err("'system_prompt' is required for koi_create")),
+        };
+        let icon = input["icon"].as_str().unwrap_or("🐟").to_string();
+        let description = input["description"].as_str().unwrap_or("").to_string();
+
+        // Pick a default color if not provided
+        let color = input["color"].as_str().unwrap_or_else(|| {
+            // Cycle through a palette based on name hash
+            let palette = ["#22c55e","#3b82f6","#f59e0b","#ec4899","#8b5cf6","#06b6d4","#ef4444","#84cc16"];
+            let idx = name.bytes().fold(0usize, |a, b| a.wrapping_add(b as usize)) % palette.len();
+            palette[idx]
+        }).to_string();
+
+        let db = self.db.lock().await;
+        let existing = db.list_kois().map_err(|e| anyhow::anyhow!(e))?;
+        const MAX_KOIS: usize = 10;
+        if existing.len() >= MAX_KOIS {
+            return Ok(ToolResult::err(format!(
+                "Koi limit reached ({}/{}). Delete an existing Koi before creating a new one.",
+                existing.len(), MAX_KOIS
+            )));
+        }
+
+        let koi = db.create_koi(&name, &role, &icon, &color, &system_prompt, &description, None)
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        // Notify frontend
+        if let Some(app) = &self.app_handle {
+            let _ = app.emit("koi_created", serde_json::json!({ "id": koi.id, "name": koi.name }));
+        }
+
+        Ok(ToolResult::ok(format!(
+            "Koi '{}' {} created successfully.\nID: {}\nRole: {}\nYou can now assign tasks to this Koi using call_koi or pool_org.",
+            koi.name, koi.icon, koi.id, koi.role
+        )))
+    }
+
+    async fn koi_delete(&self, input: &Value) -> anyhow::Result<ToolResult> {
+        let koi_id = match input["koi_id"].as_str().filter(|s| !s.trim().is_empty()) {
+            Some(id) => id.to_string(),
+            None => return Ok(ToolResult::err("'koi_id' is required for koi_delete")),
+        };
+
+        let db = self.db.lock().await;
+        // Verify the Koi exists first
+        let kois = db.list_kois().map_err(|e| anyhow::anyhow!(e))?;
+        let koi = match kois.iter().find(|k| k.id == koi_id) {
+            Some(k) => k.clone(),
+            None => return Ok(ToolResult::err(format!("Koi '{}' not found.", koi_id))),
+        };
+
+        db.delete_koi(&koi_id).map_err(|e| anyhow::anyhow!(e))?;
+
+        if let Some(app) = &self.app_handle {
+            let _ = app.emit("koi_deleted", serde_json::json!({ "id": koi_id }));
+        }
+
+        Ok(ToolResult::ok(format!(
+            "Koi '{}' {} has been deleted.",
+            koi.name, koi.icon
+        )))
+    }
 }
 
 fn safe_user_tool_name(name: &str) -> String {
