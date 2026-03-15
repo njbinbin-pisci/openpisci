@@ -9,7 +9,7 @@ import { RootState, chatActions, sessionsActions, ToolStep, StreamingState, Plan
 import { chatApi, sessionsApi, gatewayApi, AgentEventType, ChannelInfo, ChatAttachment } from "../../services/tauri";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import { openPath } from "../../services/tauri";
 import mermaid from "mermaid";
 import InteractiveCard from "./InteractiveCard";
 import ConfirmDialog from "../ConfirmDialog";
@@ -1478,7 +1478,7 @@ function MessageContent({ content }: { content: string }) {
                     style={{ cursor: "pointer" }}
                     onClick={(e) => {
                       e.preventDefault();
-                      shellOpen(uriToNativePath(href!)).catch(console.error);
+                      openPath(uriToNativePath(href!)).catch(console.error);
                     }}
                   >
                     {children}
@@ -1514,7 +1514,7 @@ function MessageContent({ content }: { content: string }) {
                     style={{ cursor: "pointer" }}
                     onClick={(e) => {
                       e.preventDefault();
-                      shellOpen(uriToNativePath(uri)).catch(console.error);
+                      openPath(uriToNativePath(uri)).catch(console.error);
                     }}
                   >
                     {text}

@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ChatMessage, Session, sessionsApi, poolApi } from "../../../services/tauri";
+import { ChatMessage, Session, sessionsApi, poolApi, openPath } from "../../../services/tauri";
 import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
 import ConfirmDialog from "../../ConfirmDialog";
 import "./PisciInbox.css";
@@ -25,8 +24,8 @@ function InboxMessageContent({ content }: { content: string }) {
               <a href="#" title={nativePath}
                 onClick={(e) => {
                   e.preventDefault();
-                  shellOpen(nativePath).catch((err) => {
-                    console.error("[inbox] shellOpen failed:", nativePath, err);
+                  openPath(nativePath).catch((err) => {
+                    console.error("[inbox] openPath failed:", nativePath, err);
                   });
                 }}
               >

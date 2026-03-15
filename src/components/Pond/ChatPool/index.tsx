@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, UIE
 import { useTranslation } from "react-i18next";
 import { useSelector, useDispatch } from "react-redux";
 import { listen } from "@tauri-apps/api/event";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import { openPath } from "../../../services/tauri";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { poolApi, koiApi, PoolMessage, KoiWithStats, PoolSession } from "../../../services/tauri";
@@ -27,7 +27,7 @@ function PoolMessageContent({ content }: { content: string }) {
                 style={{ cursor: "pointer", color: "var(--accent)" }}
                 onClick={(e) => {
                   e.preventDefault();
-                  shellOpen(uriToNativePath(href!)).catch(console.error);
+                  openPath(uriToNativePath(href!)).catch(console.error);
                 }}
               >
                 {children}

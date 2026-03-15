@@ -812,6 +812,19 @@ export interface CollabTrialStatus {
 }
 
 // ---------------------------------------------------------------------------
+// File / Path utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Open a local file or directory with the system default application.
+ * On Windows, directories are opened with Explorer.exe directly,
+ * which is more reliable than shell.open() for folder paths.
+ */
+export function openPath(path: string): Promise<void> {
+  return invoke<void>("open_path", { path });
+}
+
+// ---------------------------------------------------------------------------
 // System / Diagnostics
 // ---------------------------------------------------------------------------
 

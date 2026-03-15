@@ -180,6 +180,44 @@ fn install_crash_reporter() {
     }));
 }
 
+/// Open a local file or directory with the system default application.
+/// On Windows, directories are opened with `explorer.exe` to guarantee
+/// Explorer opens (ShellExecute "open" verb is unreliable for directories).
+/// Files are opened with the `start` command (equivalent to double-clicking).
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let p = std::path::Path::new(&path);
+        if p.is_dir() {
+            std::process::Command::new("explorer")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("Failed to open directory in Explorer: {e}"))?;
+        } else {
+            // Use cmd /c start "" "<path>" to open files with default app
+            std::process::Command::new("cmd")
+                .args(["/c", "start", "", &path])
+                .spawn()
+                .map_err(|e| format!("Failed to open file: {e}"))?;
+        }
+        return Ok(());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let cmd = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        std::process::Command::new(cmd)
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open path: {e}"))?;
+        Ok(())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _log_guard = init_logging();
@@ -765,6 +803,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            open_path,
             // Settings
             commands::settings::get_settings,
             commands::settings::get_default_workspace,
