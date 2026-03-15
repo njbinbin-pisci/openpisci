@@ -1,6 +1,6 @@
 [package]
 name = "pisci-desktop"
-version = "0.5.7"
+version = "0.5.8"
 description = "OpenPisci — Open-source Windows AI Agent Desktop"
 authors = ["Pisci Team"]
 license = "Apache-2.0"
