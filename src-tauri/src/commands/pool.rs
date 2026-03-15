@@ -195,6 +195,153 @@ pub async fn cancel_koi_task(
     Ok(())
 }
 
+/// Pause an active project pool.
+/// - Sets pool status to "paused"
+/// - Cancels all running Koi tasks in this pool
+/// - Resets in_progress todos back to "todo" so they can be resumed later
+/// - Posts a system message in the pool chat
+#[tauri::command]
+pub async fn pause_pool_session(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    // 1. Update pool status
+    {
+        let db = state.db.lock().await;
+        db.update_pool_session_status(&id, "paused")
+            .map_err(|e| e.to_string())?;
+    }
+
+    // 2. Cancel all running Koi tasks in this pool
+    {
+        let flags = state.cancel_flags.lock().await;
+        let prefix = format!("koi_runtime_");
+        // cancel_flags keys for pool tasks are "koi_runtime_{koi_id}_{pool_id}"
+        // and for call_koi path "koi_{koi_id}_{pool_id}"
+        for (key, flag) in flags.iter() {
+            if key.ends_with(&format!("_{}", id)) || key.contains(&id) {
+                flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                tracing::info!("pause_pool_session: cancel flag set for '{}'", key);
+            }
+        }
+        drop(flags);
+        // suppress unused warning
+        let _ = prefix;
+    }
+
+    // 3. Reset in_progress todos back to "todo"
+    {
+        let db = state.db.lock().await;
+        let active_todos = db.list_active_todos_by_pool(&id)
+            .map_err(|e| e.to_string())?;
+        for todo in active_todos.iter().filter(|t| t.status == "in_progress") {
+            let _ = db.update_koi_todo(&todo.id, None, None, Some("todo"), None);
+        }
+    }
+
+    // 4. Post system message
+    {
+        let db = state.db.lock().await;
+        let _ = db.insert_pool_message(
+            &id,
+            "system",
+            "⏸ 项目已被用户暂停。所有进行中的任务已重置为待办。",
+            "status_update",
+            "{}",
+        );
+    }
+
+    let _ = state.app_handle.emit("pool_session_updated", serde_json::json!({ "id": id, "status": "paused" }));
+    Ok(())
+}
+
+/// Resume a paused or archived project pool.
+/// - Sets pool status back to "active"
+/// - Posts a system message and @pisci to re-engage coordination
+#[tauri::command]
+pub async fn resume_pool_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    // 1. Update pool status
+    {
+        let db = state.db.lock().await;
+        db.update_pool_session_status(&id, "active")
+            .map_err(|e| e.to_string())?;
+    }
+
+    // 2. Post system message + @pisci to re-engage
+    let resume_msg = "▶ 项目已被用户恢复。@pisci 请检查待办任务并继续协调。".to_string();
+    {
+        let db = state.db.lock().await;
+        let msg = db.insert_pool_message(
+            &id,
+            "system",
+            &resume_msg,
+            "status_update",
+            "{}",
+        ).map_err(|e| e.to_string())?;
+        drop(db);
+        let event_name = format!("pool_message_{}", id);
+        let _ = state.app_handle.emit(&event_name, &msg);
+    }
+
+    // 3. Trigger @pisci mention so Pisci wakes up and resumes coordination
+    let app_clone = app.clone();
+    let db_arc = state.db.clone();
+    let pool_id = id.clone();
+    tokio::spawn(async move {
+        let runtime = KoiRuntime::from_tauri(app_clone, db_arc);
+        let _ = runtime.handle_mention("system", &pool_id, &resume_msg).await;
+    });
+
+    let _ = state.app_handle.emit("pool_session_updated", serde_json::json!({ "id": id, "status": "active" }));
+    Ok(())
+}
+
+/// Archive a project pool (read-only, no new tasks).
+/// - Cancels all running Koi tasks
+/// - Sets pool status to "archived"
+/// - Posts a system message
+#[tauri::command]
+pub async fn archive_pool_session(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    // 1. Cancel all running tasks
+    {
+        let flags = state.cancel_flags.lock().await;
+        for (key, flag) in flags.iter() {
+            if key.ends_with(&format!("_{}", id)) || key.contains(&id) {
+                flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+
+    // 2. Update pool status
+    {
+        let db = state.db.lock().await;
+        db.update_pool_session_status(&id, "archived")
+            .map_err(|e| e.to_string())?;
+    }
+
+    // 3. Post system message
+    {
+        let db = state.db.lock().await;
+        let _ = db.insert_pool_message(
+            &id,
+            "system",
+            "🗄 项目已归档。项目进入只读状态，Koi 不再接受新任务。",
+            "status_update",
+            "{}",
+        );
+    }
+
+    let _ = state.app_handle.emit("pool_session_updated", serde_json::json!({ "id": id, "status": "archived" }));
+    Ok(())
+}
+
 /// Handle an @mention in a pool message, dispatching to the mentioned Koi.
 #[tauri::command]
 pub async fn handle_pool_mention(

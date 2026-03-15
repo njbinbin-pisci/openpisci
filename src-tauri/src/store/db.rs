@@ -2489,6 +2489,17 @@ impl Database {
         Ok(updated)
     }
 
+    /// Return all todos for a pool that are in active states (todo / in_progress / blocked).
+    pub fn list_active_todos_by_pool(&self, pool_session_id: &str) -> Result<Vec<crate::koi::KoiTodo>> {
+        let sql = format!(
+            "SELECT {} FROM koi_todos WHERE pool_session_id = ?1 AND status IN ('todo','in_progress','blocked') ORDER BY created_at DESC",
+            Self::KOI_TODO_COLS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![pool_session_id], Self::map_koi_todo)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
     pub fn update_pool_session_status(&self, id: &str, status: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
@@ -2639,6 +2650,62 @@ impl Database {
         )?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
+    }
+
+    /// Get the content of the most recent "result" type pool message sent by a specific Koi.
+    /// Used to recover the complete_todo summary when the agent loop ends with a tool call.
+    pub fn get_latest_result_message(
+        &self,
+        pool_session_id: &str,
+        sender_id: &str,
+    ) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT content FROM pool_messages \
+             WHERE pool_session_id = ?1 AND sender_id = ?2 AND msg_type = 'result' \
+             ORDER BY created_at DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![pool_session_id, sender_id], |row| {
+            row.get::<_, String>(0)
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// Get the id of the most recent "result" message from a Koi that is not yet linked to a todo.
+    /// Used by runtime to link a complete_todo-written message to the current todo.
+    pub fn get_latest_unlinked_result_message_id(
+        &self,
+        pool_session_id: &str,
+        sender_id: &str,
+    ) -> Result<Option<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM pool_messages \
+             WHERE pool_session_id = ?1 AND sender_id = ?2 AND msg_type = 'result' \
+             AND (todo_id IS NULL OR todo_id = '') \
+             ORDER BY created_at DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![pool_session_id, sender_id], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// Link a pool message to a todo (set its todo_id field).
+    pub fn link_pool_message_to_todo(&self, message_id: i64, todo_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE pool_messages SET todo_id = ?2 WHERE id = ?1",
+            params![message_id, todo_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_pool_message_by_id(&self, id: i64) -> Result<Option<crate::koi::PoolMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, pool_session_id, sender_id, content, msg_type, metadata, \
+             todo_id, reply_to_message_id, event_type, created_at \
+             FROM pool_messages WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], Self::map_pool_message)?;
+        Ok(rows.next().transpose()?)
     }
 
     /// Get pool messages linked to a specific todo

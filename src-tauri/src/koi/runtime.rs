@@ -229,7 +229,8 @@ impl KoiRuntime {
              Mark this todo done ONLY after the actual deliverable is complete and verifiable \
              (code written, file created, review posted, etc.). \
              Writing a plan or having a discussion does NOT count as done. \
-             Call pool_org(action=\"complete_todo\", todo_id=\"{id}\") when the real output exists. \
+             Call pool_org(action=\"complete_todo\", todo_id=\"{id}\", summary=\"<what you accomplished>\") when the real output exists. \
+             The summary is REQUIRED and must describe what was actually done (e.g. \"Implemented auth module in src/auth/, 3 files created, all tests pass\"). \
              After completing, if your branch of work is fully done, post [ProjectStatus] ready_for_pisci_review @pisci in pool_chat. \
              Always end with a concise summary of what was accomplished — never end mid-sentence or with a phrase like \"now I will...\". \
              If your result is longer than ~500 words, write it to a file (e.g. kb/reports/<date>-<topic>.md) and post only the file path + a 3-5 sentence summary to pool_chat.]",
@@ -259,39 +260,54 @@ impl KoiRuntime {
         };
 
         // Post result and update todo
-        let (success, reply) = match &exec_result {
+        let (success, raw_reply) = match &exec_result {
             Ok(reply) => (true, reply.clone()),
             Err(e) => (false, format!("Execution error: {}", e)),
         };
 
         let result_msg_id = if let Some(psid) = canonical_pool_session_id.as_deref() {
             let db = self.db().lock().await;
-            let summary = if reply.chars().count() > 5000 {
-                reply.chars().take(5000).collect::<String>()
+
+            // If the raw_reply is empty, the Koi ended with a tool call (e.g. complete_todo).
+            // complete_todo already wrote a "result" message to the pool — find it and link it
+            // to this todo instead of writing a duplicate empty message.
+            if success && raw_reply.trim().is_empty() {
+                // Look for the latest result message from this Koi that is not yet linked to a todo
+                let existing_id = db.get_latest_unlinked_result_message_id(psid, koi_id)
+                    .unwrap_or_default();
+                if let Some(msg_id) = existing_id {
+                    // Link the existing message to this todo
+                    let _ = db.link_pool_message_to_todo(msg_id, &todo.id);
+                    drop(db);
+                    Some(msg_id)
+                } else {
+                    drop(db);
+                    None
+                }
             } else {
-                reply.clone()
-            };
-            let event_type = if success {
-                "task_completed"
-            } else {
-                "task_failed"
-            };
-            let msg = db.insert_pool_message_ext(
-                psid,
-                koi_id,
-                &summary,
-                if success { "result" } else { "status_update" },
-                &json!({ "todo_id": todo.id, "success": success }).to_string(),
-                Some(&todo.id),
-                assign_msg_id,
-                Some(event_type),
-            )?;
-            self.bus.emit_event(
-                &format!("pool_message_{}", psid),
-                serde_json::to_value(&msg).unwrap_or_default(),
-            );
-            drop(db);
-            Some(msg.id)
+                let summary = if raw_reply.chars().count() > 5000 {
+                    raw_reply.chars().take(5000).collect::<String>()
+                } else {
+                    raw_reply.clone()
+                };
+                let event_type = if success { "task_completed" } else { "task_failed" };
+                let msg = db.insert_pool_message_ext(
+                    psid,
+                    koi_id,
+                    &summary,
+                    if success { "result" } else { "status_update" },
+                    &json!({ "todo_id": todo.id, "success": success }).to_string(),
+                    Some(&todo.id),
+                    assign_msg_id,
+                    Some(event_type),
+                )?;
+                self.bus.emit_event(
+                    &format!("pool_message_{}", psid),
+                    serde_json::to_value(&msg).unwrap_or_default(),
+                );
+                drop(db);
+                Some(msg.id)
+            }
         } else {
             None
         };
@@ -302,7 +318,7 @@ impl KoiRuntime {
             if success {
                 db.complete_koi_todo(&todo.id, result_msg_id)?;
             } else {
-                db.block_koi_todo(&todo.id, &reply)?;
+                db.block_koi_todo(&todo.id, &raw_reply)?;
             }
         }
         self.bus.emit_event(
@@ -322,7 +338,7 @@ impl KoiRuntime {
 
         Ok(KoiExecResult {
             success,
-            reply,
+            reply: raw_reply,
             result_message_id: result_msg_id,
         })
     }
@@ -479,13 +495,19 @@ impl KoiRuntime {
             let state = app.state::<crate::store::AppState>();
             let (workspace_root, allow_outside, tool_settings_data) = {
                 let settings = state.settings.lock().await;
-                (
-                    workspace_override
-                        .map(String::from)
-                        .unwrap_or_else(|| settings.workspace_root.clone()),
-                    settings.allow_outside_workspace,
-                    Arc::new(ToolSettings::from_settings(&settings)),
-                )
+                let ws = workspace_override
+                    .map(String::from)
+                    .unwrap_or_else(|| settings.workspace_root.clone());
+                // Koi working inside a project worktree must be confined to that worktree.
+                // allow_outside_workspace is a Pisci (general assistant) setting — Koi should
+                // never inherit it when a worktree is active, to prevent accidental writes
+                // to the main project dir or other parts of the filesystem.
+                let allow_out = if workspace_override.is_some() {
+                    false // worktree is active: strictly confined
+                } else {
+                    settings.allow_outside_workspace // no project context: inherit global
+                };
+                (ws, allow_out, Arc::new(ToolSettings::from_settings(&settings)))
             };
 
             // Create notification channel and register in global session registry.

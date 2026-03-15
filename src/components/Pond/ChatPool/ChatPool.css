@@ -167,26 +167,83 @@
   margin-top: 2px;
 }
 
-.chatpool-session-delete {
+/* ── Session action menu ── */
+
+.chatpool-session-menu-wrap {
   position: absolute;
-  top: 8px;
+  top: 6px;
   right: 6px;
+}
+
+.chatpool-session-menu-btn {
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 14px;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s, color 0.15s;
-  padding: 2px 4px;
+  padding: 2px 5px;
+  border-radius: var(--radius);
+  line-height: 1;
 }
 
-.chatpool-session-item:hover .chatpool-session-delete {
+.chatpool-session-item:hover .chatpool-session-menu-btn {
   opacity: 1;
 }
 
-.chatpool-session-delete:hover {
+.chatpool-session-menu-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.chatpool-session-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 200;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  min-width: 148px;
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chatpool-menu-item {
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 7px 14px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s;
+}
+
+.chatpool-menu-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.chatpool-menu-item--ok {
+  color: #22c55e;
+}
+
+.chatpool-menu-item--warn {
+  color: #f59e0b;
+}
+
+.chatpool-menu-item--danger {
   color: var(--error);
+}
+
+.chatpool-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 0;
 }
 
 /* ── Participants panel ── */

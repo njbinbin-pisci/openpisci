@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { poolApi, koiApi, PoolMessage, KoiWithStats } from "../../../services/tauri";
+import { poolApi, koiApi, PoolMessage, KoiWithStats, PoolSession } from "../../../services/tauri";
 import { RootState, poolActions, koiActions, POOL_DEFAULT_CAPACITY } from "../../../store";
 import ConfirmDialog from "../../ConfirmDialog";
 import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
@@ -162,6 +162,10 @@ export default function ChatPool() {
   const [orgSpecOpen, setOrgSpecOpen] = useState(false);
   const [orgSpecDraft, setOrgSpecDraft] = useState("");
   const [orgSpecSaving, setOrgSpecSaving] = useState(false);
+  // Session action menu (⋯)
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [actionTarget, setActionTarget] = useState<{ id: string; name: string; action: "pause" | "resume" | "archive" } | null>(null);
+  const [actioning, setActioning] = useState(false);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -373,6 +377,45 @@ export default function ChatPool() {
     }
   };
 
+  const confirmSessionAction = async () => {
+    if (!actionTarget) return;
+    setActioning(true);
+    try {
+      if (actionTarget.action === "pause") {
+        await poolApi.pauseSession(actionTarget.id);
+        dispatch(poolActions.updatePoolSessionStatus({ id: actionTarget.id, status: "paused" }));
+      } else if (actionTarget.action === "resume") {
+        await poolApi.resumeSession(actionTarget.id);
+        dispatch(poolActions.updatePoolSessionStatus({ id: actionTarget.id, status: "active" }));
+      } else if (actionTarget.action === "archive") {
+        await poolApi.archiveSession(actionTarget.id);
+        dispatch(poolActions.updatePoolSessionStatus({ id: actionTarget.id, status: "archived" }));
+      }
+    } catch (e) {
+      console.error("[ChatPool] session action error:", e);
+    } finally {
+      setActioning(false);
+      setActionTarget(null);
+    }
+  };
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    if (!menuOpenId) return;
+    const handler = () => setMenuOpenId(null);
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [menuOpenId]);
+
+  // Listen for pool_session_updated events from backend (pause/resume/archive)
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen<{ id: string; status: string }>("pool_session_updated", (e) => {
+      dispatch(poolActions.updatePoolSessionStatus({ id: e.payload.id, status: e.payload.status }));
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, [dispatch]);
+
   return (
     <div className="chatpool">
       <div className="chatpool-sidebar">
@@ -420,6 +463,7 @@ export default function ChatPool() {
           )}
           {sessions.map((s) => {
             const statusColor = s.status === "active" ? "#22c55e" : s.status === "paused" ? "#f59e0b" : "#6b7280";
+            const isMenuOpen = menuOpenId === s.id;
             return (
               <div
                 key={s.id}
@@ -431,13 +475,42 @@ export default function ChatPool() {
                   {s.name}
                 </div>
                 <div className="chatpool-session-time">{formatTime(s.updated_at)}</div>
-                <button
-                  className="chatpool-session-delete"
-                  onClick={(e) => { e.stopPropagation(); setDeleteTarget({ id: s.id, name: s.name }); }}
-                  title={t("pool.deleteSession")}
-                >
-                  ✕
-                </button>
+                <div className="chatpool-session-menu-wrap" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="chatpool-session-menu-btn"
+                    title={t("pool.sessionActions")}
+                    onClick={(e) => { e.stopPropagation(); setMenuOpenId(isMenuOpen ? null : s.id); }}
+                  >
+                    ⋯
+                  </button>
+                  {isMenuOpen && (
+                    <div className="chatpool-session-menu">
+                      {s.status === "active" && (
+                        <button className="chatpool-menu-item chatpool-menu-item--warn"
+                          onClick={() => { setMenuOpenId(null); setActionTarget({ id: s.id, name: s.name, action: "pause" }); }}>
+                          ⏸ {t("pool.pauseSession")}
+                        </button>
+                      )}
+                      {(s.status === "paused" || s.status === "archived") && (
+                        <button className="chatpool-menu-item chatpool-menu-item--ok"
+                          onClick={() => { setMenuOpenId(null); setActionTarget({ id: s.id, name: s.name, action: "resume" }); }}>
+                          ▶ {t("pool.resumeSession")}
+                        </button>
+                      )}
+                      {s.status !== "archived" && (
+                        <button className="chatpool-menu-item"
+                          onClick={() => { setMenuOpenId(null); setActionTarget({ id: s.id, name: s.name, action: "archive" }); }}>
+                          🗄 {t("pool.archiveSession")}
+                        </button>
+                      )}
+                      <div className="chatpool-menu-divider" />
+                      <button className="chatpool-menu-item chatpool-menu-item--danger"
+                        onClick={() => { setMenuOpenId(null); setDeleteTarget({ id: s.id, name: s.name }); }}>
+                        🗑 {t("pool.deleteSession")}
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -551,6 +624,31 @@ export default function ChatPool() {
         loading={deleting}
         onConfirm={confirmDeleteSession}
         onCancel={() => !deleting && setDeleteTarget(null)}
+      />
+      <ConfirmDialog
+        open={!!actionTarget}
+        title={
+          actionTarget?.action === "pause" ? t("pool.confirmPauseTitle") :
+          actionTarget?.action === "resume" ? t("pool.confirmResumeTitle") :
+          t("pool.confirmArchiveTitle")
+        }
+        message={
+          actionTarget?.action === "pause"
+            ? t("pool.confirmPauseMessage", { name: actionTarget?.name ?? "" })
+            : actionTarget?.action === "resume"
+            ? t("pool.confirmResumeMessage", { name: actionTarget?.name ?? "" })
+            : t("pool.confirmArchiveMessage", { name: actionTarget?.name ?? "" })
+        }
+        confirmLabel={
+          actionTarget?.action === "pause" ? t("pool.pauseSession") :
+          actionTarget?.action === "resume" ? t("pool.resumeSession") :
+          t("pool.archiveSession")
+        }
+        cancelLabel={t("common.cancel")}
+        variant={actionTarget?.action === "archive" ? "danger" : "primary"}
+        loading={actioning}
+        onConfirm={confirmSessionAction}
+        onCancel={() => !actioning && setActionTarget(null)}
       />
     </div>
   );

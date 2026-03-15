@@ -428,6 +428,10 @@ const poolSlice = createSlice({
         state.activeSessionId = state.sessions[0]?.id ?? null;
       }
     },
+    updatePoolSessionStatus: (state, action: PayloadAction<{ id: string; status: string }>) => {
+      const s = state.sessions.find((s) => s.id === action.payload.id);
+      if (s) s.status = action.payload.status;
+    },
     setActivePoolSession: (state, action: PayloadAction<string | null>) => {
       state.activeSessionId = action.payload;
     },

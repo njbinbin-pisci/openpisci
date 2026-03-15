@@ -858,6 +858,9 @@ pub fn run() {
             commands::pool::dispatch_koi_task,
             commands::pool::cancel_koi_task,
             commands::pool::handle_pool_mention,
+            commands::pool::pause_pool_session,
+            commands::pool::resume_pool_session,
+            commands::pool::archive_pool_session,
             // Board (Kanban)
             commands::board::list_koi_todos,
             commands::board::create_koi_todo,

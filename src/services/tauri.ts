@@ -665,6 +665,9 @@ export const poolApi = {
   listSessions: () => invoke<PoolSession[]>("list_pool_sessions"),
   createSession: (name: string) => invoke<PoolSession>("create_pool_session", { name }),
   deleteSession: (id: string) => invoke<void>("delete_pool_session", { id }),
+  pauseSession: (id: string) => invoke<void>("pause_pool_session", { id }),
+  resumeSession: (id: string) => invoke<void>("resume_pool_session", { id }),
+  archiveSession: (id: string) => invoke<void>("archive_pool_session", { id }),
   getMessages: (input: { session_id: string; limit?: number; offset?: number }) =>
     invoke<PoolMessage[]>("get_pool_messages", { input }),
   sendMessage: (input: {

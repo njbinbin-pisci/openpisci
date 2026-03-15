@@ -49,7 +49,7 @@ impl Tool for PoolOrgTool {
          - 'get_todos': Read koi_todos associated with a project pool (requires pool_id). \
          - 'create_todo': Create a new todo for yourself (requires pool_id, title; optional description, priority). Use this when you receive real work via @mention or self-identify a task. \
          - 'claim_todo': Claim an existing unclaimed todo (requires todo_id). Marks it in_progress and assigns it to you. \
-         - 'complete_todo': Mark a todo as done (requires todo_id). Pisci can complete any todo; Koi can only complete their own. \
+         - 'complete_todo': Mark a todo as done (requires todo_id, summary). The summary is a concise description of what was accomplished — it becomes the visible result in the pool chat. Pisci can complete any todo; Koi can only complete their own. \
          - 'cancel_todo': Cancel a todo (requires todo_id, optional reason). Pisci can cancel any todo; Koi can only cancel their own — to cancel someone else's, @pisci in pool_chat. \
          - 'update_todo_status': Update a todo's status (requires todo_id, status). Pisci can change any; Koi can only change their own. Valid statuses: todo, in_progress, blocked. \
          - 'merge_branches': Merge all Koi worktree branches back into main (requires pool_id with project_dir). \
@@ -129,6 +129,10 @@ impl Tool for PoolOrgTool {
                 "reason": {
                     "type": "string",
                     "description": "For cancel_todo: optional reason for cancellation"
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "For complete_todo: REQUIRED. A concise description of what was accomplished. This becomes the visible result message in the pool chat."
                 }
             },
             "required": ["action"]
@@ -998,6 +1002,15 @@ impl PoolOrgTool {
             }
         };
 
+        let summary = match input["summary"].as_str().filter(|s| !s.trim().is_empty()) {
+            Some(s) => s.to_string(),
+            None => {
+                return Ok(ToolResult::err(
+                    "'summary' is required for action 'complete_todo'. Provide a concise description of what was accomplished.",
+                ))
+            }
+        };
+
         let todo = match self.find_todo_by_prefix(todo_id).await? {
             Some(t) => t,
             None => return Ok(ToolResult::err(format!("Todo '{}' not found", todo_id))),
@@ -1017,8 +1030,25 @@ impl PoolOrgTool {
             return Ok(r);
         }
 
+        // Write the summary as a result message in the pool, then link it to the todo
+        let result_msg_id = if let Some(ref psid) = todo.pool_session_id {
+            let db = self.db.lock().await;
+            match db.insert_pool_message(psid, &ctx.memory_owner_id, &summary, "result", "{}") {
+                Ok(msg) => {
+                    let _ = self.app.emit(
+                        &format!("pool_message_{}", psid),
+                        serde_json::to_value(&msg).unwrap_or_default(),
+                    );
+                    Some(msg.id)
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
         let db = self.db.lock().await;
-        db.complete_koi_todo(&todo.id, None)?;
+        db.complete_koi_todo(&todo.id, result_msg_id)?;
         drop(db);
 
         let _ = self.app.emit(
@@ -1029,7 +1059,7 @@ impl PoolOrgTool {
         );
 
         Ok(ToolResult::ok(format!(
-            "Todo '{}' ({}) marked as completed.",
+            "Todo '{}' ({}) marked as completed. Summary recorded.",
             &todo.id[..8.min(todo.id.len())],
             todo.title
         )))

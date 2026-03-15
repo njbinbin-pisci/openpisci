@@ -297,7 +297,7 @@ impl CallKoiTool {
              - Whenever you receive real work — whether assigned by Pisci, handed off by another Koi via @mention, or self-identified — create a todo for it FIRST: pool_org(action=\"create_todo\", pool_id=\"...\", title=\"...\", description=\"...\"). Then claim it: pool_org(action=\"claim_todo\", todo_id=\"...\"). This keeps the kanban board accurate and your work visible.\n\
              - If you are @mentioned with only a status update, acknowledgement, or notification that the project is done — no new work is implied — you do NOT need to create a todo.\n\
              - Mark a task complete ONLY when the actual deliverable exists and is verifiable: code is written and tested, a file is created, a review is posted, etc. Do NOT mark done just because you wrote a plan, had a discussion, or described what should be done.\n\
-             - When you finish a task, mark it complete: pool_org(action=\"complete_todo\", todo_id=\"...\"). Always do this — leaving tasks unmarked pollutes the kanban board.\n\
+             - When you finish a task, mark it complete: pool_org(action=\"complete_todo\", todo_id=\"...\", summary=\"<what you accomplished>\"). The summary is REQUIRED — describe concisely what was done (e.g. \"Implemented auth module in src/auth/, 3 files created, all tests pass\"). This summary becomes the visible result in the pool chat. Always do this — leaving tasks unmarked pollutes the kanban board.\n\
              - Before marking done, ask yourself: \"Could another agent pick up the project right now and find the actual output of this task?\" If no, the task is not done.\n\
              - If you realize a task is no longer needed, cancel your own: pool_org(action=\"cancel_todo\", todo_id=\"...\", reason=\"...\").\n\
              - You can ONLY complete or cancel your own tasks. To request cancellation of another agent's task, @pisci in pool_chat and explain why.\n\
@@ -406,6 +406,16 @@ impl CallKoiTool {
                         settings.max_tokens,
                     )
                 };
+            // Koi always works within a project scope.
+            // allow_outside_workspace is a Pisci (general assistant) setting.
+            // When a pool_session_id is present (project context), Koi is confined to the
+            // project workspace regardless of the global setting.
+            // Only when called with no project context (rare, ad-hoc) does it inherit the setting.
+            let koi_allow_outside = if pool_session_id.is_some() {
+                false
+            } else {
+                settings.allow_outside_workspace
+            };
             (
                 provider,
                 model,
@@ -417,7 +427,7 @@ impl CallKoiTool {
                 settings.tool_rate_limit_per_minute,
                 Arc::new(ToolSettings::from_settings(&settings)),
                 settings.builtin_tool_enabled.clone(),
-                settings.allow_outside_workspace,
+                koi_allow_outside,
                 settings.vision_enabled,
             )
         };
@@ -658,18 +668,46 @@ impl CallKoiTool {
 
         match run_result {
             Ok((final_msgs, _, _)) => {
-                let reply = final_msgs
+                // Primary: use the last assistant text from the agent loop.
+                let llm_reply = final_msgs
                     .iter()
                     .rev()
                     .find(|m| m.role == "assistant")
                     .map(|m| m.content.as_text())
                     .unwrap_or_default();
 
-                // Record result in Chat Pool (full content, no truncation)
-                if !self.managed_externally {
+                // Fallback: if the LLM reply is empty (Koi ended with a tool call such as
+                // complete_todo), look up the result message that complete_todo wrote to the
+                // pool chat for this Koi. This ensures the summary is always visible.
+                let reply = if llm_reply.trim().is_empty() {
                     if let Some(ref pool_sid) = pool_session_id {
                         let db = state.db.lock().await;
-                        let _ = db.insert_pool_message(pool_sid, &koi_id, &reply, "result", "{}");
+                        // Get the most recent "result" message sent by this Koi in this pool
+                        db.get_latest_result_message(pool_sid, &koi_id)
+                            .unwrap_or_default()
+                            .unwrap_or_default()
+                    } else {
+                        llm_reply
+                    }
+                } else {
+                    llm_reply
+                };
+
+                // Record result in Chat Pool only if complete_todo hasn't already done so
+                // (i.e. reply came from LLM text, not from the pool message written by complete_todo)
+                if !self.managed_externally && !reply.trim().is_empty() {
+                    if let Some(ref pool_sid) = pool_session_id {
+                        // Only write if the reply isn't already the latest pool message
+                        let db = state.db.lock().await;
+                        let already_recorded = db
+                            .get_latest_result_message(pool_sid, &koi_id)
+                            .ok()
+                            .flatten()
+                            .map(|m| m == reply)
+                            .unwrap_or(false);
+                        if !already_recorded {
+                            let _ = db.insert_pool_message(pool_sid, &koi_id, &reply, "result", "{}");
+                        }
                     }
                 }
 

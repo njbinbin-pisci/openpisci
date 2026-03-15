@@ -79,7 +79,7 @@ pub async fn create_koi(
 ) -> Result<KoiDefinition, String> {
     let db = state.db.lock().await;
     let existing = db.list_kois().map_err(|e| e.to_string())?;
-    const MAX_KOIS: usize = 5;
+    const MAX_KOIS: usize = 10;
     if existing.len() >= MAX_KOIS {
         return Err(format!(
             "已达到 Koi 数量上限 ({}/{}). 请删除或编辑现有 Koi.",
