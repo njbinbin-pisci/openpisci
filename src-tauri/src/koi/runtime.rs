@@ -224,6 +224,8 @@ impl KoiRuntime {
              Before starting work, call pool_chat(action=\"read\") to check if a teammate has already done related work or left relevant context. \
              When reading pool chat, focus on what is addressed to you ({name}) specifically — \
              do not confuse other team members' statuses or roles with your own. \
+             IMPORTANT: Your workspace is a Git worktree — always use RELATIVE paths (e.g. src/auth/auth.service.ts) for all file_write and file_edit operations. \
+             NEVER use absolute paths pointing to the main project directory — doing so bypasses your worktree and corrupts the shared codebase. \
              Mark this todo done ONLY after the actual deliverable is complete and verifiable \
              (code written, file created, review posted, etc.). \
              Writing a plan or having a discussion does NOT count as done. \
