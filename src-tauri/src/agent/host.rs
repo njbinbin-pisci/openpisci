@@ -87,14 +87,11 @@ impl HostAgent {
         }
     }
 
-    pub fn should_decompose(request: &str) -> bool {
-        let word_count = request.split_whitespace().count();
-        let has_multiple_actions = request.contains(" and ")
-            || request.contains(" then ")
-            || request.contains("，然后")
-            || request.contains("，接着")
-            || request.contains("并且");
-        word_count > 20 || has_multiple_actions
+    pub fn should_decompose(_request: &str) -> bool {
+        // HostAgent automatic task decomposition is disabled.
+        // Pisci handles complex tasks through its own tools (call_fish, plan_todo, etc.)
+        // and does not need a separate decomposition layer that bypasses the agent loop.
+        false
     }
 
     /// Attempt to route a sub-task to a persistent Koi agent.
