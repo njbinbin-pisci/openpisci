@@ -328,6 +328,12 @@ impl CallKoiTool {
                 Example: \"Full analysis written to `kb/reports/2024-03-auth-review.md`. Summary: Found 3 critical issues in the auth module...\"\n\
              3. When delegating to another Koi via call_koi, pass the file path in the task description instead of the full content — the receiving Koi will read the file directly.\n\
              This rule prevents message truncation and keeps pool_chat readable.\
+             \n\n## Skills\
+             \nYou have access to a skills system. Skills are task-specific instructions that guide you through specialised workflows (e.g. code review, data analysis, deployment).\
+             \n**MANDATORY — at the start of every task**, call `skill_search` with a short description of the task before doing anything else:\
+             \n  skill_search(query=\"<brief task description>\")\
+             \nIf a matching skill is found, follow its instructions. If no skill matches, proceed with your own judgment.\
+             \nThis rule applies even if you think you already know how to do the task.\
              \n\n## Sub-Task Delegation (call_fish)\n\
              You have access to specialized Fish sub-agents via the `call_fish` tool. Fish agents are **stateless, ephemeral workers** — each call starts fresh with no memory of previous calls.\n\
              \n\
