@@ -212,7 +212,7 @@ pub async fn pause_pool_session(state: State<'_, AppState>, id: String) -> Resul
     // 2. Cancel all running Koi tasks in this pool
     {
         let flags = state.cancel_flags.lock().await;
-        let prefix = format!("koi_runtime_");
+        let prefix = "koi_runtime_".to_string();
         // cancel_flags keys for pool tasks are "koi_runtime_{koi_id}_{pool_id}"
         // and for call_koi path "koi_{koi_id}_{pool_id}"
         for (key, flag) in flags.iter() {
