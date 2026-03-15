@@ -14,7 +14,8 @@ impl Tool for FileWriteTool {
     fn description(&self) -> &str {
         "Write content to a file. Creates the file and all parent directories if they don't exist. \
          Completely overwrites existing content — use file_edit if you only want to change part of a file. \
-         Always use absolute paths. \
+         Paths: use relative paths (e.g. src/auth/auth.service.ts) to write inside the current workspace root. \
+         Use absolute paths only when writing outside the workspace. \
          Note: writing to system directories (C:\\Windows\\, C:\\Program Files\\) will fail with permission denied — \
          write to user directories (C:\\Users\\name\\, Desktop, Documents) or the workspace instead."
     }
@@ -25,7 +26,7 @@ impl Tool for FileWriteTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Absolute path to the file to write (e.g. C:\\Users\\name\\output.txt). Parent directories are created automatically."
+                    "description": "Path to the file. Relative paths (e.g. src/auth/auth.service.ts) are resolved from workspace root — prefer relative paths when working inside the workspace. Use absolute paths only for files outside the workspace."
                 },
                 "content": {
                     "type": "string",
@@ -102,7 +103,7 @@ impl Tool for FileEditTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Absolute path to the file to edit"
+                    "description": "Path to the file. Relative paths (e.g. src/auth/auth.service.ts) are resolved from workspace root — prefer relative paths when working inside the workspace."
                 },
                 "old_string": {
                     "type": "string",

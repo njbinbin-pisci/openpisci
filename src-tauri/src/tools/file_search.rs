@@ -48,7 +48,7 @@ impl Tool for FileSearchTool {
                 },
                 "path": {
                     "type": "string",
-                    "description": "Root directory to search in. Defaults to C:\\ on Windows."
+                    "description": "Root directory to search in. Relative paths are resolved from workspace root (e.g. 'src' searches inside workspace/src/). Defaults to workspace root if omitted."
                 },
                 "include": {
                     "type": "string",
@@ -84,7 +84,7 @@ impl Tool for FileSearchTool {
         true
     }
 
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
+    async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let action = match input["action"].as_str() {
             Some(a) => a,
             None => return Ok(ToolResult::err("Missing required parameter: action")),
@@ -94,19 +94,20 @@ impl Tool for FileSearchTool {
             None => return Ok(ToolResult::err("Missing required parameter: pattern")),
         };
 
-        let root = input["path"]
-            .as_str()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                #[cfg(target_os = "windows")]
-                {
-                    PathBuf::from("C:\\")
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    PathBuf::from("/")
-                }
-            });
+        let root = if let Some(p) = input["path"].as_str() {
+            if std::path::Path::new(p).is_absolute() {
+                PathBuf::from(p)
+            } else {
+                ctx.workspace_root.join(p)
+            }
+        } else if !ctx.workspace_root.as_os_str().is_empty() {
+            ctx.workspace_root.clone()
+        } else {
+            #[cfg(target_os = "windows")]
+            { PathBuf::from("C:\\") }
+            #[cfg(not(target_os = "windows"))]
+            { PathBuf::from("/") }
+        };
 
         if !root.exists() {
             return Ok(ToolResult::err(format!(

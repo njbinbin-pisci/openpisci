@@ -35,7 +35,7 @@ impl Tool for FileListTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Directory path to list. Defaults to C:\\ on Windows."
+                    "description": "Directory path to list. Relative paths are resolved from workspace root (e.g. 'src' lists the src/ directory inside the workspace). Defaults to workspace root if omitted."
                 },
                 "recursive": {
                     "type": "boolean",
@@ -62,13 +62,17 @@ impl Tool for FileListTool {
         true
     }
 
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
+    async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let path_str = match input["path"].as_str() {
             Some(p) => p,
             None => return Ok(ToolResult::err("Missing required parameter: path")),
         };
 
-        let path = std::path::PathBuf::from(path_str);
+        let path = if std::path::Path::new(path_str).is_absolute() {
+            std::path::PathBuf::from(path_str)
+        } else {
+            ctx.workspace_root.join(path_str)
+        };
         if !path.exists() {
             return Ok(ToolResult::err(format!(
                 "Path does not exist: {}",

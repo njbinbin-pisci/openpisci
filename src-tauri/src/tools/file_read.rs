@@ -17,9 +17,9 @@ impl Tool for FileReadTool {
     fn description(&self) -> &str {
         "Read the contents of a known file. Returns text with line numbers, or base64 for images. \
          IMPORTANT: This tool reads FILE CONTENT only — do NOT use it to list directory contents. \
-         To list files in a directory, use: shell with interpreter=cmd, command='dir C:\\SomePath /b'. \
+         To list files in a directory, use file_list or shell with 'dir C:\\SomePath /b'. \
          If you get 'permission denied', use shell with 'Get-Content \"path\"' or 'type \"path\"' instead. \
-         Always use absolute paths (e.g. C:\\Users\\name\\file.txt). \
+         Paths: relative paths (e.g. src/auth/auth.service.ts) are resolved from workspace root — prefer relative paths when reading files inside the workspace. \
          Use offset/limit for large files to avoid reading the whole file at once."
     }
 
@@ -29,7 +29,7 @@ impl Tool for FileReadTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Absolute path to the file (e.g. C:\\Users\\name\\file.txt). Relative paths are resolved from workspace root."
+                    "description": "Path to the file. Relative paths (e.g. src/auth/auth.service.ts) are resolved from workspace root — prefer relative paths when working inside the workspace. Use absolute paths for files outside the workspace."
                 },
                 "offset": {
                     "type": "integer",
