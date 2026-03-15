@@ -318,6 +318,12 @@ export default function Chat() {
   // Tool steps panel: open while running, auto-close when agent finishes
   const [stepsOpen, setStepsOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(true);
+
+  // Plan resume dialog: shown when user sends a message while unfinished todos exist
+  const [planResumeDialog, setPlanResumeDialog] = useState<{
+    pendingContent: string;
+    pendingAttachment: import("../../services/tauri").ChatAttachment | null;
+  } | null>(null);
   const prevRunningRef = useRef(false);
   useEffect(() => {
     if (running && !prevRunningRef.current) {
@@ -793,18 +799,18 @@ export default function Chat() {
     setIsDragging(false);
   }, []);
 
-  const handleSend = useCallback(async () => {
-    if ((!input.trim() && !attachment) || !activeSessionId || running) return;
+  // Core send logic, called after plan-resume decision is made.
+  // clearPlan=true: clear existing plan before this turn (default / new task)
+  // clearPlan=false: keep existing plan (user chose to continue previous tasks)
+  const doSend = useCallback(async (
+    content: string,
+    pendingAttachment: import("../../services/tauri").ChatAttachment | null,
+    clearPlan: boolean,
+  ) => {
+    if (!activeSessionId) return;
 
-    const content = input.trim();
-    setInput("");
-    setSendError(null);
-    const pendingAttachment = attachment;
-    clearAttachment();
-
-    // Clear tool steps and any residual streaming text from the previous turn
     dispatch(chatActions.clearToolSteps(activeSessionId));
-    dispatch(chatActions.clearPlan(activeSessionId));
+    if (clearPlan) dispatch(chatActions.clearPlan(activeSessionId));
     dispatch(chatActions.clearStreaming(activeSessionId));
 
     // Auto-title: if this is the first message in the session, derive a title from it
@@ -825,7 +831,6 @@ export default function Chat() {
         : `📎 ${pendingAttachment.filename ?? pendingAttachment.path ?? t("chat.attachment")}`
       : content;
 
-    // Optimistically add user message (id prefixed with "optimistic_" so it can be removed on reload)
     dispatch(chatActions.appendMessage({
       sessionId: activeSessionId,
       message: {
@@ -840,14 +845,35 @@ export default function Chat() {
     dispatch(chatActions.setRunning({ sessionId: activeSessionId, running: true }));
 
     try {
-      await chatApi.send(activeSessionId, content, pendingAttachment ?? undefined);
+      await chatApi.send(activeSessionId, content, pendingAttachment ?? undefined, clearPlan);
     } catch (e) {
       console.error('[Chat] send error:', e);
       dispatch(chatActions.setRunning({ sessionId: activeSessionId, running: false }));
       dispatch(chatActions.clearStreaming(activeSessionId));
       setSendError(`${e}`);
     }
-  }, [input, attachment, activeSessionId, running, activeSession, dispatch, clearAttachment, t]);
+  }, [activeSessionId, messagesBySession, dispatch, t]);
+
+  const handleSend = useCallback(async () => {
+    if ((!input.trim() && !attachment) || !activeSessionId || running) return;
+
+    const content = input.trim();
+    setInput("");
+    setSendError(null);
+    const pendingAttachment = attachment;
+    clearAttachment();
+
+    // Check if there are unfinished todos — if so, ask the user what to do
+    const unfinished = activePlan.filter(
+      (item) => item.status === "pending" || item.status === "in_progress"
+    );
+    if (unfinished.length > 0) {
+      setPlanResumeDialog({ pendingContent: content, pendingAttachment });
+      return;
+    }
+
+    await doSend(content, pendingAttachment, true);
+  }, [input, attachment, activeSessionId, running, activePlan, doSend, clearAttachment]);
 
   const handleCancel = useCallback(() => {
     if (activeSessionId) {
@@ -1446,6 +1472,77 @@ export default function Chat() {
         onConfirm={confirmDeleteSession}
         onCancel={() => !deletingSession && setDeleteTarget(null)}
       />
+
+      {/* Plan resume dialog — shown when user sends a message while unfinished todos exist */}
+      {planResumeDialog && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+          onClick={() => setPlanResumeDialog(null)}
+        >
+          <div
+            style={{
+              background: "var(--bg-primary)", borderRadius: 12,
+              padding: "24px 28px", maxWidth: 420, width: "90%",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+              border: "1px solid var(--border)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 10 }}>
+              {t("chat.planResumeTitle")}
+            </div>
+            <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 20, lineHeight: 1.5 }}>
+              {t("chat.planResumeMessage", {
+                count: activePlan.filter(i => i.status === "pending" || i.status === "in_progress").length
+              })}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button
+                onClick={async () => {
+                  const { pendingContent, pendingAttachment } = planResumeDialog;
+                  setPlanResumeDialog(null);
+                  await doSend(pendingContent, pendingAttachment, false);
+                }}
+                style={{
+                  padding: "8px 16px", fontSize: 13, fontWeight: 600,
+                  background: "var(--accent)", color: "#fff",
+                  border: "none", borderRadius: 6, cursor: "pointer", textAlign: "left",
+                }}
+              >
+                {t("chat.planResumeContinue")}
+              </button>
+              <button
+                onClick={async () => {
+                  const { pendingContent, pendingAttachment } = planResumeDialog;
+                  setPlanResumeDialog(null);
+                  await doSend(pendingContent, pendingAttachment, true);
+                }}
+                style={{
+                  padding: "8px 16px", fontSize: 13, fontWeight: 600,
+                  background: "#dc3545", color: "#fff",
+                  border: "none", borderRadius: 6, cursor: "pointer", textAlign: "left",
+                }}
+              >
+                {t("chat.planResumeClear")}
+              </button>
+              <button
+                onClick={() => setPlanResumeDialog(null)}
+                style={{
+                  padding: "8px 16px", fontSize: 13,
+                  background: "var(--bg-secondary)", color: "var(--text-secondary)",
+                  border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", textAlign: "left",
+                }}
+              >
+                {t("chat.planResumeCancelSend")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

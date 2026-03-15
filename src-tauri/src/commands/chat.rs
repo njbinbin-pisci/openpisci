@@ -105,6 +105,9 @@ pub async fn chat_send(
     session_id: String,
     content: String,
     attachment: Option<FrontendAttachment>,
+    // If false, preserve the existing plan (continue previous tasks).
+    // If true or None (default), clear the plan before starting a new turn.
+    clear_plan: Option<bool>,
 ) -> Result<(), String> {
     tracing::info!(
         "chat_send called: session={} content_len={} has_attachment={}",
@@ -271,7 +274,8 @@ pub async fn chat_send(
         };
 
     // Save user message to DB (use effective_content which may include file path annotation)
-    {
+    // clear_plan defaults to true; pass false to preserve an existing plan (continue previous tasks).
+    if clear_plan.unwrap_or(true) {
         let mut plans = state.plan_state.lock().await;
         plans.remove(&session_id);
     }

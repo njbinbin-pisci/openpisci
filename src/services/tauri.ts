@@ -279,8 +279,8 @@ export interface ChatAttachment {
 }
 
 export const chatApi = {
-  send: (sessionId: string, content: string, attachment?: ChatAttachment) =>
-    invoke<void>("chat_send", { sessionId, content, attachment: attachment ?? null }),
+  send: (sessionId: string, content: string, attachment?: ChatAttachment, clearPlan?: boolean) =>
+    invoke<void>("chat_send", { sessionId, content, attachment: attachment ?? null, clearPlan: clearPlan ?? true }),
   cancel: (sessionId: string) =>
     invoke<void>("chat_cancel", { sessionId }),
   onEvent: (sessionId: string, handler: (event: AgentEventType) => void): Promise<UnlistenFn> =>
