@@ -1,7 +1,7 @@
 [package]
 name = "pisci-desktop"
-version = "0.5.8"
-description = "OpenPisci — Open-source Windows AI Agent Desktop"
+version = "0.5.9"
+description = "OpenPisci �?Open-source Windows AI Agent Desktop"
 authors = ["Pisci Team"]
 license = "Apache-2.0"
 edition = "2021"
@@ -29,7 +29,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["full"] }
 futures = "0.3"
 
-# HTTP client (LLM API calls) — use rustls to avoid openssl dependency
+# HTTP client (LLM API calls) �?use rustls to avoid openssl dependency
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "multipart"], default-features = false }
 
 # WebSocket client for Feishu long connection
@@ -41,7 +41,7 @@ serde_json = "1"
 serde_yaml = "0.9"
 toml = "0.8"
 
-# SQLite (bundled — no external dll needed)
+# SQLite (bundled �?no external dll needed)
 rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Cron scheduling
@@ -78,7 +78,7 @@ imap = "2.4.1"
 native-tls = "0.2"
 mailparse = "0.15"
 
-# SSH client — use ring backend to avoid NASM dependency on Windows
+# SSH client �?use ring backend to avoid NASM dependency on Windows
 russh = { version = "0.57", default-features = false, features = ["ring"] }
 
 # PDF read/write
