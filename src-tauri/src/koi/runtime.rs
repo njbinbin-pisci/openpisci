@@ -273,7 +273,8 @@ impl KoiRuntime {
             // to this todo instead of writing a duplicate empty message.
             if success && raw_reply.trim().is_empty() {
                 // Look for the latest result message from this Koi that is not yet linked to a todo
-                let existing_id = db.get_latest_unlinked_result_message_id(psid, koi_id)
+                let existing_id = db
+                    .get_latest_unlinked_result_message_id(psid, koi_id)
                     .unwrap_or_default();
                 if let Some(msg_id) = existing_id {
                     // Link the existing message to this todo
@@ -290,7 +291,11 @@ impl KoiRuntime {
                 } else {
                     raw_reply.clone()
                 };
-                let event_type = if success { "task_completed" } else { "task_failed" };
+                let event_type = if success {
+                    "task_completed"
+                } else {
+                    "task_failed"
+                };
                 let msg = db.insert_pool_message_ext(
                     psid,
                     koi_id,
@@ -507,7 +512,11 @@ impl KoiRuntime {
                 } else {
                     settings.allow_outside_workspace // no project context: inherit global
                 };
-                (ws, allow_out, Arc::new(ToolSettings::from_settings(&settings)))
+                (
+                    ws,
+                    allow_out,
+                    Arc::new(ToolSettings::from_settings(&settings)),
+                )
             };
 
             // Create notification channel and register in global session registry.

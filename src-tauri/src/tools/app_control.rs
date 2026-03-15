@@ -1992,14 +1992,29 @@ impl AppControlTool {
         if kois.is_empty() {
             return Ok(ToolResult::ok("No Koi agents configured yet."));
         }
-        let lines: Vec<String> = kois.iter().map(|k| {
-            format!(
-                "ID: {}\n  Name: {} {}\n  Role: {}\n  Status: {}\n  Description: {}",
-                k.id, k.icon, k.name, k.role, k.status,
-                if k.description.is_empty() { "(none)" } else { &k.description }
-            )
-        }).collect();
-        Ok(ToolResult::ok(format!("Koi agents ({}):\n\n{}", kois.len(), lines.join("\n\n"))))
+        let lines: Vec<String> = kois
+            .iter()
+            .map(|k| {
+                format!(
+                    "ID: {}\n  Name: {} {}\n  Role: {}\n  Status: {}\n  Description: {}",
+                    k.id,
+                    k.icon,
+                    k.name,
+                    k.role,
+                    k.status,
+                    if k.description.is_empty() {
+                        "(none)"
+                    } else {
+                        &k.description
+                    }
+                )
+            })
+            .collect();
+        Ok(ToolResult::ok(format!(
+            "Koi agents ({}):\n\n{}",
+            kois.len(),
+            lines.join("\n\n")
+        )))
     }
 
     async fn koi_create(&self, input: &Value) -> anyhow::Result<ToolResult> {
@@ -2011,20 +2026,34 @@ impl AppControlTool {
             Some(r) => r.trim().to_string(),
             None => return Ok(ToolResult::err("'role' is required for koi_create")),
         };
-        let system_prompt = match input["system_prompt"].as_str().filter(|s| !s.trim().is_empty()) {
+        let system_prompt = match input["system_prompt"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+        {
             Some(p) => p.trim().to_string(),
-            None => return Ok(ToolResult::err("'system_prompt' is required for koi_create")),
+            None => {
+                return Ok(ToolResult::err(
+                    "'system_prompt' is required for koi_create",
+                ))
+            }
         };
         let icon = input["icon"].as_str().unwrap_or("🐟").to_string();
         let description = input["description"].as_str().unwrap_or("").to_string();
 
         // Pick a default color if not provided
-        let color = input["color"].as_str().unwrap_or_else(|| {
-            // Cycle through a palette based on name hash
-            let palette = ["#22c55e","#3b82f6","#f59e0b","#ec4899","#8b5cf6","#06b6d4","#ef4444","#84cc16"];
-            let idx = name.bytes().fold(0usize, |a, b| a.wrapping_add(b as usize)) % palette.len();
-            palette[idx]
-        }).to_string();
+        let color = input["color"]
+            .as_str()
+            .unwrap_or_else(|| {
+                // Cycle through a palette based on name hash
+                let palette = [
+                    "#22c55e", "#3b82f6", "#f59e0b", "#ec4899", "#8b5cf6", "#06b6d4", "#ef4444",
+                    "#84cc16",
+                ];
+                let idx =
+                    name.bytes().fold(0usize, |a, b| a.wrapping_add(b as usize)) % palette.len();
+                palette[idx]
+            })
+            .to_string();
 
         let db = self.db.lock().await;
         let existing = db.list_kois().map_err(|e| anyhow::anyhow!(e))?;
@@ -2032,16 +2061,29 @@ impl AppControlTool {
         if existing.len() >= MAX_KOIS {
             return Ok(ToolResult::err(format!(
                 "Koi limit reached ({}/{}). Delete an existing Koi before creating a new one.",
-                existing.len(), MAX_KOIS
+                existing.len(),
+                MAX_KOIS
             )));
         }
 
-        let koi = db.create_koi(&name, &role, &icon, &color, &system_prompt, &description, None)
+        let koi = db
+            .create_koi(
+                &name,
+                &role,
+                &icon,
+                &color,
+                &system_prompt,
+                &description,
+                None,
+            )
             .map_err(|e| anyhow::anyhow!(e))?;
 
         // Notify frontend
         if let Some(app) = &self.app_handle {
-            let _ = app.emit("koi_created", serde_json::json!({ "id": koi.id, "name": koi.name }));
+            let _ = app.emit(
+                "koi_created",
+                serde_json::json!({ "id": koi.id, "name": koi.name }),
+            );
         }
 
         Ok(ToolResult::ok(format!(

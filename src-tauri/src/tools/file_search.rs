@@ -104,9 +104,13 @@ impl Tool for FileSearchTool {
             ctx.workspace_root.clone()
         } else {
             #[cfg(target_os = "windows")]
-            { PathBuf::from("C:\\") }
+            {
+                PathBuf::from("C:\\")
+            }
             #[cfg(not(target_os = "windows"))]
-            { PathBuf::from("/") }
+            {
+                PathBuf::from("/")
+            }
         };
 
         if !root.exists() {

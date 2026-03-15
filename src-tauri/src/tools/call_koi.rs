@@ -706,7 +706,8 @@ impl CallKoiTool {
                             .map(|m| m == reply)
                             .unwrap_or(false);
                         if !already_recorded {
-                            let _ = db.insert_pool_message(pool_sid, &koi_id, &reply, "result", "{}");
+                            let _ =
+                                db.insert_pool_message(pool_sid, &koi_id, &reply, "result", "{}");
                         }
                     }
                 }

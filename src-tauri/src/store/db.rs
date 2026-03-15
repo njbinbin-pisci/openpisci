@@ -2490,14 +2490,18 @@ impl Database {
     }
 
     /// Return all todos for a pool that are in active states (todo / in_progress / blocked).
-    pub fn list_active_todos_by_pool(&self, pool_session_id: &str) -> Result<Vec<crate::koi::KoiTodo>> {
+    pub fn list_active_todos_by_pool(
+        &self,
+        pool_session_id: &str,
+    ) -> Result<Vec<crate::koi::KoiTodo>> {
         let sql = format!(
             "SELECT {} FROM koi_todos WHERE pool_session_id = ?1 AND status IN ('todo','in_progress','blocked') ORDER BY created_at DESC",
             Self::KOI_TODO_COLS
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![pool_session_id], Self::map_koi_todo)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn update_pool_session_status(&self, id: &str, status: &str) -> Result<()> {

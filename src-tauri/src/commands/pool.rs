@@ -201,10 +201,7 @@ pub async fn cancel_koi_task(
 /// - Resets in_progress todos back to "todo" so they can be resumed later
 /// - Posts a system message in the pool chat
 #[tauri::command]
-pub async fn pause_pool_session(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn pause_pool_session(state: State<'_, AppState>, id: String) -> Result<(), String> {
     // 1. Update pool status
     {
         let db = state.db.lock().await;
@@ -232,7 +229,8 @@ pub async fn pause_pool_session(
     // 3. Reset in_progress todos back to "todo"
     {
         let db = state.db.lock().await;
-        let active_todos = db.list_active_todos_by_pool(&id)
+        let active_todos = db
+            .list_active_todos_by_pool(&id)
             .map_err(|e| e.to_string())?;
         for todo in active_todos.iter().filter(|t| t.status == "in_progress") {
             let _ = db.update_koi_todo(&todo.id, None, None, Some("todo"), None);
@@ -251,7 +249,10 @@ pub async fn pause_pool_session(
         );
     }
 
-    let _ = state.app_handle.emit("pool_session_updated", serde_json::json!({ "id": id, "status": "paused" }));
+    let _ = state.app_handle.emit(
+        "pool_session_updated",
+        serde_json::json!({ "id": id, "status": "paused" }),
+    );
     Ok(())
 }
 
@@ -275,13 +276,9 @@ pub async fn resume_pool_session(
     let resume_msg = "▶ 项目已被用户恢复。@pisci 请检查待办任务并继续协调。".to_string();
     {
         let db = state.db.lock().await;
-        let msg = db.insert_pool_message(
-            &id,
-            "system",
-            &resume_msg,
-            "status_update",
-            "{}",
-        ).map_err(|e| e.to_string())?;
+        let msg = db
+            .insert_pool_message(&id, "system", &resume_msg, "status_update", "{}")
+            .map_err(|e| e.to_string())?;
         drop(db);
         let event_name = format!("pool_message_{}", id);
         let _ = state.app_handle.emit(&event_name, &msg);
@@ -293,10 +290,15 @@ pub async fn resume_pool_session(
     let pool_id = id.clone();
     tokio::spawn(async move {
         let runtime = KoiRuntime::from_tauri(app_clone, db_arc);
-        let _ = runtime.handle_mention("system", &pool_id, &resume_msg).await;
+        let _ = runtime
+            .handle_mention("system", &pool_id, &resume_msg)
+            .await;
     });
 
-    let _ = state.app_handle.emit("pool_session_updated", serde_json::json!({ "id": id, "status": "active" }));
+    let _ = state.app_handle.emit(
+        "pool_session_updated",
+        serde_json::json!({ "id": id, "status": "active" }),
+    );
     Ok(())
 }
 
@@ -305,10 +307,7 @@ pub async fn resume_pool_session(
 /// - Sets pool status to "archived"
 /// - Posts a system message
 #[tauri::command]
-pub async fn archive_pool_session(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn archive_pool_session(state: State<'_, AppState>, id: String) -> Result<(), String> {
     // 1. Cancel all running tasks
     {
         let flags = state.cancel_flags.lock().await;
@@ -338,7 +337,10 @@ pub async fn archive_pool_session(
         );
     }
 
-    let _ = state.app_handle.emit("pool_session_updated", serde_json::json!({ "id": id, "status": "archived" }));
+    let _ = state.app_handle.emit(
+        "pool_session_updated",
+        serde_json::json!({ "id": id, "status": "archived" }),
+    );
     Ok(())
 }
 
