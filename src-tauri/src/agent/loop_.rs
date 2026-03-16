@@ -957,13 +957,14 @@ impl AgentLoop {
                 }
             }
 
-            // Dynamic compaction: keep context within budget.
+            // Dynamic compaction (Level-1): trim oversized individual tool results.
+            // single_limit is in chars (not tokens): budget tokens × share × ~4 chars/token.
+            // Bug fix: previously multiplied by 4 again, making the limit 4× too large.
             {
                 let budget =
                     crate::llm::compute_context_budget(self.context_window, self.max_tokens);
-                let single_limit =
-                    (budget as f64 * crate::agent::loop_::CONTEXT_SINGLE_RESULT_SHARE) as usize * 4;
-                // Level-1: trim oversized individual tool results
+                // single_limit in chars: budget_tokens × share × 4 chars/token
+                let single_limit = (budget as f64 * CONTEXT_SINGLE_RESULT_SHARE * 4.0) as usize;
                 compact_trim_tool_results(&mut messages, single_limit);
             }
 
@@ -981,33 +982,36 @@ impl AgentLoop {
                 })
                 .await;
 
-            // Build request
-            let req_messages = vision::inject_selected_context(&messages, &ctx.session_id).await;
-            let build_req = |model: String| LlmRequest {
-                messages: req_messages.clone(),
-                system: Some(self.system_prompt.clone()),
-                tools: self.registry.to_tool_defs(),
-                model,
-                max_tokens: self.max_tokens,
-                stream: true,
-                vision_override: self.vision_override,
-            };
-
             // Call LLM with exponential-backoff retry for transient failures,
-            // model fallback for rate_limit/overloaded/model_not_found errors,
+            // model fallback for rate_limit/model_not_found errors,
             // and level-2 LLM summarisation for context overflow errors.
+            //
+            // req_messages is rebuilt inside the loop so that after compact_summarise
+            // updates `messages`, the next attempt uses the compacted context.
             info!("calling LLM: model={}", self.model);
             let response = {
-                // Build the ordered list of models to try: primary first, then fallbacks.
-                let mut models_to_try: Vec<String> = std::iter::once(self.model.clone())
+                let models_to_try: Vec<String> = std::iter::once(self.model.clone())
                     .chain(self.fallback_models.iter().cloned())
                     .collect();
                 let mut last_err: Option<anyhow::Error> = None;
                 let mut resp: Option<crate::llm::LlmResponse> = None;
                 let mut context_overflow_attempted = false;
 
-                'model_loop: for model_candidate in &models_to_try.clone() {
-                    let req = build_req(model_candidate.clone());
+                'model_loop: for model_candidate in &models_to_try {
+                    // Build req_messages inside the model loop so that after
+                    // compact_summarise updates `messages`, we use the fresh context.
+                    let req_messages =
+                        vision::inject_selected_context(&messages, &ctx.session_id).await;
+                    let req = LlmRequest {
+                        messages: req_messages,
+                        system: Some(self.system_prompt.clone()),
+                        tools: self.registry.to_tool_defs(),
+                        model: model_candidate.clone(),
+                        max_tokens: self.max_tokens,
+                        stream: true,
+                        vision_override: self.vision_override,
+                    };
+
                     for attempt in 0..LLM_MAX_RETRIES {
                         match self.client.complete(req.clone()).await {
                             Ok(r) => {
@@ -1026,13 +1030,13 @@ impl AgentLoop {
 
                                 if is_context_overflow_error(&msg) && !context_overflow_attempted {
                                     context_overflow_attempted = true;
-                                    // Level-2: LLM summarisation of old messages
                                     let budget = crate::llm::compute_context_budget(
                                         self.context_window,
                                         self.max_tokens,
                                     );
+                                    // keep_chars: newest 60% of budget in chars
                                     let keep_chars =
-                                        (budget as f64 * SUMMARY_KEEP_RECENT_RATIO) as usize * 4;
+                                        (budget as f64 * SUMMARY_KEEP_RECENT_RATIO * 4.0) as usize;
                                     warn!("context overflow — attempting LLM summarisation (keep_chars={})", keep_chars);
                                     if let Some(compacted) = compact_summarise(
                                         messages.clone(),
@@ -1049,16 +1053,20 @@ impl AgentLoop {
                                             messages.len()
                                         );
                                     }
-                                    // Retry immediately with the compacted context
+                                    // Restart model_loop with fresh req_messages built
+                                    // from the now-compacted messages.
                                     last_err = Some(e);
-                                    break; // break inner retry loop → retry model_loop iteration
+                                    continue 'model_loop;
                                 } else if is_fallback_eligible_error(&msg) {
-                                    // Don't retry the same model; try the next fallback
+                                    // rate_limit / model_not_found: try next fallback model.
+                                    // overloaded is intentionally excluded — it should be
+                                    // retried with backoff on the same model.
                                     last_err = Some(e);
                                     break;
                                 } else {
                                     let is_transient = msg.contains("timeout")
                                         || msg.contains("connection")
+                                        || msg.contains("overloaded")
                                         || msg.contains("502")
                                         || msg.contains("503")
                                         || msg.contains("529");
@@ -1074,8 +1082,6 @@ impl AgentLoop {
                         }
                     }
                 }
-                // Suppress unused-variable warning for models_to_try
-                let _ = &mut models_to_try;
                 match resp {
                     Some(r) => r,
                     None => {
