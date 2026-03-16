@@ -364,12 +364,21 @@ fn dynamic_result_limit(context_window_tokens: usize) -> usize {
 
 const CTX_TRIM_HEAD: usize = 1_000; // chars to keep from the start of a tool result
 const CTX_TRIM_TAIL: usize = 300; // chars to keep from the end of a tool result
-const CTX_TRIM_THRESHOLD: usize = CTX_TRIM_HEAD + CTX_TRIM_TAIL + 100; // only trim if longer
+/// Minimum chars a tool result must exceed before it is eligible for trimming.
+/// Prevents trimming results that are already small enough to be useful in full.
+const CTX_TRIM_MIN_SIZE: usize = CTX_TRIM_HEAD + CTX_TRIM_TAIL + 100;
 const SUMMARY_KEEP_RECENT_RATIO: f64 = 0.60; // keep newest 60% of budget intact
 
 /// Level-1 compaction: trim oversized individual tool results (head + tail).
-/// Returns true if any message was modified.
+///
+/// A result is trimmed when it exceeds BOTH `single_limit` (the per-result share
+/// of the context budget) AND `CTX_TRIM_MIN_SIZE` (the absolute minimum worth
+/// trimming). Using `min` ensures we never trim a result that is already within
+/// the budget share, and never trim one that is too small to benefit from it.
 fn compact_trim_tool_results(messages: &mut Vec<LlmMessage>, single_limit: usize) -> bool {
+    // Effective threshold: trim only if the result exceeds the budget share AND
+    // is large enough that trimming makes sense (> head + tail + 100 chars).
+    let trim_threshold = single_limit.max(CTX_TRIM_MIN_SIZE);
     let mut changed = false;
     for msg in messages.iter_mut() {
         if msg.role != "user" {
@@ -378,13 +387,13 @@ fn compact_trim_tool_results(messages: &mut Vec<LlmMessage>, single_limit: usize
         if let MessageContent::Blocks(ref mut blocks) = msg.content {
             for block in blocks.iter_mut() {
                 if let ContentBlock::ToolResult { content, .. } = block {
-                    let len = content.chars().count();
-                    if len > single_limit.max(CTX_TRIM_THRESHOLD) {
-                        let head: String = content.chars().take(CTX_TRIM_HEAD).collect();
-                        let tail: String = content
-                            .chars()
-                            .skip(len.saturating_sub(CTX_TRIM_TAIL))
-                            .collect();
+                    // Collect chars once to avoid O(n) traversal three times.
+                    let chars: Vec<char> = content.chars().collect();
+                    let len = chars.len();
+                    if len > trim_threshold {
+                        let head: String = chars[..CTX_TRIM_HEAD].iter().collect();
+                        let tail_start = len.saturating_sub(CTX_TRIM_TAIL);
+                        let tail: String = chars[tail_start..].iter().collect();
                         let removed = len - CTX_TRIM_HEAD - CTX_TRIM_TAIL;
                         *content =
                             format!("{}\n... [{} chars removed] ...\n{}", head, removed, tail);
@@ -409,20 +418,31 @@ async fn compact_summarise(
     model: &str,
     max_tokens: u32,
 ) -> Option<Vec<LlmMessage>> {
-    // Walk from the end, accumulating estimated chars until we hit keep_chars.
-    // Everything before that boundary gets summarised.
+    if messages.len() < 2 {
+        // Nothing meaningful to summarise if there are fewer than 2 messages.
+        return None;
+    }
+
+    // Walk from the end, accumulating estimated chars until we exceed keep_chars.
+    // Everything before the boundary index gets summarised.
+    // We always keep at least the last 2 messages intact so the LLM has immediate
+    // context regardless of how large they are.
     let mut acc = 0usize;
-    let mut split_idx = 0usize;
+    // Default: summarise everything except the last 2 messages.
+    let mut split_idx = messages.len().saturating_sub(2);
     for (i, msg) in messages.iter().enumerate().rev() {
         let chars = crate::llm::estimate_tokens(&msg.content.as_text()) * 4;
-        if acc + chars > keep_chars && i < messages.len().saturating_sub(2) {
-            split_idx = i + 1;
+        acc += chars;
+        // Once the tail accumulation exceeds keep_chars, everything before
+        // index i belongs to the "old" region to be summarised.
+        if acc >= keep_chars && i > 0 {
+            split_idx = i;
             break;
         }
-        acc += chars;
     }
 
     if split_idx == 0 {
+        // All messages fit within keep_chars — nothing to summarise.
         return None;
     }
 
@@ -466,7 +486,9 @@ async fn compact_summarise(
         system: None,
         tools: vec![],
         model: model.to_string(),
-        max_tokens: max_tokens.min(1024),
+        // Use at least 512 tokens for the summary regardless of the main model's
+        // max_tokens setting, capped at 1024 to avoid wasting quota on a summary.
+        max_tokens: max_tokens.max(512).min(1024),
         stream: false,
         vision_override: Some(false),
     };
@@ -502,12 +524,14 @@ fn is_context_overflow_error(msg: &str) -> bool {
         || lower.contains("reduce the length")
 }
 
-/// Returns true if the error indicates the model is unavailable and a fallback may help.
+/// Returns true if the error indicates the model is permanently unavailable
+/// and a fallback model should be tried instead.
+/// Note: "overloaded" is intentionally excluded — it is transient and should
+/// be retried with exponential backoff on the same model, not switched away from.
 fn is_fallback_eligible_error(msg: &str) -> bool {
     let lower = msg.to_lowercase();
     lower.contains("rate_limit")
         || lower.contains("rate limit")
-        || lower.contains("overloaded")
         || lower.contains("model_not_found")
         || lower.contains("model not found")
         || lower.contains("does not exist")

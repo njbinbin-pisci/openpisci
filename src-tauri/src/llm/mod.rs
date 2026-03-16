@@ -150,7 +150,11 @@ pub trait LlmClient: Send + Sync {
 
 /// Estimate the number of tokens in a string.
 /// CJK characters count as 1 token each; other characters count as 1 token per 4 chars.
+/// Returns 0 for empty strings.
 pub fn estimate_tokens(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
     let mut cjk_count = 0usize;
     let mut ascii_count = 0usize;
     for ch in text.chars() {
