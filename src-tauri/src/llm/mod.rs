@@ -144,6 +144,51 @@ pub trait LlmClient: Send + Sync {
     async fn complete(&self, req: LlmRequest) -> Result<LlmResponse>;
 }
 
+// ---------------------------------------------------------------------------
+// Token estimation helpers
+// ---------------------------------------------------------------------------
+
+/// Estimate the number of tokens in a string.
+/// CJK characters count as 1 token each; other characters count as 1 token per 4 chars.
+pub fn estimate_tokens(text: &str) -> usize {
+    let mut cjk_count = 0usize;
+    let mut ascii_count = 0usize;
+    for ch in text.chars() {
+        let cp = ch as u32;
+        if (0x4E00..=0x9FFF).contains(&cp)
+            || (0x3400..=0x4DBF).contains(&cp)
+            || (0xF900..=0xFAFF).contains(&cp)
+            || (0x3000..=0x303F).contains(&cp)
+            || (0xFF00..=0xFFEF).contains(&cp)
+        {
+            cjk_count += 1;
+        } else {
+            ascii_count += 1;
+        }
+    }
+    cjk_count + (ascii_count / 4).max(1)
+}
+
+/// Compute the usable token budget from settings.
+///
+/// `context_window` is the user-configured input context limit (0 = auto).
+/// `max_tokens` is the max *output* tokens (used only for auto-fallback).
+///
+/// Budget = (context_window × 0.85) − 2000 (system prompt overhead)
+pub fn compute_context_budget(context_window: u32, max_tokens: u32) -> usize {
+    const SYSTEM_OVERHEAD: usize = 2_000;
+    let window = if context_window > 0 {
+        context_window as usize
+    } else {
+        match max_tokens {
+            t if t >= 8192 => 100_000,
+            t if t >= 4096 => 60_000,
+            _ => 30_000,
+        }
+    };
+    ((window as f64 * 0.85) as usize).saturating_sub(SYSTEM_OVERHEAD)
+}
+
 /// Build the appropriate client based on provider name
 pub fn build_client(provider: &str, api_key: &str, base_url: Option<&str>) -> Box<dyn LlmClient> {
     match provider {

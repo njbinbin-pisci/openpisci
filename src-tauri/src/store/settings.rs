@@ -119,6 +119,11 @@ pub struct Settings {
     /// Common values: 8192, 32768, 65536, 131072, 1000000
     #[serde(default)]
     pub context_window: u32,
+    /// Fallback models tried in order when the primary model fails with
+    /// rate_limit / overloaded / model_not_found errors.
+    /// Format: "provider/model" e.g. ["anthropic/claude-haiku-3-5", "openai/gpt-4o-mini"]
+    #[serde(default)]
+    pub fallback_models: Vec<String>,
     /// Whether to show permission dialogs for shell commands
     #[serde(default = "default_true")]
     pub confirm_shell_commands: bool,
@@ -421,6 +426,7 @@ impl Default for Settings {
             language: default_language(),
             max_tokens: default_max_tokens(),
             context_window: 0,
+            fallback_models: vec![],
             confirm_shell_commands: true,
             confirm_file_writes: true,
             browser_headless: true,

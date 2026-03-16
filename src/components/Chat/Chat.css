@@ -1106,3 +1106,15 @@
 .fish-status-done {
   color: var(--success, #4ade80);
 }
+.fish-progress-thinking {
+  width: 100%;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-tertiary, rgba(255,255,255,0.35));
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  padding-left: 20px;
+}

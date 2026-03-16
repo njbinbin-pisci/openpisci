@@ -42,7 +42,6 @@ const PING_PONG_CRITICAL: usize = 16;
 const TOOL_RESULT_HARD_MAX_CHARS: usize = 48_000;
 const CONTEXT_SINGLE_RESULT_SHARE: f64 = 0.5;
 const CHECKPOINT_MAX_BYTES: usize = 8_000_000;
-const MSG_COMPACT_AFTER_ITERATIONS: usize = 6;
 
 /// Tools that are known polling/status-checking tools. These get stricter
 /// no-progress detection (inspired by OpenClaw's known_poll_no_progress).
@@ -359,38 +358,159 @@ fn dynamic_result_limit(context_window_tokens: usize) -> usize {
 
 // ── In-memory Message Compaction ─────────────────────────────────────────────
 
-/// Compact older tool results in the in-memory messages to reduce token usage.
-/// Keeps the last `keep_recent` user-tool-result messages intact; older ones get
-/// their ToolResult content truncated to a short summary.
-/// Inspired by OpenClaw's tool-result-context-guard which replaces oldest results
-/// with "[compacted: tool output removed to free context]".
-fn compact_old_tool_results(messages: &mut [LlmMessage], keep_recent: usize) {
-    let tool_result_indices: Vec<usize> = messages.iter().enumerate()
-        .filter(|(_, m)| {
-            m.role == "user" && matches!(&m.content, MessageContent::Blocks(blocks) if blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })))
-        })
-        .map(|(i, _)| i)
-        .collect();
+// ---------------------------------------------------------------------------
+// Context compaction helpers
+// ---------------------------------------------------------------------------
 
-    if tool_result_indices.len() <= keep_recent {
-        return;
-    }
+const CTX_TRIM_HEAD: usize = 1_000; // chars to keep from the start of a tool result
+const CTX_TRIM_TAIL: usize = 300; // chars to keep from the end of a tool result
+const CTX_TRIM_THRESHOLD: usize = CTX_TRIM_HEAD + CTX_TRIM_TAIL + 100; // only trim if longer
+const SUMMARY_KEEP_RECENT_RATIO: f64 = 0.60; // keep newest 60% of budget intact
 
-    let compact_count = tool_result_indices.len() - keep_recent;
-    for &idx in tool_result_indices.iter().take(compact_count) {
-        if let MessageContent::Blocks(ref mut blocks) = messages[idx].content {
+/// Level-1 compaction: trim oversized individual tool results (head + tail).
+/// Returns true if any message was modified.
+fn compact_trim_tool_results(messages: &mut Vec<LlmMessage>, single_limit: usize) -> bool {
+    let mut changed = false;
+    for msg in messages.iter_mut() {
+        if msg.role != "user" {
+            continue;
+        }
+        if let MessageContent::Blocks(ref mut blocks) = msg.content {
             for block in blocks.iter_mut() {
                 if let ContentBlock::ToolResult { content, .. } = block {
-                    let original_len = content.chars().count();
-                    if original_len > 500 {
-                        let summary: String = content.chars().take(200).collect();
+                    let len = content.chars().count();
+                    if len > single_limit.max(CTX_TRIM_THRESHOLD) {
+                        let head: String = content.chars().take(CTX_TRIM_HEAD).collect();
+                        let tail: String = content
+                            .chars()
+                            .skip(len.saturating_sub(CTX_TRIM_TAIL))
+                            .collect();
+                        let removed = len - CTX_TRIM_HEAD - CTX_TRIM_TAIL;
                         *content =
-                            format!("{}... [compacted, was {} chars]", summary, original_len);
+                            format!("{}\n... [{} chars removed] ...\n{}", head, removed, tail);
+                        changed = true;
                     }
                 }
             }
         }
     }
+    changed
+}
+
+/// Level-2 compaction: call LLM to summarise old messages.
+///
+/// Keeps the newest `keep_chars` worth of messages intact and summarises
+/// everything older into a single user message prepended to the list.
+/// Returns the new message list, or None if there was nothing to summarise.
+async fn compact_summarise(
+    messages: Vec<LlmMessage>,
+    keep_chars: usize,
+    client: &dyn crate::llm::LlmClient,
+    model: &str,
+    max_tokens: u32,
+) -> Option<Vec<LlmMessage>> {
+    // Walk from the end, accumulating estimated chars until we hit keep_chars.
+    // Everything before that boundary gets summarised.
+    let mut acc = 0usize;
+    let mut split_idx = 0usize;
+    for (i, msg) in messages.iter().enumerate().rev() {
+        let chars = crate::llm::estimate_tokens(&msg.content.as_text()) * 4;
+        if acc + chars > keep_chars && i < messages.len().saturating_sub(2) {
+            split_idx = i + 1;
+            break;
+        }
+        acc += chars;
+    }
+
+    if split_idx == 0 {
+        return None;
+    }
+
+    let old_msgs = &messages[..split_idx];
+    if old_msgs.is_empty() {
+        return None;
+    }
+
+    let history_text: String = old_msgs
+        .iter()
+        .map(|m| {
+            let role = if m.role == "user" {
+                "用户/工具结果"
+            } else {
+                "智能体"
+            };
+            let text = m.content.as_text();
+            let snippet = if text.chars().count() > 500 {
+                format!("{}...", text.chars().take(500).collect::<String>())
+            } else {
+                text
+            };
+            format!("[{}]: {}", role, snippet)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let summary_prompt = format!(
+        "请将以下对话历史压缩为一条简洁的摘要消息。\n\
+         格式：用户要求[用户请求摘要]，智能体已完成[已完成的工作摘要]，当前状态[未完成事项或中间状态]。\n\
+         保留关键文件路径、数据和结论，省略中间步骤细节。\n\n\
+         对话历史：\n{}",
+        history_text
+    );
+
+    let req = crate::llm::LlmRequest {
+        messages: vec![crate::llm::LlmMessage {
+            role: "user".into(),
+            content: crate::llm::MessageContent::text(&summary_prompt),
+        }],
+        system: None,
+        tools: vec![],
+        model: model.to_string(),
+        max_tokens: max_tokens.min(1024),
+        stream: false,
+        vision_override: Some(false),
+    };
+
+    match client.complete(req).await {
+        Ok(resp) if !resp.content.is_empty() => {
+            let summary_msg = crate::llm::LlmMessage {
+                role: "user".into(),
+                content: crate::llm::MessageContent::text(format!(
+                    "[对话摘要] {}",
+                    resp.content.trim()
+                )),
+            };
+            let mut new_messages = vec![summary_msg];
+            new_messages.extend_from_slice(&messages[split_idx..]);
+            Some(new_messages)
+        }
+        Ok(_) | Err(_) => None,
+    }
+}
+
+/// Returns true if the error message indicates a context overflow.
+fn is_context_overflow_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("context length exceeded")
+        || lower.contains("maximum context length")
+        || lower.contains("prompt is too long")
+        || lower.contains("exceeds model context window")
+        || lower.contains("context_window_exceeded")
+        || lower.contains("request_too_large")
+        || lower.contains("上下文过长")
+        || lower.contains("input is too long")
+        || lower.contains("reduce the length")
+}
+
+/// Returns true if the error indicates the model is unavailable and a fallback may help.
+fn is_fallback_eligible_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("rate_limit")
+        || lower.contains("rate limit")
+        || lower.contains("overloaded")
+        || lower.contains("model_not_found")
+        || lower.contains("model not found")
+        || lower.contains("does not exist")
 }
 
 pub struct AgentLoop {
@@ -400,6 +520,12 @@ pub struct AgentLoop {
     pub system_prompt: String,
     pub model: String,
     pub max_tokens: u32,
+    /// Input context window size in tokens (0 = auto, derived from max_tokens).
+    /// Used for dynamic compaction budget calculation.
+    pub context_window: u32,
+    /// Fallback models tried in order when the primary model fails with
+    /// rate_limit / overloaded / model_not_found errors.
+    pub fallback_models: Vec<String>,
     /// Optional database for audit logging
     pub db: Option<Arc<Mutex<Database>>>,
     /// App handle for emitting permission request events
@@ -831,9 +957,14 @@ impl AgentLoop {
                 }
             }
 
-            // Compact old tool results to keep memory and token usage bounded.
-            if _iteration >= MSG_COMPACT_AFTER_ITERATIONS {
-                compact_old_tool_results(&mut messages, 4);
+            // Dynamic compaction: keep context within budget.
+            {
+                let budget =
+                    crate::llm::compute_context_budget(self.context_window, self.max_tokens);
+                let single_limit =
+                    (budget as f64 * crate::agent::loop_::CONTEXT_SINGLE_RESULT_SHARE) as usize * 4;
+                // Level-1: trim oversized individual tool results
+                compact_trim_tool_results(&mut messages, single_limit);
             }
 
             info!(
@@ -852,51 +983,99 @@ impl AgentLoop {
 
             // Build request
             let req_messages = vision::inject_selected_context(&messages, &ctx.session_id).await;
-            let req = LlmRequest {
-                messages: req_messages,
+            let build_req = |model: String| LlmRequest {
+                messages: req_messages.clone(),
                 system: Some(self.system_prompt.clone()),
                 tools: self.registry.to_tool_defs(),
-                model: self.model.clone(),
+                model,
                 max_tokens: self.max_tokens,
                 stream: true,
                 vision_override: self.vision_override,
             };
 
-            // Call LLM with exponential-backoff retry for transient failures
+            // Call LLM with exponential-backoff retry for transient failures,
+            // model fallback for rate_limit/overloaded/model_not_found errors,
+            // and level-2 LLM summarisation for context overflow errors.
             info!("calling LLM: model={}", self.model);
             let response = {
-                let mut last_err = None;
-                let mut resp = None;
-                for attempt in 0..LLM_MAX_RETRIES {
-                    match self.client.complete(req.clone()).await {
-                        Ok(r) => {
-                            resp = Some(r);
-                            break;
-                        }
-                        Err(e) => {
-                            let msg = e.to_string();
-                            let is_transient = msg.contains("timeout")
-                                || msg.contains("connection")
-                                || msg.contains("502")
-                                || msg.contains("503")
-                                || msg.contains("529")
-                                || msg.contains("overloaded");
-                            warn!(
-                                "LLM call attempt {}/{} failed: {}",
-                                attempt + 1,
-                                LLM_MAX_RETRIES,
-                                msg
-                            );
-                            if !is_transient || attempt + 1 == LLM_MAX_RETRIES {
-                                last_err = Some(e);
-                                break;
+                // Build the ordered list of models to try: primary first, then fallbacks.
+                let mut models_to_try: Vec<String> = std::iter::once(self.model.clone())
+                    .chain(self.fallback_models.iter().cloned())
+                    .collect();
+                let mut last_err: Option<anyhow::Error> = None;
+                let mut resp: Option<crate::llm::LlmResponse> = None;
+                let mut context_overflow_attempted = false;
+
+                'model_loop: for model_candidate in &models_to_try.clone() {
+                    let req = build_req(model_candidate.clone());
+                    for attempt in 0..LLM_MAX_RETRIES {
+                        match self.client.complete(req.clone()).await {
+                            Ok(r) => {
+                                resp = Some(r);
+                                break 'model_loop;
                             }
-                            let backoff = std::time::Duration::from_secs(1 << attempt);
-                            tokio::time::sleep(backoff).await;
-                            last_err = Some(e);
+                            Err(e) => {
+                                let msg = e.to_string();
+                                warn!(
+                                    "LLM call attempt {}/{} model={} failed: {}",
+                                    attempt + 1,
+                                    LLM_MAX_RETRIES,
+                                    model_candidate,
+                                    msg
+                                );
+
+                                if is_context_overflow_error(&msg) && !context_overflow_attempted {
+                                    context_overflow_attempted = true;
+                                    // Level-2: LLM summarisation of old messages
+                                    let budget = crate::llm::compute_context_budget(
+                                        self.context_window,
+                                        self.max_tokens,
+                                    );
+                                    let keep_chars =
+                                        (budget as f64 * SUMMARY_KEEP_RECENT_RATIO) as usize * 4;
+                                    warn!("context overflow — attempting LLM summarisation (keep_chars={})", keep_chars);
+                                    if let Some(compacted) = compact_summarise(
+                                        messages.clone(),
+                                        keep_chars,
+                                        self.client.as_ref(),
+                                        model_candidate,
+                                        self.max_tokens,
+                                    )
+                                    .await
+                                    {
+                                        messages = compacted;
+                                        info!(
+                                            "summarisation complete, messages={}",
+                                            messages.len()
+                                        );
+                                    }
+                                    // Retry immediately with the compacted context
+                                    last_err = Some(e);
+                                    break; // break inner retry loop → retry model_loop iteration
+                                } else if is_fallback_eligible_error(&msg) {
+                                    // Don't retry the same model; try the next fallback
+                                    last_err = Some(e);
+                                    break;
+                                } else {
+                                    let is_transient = msg.contains("timeout")
+                                        || msg.contains("connection")
+                                        || msg.contains("502")
+                                        || msg.contains("503")
+                                        || msg.contains("529");
+                                    if !is_transient || attempt + 1 == LLM_MAX_RETRIES {
+                                        last_err = Some(e);
+                                        break 'model_loop;
+                                    }
+                                    let backoff = std::time::Duration::from_secs(1 << attempt);
+                                    tokio::time::sleep(backoff).await;
+                                    last_err = Some(e);
+                                }
+                            }
                         }
                     }
                 }
+                // Suppress unused-variable warning for models_to_try
+                let _ = &mut models_to_try;
                 match resp {
                     Some(r) => r,
                     None => {

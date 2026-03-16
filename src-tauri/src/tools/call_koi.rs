@@ -557,6 +557,8 @@ impl CallKoiTool {
             system_prompt,
             model,
             max_tokens,
+            context_window: 0,
+            fallback_models: vec![],
             db: Some(state.db.clone()),
             app_handle: Some(state.app_handle.clone()),
             confirmation_responses: None,
@@ -607,6 +609,7 @@ impl CallKoiTool {
                             iteration: *it,
                             tool_name: None,
                             status: "thinking".to_string(),
+                            text_delta: None,
                         })
                     }
                     AgentEvent::ToolStart { name, .. } => Some(AgentEvent::FishProgress {
@@ -615,6 +618,7 @@ impl CallKoiTool {
                         iteration,
                         tool_name: Some(name.clone()),
                         status: "tool_call".to_string(),
+                        text_delta: None,
                     }),
                     AgentEvent::ToolEnd { name, .. } => Some(AgentEvent::FishProgress {
                         fish_id: koi_id_fwd.clone(),
@@ -622,6 +626,7 @@ impl CallKoiTool {
                         iteration,
                         tool_name: Some(name.clone()),
                         status: "tool_done".to_string(),
+                        text_delta: None,
                     }),
                     AgentEvent::Done { .. } => Some(AgentEvent::FishProgress {
                         fish_id: koi_id_fwd.clone(),
@@ -629,6 +634,7 @@ impl CallKoiTool {
                         iteration,
                         tool_name: None,
                         status: "done".to_string(),
+                        text_delta: None,
                     }),
                     _ => None,
                 };

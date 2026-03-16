@@ -112,7 +112,10 @@ pub enum AgentEvent {
         iteration: u32,
         /// Which tool the Fish is currently calling (None = LLM thinking)
         tool_name: Option<String>,
-        /// "thinking" | "tool_call" | "tool_done" | "done"
+        /// "thinking" | "thinking_text" | "tool_call" | "tool_done" | "done"
         status: String,
+        /// For status="thinking_text": the streaming text delta from the Fish LLM
+        #[serde(skip_serializing_if = "Option::is_none")]
+        text_delta: Option<String>,
     },
 }

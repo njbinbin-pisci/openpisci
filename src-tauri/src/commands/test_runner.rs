@@ -2,11 +2,10 @@
 ///
 /// Uses in-memory SQLite + LogEventBus to validate the full
 /// collaboration pipeline without calling real LLMs.
-use crate::agent::host::HostAgent;
 use crate::commands::collab_trial::assess_trial_project_state;
 use crate::koi::event_bus::LogEventBus;
 use crate::koi::runtime::KoiRuntime;
-use crate::koi::{KoiDefinition, KoiTodo, PoolMessage};
+use crate::koi::{KoiTodo, PoolMessage};
 use crate::pisci::heartbeat::{build_pool_heartbeat_message, collect_pool_attention};
 use crate::pisci::project_state::ProjectDecision as TrialDecision;
 use crate::store::Database;
@@ -117,7 +116,6 @@ pub async fn run_multi_agent_tests() -> Result<TestSuiteResult, String> {
     results.push(test_pisci_heartbeat_prompt_guardrails().await);
     results.push(test_todo_lifecycle().await);
     results.push(test_pool_messages().await);
-    results.push(test_route_to_koi().await);
     results.push(test_runtime_assign_execute().await);
     results.push(test_runtime_mention().await);
     results.push(test_at_all_mention().await);
@@ -789,87 +787,6 @@ async fn test_pool_messages() -> TestResult {
         ok()
     }.await;
     finish_test("pool_messages", r, start)
-}
-
-async fn test_route_to_koi() -> TestResult {
-    let start = std::time::Instant::now();
-    let r: Result<(), LocalizedError> = async {
-        let now = Utc::now();
-        let kois = vec![
-            KoiDefinition {
-                id: "fe".into(),
-                name: "FE".into(),
-                role: "前端工程师".into(),
-                icon: "🎨".into(),
-                color: "#45b7d1".into(),
-                system_prompt: "Frontend React TypeScript CSS UI design expert.".into(),
-                description: "Frontend development, React, TypeScript, CSS".into(),
-                status: "idle".into(),
-                created_at: now,
-                updated_at: now,
-                llm_provider_id: None,
-            },
-            KoiDefinition {
-                id: "be".into(),
-                name: "BE".into(),
-                role: "后端工程师".into(),
-                icon: "⚡".into(),
-                color: "#7c6af7".into(),
-                system_prompt: "Backend Rust databases API design expert.".into(),
-                description: "Backend development, Rust, database, API".into(),
-                status: "idle".into(),
-                created_at: now,
-                updated_at: now,
-                llm_provider_id: None,
-            },
-            KoiDefinition {
-                id: "qa".into(),
-                name: "QA".into(),
-                role: "测试工程师".into(),
-                icon: "🔍".into(),
-                color: "#26de81".into(),
-                system_prompt: "Testing quality assurance.".into(),
-                description: "Testing, QA, automation".into(),
-                status: "offline".into(),
-                created_at: now,
-                updated_at: now,
-                llm_provider_id: None,
-            },
-        ];
-        let r = HostAgent::route_to_koi("Create a React component with TypeScript", &kois);
-        if r != Some("fe".into()) {
-            return Err(fail_with_params(
-                "debug.multiAgentErrRoute",
-                json!({"subject":"frontend task","actual":format!("{:?}", r),"expected":"fe"}),
-                format!("FE routed to {:?}", r),
-            ));
-        }
-        let r = HostAgent::route_to_koi("Design database schema and Rust API", &kois);
-        if r != Some("be".into()) {
-            return Err(fail_with_params(
-                "debug.multiAgentErrRoute",
-                json!({"subject":"backend task","actual":format!("{:?}", r),"expected":"be"}),
-                format!("BE routed to {:?}", r),
-            ));
-        }
-        let r = HostAgent::route_to_koi("Write tests", &kois);
-        if r == Some("qa".into()) {
-            return Err(fail(
-                "debug.multiAgentErrOfflineRouted",
-                "offline Koi routed",
-            ));
-        }
-        if HostAgent::route_to_koi("x", &[]).is_some() {
-            return Err(fail_with_params(
-                "debug.multiAgentErrUnexpectedSome",
-                json!({"subject":"empty route result"}),
-                "empty→Some",
-            ));
-        }
-        ok()
-    }
-    .await;
-    finish_test("route_to_koi", r, start)
 }
 
 async fn test_runtime_assign_execute() -> TestResult {

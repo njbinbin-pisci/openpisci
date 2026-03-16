@@ -1,6 +1,6 @@
-use crate::agent::loop_::{AgentLoop, ConfirmFlags};
+use crate::agent::loop_::AgentLoop;
 use crate::agent::messages::AgentEvent;
-use crate::agent::tool::{Tool, ToolContext};
+use crate::agent::tool::ToolContext;
 use crate::llm::{build_client, ContentBlock, LlmMessage, MessageContent};
 use crate::policy::PolicyGate;
 use crate::store::{db::ChatMessage, db::Session, AppState};
@@ -435,7 +435,6 @@ pub async fn chat_send(
         injection_budget,
     );
 
-    let model_for_host = model.clone();
     let agent = AgentLoop {
         client,
         registry,
@@ -448,6 +447,8 @@ pub async fn chat_send(
         ),
         model: model.clone(),
         max_tokens,
+        context_window,
+        fallback_models: state.settings.lock().await.fallback_models.clone(),
         db: Some(state.db.clone()),
         app_handle: Some(state.app_handle.clone()),
         confirmation_responses: Some(state.confirmation_responses.clone()),
@@ -459,7 +460,6 @@ pub async fn chat_send(
         notification_rx: None,
     };
 
-    let tool_settings_for_fish = tool_settings.clone();
     let ctx = ToolContext {
         session_id: session_id.clone(),
         workspace_root: std::path::PathBuf::from(&workspace_root),
@@ -468,30 +468,6 @@ pub async fn chat_send(
         max_iterations: Some(max_iterations),
         memory_owner_id: "pisci".to_string(),
         pool_session_id: None,
-    };
-
-    // Check if the request should be decomposed by HostAgent
-    let sub_tasks = if crate::agent::host::HostAgent::should_decompose(&effective_content) {
-        let host_client = build_client(
-            &provider,
-            &api_key,
-            if base_url.is_empty() {
-                None
-            } else {
-                Some(&base_url)
-            },
-        );
-        let host_agent =
-            crate::agent::host::HostAgent::new(host_client, model_for_host.clone(), max_tokens);
-        match host_agent.decompose_task(&effective_content).await {
-            Ok(tasks) if tasks.len() > 1 => {
-                tracing::info!("HostAgent decomposed into {} sub-tasks", tasks.len());
-                Some(tasks)
-            }
-            _ => None,
-        }
-    } else {
-        None
     };
 
     // Create event channel
@@ -508,14 +484,6 @@ pub async fn chat_send(
     let provider_clone = provider.clone();
     let api_key_clone = api_key.clone();
     let base_url_clone = base_url.clone();
-    let workspace_root_clone = workspace_root.clone();
-    let policy_mode_clone = policy_mode.clone();
-    let tool_rate_limit_clone = tool_rate_limit_per_minute;
-    let allow_outside_ws_clone = allow_outside_workspace;
-    let builtin_tool_enabled_clone = builtin_tool_enabled.clone();
-    let state_browser = state.browser.clone();
-    let max_tokens_val = max_tokens;
-
     tracing::info!(
         "chat_send: spawning agent background task for session={}",
         session_id
@@ -541,384 +509,12 @@ pub async fn chat_send(
             }
         });
 
-        // Run agent loop — optionally with HostAgent sub-task decomposition
         // NOTE: agent.run() no longer emits Done — we do it here AFTER the DB write.
         let context_len = llm_messages.len();
-        let result = if let Some(tasks) = sub_tasks {
-            let plan_text = tasks
-                .iter()
-                .enumerate()
-                .map(|(i, t)| format!("{}. {}", i + 1, t.description))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let _ = event_tx
-                .send(AgentEvent::TextDelta {
-                    delta: format!(
-                        "📋 Task decomposed into {} sub-tasks:\n{}\n\n",
-                        tasks.len(),
-                        plan_text
-                    ),
-                })
-                .await;
-
-            let mut all_messages = llm_messages;
-            let mut total_in = 0u32;
-            let mut total_out = 0u32;
-            let mut last_err: Option<anyhow::Error> = None;
-
-            // Load app_data_dir once for Fish registry lookups
-            let app_data_dir_for_fish = app_clone.path().app_data_dir().ok();
-
-            // Load available Koi agents for routing
-            let available_kois = {
-                let db = db_arc.lock().await;
-                db.list_kois().unwrap_or_default()
-            };
-
-            for task in &tasks {
-                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                    break;
-                }
-
-                // Priority 1: Try to route to a persistent Koi agent
-                let koi_match =
-                    crate::agent::host::HostAgent::route_to_koi(&task.description, &available_kois);
-                if let Some(ref koi_id) = koi_match {
-                    if let Some(koi_def) = available_kois.iter().find(|k| &k.id == koi_id) {
-                        let _ = event_tx
-                            .send(AgentEvent::TextDelta {
-                                delta: format!(
-                                    "🐟 路由到 Koi「{} {}」: {}\n",
-                                    koi_def.icon, koi_def.name, task.description
-                                ),
-                            })
-                            .await;
-
-                        let koi_input = serde_json::json!({
-                            "action": "call",
-                            "koi_id": koi_id,
-                            "task": task.description,
-                        });
-                        let koi_tool = crate::tools::call_koi::CallKoiTool {
-                            app: app_clone.clone(),
-                            caller_koi_id: None,
-                            depth: 0,
-                            managed_externally: false,
-                            notification_rx: std::sync::Mutex::new(None),
-                        };
-                        match koi_tool.call(koi_input, &ctx).await {
-                            Ok(result) if !result.is_error => {
-                                let reply = result.content;
-                                all_messages.push(crate::llm::LlmMessage {
-                                    role: "assistant".into(),
-                                    content: crate::llm::MessageContent::text(format!(
-                                        "[Koi {} 完成子任务: {}]\n\n{}",
-                                        koi_def.name, task.description, reply
-                                    )),
-                                });
-                                let _ = event_tx
-                                    .send(AgentEvent::TextDelta {
-                                        delta: format!("✓ Koi「{}」已完成\n", koi_def.name),
-                                    })
-                                    .await;
-                            }
-                            Ok(result) => {
-                                tracing::warn!(
-                                    "Koi '{}' returned tool error for sub-task '{}': {}",
-                                    koi_id,
-                                    task.description,
-                                    result.content
-                                );
-                                let _ = event_tx
-                                    .send(AgentEvent::TextDelta {
-                                        delta: format!(
-                                            "⚠ Koi「{}」执行失败，改由其他路径继续\n",
-                                            koi_def.name
-                                        ),
-                                    })
-                                    .await;
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Koi '{}' failed for sub-task, falling through: {}",
-                                    koi_id,
-                                    e
-                                );
-                            }
-                        }
-                        continue;
-                    }
-                }
-
-                // Priority 2: Try to route to a Fish agent based on app_hint
-                let fish_id_opt = task
-                    .app_hint
-                    .as_deref()
-                    .and_then(crate::agent::host::HostAgent::route_to_fish);
-
-                if let Some(fish_id) = fish_id_opt {
-                    let registry =
-                        crate::fish::FishRegistry::load(app_data_dir_for_fish.as_deref());
-                    if let Some(fish_def) = registry.get(fish_id) {
-                        let fish_def = fish_def.clone();
-
-                        let _ = event_tx
-                            .send(AgentEvent::TextDelta {
-                                delta: format!(
-                                    "🐠 路由到「{}」: {}\n",
-                                    fish_def.name, task.description
-                                ),
-                            })
-                            .await;
-
-                        // Stateless Fish call: build a fresh AgentLoop with only the task
-                        let fish_msgs = vec![LlmMessage {
-                            role: "user".into(),
-                            content: MessageContent::text(&task.description),
-                        }];
-
-                        let fish_cancel = Arc::new(AtomicBool::new(false));
-                        let fish_client = build_client(
-                            &provider_clone,
-                            &api_key_clone,
-                            if base_url_clone.is_empty() {
-                                None
-                            } else {
-                                Some(&base_url_clone)
-                            },
-                        );
-                        let fish_user_tools_dir = app_clone
-                            .path()
-                            .app_data_dir()
-                            .map(|d| d.join("user-tools"))
-                            .ok();
-                        let fish_registry_tools = Arc::new(tools::build_registry(
-                            state_browser.clone(),
-                            fish_user_tools_dir.as_deref(),
-                            Some(db_arc.clone()),
-                            Some(&builtin_tool_enabled_clone),
-                            None,
-                            None,
-                            None,
-                            None,
-                        ));
-                        let fish_policy =
-                            Arc::new(crate::policy::PolicyGate::with_profile_and_flags(
-                                &workspace_root_clone,
-                                &policy_mode_clone,
-                                tool_rate_limit_clone,
-                                allow_outside_ws_clone,
-                            ));
-                        let fish_agent = AgentLoop {
-                            client: fish_client,
-                            registry: fish_registry_tools,
-                            policy: fish_policy,
-                            system_prompt: fish_def.agent.system_prompt.clone(),
-                            model: model_clone.clone(),
-                            max_tokens: max_tokens_val,
-                            db: None,
-                            app_handle: Some(app_clone.clone()),
-                            confirmation_responses: None,
-                            confirm_flags: ConfirmFlags {
-                                confirm_shell: false,
-                                confirm_file_write: false,
-                            },
-                            vision_override: Some(vision_capable),
-                            notification_rx: None,
-                        };
-                        let fish_ctx = ToolContext {
-                            session_id: format!("fish_ephemeral_{}", fish_id),
-                            workspace_root: std::path::PathBuf::from(&workspace_root_clone),
-                            bypass_permissions: false,
-                            settings: tool_settings_for_fish.clone(),
-                            max_iterations: Some(fish_def.agent.max_iterations),
-                            memory_owner_id: "pisci".to_string(),
-                            pool_session_id: None,
-                        };
-
-                        let (fish_tx, mut fish_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
-                        let fish_id_fwd = fish_id.to_string();
-                        let fish_name_fwd = fish_def.name.clone();
-                        let parent_sid = session_id_clone.clone();
-                        let app_fwd2 = app_clone.clone();
-                        let fish_fwd = tokio::spawn(async move {
-                            let mut it: u32 = 0;
-                            while let Some(ev) = fish_rx.recv().await {
-                                let prog = match &ev {
-                                    AgentEvent::TextSegmentStart { iteration } => {
-                                        it = *iteration;
-                                        Some(AgentEvent::FishProgress {
-                                            fish_id: fish_id_fwd.clone(),
-                                            fish_name: fish_name_fwd.clone(),
-                                            iteration: *iteration,
-                                            tool_name: None,
-                                            status: "thinking".into(),
-                                        })
-                                    }
-                                    AgentEvent::ToolStart { name, .. } => {
-                                        Some(AgentEvent::FishProgress {
-                                            fish_id: fish_id_fwd.clone(),
-                                            fish_name: fish_name_fwd.clone(),
-                                            iteration: it,
-                                            tool_name: Some(name.clone()),
-                                            status: "tool_call".into(),
-                                        })
-                                    }
-                                    AgentEvent::ToolEnd { name, .. } => {
-                                        Some(AgentEvent::FishProgress {
-                                            fish_id: fish_id_fwd.clone(),
-                                            fish_name: fish_name_fwd.clone(),
-                                            iteration: it,
-                                            tool_name: Some(name.clone()),
-                                            status: "tool_done".into(),
-                                        })
-                                    }
-                                    AgentEvent::Done { .. } => Some(AgentEvent::FishProgress {
-                                        fish_id: fish_id_fwd.clone(),
-                                        fish_name: fish_name_fwd.clone(),
-                                        iteration: it,
-                                        tool_name: None,
-                                        status: "done".into(),
-                                    }),
-                                    _ => None,
-                                };
-                                if let Some(p) = prog {
-                                    let payload = serde_json::to_value(&p).unwrap_or_default();
-                                    let _ = app_fwd2
-                                        .emit(&format!("agent_event_{}", parent_sid), payload);
-                                }
-                            }
-                        });
-
-                        let fish_result = fish_agent
-                            .run(fish_msgs, fish_tx, fish_cancel, fish_ctx)
-                            .await;
-                        let _ = fish_fwd.await;
-
-                        match fish_result {
-                            Ok((final_fish_msgs, _, _)) => {
-                                let reply = final_fish_msgs
-                                    .iter()
-                                    .rev()
-                                    .find(|m| m.role == "assistant")
-                                    .map(|m| m.content.as_text())
-                                    .unwrap_or_default();
-                                let fish_result_msg = LlmMessage {
-                                    role: "assistant".into(),
-                                    content: MessageContent::text(format!(
-                                        "[{}完成子任务: {}]\n\n结果:\n{}",
-                                        fish_def.name, task.description, reply
-                                    )),
-                                };
-                                all_messages.push(fish_result_msg);
-                                let _ = event_tx
-                                    .send(AgentEvent::TextDelta {
-                                        delta: format!("✓ 「{}」已完成\n", fish_def.name),
-                                    })
-                                    .await;
-                            }
-                            Err(e) => {
-                                tracing::warn!("Fish '{}' failed for sub-task: {}", fish_id, e);
-                                let _ = event_tx
-                                    .send(AgentEvent::TextDelta {
-                                        delta: format!(
-                                            "⚠ 「{}」执行失败，由主 Agent 接管: {}\n",
-                                            fish_def.name, e
-                                        ),
-                                    })
-                                    .await;
-                                let sub_msgs = [LlmMessage {
-                                    role: "user".into(),
-                                    content: MessageContent::text(format!(
-                                        "Execute this sub-task: {}\n\nContext from previous steps is available in the conversation.",
-                                        task.description
-                                    )),
-                                }];
-                                let combined: Vec<LlmMessage> = all_messages
-                                    .iter()
-                                    .chain(sub_msgs.iter())
-                                    .cloned()
-                                    .collect();
-                                let (sub_tx, mut sub_rx) =
-                                    tokio::sync::mpsc::channel::<AgentEvent>(256);
-                                let event_tx_c = event_tx.clone();
-                                let fwd = tokio::spawn(async move {
-                                    while let Some(ev) = sub_rx.recv().await {
-                                        let _ = event_tx_c.send(ev).await;
-                                    }
-                                });
-                                match agent
-                                    .run(combined, sub_tx, cancel.clone(), ctx.clone())
-                                    .await
-                                {
-                                    Ok((msgs, ti, to)) => {
-                                        all_messages = msgs;
-                                        total_in += ti;
-                                        total_out += to;
-                                    }
-                                    Err(e2) => {
-                                        last_err = Some(e2);
-                                        break;
-                                    }
-                                }
-                                let _ = fwd.await;
-                            }
-                        }
-                        continue;
-                    }
-                }
-
-                // No Fish match — execute with main Agent
-                let _ = event_tx
-                    .send(AgentEvent::TextDelta {
-                        delta: format!("▶ Sub-task: {}\n", task.description),
-                    })
-                    .await;
-                let sub_msgs = [LlmMessage {
-                    role: "user".into(),
-                    content: MessageContent::text(format!(
-                        "Execute this sub-task: {}\n\nContext from previous steps is available in the conversation.",
-                        task.description
-                    )),
-                }];
-                let combined: Vec<LlmMessage> = all_messages
-                    .iter()
-                    .chain(sub_msgs.iter())
-                    .cloned()
-                    .collect();
-                let (sub_tx, mut sub_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
-                let event_tx_c = event_tx.clone();
-                let fwd = tokio::spawn(async move {
-                    while let Some(ev) = sub_rx.recv().await {
-                        let _ = event_tx_c.send(ev).await;
-                    }
-                });
-                match agent
-                    .run(combined, sub_tx, cancel.clone(), ctx.clone())
-                    .await
-                {
-                    Ok((msgs, ti, to)) => {
-                        all_messages = msgs;
-                        total_in += ti;
-                        total_out += to;
-                    }
-                    Err(e) => {
-                        last_err = Some(e);
-                        break;
-                    }
-                }
-                let _ = fwd.await;
-            }
-            match last_err {
-                Some(e) => Err(e),
-                None => Ok((all_messages, total_in, total_out)),
-            }
-        } else {
-            tracing::info!("calling agent.run for session={}", session_id_clone);
-            agent
-                .run(llm_messages, event_tx.clone(), cancel.clone(), ctx)
-                .await
-        };
+        // Agent handles complex tasks autonomously via its own tools (call_fish, plan_todo, etc.)
+        let result = agent
+            .run(llm_messages, event_tx.clone(), cancel.clone(), ctx)
+            .await;
 
         tracing::info!(
             "agent.run completed for session={} ok={}",
@@ -1422,6 +1018,8 @@ pub async fn run_agent_headless(
         system_prompt,
         model,
         max_tokens,
+        context_window,
+        fallback_models: state.settings.lock().await.fallback_models.clone(),
         db: Some(state.db.clone()),
         app_handle: None,
         confirmation_responses: None,
@@ -2125,26 +1723,9 @@ pub fn build_im_system_prompt(channel: &str, vision_capable: bool) -> String {
     )
 }
 
-/// Estimate token count for a string.
-/// CJK characters ≈ 1 token each; ASCII ≈ 1 token per 4 chars.
+/// Estimate token count for a string. Delegates to `llm::estimate_tokens`.
 pub fn estimate_tokens(text: &str) -> usize {
-    let mut cjk_count = 0usize;
-    let mut ascii_count = 0usize;
-    for ch in text.chars() {
-        let cp = ch as u32;
-        if (0x4E00..=0x9FFF).contains(&cp)   // CJK Unified
-            || (0x3400..=0x4DBF).contains(&cp) // CJK Extension A
-            || (0xF900..=0xFAFF).contains(&cp) // CJK Compatibility
-            || (0x3000..=0x303F).contains(&cp) // CJK Symbols
-            || (0xFF00..=0xFFEF).contains(&cp)
-        // Fullwidth
-        {
-            cjk_count += 1;
-        } else {
-            ascii_count += 1;
-        }
-    }
-    cjk_count + (ascii_count / 4).max(1)
+    crate::llm::estimate_tokens(text)
 }
 
 // ---------------------------------------------------------------------------
@@ -2152,30 +1733,9 @@ pub fn estimate_tokens(text: &str) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Compute the token budget for `build_context_messages` from settings.
-///
-/// `context_window` is the user-configured input context limit (0 = auto).
-/// `max_tokens` is the max *output* tokens (used only for auto-fallback).
-///
-/// Budget = (context_window * 0.85) - system_prompt_overhead
-/// The 0.85 factor leaves headroom for the system prompt and the new user message.
-/// If `context_window` is 0, we fall back to a conservative estimate based on `max_tokens`.
+/// Delegates to `llm::compute_context_budget`.
 pub fn compute_context_budget(context_window: u32, max_tokens: u32) -> usize {
-    const SYSTEM_OVERHEAD: usize = 2_000;
-
-    let window = if context_window > 0 {
-        context_window as usize
-    } else {
-        // Auto: derive a conservative estimate from max_tokens (legacy behaviour).
-        // max_tokens is the OUTPUT limit, not the context window, so this is just a
-        // rough fallback for users who haven't set context_window yet.
-        match max_tokens {
-            t if t >= 8192 => 100_000,
-            t if t >= 4096 => 60_000,
-            _ => 30_000,
-        }
-    };
-
-    ((window as f64 * 0.85) as usize).saturating_sub(SYSTEM_OVERHEAD)
+    crate::llm::compute_context_budget(context_window, max_tokens)
 }
 
 /// How many recent conversation turns to keep with full tool call detail.

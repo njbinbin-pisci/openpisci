@@ -68,6 +68,8 @@ export interface ToolStep {
     iteration: number;
     toolName: string | null;
     status: string;
+    /** Accumulated streaming text from the Fish LLM (last ~200 chars shown in badge) */
+    thinkingText?: string;
   };
 }
 
@@ -211,17 +213,29 @@ const chatSlice = createSlice({
       iteration: number;
       toolName: string | null;
       status: string;
+      textDelta?: string;
     }>) => {
-      const { sessionId, fishId, fishName, iteration, toolName, status } = action.payload;
+      const { sessionId, fishId, fishName, iteration, toolName, status, textDelta } = action.payload;
       const steps = state.toolSteps[sessionId];
       if (!steps) return;
       // Find the call_fish step for this fish (most recent one)
       const step = [...steps].reverse().find((s) => s.name === "call_fish");
       if (step) {
-        step.fishProgress = { fishId, fishName, iteration, toolName, status };
-        if (status === "done") {
-          step.completed = true;
-          step.expanded = false;
+        if (status === "thinking_text" && textDelta) {
+          // Accumulate streaming text, keep last 200 chars to avoid unbounded growth
+          const prev = step.fishProgress?.thinkingText ?? "";
+          const next = prev + textDelta;
+          step.fishProgress = {
+            ...(step.fishProgress ?? { fishId, fishName, iteration, toolName: null, status: "thinking" }),
+            thinkingText: next.length > 200 ? next.slice(-200) : next,
+          };
+        } else {
+          const prevThinking = status === "thinking" ? "" : (step.fishProgress?.thinkingText ?? "");
+          step.fishProgress = { fishId, fishName, iteration, toolName, status, thinkingText: prevThinking };
+          if (status === "done") {
+            step.completed = true;
+            step.expanded = false;
+          }
         }
       }
     },

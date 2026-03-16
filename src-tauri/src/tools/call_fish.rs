@@ -145,6 +145,16 @@ impl CallFishTool {
             parent_session_id
         );
 
+        // Inherit the parent session's cancel flag so that clicking "Stop" in the
+        // main chat also cancels the Fish sub-agent immediately.
+        let cancel = {
+            let flags = state.cancel_flags.lock().await;
+            flags
+                .get(&parent_session_id)
+                .cloned()
+                .unwrap_or_else(|| Arc::new(AtomicBool::new(false)))
+        };
+
         let fish_system_prompt = fish_def.agent.system_prompt.clone();
 
         // Read settings snapshot
@@ -193,8 +203,6 @@ impl CallFishTool {
             content: MessageContent::text(&task),
         }];
 
-        let cancel = Arc::new(AtomicBool::new(false));
-
         let client = crate::llm::build_client(
             &provider,
             &api_key,
@@ -236,6 +244,8 @@ impl CallFishTool {
             system_prompt: fish_system_prompt,
             model,
             max_tokens,
+            context_window: 0,
+            fallback_models: vec![],
             db: None, // stateless — no DB persistence
             app_handle: Some(state.app_handle.clone()),
             confirmation_responses: None,
@@ -276,14 +286,24 @@ impl CallFishTool {
                             iteration: *it,
                             tool_name: None,
                             status: "thinking".to_string(),
+                            text_delta: None,
                         })
                     }
+                    AgentEvent::TextDelta { delta } => Some(AgentEvent::FishProgress {
+                        fish_id: fish_id_fwd.clone(),
+                        fish_name: fish_name_fwd.clone(),
+                        iteration,
+                        tool_name: None,
+                        status: "thinking_text".to_string(),
+                        text_delta: Some(delta.clone()),
+                    }),
                     AgentEvent::ToolStart { name, .. } => Some(AgentEvent::FishProgress {
                         fish_id: fish_id_fwd.clone(),
                         fish_name: fish_name_fwd.clone(),
                         iteration,
                         tool_name: Some(name.clone()),
                         status: "tool_call".to_string(),
+                        text_delta: None,
                     }),
                     AgentEvent::ToolEnd { name, .. } => Some(AgentEvent::FishProgress {
                         fish_id: fish_id_fwd.clone(),
@@ -291,6 +311,7 @@ impl CallFishTool {
                         iteration,
                         tool_name: Some(name.clone()),
                         status: "tool_done".to_string(),
+                        text_delta: None,
                     }),
                     AgentEvent::Done { .. } => Some(AgentEvent::FishProgress {
                         fish_id: fish_id_fwd.clone(),
@@ -298,6 +319,7 @@ impl CallFishTool {
                         iteration,
                         tool_name: None,
                         status: "done".to_string(),
+                        text_delta: None,
                     }),
                     _ => None,
                 };

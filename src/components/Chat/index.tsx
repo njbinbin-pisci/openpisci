@@ -500,6 +500,7 @@ export default function Chat() {
             iteration: event.iteration,
             toolName: event.tool_name,
             status: event.status,
+            textDelta: (event as { type: "fish_progress"; fish_id: string; fish_name: string; iteration: number; tool_name: string | null; status: string; text_delta?: string }).text_delta,
           }));
           break;
         case "error":
@@ -1719,12 +1720,14 @@ function PlanPanel({ items }: { items: PlanTodoItem[] }) {
 function FishProgressBadge({ progress }: { progress: NonNullable<ToolStep["fishProgress"]> }) {
   const statusLabel: Record<string, string> = {
     thinking: "思考中",
+    thinking_text: "思考中",
     tool_call: "调用工具",
     tool_done: "工具完成",
     done: "已完成",
   };
   const label = statusLabel[progress.status] ?? progress.status;
   const isRunning = progress.status !== "done";
+  const showThinking = isRunning && progress.thinkingText;
 
   return (
     <div className="fish-progress-badge">
@@ -1740,6 +1743,9 @@ function FishProgressBadge({ progress }: { progress: NonNullable<ToolStep["fishP
         {isRunning && <span className="step-spinner" style={{ width: 10, height: 10, marginRight: 4 }} />}
         {label}
       </span>
+      {showThinking && (
+        <span className="fish-progress-thinking">{progress.thinkingText}</span>
+      )}
     </div>
   );
 }

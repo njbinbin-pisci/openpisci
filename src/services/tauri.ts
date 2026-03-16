@@ -234,8 +234,10 @@ export type AgentEventType =
       iteration: number;
       /** Which tool the Fish is currently calling (null = LLM thinking) */
       tool_name: string | null;
-      /** "thinking" | "tool_call" | "tool_done" | "done" */
+      /** "thinking" | "thinking_text" | "tool_call" | "tool_done" | "done" */
       status: string;
+      /** For status="thinking_text": streaming text delta from the Fish LLM */
+      text_delta?: string;
     };
 
 // ---------------------------------------------------------------------------

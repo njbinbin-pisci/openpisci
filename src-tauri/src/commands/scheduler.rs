@@ -351,6 +351,8 @@ pub async fn execute_task(
         ),
         model,
         max_tokens,
+        context_window: 0,
+        fallback_models: vec![],
         db: Some(db.clone()),
         app_handle: None,
         confirmation_responses: None,
