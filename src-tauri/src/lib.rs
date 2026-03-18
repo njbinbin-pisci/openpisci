@@ -201,7 +201,7 @@ fn open_path(path: String) -> Result<(), String> {
                 .spawn()
                 .map_err(|e| format!("Failed to open file: {e}"))?;
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(target_os = "windows"))]
     {

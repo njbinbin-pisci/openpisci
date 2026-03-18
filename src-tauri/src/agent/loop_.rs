@@ -375,7 +375,7 @@ const SUMMARY_KEEP_RECENT_RATIO: f64 = 0.60; // keep newest 60% of budget intact
 /// of the context budget) AND `CTX_TRIM_MIN_SIZE` (the absolute minimum worth
 /// trimming). Using `min` ensures we never trim a result that is already within
 /// the budget share, and never trim one that is too small to benefit from it.
-fn compact_trim_tool_results(messages: &mut Vec<LlmMessage>, single_limit: usize) -> bool {
+fn compact_trim_tool_results(messages: &mut [LlmMessage], single_limit: usize) -> bool {
     // Effective threshold: trim only if the result exceeds the budget share AND
     // is large enough that trimming makes sense (> head + tail + 100 chars).
     let trim_threshold = single_limit.max(CTX_TRIM_MIN_SIZE);
@@ -488,7 +488,7 @@ async fn compact_summarise(
         model: model.to_string(),
         // Use at least 512 tokens for the summary regardless of the main model's
         // max_tokens setting, capped at 1024 to avoid wasting quota on a summary.
-        max_tokens: max_tokens.max(512).min(1024),
+        max_tokens: max_tokens.clamp(512, 1024),
         stream: false,
         vision_override: Some(false),
     };
