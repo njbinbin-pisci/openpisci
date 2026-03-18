@@ -70,6 +70,9 @@ pub struct CreateKoiInput {
     /// Optional named LLM provider id (empty string = use global default)
     #[serde(default)]
     pub llm_provider_id: Option<String>,
+    /// Maximum AgentLoop iterations. 0 = use system default (30).
+    #[serde(default)]
+    pub max_iterations: u32,
 }
 
 #[tauri::command]
@@ -96,6 +99,7 @@ pub async fn create_koi(
         &input.system_prompt,
         &input.description,
         provider_id,
+        input.max_iterations,
     )
     .map_err(|e| e.to_string())
 }
@@ -112,6 +116,9 @@ pub struct UpdateKoiInput {
     /// `None` = don't touch the field; `Some("")` = clear (use global); `Some("id")` = set
     #[serde(default)]
     pub llm_provider_id: Option<String>,
+    /// `None` = don't touch; `Some(0)` = use system default; `Some(n)` = set to n
+    #[serde(default)]
+    pub max_iterations: Option<u32>,
 }
 
 #[tauri::command]
@@ -144,6 +151,7 @@ pub async fn update_koi(
             input.system_prompt.as_deref(),
             input.description.as_deref(),
             provider_update,
+            input.max_iterations,
         )
         .map_err(|e| e.to_string())?;
     }

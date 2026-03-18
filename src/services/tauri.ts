@@ -559,6 +559,8 @@ export interface KoiDefinition {
   updated_at: string;
   /** Optional named LLM provider id. Empty/undefined = use global default. */
   llm_provider_id?: string;
+  /** Maximum AgentLoop iterations. 0 = use system default (30). */
+  max_iterations: number;
 }
 
 export interface KoiWithStats {
@@ -576,6 +578,8 @@ export interface KoiWithStats {
   todo_count: number;
   active_todo_count: number;
   llm_provider_id?: string;
+  /** Maximum AgentLoop iterations. 0 = use system default (30). */
+  max_iterations: number;
 }
 
 export interface KoiTodo {
@@ -637,6 +641,8 @@ export const koiApi = {
     description: string;
     /** Optional named LLM provider id; empty/undefined = use global default */
     llm_provider_id?: string;
+    /** Maximum AgentLoop iterations. 0 = use system default (30). */
+    max_iterations?: number;
   }) => invoke<KoiDefinition>("create_koi", { input }),
   update: (input: {
     id: string;
@@ -648,6 +654,8 @@ export const koiApi = {
     description?: string;
     /** Pass empty string to clear (use global default); undefined = don't change */
     llm_provider_id?: string;
+    /** undefined = don't change; 0 = use system default; n = set to n */
+    max_iterations?: number;
   }) => invoke<void>("update_koi", { input }),
   delete: (id: string) => invoke<void>("delete_koi", { id }),
   getDeleteInfo: (id: string) =>

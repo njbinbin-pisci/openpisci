@@ -378,6 +378,7 @@ export default function Chat() {
   const loadMoreHistory = useCallback(() => {
     if (!activeSessionId || loadingMoreRef.current) return;
     const el = messagesAreaRef.current;
+    const prevScrollHeight = el ? el.scrollHeight : 0;
     const currentCount = rawMessages.length;
     loadingMoreRef.current = true;
     sessionsApi.getMessages(activeSessionId, CHAT_LAZY_STEP, currentCount).then((older) => {
@@ -388,10 +389,10 @@ export default function Chat() {
       } else {
         setHasMoreHistory(false);
       }
-      // Restore scroll position so the view doesn't jump to the top
+      // Restore scroll position after prepend so the view stays at the same message
       requestAnimationFrame(() => {
         if (el) {
-          el.scrollTop = el.scrollHeight - (el.scrollHeight - (el.scrollTop));
+          el.scrollTop = el.scrollHeight - prevScrollHeight;
         }
         loadingMoreRef.current = false;
       });
@@ -548,6 +549,19 @@ export default function Chat() {
     return () => el.removeEventListener("scroll", onScroll);
   }, [hasMoreHistory, loadMoreHistory]);
 
+  // Scroll the messages area to the bottom without affecting parent containers.
+  // scrollIntoView() bubbles up and can cause the whole window to jump in Tauri WebView;
+  // directly setting scrollTop on the container avoids that.
+  const scrollToBottom = useCallback((smooth = true) => {
+    const el = messagesAreaRef.current;
+    if (!el) return;
+    if (smooth) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, []);
+
   // Detect real-time appends (tail id changed), apply FIFO trim, auto-scroll or show unread badge
   const prevLastChatIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -558,7 +572,7 @@ export default function Chat() {
     if (!isAppend) {
       // Still auto-scroll for streaming updates (streamingCurrent changes)
       if (isNearBottomRef.current) {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        scrollToBottom();
       }
       return;
     }
@@ -568,12 +582,12 @@ export default function Chat() {
       setHasMoreHistory(true);
     }
     if (isNearBottomRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      scrollToBottom();
       setUnreadCount(0);
     } else {
       setUnreadCount((n) => n + 1);
     }
-  }, [rawMessages, streamingCurrent, capacity, activeSessionId, dispatch]);
+  }, [rawMessages, streamingCurrent, capacity, activeSessionId, dispatch, scrollToBottom]);
 
   // Scroll the tool-steps area to the bottom when a new step is added or toggled open
   useEffect(() => {

@@ -79,6 +79,7 @@ fn ensure_trial_koi(
                 None,
                 None,
                 None,
+                None,
             )
             .map_err(|e| e.to_string())?;
 
@@ -101,6 +102,7 @@ fn ensure_trial_koi(
             spec.system_prompt,
             spec.description,
             None,
+            0,
         )
         .map_err(|e| e.to_string())?;
     all_kois.push(created.clone());

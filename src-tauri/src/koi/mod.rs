@@ -41,6 +41,10 @@ pub struct KoiDefinition {
     /// `LlmProviderConfig` from `Settings.llm_providers` instead of the global defaults.
     #[serde(default)]
     pub llm_provider_id: Option<String>,
+    /// Maximum number of AgentLoop iterations for this Koi.
+    /// 0 means use the system default (30).
+    #[serde(default)]
+    pub max_iterations: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

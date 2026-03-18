@@ -340,14 +340,19 @@ impl Database {
                 status TEXT NOT NULL DEFAULT 'idle',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                llm_provider_id TEXT
+                llm_provider_id TEXT,
+                max_iterations INTEGER NOT NULL DEFAULT 0
             );
         ",
         );
-        // Migration: add llm_provider_id column to existing kois tables
+        // Migrations: add columns to existing kois tables
         let _ = self
             .conn
             .execute("ALTER TABLE kois ADD COLUMN llm_provider_id TEXT", []);
+        let _ = self.conn.execute(
+            "ALTER TABLE kois ADD COLUMN max_iterations INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
 
         // Koi todo items (shared board)
         let _ = self.conn.execute_batch(
@@ -1788,14 +1793,15 @@ impl Database {
         system_prompt: &str,
         description: &str,
         llm_provider_id: Option<&str>,
+        max_iterations: u32,
     ) -> Result<crate::koi::KoiDefinition> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO kois (id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'idle', ?8, ?8, ?9)",
-            params![id, name, role, icon, color, system_prompt, description, now_str, llm_provider_id],
+            "INSERT INTO kois (id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'idle', ?8, ?8, ?9, ?10)",
+            params![id, name, role, icon, color, system_prompt, description, now_str, llm_provider_id, max_iterations],
         )?;
         Ok(crate::koi::KoiDefinition {
             id,
@@ -1809,6 +1815,7 @@ impl Database {
             created_at: now,
             updated_at: now,
             llm_provider_id: llm_provider_id.map(String::from),
+            max_iterations,
         })
     }
 
@@ -1827,6 +1834,7 @@ impl Database {
                 spec.system_prompt,
                 spec.description,
                 None,
+                0,
             )?);
         }
         Ok(created)
@@ -1834,7 +1842,7 @@ impl Database {
 
     pub fn list_kois(&self) -> Result<Vec<crate::koi::KoiDefinition>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id \
+            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations \
              FROM kois ORDER BY created_at ASC"
         )?;
         let rows = stmt.query_map([], |r| {
@@ -1856,6 +1864,7 @@ impl Database {
                     .parse::<DateTime<Utc>>()
                     .unwrap_or_else(|_| Utc::now()),
                 llm_provider_id: r.get(10)?,
+                max_iterations: r.get::<_, u32>(11).unwrap_or(0),
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -1882,12 +1891,13 @@ impl Database {
                     .parse::<DateTime<Utc>>()
                     .unwrap_or_else(|_| Utc::now()),
                 llm_provider_id: r.get(10)?,
+                max_iterations: r.get::<_, u32>(11).unwrap_or(0),
             })
         };
 
         // Exact match first
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id \
+            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations \
              FROM kois WHERE id = ?1"
         )?;
         let mut rows = stmt.query_map(params![id], koi_row)?;
@@ -1899,7 +1909,7 @@ impl Database {
         if id.len() >= 6 {
             let pattern = format!("{}%", id);
             let mut stmt2 = self.conn.prepare(
-                "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id \
+                "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations \
                  FROM kois WHERE id LIKE ?1"
             )?;
             let matches: Vec<crate::koi::KoiDefinition> = stmt2
@@ -1925,9 +1935,10 @@ impl Database {
         system_prompt: Option<&str>,
         description: Option<&str>,
         llm_provider_id: Option<Option<&str>>,
+        max_iterations: Option<u32>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        // llm_provider_id uses a special update: None means "don't change", Some(None) means "clear", Some(Some(v)) means "set"
+        // llm_provider_id: None = don't change, Some(None) = clear, Some(Some(v)) = set
         match llm_provider_id {
             None => {
                 self.conn.execute(
@@ -1938,9 +1949,20 @@ impl Database {
                      color = COALESCE(?5, color), \
                      system_prompt = COALESCE(?6, system_prompt), \
                      description = COALESCE(?7, description), \
+                     max_iterations = COALESCE(?9, max_iterations), \
                      updated_at = ?8 \
                      WHERE id = ?1",
-                    params![id, name, role, icon, color, system_prompt, description, now],
+                    params![
+                        id,
+                        name,
+                        role,
+                        icon,
+                        color,
+                        system_prompt,
+                        description,
+                        now,
+                        max_iterations
+                    ],
                 )?;
             }
             Some(provider_id) => {
@@ -1953,6 +1975,7 @@ impl Database {
                      system_prompt = COALESCE(?6, system_prompt), \
                      description = COALESCE(?7, description), \
                      llm_provider_id = ?9, \
+                     max_iterations = COALESCE(?10, max_iterations), \
                      updated_at = ?8 \
                      WHERE id = ?1",
                     params![
@@ -1964,7 +1987,8 @@ impl Database {
                         system_prompt,
                         description,
                         now,
-                        provider_id
+                        provider_id,
+                        max_iterations
                     ],
                 )?;
             }
@@ -1983,7 +2007,7 @@ impl Database {
 
     pub fn find_koi_by_name(&self, name: &str) -> Result<Option<crate::koi::KoiDefinition>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id \
+            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations \
              FROM kois WHERE name = ?1 ORDER BY created_at ASC LIMIT 1"
         )?;
         let mut rows = stmt.query_map(params![name], |r| {
@@ -2005,6 +2029,7 @@ impl Database {
                     .parse::<DateTime<Utc>>()
                     .unwrap_or_else(|_| Utc::now()),
                 llm_provider_id: r.get(10)?,
+                max_iterations: r.get::<_, u32>(11).unwrap_or(0),
             })
         })?;
         Ok(rows.next().transpose()?)

@@ -2077,6 +2077,7 @@ impl AppControlTool {
                 &system_prompt,
                 &description,
                 None,
+                0,
             )
             .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -2137,6 +2138,7 @@ impl AppControlTool {
             system_prompt.as_deref(),
             description.as_deref(),
             None, // don't touch llm_provider_id
+            None, // don't touch max_iterations
         )
         .map_err(|e| anyhow::anyhow!(e))?;
         drop(db);

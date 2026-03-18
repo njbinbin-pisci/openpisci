@@ -129,6 +129,8 @@ interface KoiFormData {
   system_prompt: string;
   /** Empty string = use global default */
   llm_provider_id: string;
+  /** 0 = use system default (30) */
+  max_iterations: number;
 }
 
 const EMPTY_FORM: KoiFormData = {
@@ -139,6 +141,7 @@ const EMPTY_FORM: KoiFormData = {
   description: "",
   system_prompt: "",
   llm_provider_id: "",
+  max_iterations: 0,
 };
 
 function KoiCard({
@@ -234,6 +237,11 @@ function KoiCard({
           <span className="koi-stat-icon koi-stat-icon--todo" />
           {t("koi.todoCount")} {koi.active_todo_count}
         </span>
+        {koi.max_iterations > 0 && (
+          <span className="koi-stat" title="最大迭代次数">
+            🔁 {koi.max_iterations}
+          </span>
+        )}
       </div>
       <div className="koi-card-actions">
         <button
@@ -304,7 +312,7 @@ function KoiDialog({
     ["#0f172a", "Dark"],
   ];
 
-  const set = (key: keyof KoiFormData, value: string) =>
+  const set = (key: keyof KoiFormData, value: string | number) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
   return (
@@ -437,6 +445,24 @@ function KoiDialog({
           )}
         </div>
 
+        <div className="koi-form-field">
+          <label className="koi-form-label">🔁 最大迭代次数</label>
+          <input
+            className="koi-input"
+            type="number"
+            min={0}
+            max={200}
+            value={form.max_iterations}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              set("max_iterations", isNaN(v) ? 0 : Math.max(0, Math.min(200, v)));
+            }}
+          />
+          <p className="koi-form-help">
+            0 = 使用系统默认值（30）；可设置 1–200 自定义上限。
+          </p>
+        </div>
+
         <div className="koi-modal-actions">
           <button
             className="koi-btn koi-btn-secondary"
@@ -543,6 +569,7 @@ export default function KoiManager() {
       description: koi.description,
       system_prompt: koi.system_prompt,
       llm_provider_id: koi.llm_provider_id ?? "",
+      max_iterations: koi.max_iterations ?? 0,
     });
     setEditingId(koi.id);
     setEditingKoi(koi);

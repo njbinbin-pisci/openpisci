@@ -546,7 +546,12 @@ impl KoiRuntime {
                 workspace_root: std::path::PathBuf::from(&workspace_root),
                 bypass_permissions: false,
                 settings: tool_settings_data,
-                max_iterations: Some(30),
+                // 0 means "use system default (30)"; non-zero values are user-configured
+                max_iterations: Some(if koi_def.max_iterations > 0 {
+                    koi_def.max_iterations
+                } else {
+                    30
+                }),
                 memory_owner_id: koi_def.id.clone(),
                 pool_session_id: pool_session_id.map(String::from),
             };
