@@ -435,16 +435,17 @@ async fn compact_summarise(
         // since as_text() returns empty string for ToolUse/ToolResult blocks.
         let chars = match &msg.content {
             crate::llm::MessageContent::Text(t) => crate::llm::estimate_tokens(t) * 4,
-            crate::llm::MessageContent::Blocks(blocks) => {
-                blocks.iter().map(|b| match b {
+            crate::llm::MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .map(|b| match b {
                     crate::llm::ContentBlock::Text { text } => text.len(),
                     crate::llm::ContentBlock::ToolUse { name, input, .. } => {
                         name.len() + input.to_string().len()
                     }
                     crate::llm::ContentBlock::ToolResult { content, .. } => content.len(),
                     _ => 0,
-                }).sum::<usize>()
-            }
+                })
+                .sum::<usize>(),
         };
         acc += chars;
         // Once the tail accumulation exceeds keep_chars, everything before
@@ -480,7 +481,11 @@ async fn compact_summarise(
                     .iter()
                     .filter_map(|b| match b {
                         crate::llm::ContentBlock::Text { text } => {
-                            if text.is_empty() { None } else { Some(text.clone()) }
+                            if text.is_empty() {
+                                None
+                            } else {
+                                Some(text.clone())
+                            }
                         }
                         crate::llm::ContentBlock::ToolUse { name, input, .. } => {
                             let input_str = input.to_string();
@@ -1049,8 +1054,7 @@ impl AgentLoop {
                     .map(crate::llm::estimate_message_tokens)
                     .sum();
                 if estimated > (budget as f64 * 0.80) as usize {
-                    let keep_chars =
-                        (budget as f64 * SUMMARY_KEEP_RECENT_RATIO * 4.0) as usize;
+                    let keep_chars = (budget as f64 * SUMMARY_KEEP_RECENT_RATIO * 4.0) as usize;
                     warn!(
                         "proactive compaction: estimated_tokens={} > 80% of budget={}, keep_chars={}",
                         estimated, budget, keep_chars
@@ -1728,9 +1732,7 @@ fn audit_action_label(tool_name: &str, input: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::{compact_summarise, compact_trim_tool_results, CTX_TRIM_HEAD, CTX_TRIM_TAIL};
-    use crate::llm::{
-        ContentBlock, LlmChunk, LlmMessage, LlmRequest, LlmResponse, MessageContent,
-    };
+    use crate::llm::{ContentBlock, LlmChunk, LlmMessage, LlmRequest, LlmResponse, MessageContent};
     use anyhow::Result;
     use async_trait::async_trait;
 
@@ -1743,7 +1745,9 @@ mod tests {
 
     impl MockLlmClient {
         fn new(response: impl Into<String>) -> Self {
-            Self { response: response.into() }
+            Self {
+                response: response.into(),
+            }
         }
     }
 
@@ -1805,8 +1809,7 @@ mod tests {
                 ContentBlock::ToolUse {
                     id: format!("call_{}", tool_name),
                     name: tool_name.to_string(),
-                    input: serde_json::from_str(input_json)
-                        .unwrap_or(serde_json::Value::Null),
+                    input: serde_json::from_str(input_json).unwrap_or(serde_json::Value::Null),
                 },
             ]),
         }
@@ -1840,7 +1843,13 @@ mod tests {
         )];
         for i in 0..n_tool_rounds {
             // assistant calls a tool (shell, file_read, com_invoke, etc.)
-            let tool_names = ["shell", "file_read", "com_invoke", "plan_todo", "file_write"];
+            let tool_names = [
+                "shell",
+                "file_read",
+                "com_invoke",
+                "plan_todo",
+                "file_write",
+            ];
             let tool_name = tool_names[i % tool_names.len()];
             let input = match tool_name {
                 "shell" => format!(
@@ -1856,7 +1865,10 @@ mod tests {
                     r#"{{"merge":true,"todos":[{{"id":"step-{}","content":"移动配件{}","status":"completed"}}]}}"#,
                     i, i
                 ),
-                _ => format!(r#"{{"path":"C:\\output\\result_{}.txt","content":"done"}}"#, i),
+                _ => format!(
+                    r#"{{"path":"C:\\output\\result_{}.txt","content":"done"}}"#,
+                    i
+                ),
             };
             msgs.push(make_tool_call_msg(tool_name, &input));
 
@@ -1868,7 +1880,10 @@ mod tests {
                 i,
                 "a".repeat(result_size)
             );
-            msgs.push(make_tool_result_msg(&format!("call_{}", tool_name), &result_content));
+            msgs.push(make_tool_result_msg(
+                &format!("call_{}", tool_name),
+                &result_content,
+            ));
         }
         msgs.push(make_text_msg(
             "assistant",
@@ -1884,7 +1899,10 @@ mod tests {
         let original = "x".repeat(1_000);
         let mut msgs = vec![make_tool_result_msg("call_1", &original)];
         let changed = compact_trim_tool_results(&mut msgs, 50_000);
-        assert!(!changed, "should not trim a 1000-char result with limit=50000");
+        assert!(
+            !changed,
+            "should not trim a 1000-char result with limit=50000"
+        );
         if let MessageContent::Blocks(ref blocks) = msgs[0].content {
             if let ContentBlock::ToolResult { content, .. } = &blocks[0] {
                 assert_eq!(*content, original, "content should be unchanged");
@@ -1929,7 +1947,10 @@ mod tests {
             }]),
         }];
         let changed = compact_trim_tool_results(&mut msgs, 1_000);
-        assert!(!changed, "assistant ToolUse should never be trimmed by Level-1");
+        assert!(
+            !changed,
+            "assistant ToolUse should never be trimmed by Level-1"
+        );
         if let MessageContent::Blocks(ref blocks) = msgs[0].content {
             if let ContentBlock::ToolUse { input, .. } = &blocks[0] {
                 assert_eq!(*input, large_input, "ToolUse input should be unchanged");
@@ -1954,7 +1975,10 @@ mod tests {
         let original_medium = "b".repeat(threshold - 1);
 
         let changed = compact_trim_tool_results(&mut msgs, limit);
-        assert!(changed, "should report change because large result was trimmed");
+        assert!(
+            changed,
+            "should report change because large result was trimmed"
+        );
 
         // small: unchanged
         if let MessageContent::Blocks(ref b) = msgs[0].content {
@@ -1971,7 +1995,10 @@ mod tests {
         // large: trimmed
         if let MessageContent::Blocks(ref b) = msgs[2].content {
             if let ContentBlock::ToolResult { content, .. } = &b[0] {
-                assert!(content.contains("chars removed"), "large result should be trimmed");
+                assert!(
+                    content.contains("chars removed"),
+                    "large result should be trimmed"
+                );
             }
         }
         // assistant: unchanged
@@ -2000,14 +2027,18 @@ mod tests {
         ];
         // keep_chars=100000 >> total size of 3 short messages
         let result = compact_summarise(msgs, 100_000, &client, "test-model", 1024).await;
-        assert!(result.is_none(), "all messages fit in budget, should return None");
+        assert!(
+            result.is_none(),
+            "all messages fit in budget, should return None"
+        );
     }
 
     // ── T7: Level-2 — plain text messages compacted correctly ────────────────
 
     #[tokio::test]
     async fn t7_plain_text_messages_compacted() {
-        let client = MockLlmClient::new("用户要求[移动配件]，智能体已完成[查询位置]，当前状态[待执行移动]");
+        let client =
+            MockLlmClient::new("用户要求[移动配件]，智能体已完成[查询位置]，当前状态[待执行移动]");
         // 20 messages × ~500 chars each ≈ 10000 chars total
         let mut msgs: Vec<LlmMessage> = (0..20)
             .map(|i| {
@@ -2020,7 +2051,10 @@ mod tests {
 
         // keep_chars=2000 forces compaction of older messages
         let result = compact_summarise(msgs.clone(), 2_000, &client, "test-model", 1024).await;
-        assert!(result.is_some(), "should compact when messages exceed keep_chars");
+        assert!(
+            result.is_some(),
+            "should compact when messages exceed keep_chars"
+        );
 
         let compacted = result.unwrap();
         assert!(
@@ -2099,7 +2133,10 @@ mod tests {
         let client = FailingLlmClient;
         let msgs = make_realistic_session(20);
         let result = compact_summarise(msgs, 1_000, &client, "test-model", 1024).await;
-        assert!(result.is_none(), "LLM failure should return None from compact_summarise");
+        assert!(
+            result.is_none(),
+            "LLM failure should return None from compact_summarise"
+        );
     }
 
     // ── T10: estimate_message_tokens handles all content types ───────────────
@@ -2111,7 +2148,10 @@ mod tests {
         // Plain text
         let text_msg = make_text_msg("user", &"a".repeat(400));
         let text_tokens = estimate_message_tokens(&text_msg);
-        assert!(text_tokens > 0, "plain text should have non-zero token estimate");
+        assert!(
+            text_tokens > 0,
+            "plain text should have non-zero token estimate"
+        );
         // 400 ASCII chars ÷ 4 = 100 tokens (max(1) applies)
         assert!(
             text_tokens >= 90 && text_tokens <= 110,
@@ -2184,7 +2224,12 @@ mod tests {
             "first message should be summary"
         );
         assert!(
-            compacted.last().unwrap().content.as_text().contains("[系统提示]"),
+            compacted
+                .last()
+                .unwrap()
+                .content
+                .as_text()
+                .contains("[系统提示]"),
             "last message should be continuation reminder"
         );
     }
