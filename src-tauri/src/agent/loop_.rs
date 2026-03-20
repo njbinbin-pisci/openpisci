@@ -703,29 +703,45 @@ impl AgentLoop {
                                 description: msg.clone(),
                             })
                             .await;
-                        match tokio::time::timeout(std::time::Duration::from_secs(60), resp_rx)
-                            .await
-                        {
-                            Ok(Ok(true)) => {
-                                debug!("User approved tool '{}' execution", name);
-                            }
-                            _ => {
-                                warn!("Tool '{}' denied by user or timed out", name);
-                                let _ = event_tx
-                                    .send(AgentEvent::ToolEnd {
-                                        id: id.to_string(),
-                                        name: name.to_string(),
-                                        result: "Denied by user".into(),
-                                        is_error: true,
-                                    })
-                                    .await;
-                                blocks.push(ContentBlock::ToolResult {
-                                    tool_use_id: id.to_string(),
-                                    content: "User denied this operation".into(),
+                        let cancel_for_perm = Arc::clone(cancel);
+                        let approved = tokio::select! {
+                            biased;
+                            // User cancelled the whole run while waiting for permission
+                            _ = async {
+                                loop {
+                                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                                    if cancel_for_perm.load(Ordering::Relaxed) { break; }
+                                }
+                            } => false,
+                            // 60-second timeout waiting for the user to click approve/deny
+                            result = tokio::time::timeout(
+                                std::time::Duration::from_secs(60),
+                                resp_rx,
+                            ) => matches!(result, Ok(Ok(true))),
+                        };
+                        if approved {
+                            debug!("User approved tool '{}' execution", name);
+                        } else {
+                            let reason = if cancel.load(Ordering::Relaxed) {
+                                "已被用户取消"
+                            } else {
+                                "User denied this operation"
+                            };
+                            warn!("Tool '{}' denied/cancelled: {}", name, reason);
+                            let _ = event_tx
+                                .send(AgentEvent::ToolEnd {
+                                    id: id.to_string(),
+                                    name: name.to_string(),
+                                    result: reason.into(),
                                     is_error: true,
-                                });
-                                return blocks;
-                            }
+                                })
+                                .await;
+                            blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id.to_string(),
+                                content: reason.into(),
+                                is_error: true,
+                            });
+                            return blocks;
                         }
                     }
                 } else {
@@ -1123,7 +1139,30 @@ impl AgentLoop {
                     };
 
                     for attempt in 0..LLM_MAX_RETRIES {
-                        match self.client.complete(req.clone()).await {
+                        // Check cancel before each LLM attempt
+                        if cancel.load(Ordering::Relaxed) {
+                            break 'model_loop;
+                        }
+
+                        // Race the LLM call against the cancel flag (200ms poll)
+                        let cancel_for_llm = Arc::clone(&cancel);
+                        let llm_result = tokio::select! {
+                            biased;
+                            _ = async {
+                                loop {
+                                    tokio::time::sleep(
+                                        std::time::Duration::from_millis(200),
+                                    ).await;
+                                    if cancel_for_llm.load(Ordering::Relaxed) { break; }
+                                }
+                            } => {
+                                info!("LLM call cancelled by user");
+                                break 'model_loop;
+                            }
+                            r = self.client.complete(req.clone()) => r,
+                        };
+
+                        match llm_result {
                             Ok(r) => {
                                 resp = Some(r);
                                 break 'model_loop;
@@ -1188,8 +1227,23 @@ impl AgentLoop {
                                         last_err = Some(e);
                                         break 'model_loop;
                                     }
+                                    // Interruptible backoff sleep — cancel exits immediately
                                     let backoff = std::time::Duration::from_secs(1 << attempt);
-                                    tokio::time::sleep(backoff).await;
+                                    let cancel_for_sleep = Arc::clone(&cancel);
+                                    tokio::select! {
+                                        biased;
+                                        _ = async {
+                                            loop {
+                                                tokio::time::sleep(
+                                                    std::time::Duration::from_millis(200),
+                                                ).await;
+                                                if cancel_for_sleep.load(Ordering::Relaxed) {
+                                                    break;
+                                                }
+                                            }
+                                        } => { break 'model_loop; }
+                                        _ = tokio::time::sleep(backoff) => {}
+                                    }
                                     last_err = Some(e);
                                 }
                             }
@@ -1199,7 +1253,11 @@ impl AgentLoop {
                 match resp {
                     Some(r) => r,
                     None => {
-                        return Err(last_err.unwrap_or_else(|| anyhow::anyhow!("LLM call failed")))
+                        // If cancelled, break the outer iteration loop cleanly
+                        if cancel.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        return Err(last_err.unwrap_or_else(|| anyhow::anyhow!("LLM call failed")));
                     }
                 }
             };
