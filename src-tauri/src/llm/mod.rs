@@ -173,6 +173,25 @@ pub fn estimate_tokens(text: &str) -> usize {
     cjk_count + (ascii_count / 4).max(1)
 }
 
+/// Estimate the token count for a single LlmMessage.
+/// Correctly handles Blocks content (ToolUse/ToolResult) which as_text() ignores.
+pub fn estimate_message_tokens(msg: &LlmMessage) -> usize {
+    match &msg.content {
+        MessageContent::Text(t) => estimate_tokens(t),
+        MessageContent::Blocks(blocks) => blocks
+            .iter()
+            .map(|b| match b {
+                ContentBlock::Text { text } => estimate_tokens(text),
+                ContentBlock::ToolUse { name, input, .. } => {
+                    estimate_tokens(name) + estimate_tokens(&input.to_string())
+                }
+                ContentBlock::ToolResult { content, .. } => estimate_tokens(content),
+                ContentBlock::Image { .. } => 256, // rough image token estimate
+            })
+            .sum(),
+    }
+}
+
 /// Compute the usable token budget from settings.
 ///
 /// `context_window` is the user-configured input context limit (0 = auto).

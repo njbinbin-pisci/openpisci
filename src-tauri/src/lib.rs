@@ -611,19 +611,53 @@ pub fn run() {
                 });
             }
 
-            // ── Startup skill cleanup: remove stale DB placeholders only ──
-            // Database is the source of truth for installed/enabled skills. We do not
-            // auto-import arbitrary skill folders from disk on startup.
+            // ── Startup skill sync: upsert all on-disk skills into DB, then clean stale entries ──
+            // This ensures skills added via Junction links or manual file placement are always
+            // registered after restart, without requiring the user to click "Sync from disk".
+            // upsert_skill uses ON CONFLICT DO UPDATE that does NOT touch the `enabled` column,
+            // so user toggle preferences are preserved across restarts.
             {
                 let db_arc = state.db.clone();
+                let app_handle_clone = app_handle.clone();
                 tauri::async_runtime::block_on(async {
+                    let app_dir = app_handle_clone
+                        .path()
+                        .app_data_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
+                    let skills_dir = app_dir.join("skills");
+
+                    // Load all skills from disk
+                    let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+                    if let Err(e) = loader.load_all() {
+                        tracing::warn!("Startup skill sync: failed to load skills from disk: {}", e);
+                    }
+
                     let db = db_arc.lock().await;
-                    // Clean up any stale "unnamed" DB entries left from previous bad parses
+
+                    // Upsert every valid on-disk skill into the DB (idempotent, preserves enabled)
+                    for skill in loader.list_skills() {
+                        if skill.name.is_empty() || skill.name == "unnamed" {
+                            continue;
+                        }
+                        let safe_id: String = skill
+                            .name
+                            .chars()
+                            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                            .collect::<String>()
+                            .to_lowercase();
+                        if let Err(e) = db.upsert_skill(&safe_id, &skill.name, &skill.description, "📦") {
+                            tracing::warn!("Startup skill sync: failed to upsert '{}': {}", skill.name, e);
+                        } else {
+                            tracing::debug!("Startup skill sync: upserted '{}'", skill.name);
+                        }
+                    }
+
+                    // Clean up stale "unnamed" DB entries left from previous bad parses
                     if let Ok(db_skills) = db.list_skills() {
                         for s in db_skills {
                             if s.name == "unnamed" || s.id == "unnamed" {
                                 let _ = db.delete_skill(&s.id);
-                                tracing::info!("Startup skill cleanup: removed stale 'unnamed' entry '{}'", s.id);
+                                tracing::info!("Startup skill sync: removed stale 'unnamed' entry '{}'", s.id);
                             }
                         }
                     }
@@ -828,6 +862,7 @@ pub fn run() {
             commands::skills::list_skills,
             commands::skills::toggle_skill,
             commands::skills::scan_skill_catalog,
+            commands::skills::sync_skills_from_disk,
             commands::skills::install_skill,
             commands::skills::uninstall_skill,
             commands::skills::clawhub_search,

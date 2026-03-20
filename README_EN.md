@@ -1,4 +1,4 @@
-﻿# 🐟 OpenPisci
+# 🐟 OpenPisci
 
 **Open-source Windows AI Agent Desktop**
 
@@ -333,6 +333,13 @@ OpenPisci
 ---
 
 ## 📋 Changelog
+
+### v0.5.12
+- **Compression algorithm unit tests**: Added 11 dedicated tests inside `AgentLoop` covering Level-1 tool result trimming (`compact_trim_tool_results`), Level-2 LLM summarisation (`compact_summarise`), `estimate_message_tokens` for all message types, and a regression test for the 154-message crash scenario
+- **Per-Koi `max_iterations`**: Each Koi can now have its own maximum iteration limit configured in its detail view, overriding the global default
+- **Compression algorithm fixes**: Fixed `compact_summarise` extracting empty content from ToolUse/ToolResult messages — the summarisation prompt now includes real tool call information; fixed an infinite loop when summarisation fails; added proactive compression trigger (compresses when context exceeds 80% of budget before calling the LLM); injected a continuation reminder after compression to prevent the LLM from treating the summary as a completed task
+- **Chat bubble stability**: After an agent turn ends, the merged streaming message view is preserved instead of being split into many individual bubbles
+- **Chat scroll fix**: Fixed the entire main window jumping upward when messages refresh
 
 ### v0.5.8
 - **Project pause / resume / archive**: users can now pause, resume, or archive projects directly from the Pond UI without going through Pisci; pausing automatically cancels running Koi tasks and resets in-progress todos

@@ -561,6 +561,11 @@ const zh = {
     hubSearchFailed: "搜索失败：{{error}}",
     hubEmpty: "点击搜索按钮开始",
     hubEmptyDesc: "输入关键词或直接点击搜索，从 ClawHub 发现并安装技能。",
+    syncBtn: "同步磁盘",
+    syncing: "同步中…",
+    syncSuccess: "同步完成：新注册 {{synced}} 个技能，已有 {{already}} 个",
+    syncNone: "无新技能，磁盘与数据库已同步",
+    syncFailed: "同步失败：{{error}}",
   },
 
   // 定时任务

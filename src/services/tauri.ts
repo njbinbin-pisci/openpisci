@@ -322,6 +322,12 @@ export interface SkillCompatibilityCheck {
   warnings: string[];
 }
 
+export interface SyncSkillsResult {
+  synced: number;
+  already_registered: number;
+  errors: string[];
+}
+
 export const skillsApi = {
   list: () => invoke<{ skills: Skill[]; total: number }>("list_skills"),
   toggle: (skillId: string, enabled: boolean) =>
@@ -331,6 +337,7 @@ export const skillsApi = {
   uninstall: (skillName: string) => invoke<void>("uninstall_skill", { skillName }),
   checkCompat: (source: string) =>
     invoke<SkillCompatibilityCheck>("check_skill_compat", { source }),
+  syncFromDisk: () => invoke<SyncSkillsResult>("sync_skills_from_disk"),
 };
 
 // ---------------------------------------------------------------------------

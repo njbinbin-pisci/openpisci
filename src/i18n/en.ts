@@ -561,6 +561,11 @@ const en = {
     hubSearchFailed: "Search failed: {{error}}",
     hubEmpty: "Click Search to get started",
     hubEmptyDesc: "Enter keywords or click Search to browse skills from ClawHub.",
+    syncBtn: "Sync Disk",
+    syncing: "Syncing…",
+    syncSuccess: "Sync complete: {{synced}} new skill(s) registered, {{already}} already up-to-date",
+    syncNone: "Nothing to sync — disk and database are already in sync",
+    syncFailed: "Sync failed: {{error}}",
   },
 
   // Scheduler

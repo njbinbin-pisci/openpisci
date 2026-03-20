@@ -1257,9 +1257,9 @@ pub fn build_system_prompt_with_env(
 Today's date: {date}{workspace_line}
 
 ## ⚡ First Step: Always Check Skills
-Before doing anything else, call `skill_search` with the user's task as the query.
-- If a matching skill is found → follow its instructions exactly.
-- If no skill matches → proceed with your built-in capabilities below.
+Before doing anything else, call `skill_list` to see all available skills.
+- If one skill clearly applies → read its SKILL.md with `file_read`, then follow it exactly.
+- If none apply → proceed with your built-in capabilities below.
 This applies to every new task, no exceptions.
 
 ## Tool Selection Decision Tree
@@ -1594,10 +1594,9 @@ Use diagrams proactively when they make information clearer. Keep them concise.{
         } else {
             format!(
                 "\n\n## Available Skills\n\
-                 When you receive a task, **first call `skill_search`** to find relevant skills. \
-                 If a matching skill is found, follow its instructions. \
-                 If no skill matches, proceed with your built-in capabilities.\n\n\
-                 Installed skills (use skill_search to load full instructions):\n{}",
+                 Call `skill_list` to browse all skills (name + description + SKILL.md path).\n\
+                 Once you identify a matching skill, use `file_read` to load its SKILL.md and follow it.\n\n\
+                 {}",
                 skill_context
             )
         }

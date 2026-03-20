@@ -21,7 +21,7 @@ pub mod pool_org;
 pub mod powershell;
 pub mod process_control;
 pub mod shell;
-pub mod skill_search;
+pub mod skill_list;
 pub mod ssh;
 pub mod user_tool;
 pub mod vision_context;
@@ -200,10 +200,10 @@ pub fn build_registry(
         }
     }
 
-    // skill_search tool — lazy-load skill instructions on demand
-    if is_enabled("skill_search") {
+    // skill_list tool — browse installed skills
+    if is_enabled("skill_list") {
         if let Some(loader) = skill_loader {
-            registry.register(Box::new(skill_search::SkillSearchTool { loader }));
+            registry.register(Box::new(skill_list::SkillListTool { loader }));
         }
     }
 

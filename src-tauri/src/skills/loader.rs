@@ -171,8 +171,11 @@ impl SkillLoader {
     }
 
     fn load_skill(&self, path: &Path) -> Result<SkillDefinition> {
-        let content =
-            std::fs::read_to_string(path).with_context(|| format!("Failed to read {:?}", path))?;
+        let raw =
+            std::fs::read(path).with_context(|| format!("Failed to read {:?}", path))?;
+        // Strip UTF-8 BOM (EF BB BF) if present so YAML frontmatter parses correctly.
+        let raw = if raw.starts_with(b"\xEF\xBB\xBF") { &raw[3..] } else { &raw[..] };
+        let content = String::from_utf8_lossy(raw).into_owned();
 
         let (frontmatter, instructions) = parse_frontmatter(&content)?;
 
@@ -552,64 +555,26 @@ impl SkillLoader {
         prompt
     }
 
-    /// Generate a lightweight skill directory (name + one-line description only).
-    /// Used in system prompt instead of full instructions to avoid context overflow.
-    /// Each entry is ~10 tokens; 100 skills ≈ 1000 tokens total.
+    /// Generate a skill directory for the system prompt.
+    /// Each entry includes name, description, and the SKILL.md path so the LLM
+    /// can load it directly with file_read after calling skill_list.
+    /// Format: `- **name** (path/to/SKILL.md): description`
     pub fn generate_skill_directory(&self, enabled_skills: &[String]) -> String {
         let mut lines = Vec::new();
         for name in enabled_skills {
             if let Some(skill) = self.skills.get(name) {
-                lines.push(format!("- **{}**: {}", skill.name, skill.description));
+                let skill_md = skill.source_path.join("SKILL.md");
+                lines.push(format!(
+                    "- **{}** (`{}`): {}",
+                    skill.name,
+                    skill_md.display(),
+                    skill.description
+                ));
             }
         }
         lines.join("\n")
     }
 
-    /// Search skills by keyword using in-memory substring matching.
-    /// Supports mixed Chinese/English queries without any external tokenizer.
-    ///
-    /// Matching strategy:
-    /// 1. Split query into tokens on whitespace and punctuation
-    /// 2. For each skill, concatenate name + description + triggers
-    /// 3. A skill matches if any query token (>= 2 chars) appears in the concatenated string
-    /// 4. Results sorted by number of matching tokens descending, top 5 returned
-    pub fn search_skills(&self, query: &str) -> Vec<&SkillDefinition> {
-        // Split query into tokens: split on ASCII whitespace/punctuation, keep CJK chars together
-        let tokens: Vec<String> = query
-            .split(|c: char| c.is_ascii_punctuation() || c.is_ascii_whitespace())
-            .filter(|t| t.chars().count() >= 2)
-            .map(|t| t.to_lowercase())
-            .collect();
-
-        if tokens.is_empty() {
-            return vec![];
-        }
-
-        let mut scored: Vec<(usize, &SkillDefinition)> = self
-            .skills
-            .values()
-            .filter_map(|skill| {
-                let haystack = format!(
-                    "{} {} {}",
-                    skill.name.to_lowercase(),
-                    skill.description.to_lowercase(),
-                    skill.triggers.join(" ").to_lowercase()
-                );
-                let hits = tokens
-                    .iter()
-                    .filter(|t| haystack.contains(t.as_str()))
-                    .count();
-                if hits > 0 {
-                    Some((hits, skill))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
-        scored.into_iter().take(5).map(|(_, s)| s).collect()
-    }
 
     /// Get the full instructions for a skill by name.
     #[allow(dead_code)]

@@ -428,10 +428,24 @@ async fn compact_summarise(
     // We always keep at least the last 2 messages intact so the LLM has immediate
     // context regardless of how large they are.
     let mut acc = 0usize;
-    // Default: summarise everything except the last 2 messages.
-    let mut split_idx = messages.len().saturating_sub(2);
+    // Default: summarise everything except the last 6 messages (3 tool call rounds).
+    let mut split_idx = messages.len().saturating_sub(6);
     for (i, msg) in messages.iter().enumerate().rev() {
-        let chars = crate::llm::estimate_tokens(&msg.content.as_text()) * 4;
+        // For tool-call messages (Blocks), estimate size from the serialised JSON
+        // since as_text() returns empty string for ToolUse/ToolResult blocks.
+        let chars = match &msg.content {
+            crate::llm::MessageContent::Text(t) => crate::llm::estimate_tokens(t) * 4,
+            crate::llm::MessageContent::Blocks(blocks) => {
+                blocks.iter().map(|b| match b {
+                    crate::llm::ContentBlock::Text { text } => text.len(),
+                    crate::llm::ContentBlock::ToolUse { name, input, .. } => {
+                        name.len() + input.to_string().len()
+                    }
+                    crate::llm::ContentBlock::ToolResult { content, .. } => content.len(),
+                    _ => 0,
+                }).sum::<usize>()
+            }
+        };
         acc += chars;
         // Once the tail accumulation exceeds keep_chars, everything before
         // index i belongs to the "old" region to be summarised.
@@ -459,7 +473,32 @@ async fn compact_summarise(
             } else {
                 "智能体"
             };
-            let text = m.content.as_text();
+            // as_text() returns empty for Blocks(ToolUse/ToolResult) — extract manually.
+            let text = match &m.content {
+                crate::llm::MessageContent::Text(t) => t.clone(),
+                crate::llm::MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        crate::llm::ContentBlock::Text { text } => {
+                            if text.is_empty() { None } else { Some(text.clone()) }
+                        }
+                        crate::llm::ContentBlock::ToolUse { name, input, .. } => {
+                            let input_str = input.to_string();
+                            let preview: String = input_str.chars().take(200).collect();
+                            Some(format!("调用工具 {}: {}", name, preview))
+                        }
+                        crate::llm::ContentBlock::ToolResult { content, .. } => {
+                            let preview: String = content.chars().take(200).collect();
+                            Some(format!("工具结果: {}", preview))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            };
+            if text.is_empty() {
+                return String::new();
+            }
             let snippet = if text.chars().count() > 500 {
                 format!("{}...", text.chars().take(500).collect::<String>())
             } else {
@@ -467,6 +506,7 @@ async fn compact_summarise(
             };
             format!("[{}]: {}", role, snippet)
         })
+        .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
 
@@ -504,6 +544,15 @@ async fn compact_summarise(
             };
             let mut new_messages = vec![summary_msg];
             new_messages.extend_from_slice(&messages[split_idx..]);
+            // After compaction, inject a continuation reminder so the LLM doesn't
+            // mistake the summary for a completed task and stop prematurely.
+            new_messages.push(crate::llm::LlmMessage {
+                role: "user".into(),
+                content: crate::llm::MessageContent::text(
+                    "[系统提示] 以上是对话历史的压缩摘要。请根据摘要中的「当前状态」继续完成尚未完成的任务，不要重复已完成的工作。"
+                        .to_string(),
+                ),
+            });
             Some(new_messages)
         }
         Ok(_) | Err(_) => None,
@@ -990,6 +1039,39 @@ impl AgentLoop {
                 // single_limit in chars: budget_tokens × share × 4 chars/token
                 let single_limit = (budget as f64 * CONTEXT_SINGLE_RESULT_SHARE * 4.0) as usize;
                 compact_trim_tool_results(&mut messages, single_limit);
+
+                // Dynamic compaction (Level-2 proactive): if estimated token count exceeds
+                // 80% of the budget, summarise old messages now — before the LLM call —
+                // rather than waiting for a context overflow error (which some models never
+                // emit, instead silently truncating or producing near-empty responses).
+                let estimated: usize = messages
+                    .iter()
+                    .map(crate::llm::estimate_message_tokens)
+                    .sum();
+                if estimated > (budget as f64 * 0.80) as usize {
+                    let keep_chars =
+                        (budget as f64 * SUMMARY_KEEP_RECENT_RATIO * 4.0) as usize;
+                    warn!(
+                        "proactive compaction: estimated_tokens={} > 80% of budget={}, keep_chars={}",
+                        estimated, budget, keep_chars
+                    );
+                    if let Some(compacted) = compact_summarise(
+                        messages.clone(),
+                        keep_chars,
+                        self.client.as_ref(),
+                        &self.model,
+                        self.max_tokens,
+                    )
+                    .await
+                    {
+                        info!(
+                            "proactive summarisation complete: {} → {} messages",
+                            messages.len(),
+                            compacted.len()
+                        );
+                        messages = compacted;
+                    }
+                }
             }
 
             info!(
@@ -1062,25 +1144,29 @@ impl AgentLoop {
                                     let keep_chars =
                                         (budget as f64 * SUMMARY_KEEP_RECENT_RATIO * 4.0) as usize;
                                     warn!("context overflow — attempting LLM summarisation (keep_chars={})", keep_chars);
-                                    if let Some(compacted) = compact_summarise(
+                                    let compacted = compact_summarise(
                                         messages.clone(),
                                         keep_chars,
                                         self.client.as_ref(),
                                         model_candidate,
                                         self.max_tokens,
                                     )
-                                    .await
-                                    {
-                                        messages = compacted;
+                                    .await;
+                                    if let Some(c) = compacted {
+                                        messages = c;
                                         info!(
                                             "summarisation complete, messages={}",
                                             messages.len()
                                         );
+                                        // Restart model_loop with the compacted context.
+                                        last_err = Some(e);
+                                        continue 'model_loop;
+                                    } else {
+                                        // Summarisation failed — cannot recover from overflow.
+                                        warn!("summarisation failed, cannot recover from context overflow");
+                                        last_err = Some(e);
+                                        break 'model_loop;
                                     }
-                                    // Restart model_loop with fresh req_messages built
-                                    // from the now-compacted messages.
-                                    last_err = Some(e);
-                                    continue 'model_loop;
                                 } else if is_fallback_eligible_error(&msg) {
                                     // rate_limit / model_not_found: try next fallback model.
                                     // overloaded is intentionally excluded — it should be
@@ -1632,5 +1718,474 @@ fn audit_action_label(tool_name: &str, input: &serde_json::Value) -> String {
             }
             tool_name.to_string()
         }
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::{compact_summarise, compact_trim_tool_results, CTX_TRIM_HEAD, CTX_TRIM_TAIL};
+    use crate::llm::{
+        ContentBlock, LlmChunk, LlmMessage, LlmRequest, LlmResponse, MessageContent,
+    };
+    use anyhow::Result;
+    use async_trait::async_trait;
+
+    // ── Mock LLM clients ──────────────────────────────────────────────────────
+
+    /// Returns a fixed summary string — simulates a successful LLM summarisation call.
+    struct MockLlmClient {
+        response: String,
+    }
+
+    impl MockLlmClient {
+        fn new(response: impl Into<String>) -> Self {
+            Self { response: response.into() }
+        }
+    }
+
+    #[async_trait]
+    impl crate::llm::LlmClient for MockLlmClient {
+        async fn stream(
+            &self,
+            _req: LlmRequest,
+            _tx: tokio::sync::mpsc::Sender<LlmChunk>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn complete(&self, _req: LlmRequest) -> Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: self.response.clone(),
+                tool_calls: vec![],
+                input_tokens: 10,
+                output_tokens: 10,
+            })
+        }
+    }
+
+    /// Always returns an error — simulates a failed LLM call.
+    struct FailingLlmClient;
+
+    #[async_trait]
+    impl crate::llm::LlmClient for FailingLlmClient {
+        async fn stream(
+            &self,
+            _req: LlmRequest,
+            _tx: tokio::sync::mpsc::Sender<LlmChunk>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn complete(&self, _req: LlmRequest) -> Result<LlmResponse> {
+            Err(anyhow::anyhow!("simulated LLM failure"))
+        }
+    }
+
+    // ── Test data helpers ─────────────────────────────────────────────────────
+
+    fn make_text_msg(role: &str, text: &str) -> LlmMessage {
+        LlmMessage {
+            role: role.to_string(),
+            content: MessageContent::Text(text.to_string()),
+        }
+    }
+
+    /// Assistant message with a ToolUse block (mirrors real DB tool_calls_json).
+    fn make_tool_call_msg(tool_name: &str, input_json: &str) -> LlmMessage {
+        LlmMessage {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Text {
+                    text: format!("正在调用 {}...", tool_name),
+                },
+                ContentBlock::ToolUse {
+                    id: format!("call_{}", tool_name),
+                    name: tool_name.to_string(),
+                    input: serde_json::from_str(input_json)
+                        .unwrap_or(serde_json::Value::Null),
+                },
+            ]),
+        }
+    }
+
+    /// User message with a ToolResult block (mirrors real DB tool_results_json).
+    fn make_tool_result_msg(tool_use_id: &str, content: &str) -> LlmMessage {
+        LlmMessage {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: tool_use_id.to_string(),
+                content: content.to_string(),
+                is_error: false,
+            }]),
+        }
+    }
+
+    /// User message with a large ToolResult of exactly `size_chars` characters.
+    fn make_large_tool_result(size_chars: usize) -> LlmMessage {
+        let content = "x".repeat(size_chars);
+        make_tool_result_msg("call_large", &content)
+    }
+
+    /// Simulate a realistic agent session with `n_tool_rounds` tool call rounds.
+    /// Structure mirrors what the real AgentLoop produces in memory:
+    ///   user text → [assistant(ToolUse) → user(ToolResult)] × n_rounds → assistant text
+    fn make_realistic_session(n_tool_rounds: usize) -> Vec<LlmMessage> {
+        let mut msgs = vec![make_text_msg(
+            "user",
+            "请帮我在Tribon中移动配件位置，将管道支撑从坐标(100,200,300)移动到(150,250,350)",
+        )];
+        for i in 0..n_tool_rounds {
+            // assistant calls a tool (shell, file_read, com_invoke, etc.)
+            let tool_names = ["shell", "file_read", "com_invoke", "plan_todo", "file_write"];
+            let tool_name = tool_names[i % tool_names.len()];
+            let input = match tool_name {
+                "shell" => format!(
+                    r#"{{"command":"python tribon_move.py --id {} --x 150 --y 250 --z 350"}}"#,
+                    i
+                ),
+                "file_read" => format!(r#"{{"path":"C:\\Tribon\\project\\part_{}.xml"}}"#, i),
+                "com_invoke" => format!(
+                    r#"{{"prog_id":"Tribon.Application","method":"MoveComponent","args":[{},150,250,350]}}"#,
+                    i
+                ),
+                "plan_todo" => format!(
+                    r#"{{"merge":true,"todos":[{{"id":"step-{}","content":"移动配件{}","status":"completed"}}]}}"#,
+                    i, i
+                ),
+                _ => format!(r#"{{"path":"C:\\output\\result_{}.txt","content":"done"}}"#, i),
+            };
+            msgs.push(make_tool_call_msg(tool_name, &input));
+
+            // tool result (realistic size: 200-2000 chars)
+            let result_size = 200 + (i * 37) % 1800;
+            let result_content = format!(
+                "工具 {} 执行结果 (迭代 {}):\n{}\n退出码: 0",
+                tool_name,
+                i,
+                "a".repeat(result_size)
+            );
+            msgs.push(make_tool_result_msg(&format!("call_{}", tool_name), &result_content));
+        }
+        msgs.push(make_text_msg(
+            "assistant",
+            "配件移动完成。已将管道支撑从(100,200,300)成功移动到(150,250,350)。",
+        ));
+        msgs
+    }
+
+    // ── T1: Level-1 — small result not trimmed ────────────────────────────────
+
+    #[test]
+    fn t1_small_tool_result_not_trimmed() {
+        let original = "x".repeat(1_000);
+        let mut msgs = vec![make_tool_result_msg("call_1", &original)];
+        let changed = compact_trim_tool_results(&mut msgs, 50_000);
+        assert!(!changed, "should not trim a 1000-char result with limit=50000");
+        if let MessageContent::Blocks(ref blocks) = msgs[0].content {
+            if let ContentBlock::ToolResult { content, .. } = &blocks[0] {
+                assert_eq!(*content, original, "content should be unchanged");
+            }
+        }
+    }
+
+    // ── T2: Level-1 — oversized result trimmed ────────────────────────────────
+
+    #[test]
+    fn t2_large_tool_result_trimmed() {
+        let mut msgs = vec![make_large_tool_result(100_000)];
+        let changed = compact_trim_tool_results(&mut msgs, 10_000);
+        assert!(changed, "should trim a 100000-char result with limit=10000");
+        if let MessageContent::Blocks(ref blocks) = msgs[0].content {
+            if let ContentBlock::ToolResult { content, .. } = &blocks[0] {
+                assert!(
+                    content.contains("chars removed"),
+                    "trimmed content should contain 'chars removed' marker"
+                );
+                // Verify head and tail are preserved
+                let head_check: String = "x".repeat(CTX_TRIM_HEAD);
+                assert!(content.starts_with(&head_check), "head should be preserved");
+                let tail_check: String = "x".repeat(CTX_TRIM_TAIL);
+                assert!(content.ends_with(&tail_check), "tail should be preserved");
+            }
+        }
+    }
+
+    // ── T3: Level-1 — assistant messages not trimmed ─────────────────────────
+
+    #[test]
+    fn t3_assistant_tool_use_not_trimmed() {
+        // assistant ToolUse messages should never be touched by Level-1
+        let large_input = serde_json::json!({"command": "x".repeat(50_000)});
+        let mut msgs = vec![LlmMessage {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "call_big".to_string(),
+                name: "shell".to_string(),
+                input: large_input.clone(),
+            }]),
+        }];
+        let changed = compact_trim_tool_results(&mut msgs, 1_000);
+        assert!(!changed, "assistant ToolUse should never be trimmed by Level-1");
+        if let MessageContent::Blocks(ref blocks) = msgs[0].content {
+            if let ContentBlock::ToolUse { input, .. } = &blocks[0] {
+                assert_eq!(*input, large_input, "ToolUse input should be unchanged");
+            }
+        }
+    }
+
+    // ── T4: Level-1 — mixed messages, only oversized user results trimmed ─────
+
+    #[test]
+    fn t4_mixed_messages_only_oversized_trimmed() {
+        let limit = 5_000;
+        let threshold = limit.max(CTX_TRIM_HEAD + CTX_TRIM_TAIL + 100);
+
+        let small = make_tool_result_msg("c1", &"a".repeat(500));
+        let medium = make_tool_result_msg("c2", &"b".repeat(threshold - 1)); // just under threshold
+        let large = make_large_tool_result(threshold + 10_000); // well over threshold
+        let assistant = make_tool_call_msg("shell", r#"{"command":"ls"}"#);
+
+        let mut msgs = vec![small, medium, large, assistant];
+        let original_small = "a".repeat(500);
+        let original_medium = "b".repeat(threshold - 1);
+
+        let changed = compact_trim_tool_results(&mut msgs, limit);
+        assert!(changed, "should report change because large result was trimmed");
+
+        // small: unchanged
+        if let MessageContent::Blocks(ref b) = msgs[0].content {
+            if let ContentBlock::ToolResult { content, .. } = &b[0] {
+                assert_eq!(*content, original_small);
+            }
+        }
+        // medium: unchanged (just under threshold)
+        if let MessageContent::Blocks(ref b) = msgs[1].content {
+            if let ContentBlock::ToolResult { content, .. } = &b[0] {
+                assert_eq!(*content, original_medium);
+            }
+        }
+        // large: trimmed
+        if let MessageContent::Blocks(ref b) = msgs[2].content {
+            if let ContentBlock::ToolResult { content, .. } = &b[0] {
+                assert!(content.contains("chars removed"), "large result should be trimmed");
+            }
+        }
+        // assistant: unchanged
+        assert_eq!(msgs[3].role, "assistant");
+    }
+
+    // ── T5: Level-2 — too few messages returns None ───────────────────────────
+
+    #[tokio::test]
+    async fn t5_too_few_messages_returns_none() {
+        let client = MockLlmClient::new("摘要内容");
+        let msgs = vec![make_text_msg("user", "只有一条消息")];
+        let result = compact_summarise(msgs, 100_000, &client, "test-model", 1024).await;
+        assert!(result.is_none(), "single message should return None");
+    }
+
+    // ── T6: Level-2 — all messages fit in keep_chars, returns None ────────────
+
+    #[tokio::test]
+    async fn t6_all_fit_in_budget_returns_none() {
+        let client = MockLlmClient::new("摘要内容");
+        let msgs = vec![
+            make_text_msg("user", "短消息1"),
+            make_text_msg("assistant", "短回复1"),
+            make_text_msg("user", "短消息2"),
+        ];
+        // keep_chars=100000 >> total size of 3 short messages
+        let result = compact_summarise(msgs, 100_000, &client, "test-model", 1024).await;
+        assert!(result.is_none(), "all messages fit in budget, should return None");
+    }
+
+    // ── T7: Level-2 — plain text messages compacted correctly ────────────────
+
+    #[tokio::test]
+    async fn t7_plain_text_messages_compacted() {
+        let client = MockLlmClient::new("用户要求[移动配件]，智能体已完成[查询位置]，当前状态[待执行移动]");
+        // 20 messages × ~500 chars each ≈ 10000 chars total
+        let mut msgs: Vec<LlmMessage> = (0..20)
+            .map(|i| {
+                let role = if i % 2 == 0 { "user" } else { "assistant" };
+                make_text_msg(role, &format!("消息内容 {}: {}", i, "x".repeat(500)))
+            })
+            .collect();
+        // Ensure alternating roles start with user
+        msgs[0] = make_text_msg("user", &format!("用户请求: {}", "x".repeat(500)));
+
+        // keep_chars=2000 forces compaction of older messages
+        let result = compact_summarise(msgs.clone(), 2_000, &client, "test-model", 1024).await;
+        assert!(result.is_some(), "should compact when messages exceed keep_chars");
+
+        let compacted = result.unwrap();
+        assert!(
+            compacted.len() < msgs.len(),
+            "compacted messages ({}) should be fewer than original ({})",
+            compacted.len(),
+            msgs.len()
+        );
+
+        // First message should be the summary
+        let first_content = compacted[0].content.as_text();
+        assert!(
+            first_content.contains("[对话摘要]"),
+            "first message should contain [对话摘要], got: {}",
+            &first_content[..first_content.len().min(100)]
+        );
+
+        // Last message should be the continuation reminder
+        let last_content = compacted.last().unwrap().content.as_text();
+        assert!(
+            last_content.contains("[系统提示]"),
+            "last message should contain [系统提示]"
+        );
+    }
+
+    // ── T8: Level-2 — realistic session with tool calls compacted ────────────
+
+    #[tokio::test]
+    async fn t8_realistic_tool_call_session_compacted() {
+        let summary_text =
+            "用户要求[移动Tribon配件]，智能体已完成[调用shell脚本、读取XML文件、调用COM接口]，当前状态[验证移动结果]";
+        let client = MockLlmClient::new(summary_text);
+
+        // 30 rounds of tool calls — mirrors the real crash scenario
+        let msgs = make_realistic_session(30);
+        let original_len = msgs.len();
+
+        // keep_chars=5000 forces compaction of the bulk of the history
+        let result = compact_summarise(msgs, 5_000, &client, "deepseek-chat", 4096).await;
+        assert!(result.is_some(), "30-round session should be compacted");
+
+        let compacted = result.unwrap();
+        assert!(
+            compacted.len() < original_len,
+            "compacted ({}) should be fewer than original ({})",
+            compacted.len(),
+            original_len
+        );
+
+        // Summary message should contain tool names (not empty)
+        let summary_msg = &compacted[0];
+        let summary_content = summary_msg.content.as_text();
+        assert!(
+            summary_content.contains("[对话摘要]"),
+            "first message should be summary"
+        );
+        assert!(
+            !summary_content.trim().is_empty(),
+            "summary content should not be empty"
+        );
+
+        // The history_text sent to LLM should have contained tool call info.
+        // We verify this indirectly: the mock returns our fixed summary, which
+        // means compact_summarise successfully called the LLM (didn't short-circuit
+        // due to empty history_text).
+        assert!(
+            summary_content.contains(summary_text),
+            "summary should contain the mock LLM response"
+        );
+    }
+
+    // ── T9: Level-2 — LLM failure returns None ───────────────────────────────
+
+    #[tokio::test]
+    async fn t9_llm_failure_returns_none() {
+        let client = FailingLlmClient;
+        let msgs = make_realistic_session(20);
+        let result = compact_summarise(msgs, 1_000, &client, "test-model", 1024).await;
+        assert!(result.is_none(), "LLM failure should return None from compact_summarise");
+    }
+
+    // ── T10: estimate_message_tokens handles all content types ───────────────
+
+    #[test]
+    fn t10_estimate_message_tokens_all_types() {
+        use crate::llm::estimate_message_tokens;
+
+        // Plain text
+        let text_msg = make_text_msg("user", &"a".repeat(400));
+        let text_tokens = estimate_message_tokens(&text_msg);
+        assert!(text_tokens > 0, "plain text should have non-zero token estimate");
+        // 400 ASCII chars ÷ 4 = 100 tokens (max(1) applies)
+        assert!(
+            text_tokens >= 90 && text_tokens <= 110,
+            "400 ASCII chars should estimate ~100 tokens, got {}",
+            text_tokens
+        );
+
+        // ToolUse (assistant) — previously returned 0 with as_text()
+        let tool_call = make_tool_call_msg("shell", r#"{"command":"python move.py --x 150"}"#);
+        let tool_call_tokens = estimate_message_tokens(&tool_call);
+        assert!(
+            tool_call_tokens > 0,
+            "ToolUse message should have non-zero token estimate, got {}",
+            tool_call_tokens
+        );
+
+        // ToolResult (user) — previously returned 0 with as_text()
+        let tool_result = make_tool_result_msg("call_1", &"result content ".repeat(50));
+        let tool_result_tokens = estimate_message_tokens(&tool_result);
+        assert!(
+            tool_result_tokens > 0,
+            "ToolResult message should have non-zero token estimate, got {}",
+            tool_result_tokens
+        );
+
+        // Large ToolResult should estimate more tokens than small one
+        let small_result = make_tool_result_msg("c1", "short");
+        let large_result = make_large_tool_result(10_000);
+        assert!(
+            estimate_message_tokens(&large_result) > estimate_message_tokens(&small_result),
+            "larger tool result should estimate more tokens"
+        );
+    }
+
+    // ── T11: 154-round crash scenario — split_idx keeps enough tail messages ──
+
+    #[tokio::test]
+    async fn t11_154_round_crash_scenario_split_idx() {
+        let client = MockLlmClient::new(
+            "用户要求[监控路径合规性]，智能体已完成[检查前端和后端代码]，当前状态[待完成报告生成]",
+        );
+
+        // Reproduce the exact crash scenario from the logs:
+        // deepseek-chat, max_tokens=4096 → budget=49000, keep_chars=117600
+        let msgs = make_realistic_session(76); // 76 rounds ≈ 154 messages
+        let original_len = msgs.len();
+
+        // keep_chars matching the real crash: budget(49000) × 0.60 × 4 = 117600
+        let keep_chars = 117_600usize;
+        let result = compact_summarise(msgs, keep_chars, &client, "deepseek-chat", 4096).await;
+
+        assert!(result.is_some(), "154-message session should be compacted");
+        let compacted = result.unwrap();
+
+        // Key regression check: must keep more than just 2 tail messages.
+        // Before the fix, split_idx defaulted to len-2, leaving only 3 messages total.
+        // After the fix, split_idx is computed from actual content sizes.
+        let tail_count = compacted.len() - 1; // subtract the summary message
+        assert!(
+            tail_count >= 6,
+            "should keep at least 6 tail messages (3 tool rounds), got {} tail + 1 summary = {} total (original={})",
+            tail_count,
+            compacted.len(),
+            original_len
+        );
+
+        // Summary should be first, continuation reminder last
+        assert!(
+            compacted[0].content.as_text().contains("[对话摘要]"),
+            "first message should be summary"
+        );
+        assert!(
+            compacted.last().unwrap().content.as_text().contains("[系统提示]"),
+            "last message should be continuation reminder"
+        );
     }
 }

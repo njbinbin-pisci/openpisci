@@ -101,6 +101,10 @@ interface ChatState {
   toolStepsTurnDone: Record<string, boolean>;
   planBySession: Record<string, PlanTodoItem[]>;
   isRunning: Record<string, boolean>;
+  /** Frozen streaming text from the last completed agent turn, keyed by sessionId.
+   *  Used to replace the multi-bubble DB reload with a single merged bubble.
+   *  Cleared when the next user message is sent. */
+  frozenBubble: Record<string, string>;
 }
 
 const chatSlice = createSlice({
@@ -112,6 +116,7 @@ const chatSlice = createSlice({
     toolStepsTurnDone: {},
     planBySession: {},
     isRunning: {},
+    frozenBubble: {},
   } as ChatState,
   reducers: {
     setMessages: (state, action: PayloadAction<{ sessionId: string; messages: ChatMessage[] }>) => {
@@ -175,6 +180,64 @@ const chatSlice = createSlice({
     },
     clearStreaming: (state, action: PayloadAction<string>) => {
       delete state.streaming[action.payload];
+    },
+    /** Called on `done`: snapshot streaming.current into frozenBubble, then clear streaming.
+     *  The frozen text will be used to replace the multi-bubble DB reload with a single bubble. */
+    freezeStreaming: (state, action: PayloadAction<string>) => {
+      const sid = action.payload;
+      const text = state.streaming[sid]?.current ?? "";
+      if (text.trim()) {
+        state.frozenBubble[sid] = text;
+      }
+      delete state.streaming[sid];
+    },
+    /** Like setMessages, but if a frozenBubble exists for this session, replace all assistant
+     *  messages from the last agent turn (after the last real user message) with a single
+     *  synthetic message whose content is the frozen text. */
+    setMessagesWithFrozen: (state, action: PayloadAction<{ sessionId: string; messages: ChatMessage[] }>) => {
+      const { sessionId, messages } = action.payload;
+      const frozen = state.frozenBubble[sessionId];
+      if (!frozen) {
+        state.messagesBySession[sessionId] = messages;
+        return;
+      }
+      // Find the index of the last real (non-optimistic) user message to determine the turn boundary.
+      // Everything after that boundary is the current agent turn's messages.
+      let turnStart = messages.length; // default: no user message found, all are agent turn
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === "user" && !messages[i].id.startsWith("optimistic_")) {
+          turnStart = i + 1;
+          break;
+        }
+      }
+      const before = messages.slice(0, turnStart);
+      const agentMessages = messages.slice(turnStart);
+      // Build a single synthetic assistant message to replace all agent-turn assistant messages.
+      // Preserve the last assistant message's id so React keys are stable on subsequent reloads.
+      const lastAssistant = [...agentMessages].reverse().find((m) => m.role === "assistant");
+      const syntheticId = lastAssistant?.id ?? `frozen_${sessionId}`;
+      const synthetic: ChatMessage = {
+        id: syntheticId,
+        session_id: sessionId,
+        role: "assistant",
+        content: frozen,
+        created_at: lastAssistant?.created_at ?? new Date().toISOString(),
+      };
+      // Keep any chat_ui tool-call messages (interactive cards) from the agent turn as-is.
+      const chatUiMessages = agentMessages.filter(
+        (m) => m.role === "assistant" && m.tool_calls_json &&
+          (() => {
+            try {
+              const calls = JSON.parse(m.tool_calls_json!);
+              return Array.isArray(calls) && calls.some((c: { name: string }) => c.name === "chat_ui");
+            } catch { return false; }
+          })()
+      );
+      state.messagesBySession[sessionId] = [...before, synthetic, ...chatUiMessages];
+    },
+    /** Clear the frozen bubble for a session (called when the next user message is sent). */
+    clearFrozenBubble: (state, action: PayloadAction<string>) => {
+      delete state.frozenBubble[action.payload];
     },
     /** Add a pending tool step when execution starts.
      *  If the previous turn is marked done, clear old steps first (new turn). */

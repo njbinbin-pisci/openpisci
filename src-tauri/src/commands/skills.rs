@@ -143,6 +143,92 @@ pub async fn scan_skill_catalog(
     Ok(items)
 }
 
+/// Scan the skills directory on disk and register any skills that are present
+/// on the filesystem but not yet in the database.  Already-registered skills
+/// are left untouched (their `enabled` flag is preserved).
+///
+/// Returns a summary: `{ synced: N, already_registered: M, errors: [...] }`
+#[derive(Debug, Serialize)]
+pub struct SyncSkillsResult {
+    pub synced: usize,
+    pub already_registered: usize,
+    pub errors: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn sync_skills_from_disk(
+    state: State<'_, AppState>,
+) -> Result<SyncSkillsResult, String> {
+    let app_dir = state
+        .app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
+    let skills_dir = app_dir.join("skills");
+
+    // Load all skills from the filesystem
+    let mut loader = crate::skills::loader::SkillLoader::new(&skills_dir);
+    loader.load_all().map_err(|e| e.to_string())?;
+    let fs_skills = loader.list_skills();
+
+    // Get the set of skill IDs already in the DB
+    let db_skill_ids: std::collections::HashSet<String> = {
+        let db = state.db.lock().await;
+        db.list_skills()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| s.id)
+            .collect()
+    };
+
+    let mut synced = 0usize;
+    let mut already_registered = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+
+    for skill in fs_skills {
+        if skill.name.is_empty() || skill.name == "unnamed" {
+            continue;
+        }
+
+        // Derive the same safe_name key used by install_skill
+        let safe_name: String = skill
+            .name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>()
+            .to_lowercase();
+
+        if db_skill_ids.contains(&safe_name) {
+            already_registered += 1;
+            continue;
+        }
+
+        // Register the skill in the DB (enabled by default)
+        let db = state.db.lock().await;
+        match db.upsert_skill(&safe_name, &skill.name, &skill.description, "📦") {
+            Ok(_) => {
+                info!("sync_skills_from_disk: registered '{}'", skill.name);
+                synced += 1;
+            }
+            Err(e) => {
+                errors.push(format!("'{}': {}", skill.name, e));
+            }
+        }
+    }
+
+    Ok(SyncSkillsResult {
+        synced,
+        already_registered,
+        errors,
+    })
+}
+
 /// Install a skill from a URL (raw SKILL.md) or local file path.
 /// The SKILL.md is downloaded, parsed, and written to the app skills directory.
 async fn install_skill_from_content(

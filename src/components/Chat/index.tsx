@@ -355,6 +355,8 @@ export default function Chat() {
           sessionsApi.getMessages(activeSessionId, CHAT_INITIAL_SIZE, 0),
           sessionsApi.list(),
         ]);
+        // Clear any frozen bubble from a previous turn so the full DB history is shown
+        dispatch(chatActions.clearFrozenBubble(activeSessionId));
         dispatch(chatActions.setMessages({ sessionId: activeSessionId, messages }));
         setHasMoreHistory(messages.length >= CHAT_INITIAL_SIZE);
         if (messages.length > 0) {
@@ -481,13 +483,17 @@ export default function Chat() {
         case "done":
           console.log('[Chat] agent done event, sid=', sid, 'isImSession=', isImSessionRef.current);
           dispatch(chatActions.setRunning({ sessionId: sid, running: false }));
-          dispatch(chatActions.clearStreaming(sid));
+          // Snapshot streaming text into frozenBubble before clearing, so the single merged
+          // bubble is preserved after DB reload replaces the streaming state.
+          dispatch(chatActions.freezeStreaming(sid));
           dispatch(chatActions.removeOptimisticMessages(sid));
           if (!isImSessionRef.current) {
             // Regular chat: reload from DB immediately (persist is synchronous before Done event)
             sessionsApi.getMessages(sid).then((messages) => {
               console.log('[Chat] done: reloaded', messages.length, 'messages for', sid);
-              dispatch(chatActions.setMessages({ sessionId: sid, messages }));
+              // Use setMessagesWithFrozen so the multi-bubble DB result is collapsed back into
+              // the single merged bubble the user saw during streaming.
+              dispatch(chatActions.setMessagesWithFrozen({ sessionId: sid, messages }));
             }).catch(() => {});
           }
           // IM sessions: App.tsx listens for im_session_done (emitted AFTER persist_agent_turn),
@@ -827,6 +833,8 @@ export default function Chat() {
     dispatch(chatActions.clearToolSteps(activeSessionId));
     if (clearPlan) dispatch(chatActions.clearPlan(activeSessionId));
     dispatch(chatActions.clearStreaming(activeSessionId));
+    // Clear frozen bubble so the next turn starts fresh from DB messages
+    dispatch(chatActions.clearFrozenBubble(activeSessionId));
 
     // Auto-title: if this is the first message in the session, derive a title from it
     const currentMessages = messagesBySession[activeSessionId] ?? [];

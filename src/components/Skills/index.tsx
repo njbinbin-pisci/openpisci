@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { RootState, skillsActions } from "../../store";
 import { skillsApi, clawHubApi, SkillCatalogItem, ClawHubSkill, SkillCompatibilityCheck } from "../../services/tauri";
 import ConfirmDialog from "../ConfirmDialog";
+import type { SyncSkillsResult } from "../../services/tauri";
 
 const SOURCE_BADGE: Record<string, { label: string; color: string }> = {
   builtin:   { label: "builtin",   color: "var(--text-muted)" },
@@ -32,6 +33,9 @@ export default function Skills() {
   const [uninstallTarget, setUninstallTarget] = useState<string | null>(null);
   const [uninstalling, setUninstalling] = useState(false);
 
+  // Sync from disk
+  const [syncing, setSyncing] = useState(false);
+
   // ClawHub marketplace
   const [hubTab, setHubTab] = useState<"local" | "hub">("local");
   const [hubQuery, setHubQuery] = useState("");
@@ -51,6 +55,28 @@ export default function Skills() {
   useEffect(() => {
     loadSkills();
   }, [loadSkills]);
+
+  const handleSyncFromDisk = useCallback(async () => {
+    setSyncing(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const result: SyncSkillsResult = await skillsApi.syncFromDisk();
+      if (result.synced > 0) {
+        setSuccessMsg(t("skills.syncSuccess", { synced: result.synced, already: result.already_registered }));
+      } else {
+        setSuccessMsg(t("skills.syncNone"));
+      }
+      if (result.errors.length > 0) {
+        setError(result.errors.join("; "));
+      }
+      loadSkills();
+    } catch (e) {
+      setError(t("skills.syncFailed", { error: String(e) }));
+    } finally {
+      setSyncing(false);
+    }
+  }, [t, loadSkills]);
 
   const handleToggle = async (id: string, enabled: boolean) => {
     try {
@@ -202,9 +228,20 @@ export default function Skills() {
     <div className="page">
       <div className="page-header">
         <h1 className="page-title">⚡ {t("skills.title")}</h1>
-        <span className="badge badge-info">
-          {t("skills.enabledCount", { enabled: visibleSkills.filter((s) => s.enabled).length, total: visibleSkills.length })}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="badge badge-info">
+            {t("skills.enabledCount", { enabled: visibleSkills.filter((s) => s.enabled).length, total: visibleSkills.length })}
+          </span>
+          <button
+            className="btn btn-secondary"
+            onClick={handleSyncFromDisk}
+            disabled={syncing}
+            title={t("skills.syncBtn")}
+            style={{ fontSize: 12, padding: "3px 10px" }}
+          >
+            {syncing ? t("skills.syncing") : `↻ ${t("skills.syncBtn")}`}
+          </button>
+        </div>
       </div>
 
       <div className="page-body">

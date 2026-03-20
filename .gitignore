@@ -41,3 +41,9 @@ examples/__pycache__/
 examples/string_utils.py
 test_output.txt
 
+# Tribon M3 local reference docs (machine-specific, not for version control)
+docs/tribon/
+
+# Local skills development (machine-specific, deployed via Junction to AppData)
+skills/
+
