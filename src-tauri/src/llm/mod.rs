@@ -198,18 +198,27 @@ pub fn estimate_message_tokens(msg: &LlmMessage) -> usize {
 /// `max_tokens` is the max *output* tokens (used only for auto-fallback).
 ///
 /// Budget = (context_window × 0.85) − 2000 (system prompt overhead)
+///
+/// When `context_window` is 0 (not configured), we use a conservative estimate
+/// based on `max_tokens`. The estimate is intentionally conservative to avoid
+/// sending more tokens than the model accepts:
+///   - max_tokens >= 8192: assume 128k window (common for GPT-4o, Kimi, DeepSeek-V3)
+///   - max_tokens >= 4096: assume 64k window
+///   - otherwise: assume 32k window
 pub fn compute_context_budget(context_window: u32, max_tokens: u32) -> usize {
     const SYSTEM_OVERHEAD: usize = 2_000;
     let window = if context_window > 0 {
         context_window as usize
     } else {
         match max_tokens {
-            t if t >= 8192 => 100_000,
-            t if t >= 4096 => 60_000,
-            _ => 30_000,
+            t if t >= 8192 => 128_000,
+            t if t >= 4096 => 64_000,
+            _ => 32_000,
         }
     };
-    ((window as f64 * 0.85) as usize).saturating_sub(SYSTEM_OVERHEAD)
+    // Reserve max_tokens output budget + system overhead from the window
+    let output_reserve = max_tokens as usize + SYSTEM_OVERHEAD;
+    window.saturating_sub(output_reserve)
 }
 
 /// Build the appropriate client based on provider name

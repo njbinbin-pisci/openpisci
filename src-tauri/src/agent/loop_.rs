@@ -1065,15 +1065,24 @@ impl AgentLoop {
                 // 80% of the budget, summarise old messages now — before the LLM call —
                 // rather than waiting for a context overflow error (which some models never
                 // emit, instead silently truncating or producing near-empty responses).
-                let estimated: usize = messages
+                //
+                // We retry with a smaller keep_chars if the first pass still leaves too
+                // many tokens (can happen when the budget estimate is conservative).
+                let mut estimated: usize = messages
                     .iter()
                     .map(crate::llm::estimate_message_tokens)
                     .sum();
-                if estimated > (budget as f64 * 0.80) as usize {
-                    let keep_chars = (budget as f64 * SUMMARY_KEEP_RECENT_RATIO * 4.0) as usize;
+                // Up to 2 compaction passes: first at 60% keep, then at 30% keep
+                let keep_ratios: &[f64] =
+                    &[SUMMARY_KEEP_RECENT_RATIO, SUMMARY_KEEP_RECENT_RATIO * 0.5];
+                for (pass, &ratio) in keep_ratios.iter().enumerate() {
+                    if estimated <= (budget as f64 * 0.80) as usize {
+                        break;
+                    }
+                    let keep_chars = (budget as f64 * ratio * 4.0) as usize;
                     warn!(
-                        "proactive compaction: estimated_tokens={} > 80% of budget={}, keep_chars={}",
-                        estimated, budget, keep_chars
+                        "proactive compaction pass={} estimated_tokens={} > 80% of budget={}, keep_chars={}",
+                        pass + 1, estimated, budget, keep_chars
                     );
                     if let Some(compacted) = compact_summarise(
                         messages.clone(),
@@ -1084,12 +1093,24 @@ impl AgentLoop {
                     )
                     .await
                     {
+                        let new_estimated: usize = compacted
+                            .iter()
+                            .map(crate::llm::estimate_message_tokens)
+                            .sum();
                         info!(
-                            "proactive summarisation complete: {} → {} messages",
+                            "proactive summarisation pass={} complete: {} → {} messages, tokens {} → {}",
+                            pass + 1,
                             messages.len(),
-                            compacted.len()
+                            compacted.len(),
+                            estimated,
+                            new_estimated,
                         );
                         messages = compacted;
+                        estimated = new_estimated;
+                    } else {
+                        // Summarisation failed — stop trying
+                        warn!("proactive summarisation pass={} failed, proceeding with current context", pass + 1);
+                        break;
                     }
                 }
             }
