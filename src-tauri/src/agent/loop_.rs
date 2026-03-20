@@ -1243,7 +1243,13 @@ impl AgentLoop {
                                         || msg.contains("overloaded")
                                         || msg.contains("502")
                                         || msg.contains("503")
-                                        || msg.contains("529");
+                                        || msg.contains("529")
+                                        // Network-level decode errors (server closed connection
+                                        // mid-stream, incomplete chunk, etc.) are transient
+                                        || msg.contains("error decoding response body")
+                                        || msg.contains("incomplete message")
+                                        || msg.contains("unexpected eof")
+                                        || msg.contains("broken pipe");
                                     if !is_transient || attempt + 1 == LLM_MAX_RETRIES {
                                         last_err = Some(e);
                                         break 'model_loop;

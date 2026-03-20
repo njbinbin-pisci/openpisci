@@ -545,7 +545,14 @@ impl LlmClient for OpenAiClient {
         let mut output_tokens = 0u32;
 
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    // Network-level errors mid-stream (server closed connection, incomplete
+                    // chunk, etc.) — propagate so the caller can retry with backoff.
+                    return Err(anyhow::anyhow!("error decoding response body: {}", e));
+                }
+            };
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
