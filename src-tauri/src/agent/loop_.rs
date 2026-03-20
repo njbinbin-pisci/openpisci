@@ -1076,12 +1076,12 @@ impl AgentLoop {
                 let keep_ratios: &[f64] =
                     &[SUMMARY_KEEP_RECENT_RATIO, SUMMARY_KEEP_RECENT_RATIO * 0.5];
                 for (pass, &ratio) in keep_ratios.iter().enumerate() {
-                    if estimated <= (budget as f64 * 0.80) as usize {
+                    if estimated <= (budget as f64 * 0.70) as usize {
                         break;
                     }
                     let keep_chars = (budget as f64 * ratio * 4.0) as usize;
                     warn!(
-                        "proactive compaction pass={} estimated_tokens={} > 80% of budget={}, keep_chars={}",
+                        "proactive compaction pass={} estimated_tokens={} > 70% of budget={}, keep_chars={}",
                         pass + 1, estimated, budget, keep_chars
                     );
                     if let Some(compacted) = compact_summarise(

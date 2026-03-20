@@ -175,38 +175,47 @@ pub fn estimate_tokens(text: &str) -> usize {
 
 /// Estimate the token count for a single LlmMessage.
 /// Correctly handles Blocks content (ToolUse/ToolResult) which as_text() ignores.
+///
+/// Each message has ~8 tokens of framing overhead (role, delimiters) on top of
+/// content tokens, which we add here to reduce systematic underestimation.
 pub fn estimate_message_tokens(msg: &LlmMessage) -> usize {
-    match &msg.content {
+    const MSG_OVERHEAD: usize = 8; // role + message framing tokens
+    let content_tokens = match &msg.content {
         MessageContent::Text(t) => estimate_tokens(t),
         MessageContent::Blocks(blocks) => blocks
             .iter()
             .map(|b| match b {
                 ContentBlock::Text { text } => estimate_tokens(text),
                 ContentBlock::ToolUse { name, input, .. } => {
-                    estimate_tokens(name) + estimate_tokens(&input.to_string())
+                    // tool_call_id + function name + arguments JSON
+                    8 + estimate_tokens(name) + estimate_tokens(&input.to_string())
                 }
-                ContentBlock::ToolResult { content, .. } => estimate_tokens(content),
+                ContentBlock::ToolResult { content, .. } => {
+                    // tool_call_id overhead + content
+                    4 + estimate_tokens(content)
+                }
                 ContentBlock::Image { .. } => 256, // rough image token estimate
             })
             .sum(),
-    }
+    };
+    content_tokens + MSG_OVERHEAD
 }
 
-/// Compute the usable token budget from settings.
+/// Compute the usable token budget for *input messages*.
 ///
 /// `context_window` is the user-configured input context limit (0 = auto).
-/// `max_tokens` is the max *output* tokens (used only for auto-fallback).
+/// `max_tokens` is the max *output* tokens.
 ///
-/// Budget = (context_window × 0.85) − 2000 (system prompt overhead)
-///
-/// When `context_window` is 0 (not configured), we use a conservative estimate
-/// based on `max_tokens`. The estimate is intentionally conservative to avoid
-/// sending more tokens than the model accepts:
-///   - max_tokens >= 8192: assume 128k window (common for GPT-4o, Kimi, DeepSeek-V3)
+/// When `context_window` is 0 (not configured), we use a conservative estimate:
+///   - max_tokens >= 8192: assume 128k window (GPT-4o, Kimi, DeepSeek-V3)
 ///   - max_tokens >= 4096: assume 64k window
 ///   - otherwise: assume 32k window
+///
+/// We apply an additional 0.85 safety factor to compensate for the systematic
+/// underestimation in `estimate_tokens` (JSON overhead, message framing, etc.).
+/// Empirically, actual token counts run ~10-15% higher than estimates.
 pub fn compute_context_budget(context_window: u32, max_tokens: u32) -> usize {
-    const SYSTEM_OVERHEAD: usize = 2_000;
+    const SYSTEM_OVERHEAD: usize = 3_000; // system prompt + framing
     let window = if context_window > 0 {
         context_window as usize
     } else {
@@ -216,9 +225,10 @@ pub fn compute_context_budget(context_window: u32, max_tokens: u32) -> usize {
             _ => 32_000,
         }
     };
-    // Reserve max_tokens output budget + system overhead from the window
-    let output_reserve = max_tokens as usize + SYSTEM_OVERHEAD;
-    window.saturating_sub(output_reserve)
+    // Reserve output tokens + system overhead, then apply 0.85 safety factor
+    // to account for token estimation underestimation.
+    let usable = window.saturating_sub(max_tokens as usize + SYSTEM_OVERHEAD);
+    (usable as f64 * 0.85) as usize
 }
 
 /// Build the appropriate client based on provider name
