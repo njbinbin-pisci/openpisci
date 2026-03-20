@@ -310,7 +310,15 @@ impl LlmClient for ClaudeClient {
             return Err(anyhow!("Claude API error {}: {}", status, text));
         }
 
-        let val: Value = response.json().await?;
+        let body = response.bytes().await?;
+        let val: Value = serde_json::from_slice(&body).map_err(|e| {
+            let preview: String = String::from_utf8_lossy(&body).chars().take(200).collect();
+            anyhow!(
+                "Claude response JSON decode error: {} (body preview: {})",
+                e,
+                preview
+            )
+        })?;
         let mut text = String::new();
         let mut tool_calls = Vec::new();
 

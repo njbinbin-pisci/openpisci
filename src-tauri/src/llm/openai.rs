@@ -644,7 +644,15 @@ impl LlmClient for OpenAiClient {
             return Err(anyhow!("OpenAI API error {}: {}", status, text));
         }
 
-        let val: Value = response.json().await?;
+        let body = response.bytes().await?;
+        let val: Value = serde_json::from_slice(&body).map_err(|e| {
+            let preview: String = String::from_utf8_lossy(&body).chars().take(200).collect();
+            anyhow!(
+                "OpenAI response JSON decode error: {} (body preview: {})",
+                e,
+                preview
+            )
+        })?;
         let choices = val["choices"]
             .as_array()
             .ok_or_else(|| anyhow!("OpenAI response missing 'choices' field"))?;
