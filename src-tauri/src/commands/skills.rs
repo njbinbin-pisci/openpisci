@@ -156,9 +156,7 @@ pub struct SyncSkillsResult {
 }
 
 #[tauri::command]
-pub async fn sync_skills_from_disk(
-    state: State<'_, AppState>,
-) -> Result<SyncSkillsResult, String> {
+pub async fn sync_skills_from_disk(state: State<'_, AppState>) -> Result<SyncSkillsResult, String> {
     let app_dir = state
         .app_handle
         .path()

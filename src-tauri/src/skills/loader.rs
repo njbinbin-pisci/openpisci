@@ -171,10 +171,13 @@ impl SkillLoader {
     }
 
     fn load_skill(&self, path: &Path) -> Result<SkillDefinition> {
-        let raw =
-            std::fs::read(path).with_context(|| format!("Failed to read {:?}", path))?;
+        let raw = std::fs::read(path).with_context(|| format!("Failed to read {:?}", path))?;
         // Strip UTF-8 BOM (EF BB BF) if present so YAML frontmatter parses correctly.
-        let raw = if raw.starts_with(b"\xEF\xBB\xBF") { &raw[3..] } else { &raw[..] };
+        let raw = if raw.starts_with(b"\xEF\xBB\xBF") {
+            &raw[3..]
+        } else {
+            &raw[..]
+        };
         let content = String::from_utf8_lossy(raw).into_owned();
 
         let (frontmatter, instructions) = parse_frontmatter(&content)?;
@@ -574,7 +577,6 @@ impl SkillLoader {
         }
         lines.join("\n")
     }
-
 
     /// Get the full instructions for a skill by name.
     #[allow(dead_code)]
