@@ -26,7 +26,10 @@ impl Tool for ShellTool {
          Use `interpreter: \"powershell32\"` for 32-bit PowerShell (required for legacy COM/ActiveX components). \
          Use `interpreter: \"cmd\"` for cmd.exe (useful for dir, reg, findstr, etc.). \
          Use `elevated: true` to run with administrator privileges — Windows will show a UAC consent dialog \
-         for the user to approve. Use elevated when you get 'Access Denied' or need to write to system directories. \
+         for the user to approve. IMPORTANT: If a command fails with 'Access Denied' or permission error, \
+         ALWAYS retry with elevated=true. The system will auto-detect permission errors and prompt UAC, \
+         but you can also set elevated=true proactively for operations that clearly need admin rights. \
+         You are CAPABLE of running admin commands — never skip a task just because it needs elevation. \
          The working directory defaults to C:\\ (not the workspace root) so absolute paths always work. \
          Always returns exit code + stdout + stderr so you can judge success yourself. \
          Tips: \
@@ -34,7 +37,7 @@ impl Tool for ShellTool {
          - To query registry: `reg query HKLM\\SOFTWARE\\Classes /f keyword /s` \
          - To check 32-bit COM: use powershell32 and New-Object -ComObject ProgID \
          - To list C:\\ root dirs: `cmd /c dir C:\\ /ad /b` \
-         - Needs admin (e.g. install software, write to Program Files, modify system registry): use elevated=true"
+         - Needs admin (e.g. install software, write to Program Files, modify system registry, regsvr32): use elevated=true"
     }
 
     fn input_schema(&self) -> Value {
