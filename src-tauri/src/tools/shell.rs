@@ -179,6 +179,62 @@ impl Tool for ShellTool {
                 let stderr = truncate_output(&String::from_utf8_lossy(&output.stderr), MAX_OUTPUT_BYTES / 4);
                 let exit_code = output.status.code().unwrap_or(-1);
 
+                // Auto-elevate: if the command failed with a permission error and
+                // elevated was not already requested, retry automatically with UAC.
+                #[cfg(target_os = "windows")]
+                if !elevated && is_permission_error(exit_code, &stdout, &stderr) {
+                    tracing::info!(
+                        "shell: permission error detected (exit={}), auto-retrying with elevation",
+                        exit_code
+                    );
+                    let arch = match interpreter {
+                        "powershell32" => "x86",
+                        _ => "x64",
+                    };
+                    // Use a longer timeout to give the user time to respond to UAC
+                    let elev_timeout = input["timeout"].as_u64().unwrap_or(180);
+                    return match elevate::run_elevated_powershell(command, arch, elev_timeout).await {
+                        Ok(r) => {
+                            let mut parts = vec![format!(
+                                "Exit code: {} (auto-elevated to Administrator after permission error)",
+                                r.exit_code
+                            )];
+                            if !r.stdout.is_empty() {
+                                parts.push(format!(
+                                    "STDOUT:\n{}",
+                                    truncate_output(&r.stdout, MAX_OUTPUT_BYTES * 3 / 4)
+                                ));
+                            }
+                            if !r.stderr.is_empty() {
+                                parts.push(format!(
+                                    "STDERR:\n{}",
+                                    truncate_output(&r.stderr, MAX_OUTPUT_BYTES / 4)
+                                ));
+                            }
+                            if r.stdout.is_empty() && r.stderr.is_empty() {
+                                parts.push("(no output)".to_string());
+                            }
+                            Ok(ToolResult::ok(parts.join("\n\n")))
+                        }
+                        Err(e) => {
+                            // UAC was denied or failed — return original error with a hint
+                            let mut parts = vec![format!("Exit code: {}", exit_code)];
+                            if !stdout.is_empty() {
+                                parts.push(format!("STDOUT:\n{}", stdout));
+                            }
+                            if !stderr.is_empty() {
+                                parts.push(format!("STDERR:\n{}", stderr));
+                            }
+                            parts.push(format!(
+                                "\n⚠️ Auto-elevation attempted but failed (UAC denied or error: {}). \
+                                 To retry manually, use `elevated: true` in your next shell call.",
+                                e
+                            ));
+                            Ok(ToolResult::ok(parts.join("\n\n")))
+                        }
+                    };
+                }
+
                 // Build a clear, structured result the LLM can parse
                 let mut parts = vec![format!("Exit code: {}", exit_code)];
                 if !stdout.is_empty() {
@@ -235,6 +291,30 @@ fn build_windows_cmd(interpreter: &str, command: &str) -> Command {
             c
         }
     }
+}
+
+/// Detect whether a command failed due to insufficient privileges.
+/// Checks common Windows permission error patterns in exit code, stdout, and stderr.
+fn is_permission_error(exit_code: i32, stdout: &str, stderr: &str) -> bool {
+    // Non-zero exit code required — don't auto-elevate successful commands
+    if exit_code == 0 {
+        return false;
+    }
+    let combined = format!("{} {}", stdout, stderr).to_lowercase();
+    // Common Windows permission error strings
+    combined.contains("access is denied")
+        || combined.contains("access denied")
+        || combined.contains("拒绝访问")
+        || combined.contains("requires elevation")
+        || combined.contains("elevated")
+        || combined.contains("administrator")
+        || combined.contains("privileged")
+        || combined.contains("0x80070005") // E_ACCESSDENIED HRESULT
+        || combined.contains("error 5")    // ERROR_ACCESS_DENIED Win32
+        || combined.contains("error: 5,")
+        || (exit_code == 1 && combined.contains("regsvr32"))
+        || combined.contains("cannot be loaded because running scripts is disabled")
+        || combined.contains("unauthorizedaccessexception")
 }
 
 fn truncate_output(s: &str, max_bytes: usize) -> String {
