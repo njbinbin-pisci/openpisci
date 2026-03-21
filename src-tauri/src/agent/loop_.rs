@@ -1072,16 +1072,23 @@ impl AgentLoop {
                     .iter()
                     .map(crate::llm::estimate_message_tokens)
                     .sum();
+                info!(
+                    "context check: {} messages, ~{} estimated tokens (budget={}, threshold={})",
+                    messages.len(),
+                    estimated,
+                    budget,
+                    (budget as f64 * 0.60) as usize,
+                );
                 // Up to 2 compaction passes: first at 60% keep, then at 30% keep
                 let keep_ratios: &[f64] =
                     &[SUMMARY_KEEP_RECENT_RATIO, SUMMARY_KEEP_RECENT_RATIO * 0.5];
                 for (pass, &ratio) in keep_ratios.iter().enumerate() {
-                    if estimated <= (budget as f64 * 0.70) as usize {
+                    if estimated <= (budget as f64 * 0.60) as usize {
                         break;
                     }
                     let keep_chars = (budget as f64 * ratio * 4.0) as usize;
                     warn!(
-                        "proactive compaction pass={} estimated_tokens={} > 70% of budget={}, keep_chars={}",
+                        "proactive compaction pass={} estimated_tokens={} > 60% of budget={}, keep_chars={}",
                         pass + 1, estimated, budget, keep_chars
                     );
                     if let Some(compacted) = compact_summarise(
@@ -1314,14 +1321,55 @@ impl AgentLoop {
                     .await;
             }
 
-            // If no tool calls, we're done
+            // If no tool calls, check for unfinished plan_todo items before exiting.
+            // If any todo is still in_progress or pending, inject a reminder and continue.
             if tool_calls.is_empty() {
-                // Add assistant message
-                messages.push(LlmMessage {
-                    role: "assistant".into(),
-                    content: MessageContent::text(&text_buf),
-                });
-                break;
+                // Check if there are any in_progress or pending todos that haven't been resolved
+                let unfinished_todos = if let Some(ref app) = self.app_handle {
+                    use tauri::Manager;
+                    let state = app.state::<crate::store::AppState>();
+                    let plan_state = state.plan_state.lock().await;
+                    plan_state
+                        .get(&ctx.session_id)
+                        .map(|todos| {
+                            todos
+                                .iter()
+                                .filter(|t| t.status == "in_progress" || t.status == "pending")
+                                .map(|t| format!("- [{}] {}", t.status, t.content))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    vec![]
+                };
+
+                if !unfinished_todos.is_empty() {
+                    // Inject a reminder and continue the loop instead of breaking
+                    warn!(
+                        "LLM tried to exit with {} unfinished todo(s), injecting reminder",
+                        unfinished_todos.len()
+                    );
+                    messages.push(LlmMessage {
+                        role: "assistant".into(),
+                        content: MessageContent::text(&text_buf),
+                    });
+                    let reminder = format!(
+                        "⚠️ 你的计划中还有未完成的步骤，请继续执行或将其标记为 cancelled：\n{}\n\n请继续完成这些步骤，或者用 plan_todo 将无法完成的步骤标记为 cancelled 并向用户说明原因。",
+                        unfinished_todos.join("\n")
+                    );
+                    messages.push(LlmMessage {
+                        role: "user".into(),
+                        content: MessageContent::text(&reminder),
+                    });
+                    // Continue the loop (don't break)
+                } else {
+                    // All todos are done (or no plan exists) — normal exit
+                    messages.push(LlmMessage {
+                        role: "assistant".into(),
+                        content: MessageContent::text(&text_buf),
+                    });
+                    break;
+                }
             }
 
             // ── Per-tool loop detection (before execution) ──────────────────

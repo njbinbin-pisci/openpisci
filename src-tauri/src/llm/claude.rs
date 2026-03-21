@@ -18,9 +18,13 @@ pub struct ClaudeClient {
 
 impl ClaudeClient {
     pub fn new(api_key: &str) -> Self {
+        let http = Client::builder()
+            .read_timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_default();
         Self {
             api_key: api_key.to_string(),
-            http: Client::new(),
+            http,
         }
     }
 

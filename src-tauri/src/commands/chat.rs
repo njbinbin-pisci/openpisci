@@ -1397,6 +1397,12 @@ For complex, multi-step tasks, keep a short visible plan using the `plan_todo` t
 4. If the plan changes substantially, replace the whole list instead of patching it awkwardly
 5. Do not use `plan_todo` for very simple one-step requests
 
+**CRITICAL - Never exit with unfinished todos:**
+- Before giving a final response (no tool calls), you MUST ensure every todo is either `completed` or `cancelled`.
+- If a step fails or is blocked, mark it `cancelled` with a note in the content, then decide whether to continue or stop.
+- NEVER leave a todo in `in_progress` or `pending` when you stop working — always update the plan first.
+- If you cannot complete a step (e.g. missing permissions, software not installed), mark it `cancelled`, explain why in your response, and ask the user for help.
+
 ## Visual Iteration (vision_context)
 
 For screenshots, scanned PDFs, UI captures, charts, or any image-heavy task, you can control visual context explicitly.
