@@ -1001,14 +1001,30 @@ impl AgentLoop {
                     let raw_text = msg.content.as_text();
                     let text = crate::commands::chat::strip_send_markers(&raw_text);
                     let calls_json = serde_json::to_string(&tool_uses).unwrap_or_default();
-                    let _ = db.append_message_full(session_id, "assistant", &text, Some(&calls_json), None, turn_index);
+                    let _ = db.append_message_full(
+                        session_id,
+                        "assistant",
+                        &text,
+                        Some(&calls_json),
+                        None,
+                        turn_index,
+                    );
                 } else if !tool_results.is_empty() {
                     let results_json = serde_json::to_string(&tool_results).unwrap_or_default();
-                    let _ = db.append_message_full(session_id, "user", "", None, Some(&results_json), turn_index);
+                    let _ = db.append_message_full(
+                        session_id,
+                        "user",
+                        "",
+                        None,
+                        Some(&results_json),
+                        turn_index,
+                    );
                 } else {
                     let text = msg.content.as_text();
                     if !text.is_empty() {
-                        let _ = db.append_message_full(session_id, &msg.role, &text, None, None, turn_index);
+                        let _ = db.append_message_full(
+                            session_id, &msg.role, &text, None, None, turn_index,
+                        );
                     }
                 }
             }
@@ -1020,7 +1036,9 @@ impl AgentLoop {
                         text.clone()
                     };
                     if !clean.is_empty() {
-                        let _ = db.append_message_full(session_id, &msg.role, &clean, None, None, turn_index);
+                        let _ = db.append_message_full(
+                            session_id, &msg.role, &clean, None, None, turn_index,
+                        );
                     }
                 }
             }
@@ -1423,7 +1441,8 @@ impl AgentLoop {
                     };
                     new_messages.push(asst_msg.clone());
                     messages.push(asst_msg.clone());
-                    self.persist_message(&ctx.session_id, &asst_msg, turn_index).await;
+                    self.persist_message(&ctx.session_id, &asst_msg, turn_index)
+                        .await;
                     let reminder = format!(
                         "⚠️ 你的计划中还有未完成的步骤，请继续执行或将其标记为 cancelled：\n{}\n\n请继续完成这些步骤，或者用 plan_todo 将无法完成的步骤标记为 cancelled 并向用户说明原因。",
                         unfinished_todos.join("\n")
@@ -1434,7 +1453,8 @@ impl AgentLoop {
                     };
                     new_messages.push(reminder_msg.clone());
                     messages.push(reminder_msg.clone());
-                    self.persist_message(&ctx.session_id, &reminder_msg, turn_index).await;
+                    self.persist_message(&ctx.session_id, &reminder_msg, turn_index)
+                        .await;
                     // Continue the loop (don't break)
                 } else {
                     // All todos are done (or no plan exists) — normal exit
@@ -1444,7 +1464,8 @@ impl AgentLoop {
                     };
                     new_messages.push(asst_msg.clone());
                     messages.push(asst_msg.clone());
-                    self.persist_message(&ctx.session_id, &asst_msg, turn_index).await;
+                    self.persist_message(&ctx.session_id, &asst_msg, turn_index)
+                        .await;
                     break;
                 }
             }
@@ -1490,7 +1511,8 @@ impl AgentLoop {
                 };
                 new_messages.push(asst_msg.clone());
                 messages.push(asst_msg.clone());
-                self.persist_message(&ctx.session_id, &asst_msg, turn_index).await;
+                self.persist_message(&ctx.session_id, &asst_msg, turn_index)
+                    .await;
                 break;
             }
 
@@ -1514,7 +1536,8 @@ impl AgentLoop {
             };
             new_messages.push(asst_tool_msg.clone());
             messages.push(asst_tool_msg.clone());
-            self.persist_message(&ctx.session_id, &asst_tool_msg, turn_index).await;
+            self.persist_message(&ctx.session_id, &asst_tool_msg, turn_index)
+                .await;
 
             // Execute tools — read-only concurrently, write serially.
             // Blocked tools (by loop detector) get a synthetic error result instead.
@@ -1643,7 +1666,8 @@ impl AgentLoop {
             };
             new_messages.push(tool_result_msg.clone());
             messages.push(tool_result_msg.clone());
-            self.persist_message(&ctx.session_id, &tool_result_msg, turn_index).await;
+            self.persist_message(&ctx.session_id, &tool_result_msg, turn_index)
+                .await;
 
             // Write checkpoint after each iteration (with size guard)
             if let Some(ref db_arc) = self.db {

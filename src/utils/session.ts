@@ -1,6 +1,6 @@
 /** Returns true for sessions that are internal/system and should not appear in the
  *  user-facing session list (heartbeat, pisci_inbox, pool coordinators, etc.). */
-export function isInternalSession(session: { source?: string; id?: string } | undefined | null): boolean {
+export function isInternalSession(session: { source?: string | null; id?: string | null } | undefined | null): boolean {
   if (!session) return false;
   return session.source === "heartbeat"
     || session.source === "heartbeat_pool"
