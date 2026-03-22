@@ -108,6 +108,11 @@ interface ChatState {
    *  Used to replace the multi-bubble DB reload with a single merged bubble.
    *  Cleared when the next user message is sent. */
   frozenBubble: Record<string, string>;
+  /** The final summary segment extracted by freezeStreaming, keyed by sessionId.
+   *  Injected immediately into messagesBySession as a synthetic message so the user
+   *  sees the final report without waiting for the async DB reload.
+   *  Cleared by setMessagesWithFrozen once DB data arrives. */
+  pendingSummary: Record<string, string>;
 }
 
 const chatSlice = createSlice({
@@ -120,6 +125,7 @@ const chatSlice = createSlice({
     planBySession: {},
     isRunning: {},
     frozenBubble: {},
+    pendingSummary: {},
   } as ChatState,
   reducers: {
     setMessages: (state, action: PayloadAction<{ sessionId: string; messages: ChatMessage[] }>) => {
@@ -186,25 +192,48 @@ const chatSlice = createSlice({
     clearStreaming: (state, action: PayloadAction<string>) => {
       delete state.streaming[action.payload];
     },
-    /** Called on `done`: snapshot intermediate streaming text into frozenBubble, then clear streaming.
-     *  The frozen text (everything before the last segment) becomes the collapsed intermediate-steps
-     *  bubble. The last segment is the final summary and will be shown separately from DB data. */
+    /** Called on `done`: snapshot streaming text into frozenBubble + pendingSummary, clear streaming.
+     *
+     *  frozenBubble  = intermediate steps (everything before the last segment boundary).
+     *                  Shown as the single collapsed bubble after DB reload.
+     *  pendingSummary = the final summary segment (lastSegmentStart..end).
+     *                  Immediately injected into messagesBySession so the user sees the
+     *                  final report right away, before the async getMessages DB reload.
+     *                  Cleared by setMessagesWithFrozen once DB data arrives.
+     */
     freezeStreaming: (state, action: PayloadAction<string>) => {
       const sid = action.payload;
       const s = state.streaming[sid];
       if (s) {
-        // Split: everything before lastSegmentStart = intermediate steps (frozen bubble).
-        //        lastSegmentStart..end = final summary (shown separately from DB).
         const intermediateText = s.lastSegmentStart > 0
           ? s.current.slice(0, s.lastSegmentStart).trimEnd()
           : "";
+        const summaryText = s.lastSegmentStart > 0
+          ? s.current.slice(s.lastSegmentStart).trimStart()
+          : s.current;
+
         if (intermediateText.trim()) {
           state.frozenBubble[sid] = intermediateText;
-        }
-        // If there were no segment boundaries (single-segment run), store the full text.
-        // setMessagesWithFrozen will deduplicate against the DB summary message.
-        else if (s.current.trim()) {
+        } else if (s.current.trim()) {
+          // Single-segment run — full text is both the intermediate record and the summary.
           state.frozenBubble[sid] = s.current;
+        }
+
+        // Immediately append the final summary as a synthetic message so the user sees
+        // it right away without waiting for the async DB reload.
+        if (summaryText.trim()) {
+          state.pendingSummary[sid] = summaryText;
+          const existing = state.messagesBySession[sid] ?? [];
+          // Remove any previous pending-summary placeholder, then append the new one.
+          const withoutPrev = existing.filter((m) => !m.id.startsWith("pending_summary_"));
+          const summaryMsg: ChatMessage = {
+            id: `pending_summary_${sid}`,
+            session_id: sid,
+            role: "assistant",
+            content: summaryText,
+            created_at: new Date().toISOString(),
+          };
+          state.messagesBySession[sid] = [...withoutPrev, summaryMsg];
         }
       }
       delete state.streaming[sid];
@@ -254,17 +283,33 @@ const chatSlice = createSlice({
         created_at: agentMessages[0]?.created_at ?? new Date().toISOString(),
       };
 
-      // Find the last persisted assistant message with text and no tool calls.
-      // This is the final summary — show it as a separate bubble after the collapsed
-      // intermediate-steps bubble. Skip it only if it is identical to the frozen text
-      // (happens on single-segment runs where there were no intermediate tool steps).
+      // Find the final summary: prefer the last persisted assistant text message from DB.
+      // Fall back to pendingSummary (the streamed text captured at done time) if DB has
+      // nothing new yet — this handles the race where setMessagesWithFrozen is called
+      // before the backend has fully persisted the final message.
       const lastAssistant = [...agentMessages]
         .reverse()
         .find((m) => m.role === "assistant" && m.content.trim() && !m.tool_calls_json);
-      const summaryBubble: ChatMessage[] =
-        lastAssistant && lastAssistant.content.trim() !== frozen.trim()
-          ? [lastAssistant]
-          : [];
+
+      const pending = state.pendingSummary[sessionId];
+      // Clear pendingSummary now that DB data has arrived.
+      delete state.pendingSummary[sessionId];
+
+      let summaryBubble: ChatMessage[] = [];
+      if (lastAssistant && lastAssistant.content.trim() !== frozen.trim()) {
+        // DB has a distinct final summary — use it (authoritative).
+        summaryBubble = [lastAssistant];
+      } else if (!lastAssistant && pending && pending.trim() !== frozen.trim()) {
+        // DB doesn't have the final summary yet (or it was deduplicated) but we have
+        // the streamed text — show it as a synthetic bubble so the user isn't left blank.
+        summaryBubble = [{
+          id: `pending_summary_${sessionId}`,
+          session_id: sessionId,
+          role: "assistant",
+          content: pending,
+          created_at: new Date().toISOString(),
+        }];
+      }
 
       // Keep any chat_ui tool-call messages (interactive cards) from the agent turn as-is.
       const chatUiMessages = agentMessages.filter(
@@ -281,6 +326,7 @@ const chatSlice = createSlice({
     /** Clear the frozen bubble for a session (called when the next user message is sent). */
     clearFrozenBubble: (state, action: PayloadAction<string>) => {
       delete state.frozenBubble[action.payload];
+      delete state.pendingSummary[action.payload];
     },
     /** Add a pending tool step when execution starts.
      *  If the previous turn is marked done, clear old steps first (new turn). */
