@@ -980,6 +980,53 @@ impl AgentLoop {
     /// Sends `AgentEvent`s through `event_tx` for streaming to the frontend.
     /// Returns `(final_messages, input_tokens, output_tokens)` when the LLM produces
     /// a final response with no tool calls, when `cancel` is set, or after MAX_ITERATIONS.
+    /// Write a single LlmMessage to the database immediately (real-time persistence).
+    /// Called after every new assistant/tool message is appended during the agent loop,
+    /// so messages survive even if the process is killed mid-run.
+    async fn persist_message(&self, session_id: &str, msg: &LlmMessage, turn_index: Option<i64>) {
+        let Some(ref db_arc) = self.db else { return };
+        let db = db_arc.lock().await;
+        use crate::llm::{ContentBlock, MessageContent};
+        match &msg.content {
+            MessageContent::Blocks(blocks) => {
+                let tool_uses: Vec<&ContentBlock> = blocks
+                    .iter()
+                    .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                    .collect();
+                let tool_results: Vec<&ContentBlock> = blocks
+                    .iter()
+                    .filter(|b| matches!(b, ContentBlock::ToolResult { .. }))
+                    .collect();
+                if !tool_uses.is_empty() {
+                    let raw_text = msg.content.as_text();
+                    let text = crate::commands::chat::strip_send_markers(&raw_text);
+                    let calls_json = serde_json::to_string(&tool_uses).unwrap_or_default();
+                    let _ = db.append_message_full(session_id, "assistant", &text, Some(&calls_json), None, turn_index);
+                } else if !tool_results.is_empty() {
+                    let results_json = serde_json::to_string(&tool_results).unwrap_or_default();
+                    let _ = db.append_message_full(session_id, "user", "", None, Some(&results_json), turn_index);
+                } else {
+                    let text = msg.content.as_text();
+                    if !text.is_empty() {
+                        let _ = db.append_message_full(session_id, &msg.role, &text, None, None, turn_index);
+                    }
+                }
+            }
+            MessageContent::Text(text) => {
+                if !text.is_empty() {
+                    let clean = if msg.role == "assistant" {
+                        crate::commands::chat::strip_send_markers(text).into_owned()
+                    } else {
+                        text.clone()
+                    };
+                    if !clean.is_empty() {
+                        let _ = db.append_message_full(session_id, &msg.role, &clean, None, None, turn_index);
+                    }
+                }
+            }
+        }
+    }
+
     ///
     /// NOTE: The caller is responsible for emitting `AgentEvent::Done` AFTER persisting
     /// the result to the database, to avoid a race condition where the frontend reloads
@@ -1003,6 +1050,22 @@ impl AgentLoop {
         // window), but new_messages always grows monotonically with every new assistant/tool
         // message. The caller persists new_messages to the DB.
         let mut new_messages: Vec<LlmMessage> = Vec::new();
+
+        // Determine the turn_index for this run once, so all messages share the same index.
+        // This must be computed before any messages are written.
+        let turn_index: Option<i64> = if let Some(ref db_arc) = self.db {
+            let db = db_arc.lock().await;
+            let idx = db
+                .get_messages_latest(&ctx.session_id, 2000)
+                .map(|msgs| {
+                    let max_turn = msgs.iter().filter_map(|m| m.turn_index).max().unwrap_or(0);
+                    max_turn + 1
+                })
+                .unwrap_or(1);
+            Some(idx)
+        } else {
+            None
+        };
 
         // Check for a resumable checkpoint from a previous (crashed) run
         if let Some(ref db_arc) = self.db {
@@ -1359,7 +1422,8 @@ impl AgentLoop {
                         content: MessageContent::text(&text_buf),
                     };
                     new_messages.push(asst_msg.clone());
-                    messages.push(asst_msg);
+                    messages.push(asst_msg.clone());
+                    self.persist_message(&ctx.session_id, &asst_msg, turn_index).await;
                     let reminder = format!(
                         "⚠️ 你的计划中还有未完成的步骤，请继续执行或将其标记为 cancelled：\n{}\n\n请继续完成这些步骤，或者用 plan_todo 将无法完成的步骤标记为 cancelled 并向用户说明原因。",
                         unfinished_todos.join("\n")
@@ -1369,7 +1433,8 @@ impl AgentLoop {
                         content: MessageContent::text(&reminder),
                     };
                     new_messages.push(reminder_msg.clone());
-                    messages.push(reminder_msg);
+                    messages.push(reminder_msg.clone());
+                    self.persist_message(&ctx.session_id, &reminder_msg, turn_index).await;
                     // Continue the loop (don't break)
                 } else {
                     // All todos are done (or no plan exists) — normal exit
@@ -1378,7 +1443,8 @@ impl AgentLoop {
                         content: MessageContent::text(&text_buf),
                     };
                     new_messages.push(asst_msg.clone());
-                    messages.push(asst_msg);
+                    messages.push(asst_msg.clone());
+                    self.persist_message(&ctx.session_id, &asst_msg, turn_index).await;
                     break;
                 }
             }
@@ -1423,7 +1489,8 @@ impl AgentLoop {
                     content: MessageContent::text(&text_buf),
                 };
                 new_messages.push(asst_msg.clone());
-                messages.push(asst_msg);
+                messages.push(asst_msg.clone());
+                self.persist_message(&ctx.session_id, &asst_msg, turn_index).await;
                 break;
             }
 
@@ -1446,7 +1513,8 @@ impl AgentLoop {
                 content: MessageContent::Blocks(assistant_blocks),
             };
             new_messages.push(asst_tool_msg.clone());
-            messages.push(asst_tool_msg);
+            messages.push(asst_tool_msg.clone());
+            self.persist_message(&ctx.session_id, &asst_tool_msg, turn_index).await;
 
             // Execute tools — read-only concurrently, write serially.
             // Blocked tools (by loop detector) get a synthetic error result instead.
@@ -1574,7 +1642,8 @@ impl AgentLoop {
                 content: MessageContent::Blocks(tool_result_blocks),
             };
             new_messages.push(tool_result_msg.clone());
-            messages.push(tool_result_msg);
+            messages.push(tool_result_msg.clone());
+            self.persist_message(&ctx.session_id, &tool_result_msg, turn_index).await;
 
             // Write checkpoint after each iteration (with size guard)
             if let Some(ref db_arc) = self.db {

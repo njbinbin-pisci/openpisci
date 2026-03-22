@@ -1773,7 +1773,7 @@ const CTX_TRIM_TAIL: usize = 300;
 /// Persist only the *new* messages produced by the agent loop.
 /// Strip `SEND_FILE:` and `SEND_IMAGE:` marker lines from text before persisting to DB.
 /// These lines are consumed by the gateway for file dispatch and must not appear in chat history.
-fn strip_send_markers(text: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn strip_send_markers(text: &str) -> std::borrow::Cow<'_, str> {
     if !text.contains("SEND_FILE:") && !text.contains("SEND_IMAGE:") {
         return std::borrow::Cow::Borrowed(text);
     }
@@ -1788,121 +1788,16 @@ fn strip_send_markers(text: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(cleaned.trim().to_string())
 }
 
-/// Persist the new messages produced by `AgentLoop::run()` to the database.
-/// `final_messages` is the `new_messages` buffer returned by `run()` — it contains only the
-/// messages appended during the run (not the context fed in), and is immune to compaction.
+/// No-op: messages are now persisted in real-time by `AgentLoop::persist_message()`
+/// during the run, so there is nothing left to write here.
+/// The `final_messages` parameter is kept for logging only.
 pub fn persist_agent_turn(
-    db: &crate::store::Database,
+    _db: &crate::store::Database,
     session_id: &str,
     final_messages: &[LlmMessage],
 ) {
     tracing::info!(
-        "persist_agent_turn: session={} new_messages={}",
-        session_id, final_messages.len()
-    );
-    // Determine the turn index from the current message count.
-    // We use the count BEFORE writing so all new rows share the same index.
-    let turn_index = db
-        .get_messages_latest(session_id, 2000)
-        .map(|msgs| {
-            // Count distinct turn_index values already stored + 1
-            let max_turn = msgs.iter().filter_map(|m| m.turn_index).max().unwrap_or(0);
-            max_turn + 1
-        })
-        .unwrap_or(1);
-
-    // Walk through the messages produced by the agent loop.
-    // The first N-1 messages are intermediate (tool calls + results).
-    // The last assistant message is the final answer.
-    let mut i = 0;
-    while i < final_messages.len() {
-        let msg = &final_messages[i];
-
-        match &msg.content {
-            MessageContent::Blocks(blocks) => {
-                let tool_uses: Vec<&ContentBlock> = blocks
-                    .iter()
-                    .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
-                    .collect();
-                let tool_results: Vec<&ContentBlock> = blocks
-                    .iter()
-                    .filter(|b| matches!(b, ContentBlock::ToolResult { .. }))
-                    .collect();
-
-                if !tool_uses.is_empty() {
-                    // Assistant message with tool calls
-                    let raw_text = msg.content.as_text();
-                    let text = strip_send_markers(&raw_text);
-                    let calls_json = serde_json::to_string(&tool_uses).unwrap_or_default();
-                    let _ = db.append_message_full(
-                        session_id,
-                        "assistant",
-                        &text,
-                        Some(&calls_json),
-                        None,
-                        Some(turn_index),
-                    );
-                } else if !tool_results.is_empty() {
-                    // User message carrying tool results
-                    let results_json = serde_json::to_string(&tool_results).unwrap_or_default();
-                    let _ = db.append_message_full(
-                        session_id,
-                        "user",
-                        "",
-                        None,
-                        Some(&results_json),
-                        Some(turn_index),
-                    );
-                } else {
-                    // Blocks with only text (or image) — treat as plain assistant message
-                    let text = msg.content.as_text();
-                    if !text.is_empty() {
-                        let _ = db.append_message_full(
-                            session_id,
-                            &msg.role,
-                            &text,
-                            None,
-                            None,
-                            Some(turn_index),
-                        );
-                    }
-                }
-            }
-            MessageContent::Text(text) => {
-                if !text.is_empty() {
-                    let clean = if msg.role == "assistant" {
-                        strip_send_markers(text)
-                    } else {
-                        std::borrow::Cow::Borrowed(text.as_str())
-                    };
-                    if clean.is_empty() {
-                        i += 1;
-                        continue;
-                    }
-                    if clean.len() > 10_000 {
-                        tracing::info!(
-                            "Saving large assistant message ({} chars) for session={}",
-                            clean.len(),
-                            session_id
-                        );
-                    }
-                    let _ = db.append_message_full(
-                        session_id,
-                        &msg.role,
-                        &clean,
-                        None,
-                        None,
-                        Some(turn_index),
-                    );
-                }
-            }
-        }
-        i += 1;
-    }
-
-    tracing::info!(
-        "Persisted agent turn {} for session={} ({} messages)",
-        turn_index,
+        "persist_agent_turn: session={} new_messages={} (already written in real-time)",
         session_id,
         final_messages.len()
     );

@@ -334,6 +334,9 @@ OpenPisci
 
 ## 📋 Changelog
 
+### v0.5.15
+- **Real-time persistence**: Completely fixed the message loss problem — previously messages were batch-written to the database only when `run()` finished, so any mid-run exit (compilation restart, crash, etc.) would lose all in-progress messages; now every message is written to the database immediately as it is produced, so no completed steps are ever lost regardless of when the process exits
+
 ### v0.5.14
 - **Final summary persistence fix**: Fixed the root cause of the final summary message being lost after context compaction — the previous approach relied on a `context_len` offset to locate new messages, but compaction shrinks the list causing the offset to overshoot and discard all new messages; the new approach maintains a dedicated `new_messages` buffer inside `AgentLoop::run()` that is completely separate from the LLM context window — compaction only affects the context, never the persistence buffer, eliminating this class of bug entirely
 - **About page redesign**: GitHub link now appears alongside the product description; added an "About Us" card with team introduction and official website link; updated product description to include Koi and the three-tier multi-agent architecture
