@@ -41,23 +41,24 @@ export default function About() {
       <div className="about-desc">
         <p>{t("about.desc1")}</p>
         <p>{t("about.desc2")}</p>
-      </div>
-
-      <div className="about-links">
         <button
-          className="about-link-btn about-link-website"
-          onClick={() => openLink(WEBSITE_URL)}
-        >
-          <span className="about-link-icon">🌐</span>
-          <span>{t("about.website")} — www.dimnuo.com</span>
-          <span className="about-link-arrow">↗</span>
-        </button>
-        <button
-          className="about-link-btn about-link-github"
+          className="about-link-btn about-link-github about-link-inline"
           onClick={() => openLink(GITHUB_URL)}
         >
           <span className="about-link-icon">⭐</span>
           <span>GitHub — njbinbin-pisci/openpisci</span>
+          <span className="about-link-arrow">↗</span>
+        </button>
+      </div>
+
+      <div className="about-team-card">
+        <p className="about-team-desc">{t("about.teamDesc")}</p>
+        <button
+          className="about-link-btn about-link-website about-link-inline"
+          onClick={() => openLink(WEBSITE_URL)}
+        >
+          <span className="about-link-icon">🌐</span>
+          <span>{t("about.website")} — www.dimnuo.com</span>
           <span className="about-link-arrow">↗</span>
         </button>
       </div>

@@ -998,6 +998,11 @@ impl AgentLoop {
         info!(parent: &span, "agent loop starting");
         let mut total_input = 0u32;
         let mut total_output = 0u32;
+        // Accumulate new messages produced during this run in a separate buffer.
+        // This is immune to compaction: compaction only modifies `messages` (the LLM context
+        // window), but new_messages always grows monotonically with every new assistant/tool
+        // message. The caller persists new_messages to the DB.
+        let mut new_messages: Vec<LlmMessage> = Vec::new();
 
         // Check for a resumable checkpoint from a previous (crashed) run
         if let Some(ref db_arc) = self.db {
@@ -1349,25 +1354,31 @@ impl AgentLoop {
                         "LLM tried to exit with {} unfinished todo(s), injecting reminder",
                         unfinished_todos.len()
                     );
-                    messages.push(LlmMessage {
+                    let asst_msg = LlmMessage {
                         role: "assistant".into(),
                         content: MessageContent::text(&text_buf),
-                    });
+                    };
+                    new_messages.push(asst_msg.clone());
+                    messages.push(asst_msg);
                     let reminder = format!(
                         "⚠️ 你的计划中还有未完成的步骤，请继续执行或将其标记为 cancelled：\n{}\n\n请继续完成这些步骤，或者用 plan_todo 将无法完成的步骤标记为 cancelled 并向用户说明原因。",
                         unfinished_todos.join("\n")
                     );
-                    messages.push(LlmMessage {
+                    let reminder_msg = LlmMessage {
                         role: "user".into(),
                         content: MessageContent::text(&reminder),
-                    });
+                    };
+                    new_messages.push(reminder_msg.clone());
+                    messages.push(reminder_msg);
                     // Continue the loop (don't break)
                 } else {
                     // All todos are done (or no plan exists) — normal exit
-                    messages.push(LlmMessage {
+                    let asst_msg = LlmMessage {
                         role: "assistant".into(),
                         content: MessageContent::text(&text_buf),
-                    });
+                    };
+                    new_messages.push(asst_msg.clone());
+                    messages.push(asst_msg);
                     break;
                 }
             }
@@ -1407,10 +1418,12 @@ impl AgentLoop {
                         delta: format!("\n\n[系统] {}\n", combined_msg),
                     })
                     .await;
-                messages.push(LlmMessage {
+                let asst_msg = LlmMessage {
                     role: "assistant".into(),
                     content: MessageContent::text(&text_buf),
-                });
+                };
+                new_messages.push(asst_msg.clone());
+                messages.push(asst_msg);
                 break;
             }
 
@@ -1428,10 +1441,12 @@ impl AgentLoop {
                     input: input.clone(),
                 });
             }
-            messages.push(LlmMessage {
+            let asst_tool_msg = LlmMessage {
                 role: "assistant".into(),
                 content: MessageContent::Blocks(assistant_blocks),
-            });
+            };
+            new_messages.push(asst_tool_msg.clone());
+            messages.push(asst_tool_msg);
 
             // Execute tools — read-only concurrently, write serially.
             // Blocked tools (by loop detector) get a synthetic error result instead.
@@ -1554,10 +1569,12 @@ impl AgentLoop {
             }
 
             // Add tool results as user message
-            messages.push(LlmMessage {
+            let tool_result_msg = LlmMessage {
                 role: "user".into(),
                 content: MessageContent::Blocks(tool_result_blocks),
-            });
+            };
+            new_messages.push(tool_result_msg.clone());
+            messages.push(tool_result_msg);
 
             // Write checkpoint after each iteration (with size guard)
             if let Some(ref db_arc) = self.db {
@@ -1589,9 +1606,11 @@ impl AgentLoop {
             let _ = db.prune_checkpoints(24);
         }
 
-        // Return token counts to the caller — it is the caller's responsibility to emit
-        // AgentEvent::Done AFTER persisting the result to the database.
-        Ok((messages, total_input, total_output))
+        // Return only the new messages produced during this run (not the full context).
+        // new_messages is immune to compaction: it accumulates every assistant/tool message
+        // appended during the run, regardless of how many times the context was compacted.
+        // The caller (persist_agent_turn) saves exactly these messages to the DB.
+        Ok((new_messages, total_input, total_output))
     }
 }
 

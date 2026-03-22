@@ -13,6 +13,7 @@ import { openPath } from "../../services/tauri";
 import mermaid from "mermaid";
 import InteractiveCard from "./InteractiveCard";
 import ConfirmDialog from "../ConfirmDialog";
+import { isInternalSession } from "../../utils/session";
 import "./Chat.css";
 
 // ─── Mermaid diagram block ────────────────────────────────────────────────────
@@ -96,17 +97,6 @@ type SessionKind = "chat" | "im";
 
 type SessionLike = { source?: string | null; id?: string | null };
 
-function isInternalSession(session: SessionLike | undefined | null): boolean {
-  if (!session) return false;
-  return session.source === "heartbeat"
-    || session.source === "heartbeat_pool"
-    || session.source === "pisci_inbox_global"
-    || session.source === "pisci_inbox_pool"
-    || session.source === "pisci_internal"
-    || session.id === "heartbeat"
-    || session.id === "pisci_inbox_global"
-    || session.id?.startsWith("pisci_pool_") === true;
-}
 
 function classifySession(session: SessionLike | undefined | null): SessionKind {
   if (isInternalSession(session)) return "chat";

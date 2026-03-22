@@ -334,6 +334,11 @@ OpenPisci
 
 ## 📋 Changelog
 
+### v0.5.14
+- **Final summary persistence fix**: Fixed the root cause of the final summary message being lost after context compaction — the previous approach relied on a `context_len` offset to locate new messages, but compaction shrinks the list causing the offset to overshoot and discard all new messages; the new approach maintains a dedicated `new_messages` buffer inside `AgentLoop::run()` that is completely separate from the LLM context window — compaction only affects the context, never the persistence buffer, eliminating this class of bug entirely
+- **About page redesign**: GitHub link now appears alongside the product description; added an "About Us" card with team introduction and official website link; updated product description to include Koi and the three-tier multi-agent architecture
+- **Internal session auto-open fix**: On startup, heartbeat/patrol internal sessions are no longer automatically activated — a user-visible session is always selected first
+
 ### v0.5.13
 - **Session switching fix**: Fixed messages not updating when switching sessions — the message area always reflects the selected session now; fixed IM sessions missing from the session list causing them to be unreachable
 - **Wide content local scrolling**: Tables, code blocks and other wide content now generate a local horizontal scrollbar inside the bubble instead of stretching the bubble or causing the entire message area to scroll horizontally

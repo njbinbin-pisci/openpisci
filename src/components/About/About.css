@@ -64,11 +64,12 @@
 }
 
 .about-desc p:last-child {
-  margin: 0;
+  margin: 0 0 10px 0;
 }
 
-.about-links {
-  margin-bottom: 24px;
+/* GitHub button embedded inside the desc card */
+.about-link-inline {
+  margin-top: 4px;
 }
 
 .about-link-btn {
@@ -104,6 +105,22 @@
 .about-link-github:hover {
   border-color: var(--accent-color);
   background: var(--bg-tertiary);
+}
+
+/* Team / About Us card */
+.about-team-card {
+  margin-bottom: 24px;
+  padding: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+
+.about-team-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin: 0 0 12px 0;
 }
 
 /* Disclaimer */

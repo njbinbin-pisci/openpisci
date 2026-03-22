@@ -623,8 +623,10 @@ const zh = {
   // 关于
   about: {
     tagline: "开源 Windows AI 桌面 Agent",
-    desc1: "OpenPisci 是一款运行在 Windows 桌面的开源 AI Agent，基于 Tauri + Rust 构建。大鱼（Pisci）是主 Agent，小鱼（Fish）是用户自定义的专属子 Agent。",
-    desc2: "支持 Windows UI 自动化、浏览器控制、文件操作、定时任务、IM 网关、长期记忆等功能。",
+    desc1: "OpenPisci 是一款运行在 Windows 桌面的开源 AI Agent，基于 Tauri + Rust 构建。采用三层多智能体架构：大鱼（Pisci）是主 Agent 与用户入口，锦鲤（Koi）是持久化协作 Agent，小鱼（Fish）是按需创建的无状态子 Agent。",
+    desc2: "支持 Windows UI 自动化、浏览器控制、文件操作、定时任务、IM 网关、长期记忆、多 Agent 协作等功能。",
+    teamTitle: "关于我们",
+    teamDesc: "我们是专门研究开发智能体应用（Harness）的团队，致力于 AI 赋能各行各业。特别是在 AI4S 领域推出的 Vibe Research System，可以实现科研任务的自主规划与执行、软件安装与部署、算力平台对接与任务提交，是 AI4S 的 Manus 与 OpenClaw。",
     licenseTitle: "许可证",
     licenseContent: "MIT License — 自由使用、修改和分发",
     techTitle: "技术栈",

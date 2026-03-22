@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChatMessage, Session, sessionsApi, poolApi, openPath } from "../../../services/tauri";
 import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
+import { isInternalSession } from "../../../utils/session";
 import ConfirmDialog from "../../ConfirmDialog";
 import "./PisciInbox.css";
 
@@ -43,16 +44,6 @@ function InboxMessageContent({ content }: { content: string }) {
   );
 }
 
-function isInternalSession(session: Session): boolean {
-  return session.source === "heartbeat"
-    || session.source === "heartbeat_pool"
-    || session.source === "pisci_inbox_global"
-    || session.source === "pisci_inbox_pool"
-    || session.source === "pisci_internal"
-    || session.id === "heartbeat"
-    || session.id === "pisci_inbox_global"
-    || session.id.startsWith("pisci_pool_");
-}
 
 function formatTime(value: string): string {
   try {

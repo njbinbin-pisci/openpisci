@@ -623,8 +623,10 @@ const en = {
   // About
   about: {
     tagline: "Open-source Windows AI Desktop Agent",
-    desc1: "OpenPisci is an open-source AI Agent for Windows desktop, built with Tauri + Rust. Big Fish (Pisci) is the main agent, while Small Fish (Fish) are user-defined sub-agents.",
-    desc2: "It supports Windows UI automation, browser control, file operations, scheduled tasks, IM gateways, and long-term memory.",
+    desc1: "OpenPisci is an open-source AI Agent for Windows desktop, built with Tauri + Rust. It features a three-tier multi-agent architecture: Big Fish (Pisci) is the main agent and user interface, Koi are persistent collaborative agents, and Small Fish (Fish) are stateless sub-agents created on demand.",
+    desc2: "It supports Windows UI automation, browser control, file operations, scheduled tasks, IM gateways, long-term memory, and multi-agent collaboration.",
+    teamTitle: "About Us",
+    teamDesc: "We are a team dedicated to researching and building agentic applications (Harness), committed to empowering every industry with AI. Our Vibe Research System, designed for the AI4S domain, enables autonomous planning and execution of research tasks, software installation and deployment, and HPC platform integration with job submission — the Manus and OpenClaw of AI4S.",
     licenseTitle: "License",
     licenseContent: "MIT License — free to use, modify, and distribute",
     techTitle: "Tech Stack",

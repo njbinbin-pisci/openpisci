@@ -510,7 +510,6 @@ pub async fn chat_send(
         });
 
         // NOTE: agent.run() no longer emits Done — we do it here AFTER the DB write.
-        let context_len = llm_messages.len();
         // Agent handles complex tasks autonomously via its own tools (call_fish, plan_todo, etc.)
         let result = agent
             .run(llm_messages, event_tx.clone(), cancel.clone(), ctx)
@@ -527,10 +526,12 @@ pub async fn chat_send(
         // the frontend reads the DB before the write completes → empty history.
         match &result {
             Ok((final_messages, total_in, total_out)) => {
-                // Persist only the NEW messages produced by the agent (not the context we fed in).
+                // Persist the new messages produced by the agent during this run.
+                // final_messages is the new_messages buffer from AgentLoop::run(), which only
+                // contains messages appended during this run (immune to compaction).
                 {
                     let db = db_arc.lock().await;
-                    persist_agent_turn(&db, &session_id_clone, final_messages, context_len);
+                    persist_agent_turn(&db, &session_id_clone, final_messages);
                     let _ = db.update_session_status(&session_id_clone, "idle");
                 }
 
@@ -1090,8 +1091,6 @@ pub async fn run_agent_headless(
         }
     }
 
-    let context_len = llm_messages.len();
-
     let cancel = Arc::new(AtomicBool::new(false));
     {
         let mut flags = state.cancel_flags.lock().await;
@@ -1189,7 +1188,7 @@ pub async fn run_agent_headless(
             session_id
         );
         let db = state.db.lock().await;
-        persist_agent_turn(&db, session_id, &final_msgs, context_len);
+        persist_agent_turn(&db, session_id, &final_msgs);
         tracing::info!("run_agent_headless: persist done for {}", session_id);
     }
 
@@ -1789,15 +1788,18 @@ fn strip_send_markers(text: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(cleaned.trim().to_string())
 }
 
-/// `context_len` is the number of messages that were passed INTO agent.run() as context
-/// (already stored in the DB). Only messages at index >= context_len are new and need saving.
+/// Persist the new messages produced by `AgentLoop::run()` to the database.
+/// `final_messages` is the `new_messages` buffer returned by `run()` — it contains only the
+/// messages appended during the run (not the context fed in), and is immune to compaction.
 pub fn persist_agent_turn(
     db: &crate::store::Database,
     session_id: &str,
     final_messages: &[LlmMessage],
-    context_len: usize,
 ) {
-    let final_messages = &final_messages[context_len.min(final_messages.len())..];
+    tracing::info!(
+        "persist_agent_turn: session={} new_messages={}",
+        session_id, final_messages.len()
+    );
     // Determine the turn index from the current message count.
     // We use the count BEFORE writing so all new rows share the same index.
     let turn_index = db

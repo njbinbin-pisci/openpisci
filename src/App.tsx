@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
 import { settingsApi, sessionsApi, windowApi } from "./services/tauri";
+import { isInternalSession } from "./utils/session";
 import { setLanguage } from "./i18n";
 import Chat from "./components/Chat";
 import Memory from "./components/Memory";
@@ -77,10 +78,15 @@ function AppContent() {
           dispatch(settingsActions.setShowOnboarding(true));
         }
 
-        // Load sessions
-        const { sessions } = await sessionsApi.list();
+        // Load sessions — skip internal sessions (heartbeat, pisci_inbox, etc.)
+        // when choosing the initial active session so the user always lands on
+        // a real chat session, not an invisible internal one.
+        const { sessions } = await sessionsApi.list(100);
         dispatch(sessionsActions.setSessions(sessions));
-        if (sessions.length > 0) {
+        const firstVisible = sessions.find((s) => !isInternalSession(s));
+        if (firstVisible) {
+          dispatch(sessionsActions.setActiveSession(firstVisible.id));
+        } else if (sessions.length > 0) {
           dispatch(sessionsActions.setActiveSession(sessions[0].id));
         }
       } catch (e) {
