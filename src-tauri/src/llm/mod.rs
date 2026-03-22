@@ -17,7 +17,7 @@ pub struct LlmMessage {
     pub content: MessageContent,
 }
 
-/// Message content — either plain text or a list of content blocks
+/// Message content - either plain text or a list of content blocks
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum MessageContent {

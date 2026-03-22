@@ -141,6 +141,7 @@
 .messages-area {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 20px 24px;
   display: flex;
   flex-direction: column;
@@ -152,6 +153,7 @@
   flex-direction: column;
   gap: 6px;
   max-width: 85%;
+  min-width: 0;
 }
 
 .message-user {
@@ -178,8 +180,14 @@
   font-size: 14px;
   line-height: 1.6;
   word-break: break-word;
-  /* pre-wrap is handled per-element; markdown generates block elements */
   white-space: normal;
+  /* Fix bubble width to the .message box width (capped at 85% of messages-area).
+     overflow-x: hidden prevents the bubble from being pushed wider by any child.
+     Each wide child (table, code block) carries its own overflow-x: auto scroll. */
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 .message-user .message-content {
@@ -605,10 +613,44 @@
   margin: 10px 0;
 }
 
+/* Raw <pre> blocks inside markdown (not wrapped by our custom renderer) */
+.message-content .markdown-body pre {
+  overflow-x: auto;
+  white-space: pre;
+  max-width: 100%;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.message-content .markdown-body pre::-webkit-scrollbar { height: 5px; }
+.message-content .markdown-body pre::-webkit-scrollbar-track { background: transparent; }
+.message-content .markdown-body pre::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+/* Scrollable wrapper for wide tables — the table expands to its natural width
+   and scrolls horizontally inside this wrapper, keeping the bubble width fixed. */
+.table-scroll-wrapper {
+  display: block;
+  overflow-x: auto;
+  overflow-y: visible;
+  margin: 6px 0;
+  /* Use a thin scrollbar so it's visible but unobtrusive */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.table-scroll-wrapper::-webkit-scrollbar { height: 5px; }
+.table-scroll-wrapper::-webkit-scrollbar-track { background: transparent; }
+.table-scroll-wrapper::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
 .message-content .markdown-body table {
   border-collapse: collapse;
-  width: 100%;
-  margin: 6px 0;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
   font-size: 0.9em;
 }
 

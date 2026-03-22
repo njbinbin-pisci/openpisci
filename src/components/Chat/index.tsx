@@ -355,13 +355,12 @@ export default function Chat() {
           sessionsApi.getMessages(activeSessionId, CHAT_INITIAL_SIZE, 0),
           sessionsApi.list(),
         ]);
-        // Clear any frozen bubble from a previous turn so the full DB history is shown
-        dispatch(chatActions.clearFrozenBubble(activeSessionId));
-        dispatch(chatActions.setMessages({ sessionId: activeSessionId, messages }));
+        // Use setMessagesWithFrozen: if a frozenBubble exists for this session (set during
+        // a recent agent run), it is preserved as a single collapsed bubble. For sessions
+        // with no frozenBubble (old history, other sessions), it falls back to plain setMessages.
+        // Do NOT auto-reconstruct frozenBubble from DB here — that would collapse all history.
+        dispatch(chatActions.setMessagesWithFrozen({ sessionId: activeSessionId, messages }));
         setHasMoreHistory(messages.length >= CHAT_INITIAL_SIZE);
-        if (messages.length > 0) {
-          prevLastChatIdRef.current = messages[messages.length - 1].id;
-        }
         // Correct stale running state from DB
         const s = fresh.find((x) => x.id === activeSessionId);
         if (s && s.status !== "running") {
@@ -401,17 +400,26 @@ export default function Chat() {
     }).catch(() => { loadingMoreRef.current = false; });
   }, [activeSessionId, rawMessages.length, dispatch]);
 
-  // When the filter changes, if the active session is not visible under the new
-  // filter, switch to the first visible session (or null).
+  // When the filter changes, switch to the first visible session if the current
+  // active session is not visible under the new filter.
+  // We use refs for sessions/activeSessionId to avoid re-running on every session
+  // list update (which would kick the user out of IM sessions not yet in the list).
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const activeSessionIdForFilterRef = useRef(activeSessionId);
+  activeSessionIdForFilterRef.current = activeSessionId;
   useEffect(() => {
-    const visibleSessions = sessions.filter((x) => !isInternalSession(x) && (
+    const currentSessions = sessionsRef.current;
+    const currentActiveId = activeSessionIdForFilterRef.current;
+    const visibleSessions = currentSessions.filter((x) => !isInternalSession(x) && (
       sessionFilter === "all" || classifySession(x) === sessionFilter
     ));
-    const s = activeSessionId ? sessions.find((x) => x.id === activeSessionId) : null;
+    if (visibleSessions.length === 0) return;
+    const s = currentActiveId ? currentSessions.find((x) => x.id === currentActiveId) : null;
     if (s && visibleSessions.some((x) => x.id === s.id)) return;
     const first = visibleSessions[0];
     dispatch(sessionsActions.setActiveSession(first ? first.id : null));
-  }, [activeSessionId, sessions, sessionFilter, dispatch]);
+  }, [sessionFilter, dispatch]);
 
   // Subscribe to agent events — use ref to avoid stale closure over activeSessionId
   useEffect(() => {
@@ -425,10 +433,17 @@ export default function Chat() {
 
     let cancelled = false;
 
-    console.log('[Chat] registering event listener for session:', activeSessionId);
+    // The session id this listener is bound to — used for session-scoped operations
+    // like freezeStreaming and getMessages on done, which must target THIS session,
+    // not whatever session happens to be active when the event fires.
+    const boundSessionId = activeSessionId;
+    console.log('[Chat] registering event listener for session:', boundSessionId);
     chatApi.onEvent(activeSessionId, (event: AgentEventType) => {
-      console.log('[Chat] received event:', event.type, 'for session:', activeSessionIdRef.current);
-      // Always read the ref so we dispatch to the correct (current) session
+      console.log('[Chat] received event:', event.type, 'for session:', boundSessionId);
+      // For streaming deltas: write to the currently visible session (ref) so the user
+      // sees live output even if they switched sessions mid-stream.
+      // For session-scoped finalization (done, error): always use boundSessionId so we
+      // don't corrupt another session's frozenBubble or message state.
       const sid = activeSessionIdRef.current;
       if (!sid) return;
       switch (event.type) {
@@ -479,25 +494,22 @@ export default function Chat() {
               uiDefinition: event.ui_definition,
             },
           }));
+          // Scroll to bottom so the card is immediately visible — it renders after the
+          // streaming bubble, so without this the user might not notice it appeared.
+          setTimeout(() => scrollToBottom(true), 50);
           break;
         case "done":
-          console.log('[Chat] agent done event, sid=', sid, 'isImSession=', isImSessionRef.current);
-          dispatch(chatActions.setRunning({ sessionId: sid, running: false }));
-          // Snapshot streaming text into frozenBubble before clearing, so the single merged
-          // bubble is preserved after DB reload replaces the streaming state.
-          dispatch(chatActions.freezeStreaming(sid));
-          dispatch(chatActions.removeOptimisticMessages(sid));
-          if (!isImSessionRef.current) {
-            // Regular chat: reload from DB immediately (persist is synchronous before Done event)
-            sessionsApi.getMessages(sid).then((messages) => {
-              console.log('[Chat] done: reloaded', messages.length, 'messages for', sid);
-              // Use setMessagesWithFrozen so the multi-bubble DB result is collapsed back into
-              // the single merged bubble the user saw during streaming.
-              dispatch(chatActions.setMessagesWithFrozen({ sessionId: sid, messages }));
-            }).catch(() => {});
-          }
-          // IM sessions: App.tsx listens for im_session_done (emitted AFTER persist_agent_turn),
-          // which will reload messages. No action needed here.
+          // Use boundSessionId (the session this listener was registered for) so that
+          // freezeStreaming and getMessages always target the correct session, even if
+          // the user switched to a different session while the agent was running.
+          console.log('[Chat] agent done event, boundSid=', boundSessionId);
+          dispatch(chatActions.setRunning({ sessionId: boundSessionId, running: false }));
+          dispatch(chatActions.freezeStreaming(boundSessionId));
+          dispatch(chatActions.removeOptimisticMessages(boundSessionId));
+          sessionsApi.getMessages(boundSessionId, CHAT_INITIAL_SIZE).then((messages) => {
+            console.log('[Chat] done: reloaded', messages.length, 'messages for', boundSessionId);
+            dispatch(chatActions.setMessagesWithFrozen({ sessionId: boundSessionId, messages }));
+          }).catch(() => {});
           break;
         case "fish_progress":
           dispatch(chatActions.updateFishProgress({
@@ -511,8 +523,9 @@ export default function Chat() {
           }));
           break;
         case "error":
-          dispatch(chatActions.setRunning({ sessionId: sid, running: false }));
-          dispatch(chatActions.clearStreaming(sid));
+          // Also use boundSessionId for error — clears running state for the correct session.
+          dispatch(chatActions.setRunning({ sessionId: boundSessionId, running: false }));
+          dispatch(chatActions.clearStreaming(boundSessionId));
           setSendError((event as { type: "error"; message: string }).message ?? "Unknown error");
           break;
       }
@@ -1167,20 +1180,6 @@ export default function Chat() {
                 </div>
               )}
 
-              {/* Interactive UI cards from chat_ui tool */}
-              {Object.values(interactiveCards).map((card) => (
-                <div key={card.requestId} className="message message-assistant">
-                  <div className="message-role">{t("chat.pisci")}</div>
-                  <div className="message-content">
-                    <InteractiveCard
-                      requestId={card.requestId}
-                      uiDefinition={card.uiDefinition}
-                      submittedValues={card.submitted ? undefined : null}
-                    />
-                  </div>
-                </div>
-              ))}
-
               {/* Single streaming bubble — shows thinking dots until first text arrives,
                   then displays the latest streamed text. Disappears when running stops.
                   Hidden for IM sessions (headless agent, no real-time text stream). */}
@@ -1201,6 +1200,23 @@ export default function Chat() {
                   </div>
                 </div>
               )}
+
+              {/* Interactive UI cards from chat_ui tool — rendered AFTER the streaming bubble
+                  so they appear at the bottom of the conversation, always visible to the user.
+                  The agent pauses streaming while waiting for user input, so the streaming
+                  bubble is empty/hidden at this point anyway. */}
+              {Object.values(interactiveCards).map((card) => (
+                <div key={card.requestId} className="message message-assistant">
+                  <div className="message-role">{t("chat.pisci")}</div>
+                  <div className="message-content">
+                    <InteractiveCard
+                      requestId={card.requestId}
+                      uiDefinition={card.uiDefinition}
+                      submittedValues={card.submitted ? undefined : null}
+                    />
+                  </div>
+                </div>
+              ))}
 
               <div ref={messagesEndRef} />
             </div>
@@ -1643,6 +1659,12 @@ function MessageContent({ content }: { content: string }) {
               }
               return <code className="inline-code" {...props}>{children}</code>;
             },
+            // Tables: wrap in a scrollable container so wide tables don't stretch the bubble
+            table: ({ children }) => (
+              <div className="table-scroll-wrapper">
+                <table>{children}</table>
+              </div>
+            ),
             // Inline images — clickable for full-size view
             img: ({ src, alt }) => (
               <img

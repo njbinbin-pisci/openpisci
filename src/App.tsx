@@ -95,6 +95,8 @@ function AppContent() {
   // im_session_updated: inbound user message arrived and was pre-written to DB.
   // Reload messages immediately so the user sees their own message right away.
   // Mark session as running to show the processing indicator.
+  // Also refresh the session list so IM sessions (which are created on demand)
+  // appear in the sidebar and can be selected.
   useEffect(() => {
     const unlisten = listen<string>("im_session_updated", async (event) => {
       const sid = event.payload;
@@ -103,9 +105,12 @@ function AppContent() {
       try {
         const [messages, { sessions: fresh }] = await Promise.all([
           sessionsApi.getMessages(sid),
-          sessionsApi.list(),
+          sessionsApi.list(100),
         ]);
         console.log('[IM] im_session_updated: loaded', messages.length, 'messages');
+        // Update session list so the IM session appears in the sidebar.
+        // setSessions does NOT change activeSessionId, so the user's current
+        // session selection is preserved.
         dispatch(sessionsActions.setSessions(fresh));
         dispatch(chatActions.setMessages({ sessionId: sid, messages }));
         dispatch(chatActions.setRunning({ sessionId: sid, running: true }));
@@ -124,13 +129,11 @@ function AppContent() {
       if (!sid) return;
       console.log('[IM] im_session_done sid=', sid);
       try {
-        const [messages, { sessions: fresh }] = await Promise.all([
-          sessionsApi.getMessages(sid),
-          sessionsApi.list(),
-        ]);
+        const messages = await sessionsApi.getMessages(sid, 200);
         console.log('[IM] im_session_done: loaded', messages.length, 'messages');
-        dispatch(sessionsActions.setSessions(fresh));
-        dispatch(chatActions.setMessages({ sessionId: sid, messages }));
+        // Use setMessagesWithFrozen so the frozenBubble (merged streaming text) is preserved
+        // as a single bubble, rather than being replaced by the raw multi-row DB data.
+        dispatch(chatActions.setMessagesWithFrozen({ sessionId: sid, messages }));
       } catch (e) {
         console.error("[IM] im_session_done error:", e);
       }

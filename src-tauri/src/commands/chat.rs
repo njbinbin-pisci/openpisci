@@ -1133,7 +1133,17 @@ pub async fn run_agent_headless(
     let (final_msgs, _, _) = match run_result {
         Ok(messages) => messages,
         Err(e) => {
-            let _ = state.app_handle.emit("im_session_done", session_id);
+            // Emit an error event so the frontend clears the running state without
+            // reloading messages from DB. This preserves the frozenBubble (streaming
+            // text accumulated during the run) so the user can still see the partial output.
+            let err_payload = serde_json::to_value(&AgentEvent::Error {
+                message: e.to_string(),
+            })
+            .unwrap_or_default();
+            let _ = state
+                .app_handle
+                .emit(&format!("agent_event_{}", session_id), err_payload.clone());
+            let _ = state.app_handle.emit("agent_broadcast", err_payload);
             return Err(e.to_string());
         }
     };

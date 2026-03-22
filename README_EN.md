@@ -334,6 +334,11 @@ OpenPisci
 
 ## 📋 Changelog
 
+### v0.5.13
+- **Session switching fix**: Fixed messages not updating when switching sessions — the message area always reflects the selected session now; fixed IM sessions missing from the session list causing them to be unreachable
+- **Wide content local scrolling**: Tables, code blocks and other wide content now generate a local horizontal scrollbar inside the bubble instead of stretching the bubble or causing the entire message area to scroll horizontally
+- **Streaming event ownership fix**: `done`/`error` events now use the session ID captured at listener registration time, preventing state corruption when the user switches sessions while an agent is running
+
 ### v0.5.12
 - **Compression algorithm unit tests**: Added 11 dedicated tests inside `AgentLoop` covering Level-1 tool result trimming (`compact_trim_tool_results`), Level-2 LLM summarisation (`compact_summarise`), `estimate_message_tokens` for all message types, and a regression test for the 154-message crash scenario
 - **Per-Koi `max_iterations`**: Each Koi can now have its own maximum iteration limit configured in its detail view, overriding the global default

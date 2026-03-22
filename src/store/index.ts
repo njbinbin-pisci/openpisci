@@ -87,6 +87,9 @@ export interface StreamingState {
   exiting: string | null;
   /** Incremented each time a new segment starts — used as React key to re-trigger enter animation */
   segmentId: number;
+  /** Character offset in `current` where the last segment started.
+   *  Used by freezeStreaming to split intermediate steps from the final summary. */
+  lastSegmentStart: number;
 }
 
 interface ChatState {
@@ -158,7 +161,7 @@ const chatSlice = createSlice({
     appendDelta: (state, action: PayloadAction<{ sessionId: string; delta: string }>) => {
       const { sessionId, delta } = action.payload;
       if (!state.streaming[sessionId]) {
-        state.streaming[sessionId] = { current: "", exiting: null, segmentId: 0 };
+        state.streaming[sessionId] = { current: "", exiting: null, segmentId: 0, lastSegmentStart: 0 };
       }
       state.streaming[sessionId].current += delta;
     },
@@ -167,10 +170,12 @@ const chatSlice = createSlice({
       const sid = action.payload;
       const s = state.streaming[sid];
       if (s) {
-        // Keep current text; new deltas will append to it (single bubble, no exit animation)
+        // Keep current text; new deltas will append to it (single bubble, no exit animation).
+        // Record where this segment starts so freezeStreaming can split off the final summary.
+        s.lastSegmentStart = s.current.length;
         s.segmentId = (s.segmentId ?? 0) + 1;
       } else {
-        state.streaming[sid] = { current: "", exiting: null, segmentId: 0 };
+        state.streaming[sid] = { current: "", exiting: null, segmentId: 0, lastSegmentStart: 0 };
       }
     },
     /** No-op kept for API compatibility — exiting animation is removed */
@@ -181,29 +186,47 @@ const chatSlice = createSlice({
     clearStreaming: (state, action: PayloadAction<string>) => {
       delete state.streaming[action.payload];
     },
-    /** Called on `done`: snapshot streaming.current into frozenBubble, then clear streaming.
-     *  The frozen text will be used to replace the multi-bubble DB reload with a single bubble. */
+    /** Called on `done`: snapshot intermediate streaming text into frozenBubble, then clear streaming.
+     *  The frozen text (everything before the last segment) becomes the collapsed intermediate-steps
+     *  bubble. The last segment is the final summary and will be shown separately from DB data. */
     freezeStreaming: (state, action: PayloadAction<string>) => {
       const sid = action.payload;
-      const text = state.streaming[sid]?.current ?? "";
-      if (text.trim()) {
-        state.frozenBubble[sid] = text;
+      const s = state.streaming[sid];
+      if (s) {
+        // Split: everything before lastSegmentStart = intermediate steps (frozen bubble).
+        //        lastSegmentStart..end = final summary (shown separately from DB).
+        const intermediateText = s.lastSegmentStart > 0
+          ? s.current.slice(0, s.lastSegmentStart).trimEnd()
+          : "";
+        if (intermediateText.trim()) {
+          state.frozenBubble[sid] = intermediateText;
+        }
+        // If there were no segment boundaries (single-segment run), store the full text.
+        // setMessagesWithFrozen will deduplicate against the DB summary message.
+        else if (s.current.trim()) {
+          state.frozenBubble[sid] = s.current;
+        }
       }
       delete state.streaming[sid];
     },
-    /** Like setMessages, but if a frozenBubble exists for this session, replace all assistant
-     *  messages from the last agent turn (after the last real user message) with a single
-     *  synthetic message whose content is the frozen text. */
+    /** Replace messages for a session, collapsing the last agent turn into a single bubble.
+     *
+     *  If a frozenBubble exists for this session (set by freezeStreaming during a recent run),
+     *  the last agent turn is collapsed: intermediate steps → one bubble, final summary → separate bubble.
+     *  If no frozenBubble exists (other sessions, old history, after app restart), messages are
+     *  set as-is from DB — no collapsing, no reconstruction.
+     *
+     *  Result when frozenBubble present:
+     *   [...history before last user msg]
+     *   [single collapsed bubble — intermediate steps (frozenBubble content)]
+     *   [final summary bubble — DB lastAssistant, only if different from frozenBubble]
+     *   [...chat_ui interactive cards]
+     */
     setMessagesWithFrozen: (state, action: PayloadAction<{ sessionId: string; messages: ChatMessage[] }>) => {
       const { sessionId, messages } = action.payload;
-      const frozen = state.frozenBubble[sessionId];
-      if (!frozen) {
-        state.messagesBySession[sessionId] = messages;
-        return;
-      }
+
       // Find the index of the last real (non-optimistic) user message to determine the turn boundary.
-      // Everything after that boundary is the current agent turn's messages.
-      let turnStart = messages.length; // default: no user message found, all are agent turn
+      let turnStart = messages.length;
       for (let i = messages.length - 1; i >= 0; i--) {
         if (messages[i].role === "user" && !messages[i].id.startsWith("optimistic_")) {
           turnStart = i + 1;
@@ -212,17 +235,37 @@ const chatSlice = createSlice({
       }
       const before = messages.slice(0, turnStart);
       const agentMessages = messages.slice(turnStart);
-      // Build a single synthetic assistant message to replace all agent-turn assistant messages.
-      // Preserve the last assistant message's id so React keys are stable on subsequent reloads.
-      const lastAssistant = [...agentMessages].reverse().find((m) => m.role === "assistant");
-      const syntheticId = lastAssistant?.id ?? `frozen_${sessionId}`;
+
+      // Only use frozenBubble if it was explicitly set during a recent streaming run.
+      // Never auto-reconstruct from DB — that would collapse all history into one bubble.
+      const frozen = state.frozenBubble[sessionId];
+      if (!frozen) {
+        // No frozenBubble for this session — show raw DB messages as-is.
+        state.messagesBySession[sessionId] = messages;
+        return;
+      }
+
+      // Build the single collapsed bubble for intermediate steps.
       const synthetic: ChatMessage = {
-        id: syntheticId,
+        id: `frozen_${sessionId}`,
         session_id: sessionId,
         role: "assistant",
         content: frozen,
-        created_at: lastAssistant?.created_at ?? new Date().toISOString(),
+        created_at: agentMessages[0]?.created_at ?? new Date().toISOString(),
       };
+
+      // Find the last persisted assistant message with text and no tool calls.
+      // This is the final summary — show it as a separate bubble after the collapsed
+      // intermediate-steps bubble. Skip it only if it is identical to the frozen text
+      // (happens on single-segment runs where there were no intermediate tool steps).
+      const lastAssistant = [...agentMessages]
+        .reverse()
+        .find((m) => m.role === "assistant" && m.content.trim() && !m.tool_calls_json);
+      const summaryBubble: ChatMessage[] =
+        lastAssistant && lastAssistant.content.trim() !== frozen.trim()
+          ? [lastAssistant]
+          : [];
+
       // Keep any chat_ui tool-call messages (interactive cards) from the agent turn as-is.
       const chatUiMessages = agentMessages.filter(
         (m) => m.role === "assistant" && m.tool_calls_json &&
@@ -233,7 +276,7 @@ const chatSlice = createSlice({
             } catch { return false; }
           })()
       );
-      state.messagesBySession[sessionId] = [...before, synthetic, ...chatUiMessages];
+      state.messagesBySession[sessionId] = [...before, synthetic, ...summaryBubble, ...chatUiMessages];
     },
     /** Clear the frozen bubble for a session (called when the next user message is sent). */
     clearFrozenBubble: (state, action: PayloadAction<string>) => {
