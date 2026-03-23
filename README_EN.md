@@ -334,6 +334,9 @@ OpenPisci
 
 ## 📋 Changelog
 
+### v0.5.16
+- **UAC execution fix**: Fixed two root causes of elevated command result parsing failures: ① Windows `[System.Text.Encoding]::UTF8` writes files with a UTF-8 BOM by default, causing `serde_json` to fail with `expected value at line 1 column 1`; ② native executables such as `regsvr32` and `reg` do not set `$LASTEXITCODE` correctly when run inside a `& { } 2>&1` block, causing the exit code to always be 0; the new approach writes the user command to a separate inner script file, runs it via `Start-Process -Wait -PassThru` and reads the real exit code from `$proc.ExitCode`, and writes the result file with BOM-free UTF-8 encoding
+
 ### v0.5.15
 - **Real-time persistence**: Completely fixed the message loss problem — previously messages were batch-written to the database only when `run()` finished, so any mid-run exit (compilation restart, crash, etc.) would lose all in-progress messages; now every message is written to the database immediately as it is produced, so no completed steps are ever lost regardless of when the process exits
 

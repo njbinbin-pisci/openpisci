@@ -44,42 +44,68 @@ pub async fn run_elevated_powershell(
     let script_path = tmp_dir.join(format!("pisci_elev_{}.ps1", id));
     let result_path = tmp_dir.join(format!("pisci_elev_{}.result", id));
 
-    // Write the wrapper script that captures output and writes to result file
+    // Write the wrapper script that captures output and writes to result file.
+    //
+    // Key design decisions:
+    // 1. Write the user command to a separate inner script file, then run it via
+    //    Start-Process with stdout/stderr redirected to temp files. This correctly
+    //    captures $LASTEXITCODE from native executables (regsvr32, reg, etc.) that
+    //    the & { } 2>&1 approach loses.
+    // 2. Write result with UTF8NoBOM (New-Object System.Text.UTF8Encoding($false))
+    //    to avoid the BOM that Windows [System.Text.Encoding]::UTF8 emits by default,
+    //    which would cause serde_json to fail with "expected value at line 1 column 1".
     let result_path_escaped = result_path.to_string_lossy().replace('\\', "\\\\");
+    let inner_script_path = tmp_dir.join(format!("pisci_elev_{}_inner.ps1", id));
+    let inner_script_path_escaped = inner_script_path.to_string_lossy().replace('\\', "\\\\");
+
+    // Write the inner script (the actual user command) separately
+    let inner_content = format!(
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8\n$OutputEncoding=[System.Text.Encoding]::UTF8\nchcp 65001 | Out-Null\n{}\n",
+        command
+    );
+    std::fs::write(&inner_script_path, inner_content.as_bytes())?;
+
+    // Use the same PowerShell bitness for the inner process as requested by the caller
+    let inner_ps_exe = if arch == "x86" {
+        r"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
+    } else {
+        "powershell.exe"
+    };
+
     let script_content = format!(
         r#"
-$ErrorActionPreference = 'Continue'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$OutputEncoding = [System.Text.Encoding]::UTF8
-chcp 65001 | Out-Null
-
-$stdout = ""
-$stderr = ""
+$tmpOut = [System.IO.Path]::GetTempFileName()
+$tmpErr = [System.IO.Path]::GetTempFileName()
 $exitCode = 0
 
 try {{
-    $result = & {{
-        {command}
-    }} 2>&1
-
-    $stdout = ($result | Where-Object {{ $_ -isnot [System.Management.Automation.ErrorRecord] }}) -join "`n"
-    $stderr = ($result | Where-Object {{ $_ -is [System.Management.Automation.ErrorRecord] }}) -join "`n"
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -eq $null) {{ $exitCode = 0 }}
+    $proc = Start-Process -FilePath "{inner_ps_exe}" `
+        -ArgumentList @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "{inner_script_path_escaped}") `
+        -RedirectStandardOutput $tmpOut `
+        -RedirectStandardError $tmpErr `
+        -Wait -PassThru -NoNewWindow
+    $exitCode = if ($proc.ExitCode -ne $null) {{ $proc.ExitCode }} else {{ 0 }}
 }} catch {{
-    $stderr = $_.Exception.Message
     $exitCode = 1
+    $utf8NoBom2 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($tmpErr, $_.Exception.Message, $utf8NoBom2)
 }}
 
-$output = @{{
-    exit_code = $exitCode
+$stdout = if (Test-Path $tmpOut) {{ [System.IO.File]::ReadAllText($tmpOut, [System.Text.Encoding]::UTF8).Trim() }} else {{ "" }}
+$stderr = if (Test-Path $tmpErr) {{ [System.IO.File]::ReadAllText($tmpErr, [System.Text.Encoding]::UTF8).Trim() }} else {{ "" }}
+Remove-Item $tmpOut, $tmpErr, "{inner_script_path_escaped}" -ErrorAction SilentlyContinue
+
+$output = [PSCustomObject]@{{
+    exit_code = [int]$exitCode
     stdout = $stdout
     stderr = $stderr
 }} | ConvertTo-Json -Compress
 
-[System.IO.File]::WriteAllText("{result_path_escaped}", $output, [System.Text.Encoding]::UTF8)
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText("{result_path_escaped}", $output, $utf8NoBom)
 "#,
-        command = command,
+        inner_ps_exe = inner_ps_exe,
+        inner_script_path_escaped = inner_script_path_escaped,
         result_path_escaped = result_path_escaped
     );
 
@@ -110,6 +136,7 @@ $output = @{{
 
     if let Err(e) = launch_result {
         let _ = std::fs::remove_file(&script_path);
+        let _ = std::fs::remove_file(&inner_script_path);
         return Err(e);
     }
 
@@ -120,8 +147,10 @@ $output = @{{
     )
     .await;
 
-    // Clean up script file
+    // Clean up script files (inner script is also cleaned by the PS script itself,
+    // but remove here as a safety net in case the elevated process was killed)
     let _ = std::fs::remove_file(&script_path);
+    let _ = std::fs::remove_file(&inner_script_path);
 
     match poll_result {
         Err(_) => {
@@ -159,7 +188,10 @@ async fn poll_for_result(result_path: &PathBuf) -> Result<String> {
 }
 
 fn parse_result(json_str: &str) -> Result<ElevatedResult> {
-    let v: serde_json::Value = serde_json::from_str(json_str.trim()).map_err(|e| {
+    // Strip UTF-8 BOM (U+FEFF) that Windows WriteAllText with UTF8 encoding emits,
+    // then also strip whitespace. serde_json rejects any leading non-JSON bytes.
+    let stripped = json_str.trim_start_matches('\u{FEFF}').trim();
+    let v: serde_json::Value = serde_json::from_str(stripped).map_err(|e| {
         anyhow::anyhow!("Failed to parse elevated result: {} | raw: {}", e, json_str)
     })?;
 

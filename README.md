@@ -337,6 +337,9 @@ OpenPisci
 
 ## 📋 更新日志
 
+### v0.5.16
+- **UAC 执行修复**：修复 elevated 命令返回值解析失败的两个根本原因：① Windows `[System.Text.Encoding]::UTF8` 写文件时默认带 UTF-8 BOM，导致 `serde_json` 解析失败（`expected value at line 1 column 1`）；② `regsvr32`、`reg` 等原生可执行文件在 `& { } 2>&1` 块内执行时 `$LASTEXITCODE` 不会被正确设置，导致退出码始终为 0；新方案将用户命令写入独立 inner 脚本，通过 `Start-Process -Wait -PassThru` 执行并用 `$proc.ExitCode` 获取真实退出码，结果文件改用无 BOM 的 UTF-8 编码写入
+
 ### v0.5.15
 - **实时持久化**：彻底修复消息丢失问题——之前持久化在 `run()` 结束时批量写入，若程序在迭代中途退出（编译重启、崩溃等）则所有中间消息全部丢失；现在每产生一条消息立即写入数据库，程序任何时刻退出都不会丢失已完成的步骤
 
