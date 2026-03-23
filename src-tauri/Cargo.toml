@@ -86,6 +86,7 @@ russh = { version = "0.57", default-features = false, features = ["ring"] }
 lopdf = { version = "0.34", features = ["nom_parser"] }
 pdf-extract = "0.7"
 tauri-plugin-single-instance = "2.4.0"
+encoding_rs = "0.8.35"
 
 # Windows-specific (conditional)
 [target.'cfg(target_os = "windows")'.dependencies]

@@ -3,6 +3,36 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+
+/// Return true if the file starts with a UTF-8 BOM.
+fn file_has_utf8_bom(path: &std::path::Path) -> bool {
+    let mut buf = [0u8; 3];
+    if let Ok(mut f) = std::fs::File::open(path) {
+        use std::io::Read;
+        if f.read_exact(&mut buf).is_ok() {
+            return buf == *UTF8_BOM;
+        }
+    }
+    false
+}
+
+/// Write content to a file, prepending a UTF-8 BOM if `preserve_bom` is true.
+fn write_with_bom_policy(
+    path: &std::path::Path,
+    content: &str,
+    preserve_bom: bool,
+) -> std::io::Result<()> {
+    if preserve_bom {
+        let mut bytes = Vec::with_capacity(UTF8_BOM.len() + content.len());
+        bytes.extend_from_slice(UTF8_BOM);
+        bytes.extend_from_slice(content.as_bytes());
+        std::fs::write(path, bytes)
+    } else {
+        std::fs::write(path, content.as_bytes())
+    }
+}
+
 pub struct FileWriteTool;
 
 #[async_trait]
@@ -63,7 +93,8 @@ impl Tool for FileWriteTool {
         }
 
         let existed = path.exists();
-        std::fs::write(&path, content)?;
+        let preserve_bom = existed && file_has_utf8_bom(&path);
+        write_with_bom_policy(&path, content, preserve_bom)?;
 
         let action = if existed { "Updated" } else { "Created" };
         Ok(ToolResult::ok(format!(
@@ -199,7 +230,13 @@ impl Tool for FileEditTool {
             vec![(old_str, new_str)]
         };
 
-        let content = std::fs::read_to_string(&path)?;
+        let raw = std::fs::read(&path)?;
+        let preserve_bom = raw.starts_with(UTF8_BOM);
+        let content = if preserve_bom {
+            String::from_utf8_lossy(&raw[UTF8_BOM.len()..]).into_owned()
+        } else {
+            String::from_utf8_lossy(&raw).into_owned()
+        };
         let lines_before = content.lines().count();
 
         // Validation pass: every old_string must appear exactly once
@@ -259,7 +296,7 @@ impl Tool for FileEditTool {
             result.replace_range(pos..pos + old_len, &pairs[pair_idx].1);
         }
 
-        std::fs::write(&path, &result)?;
+        write_with_bom_policy(&path, &result, preserve_bom)?;
 
         let lines_after = result.lines().count();
         let line_delta = lines_after as i64 - lines_before as i64;

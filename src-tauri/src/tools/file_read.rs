@@ -6,6 +6,58 @@ use serde_json::{json, Value};
 const MAX_TEXT_BYTES: u64 = 256 * 1024; // 256 KB
 const MAX_IMAGE_BYTES: u64 = 4 * 1024 * 1024; // 4 MB
 
+const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+const UTF16_LE_BOM: &[u8] = &[0xFF, 0xFE];
+const UTF16_BE_BOM: &[u8] = &[0xFE, 0xFF];
+
+/// Decode raw file bytes to a String.
+/// Priority:
+///   1. Strip UTF-8 BOM if present, decode as UTF-8.
+///   2. Try UTF-8 (no BOM).
+///   3. Try GBK/GB18030 (common on Chinese Windows systems).
+///   4. Lossy UTF-8 as last resort.
+fn decode_bytes(bytes: &[u8]) -> (String, &'static str) {
+    // UTF-16 LE/BE — convert via encoding_rs
+    if bytes.starts_with(UTF16_LE_BOM) {
+        let (cow, _, had_errors) = encoding_rs::UTF_16LE.decode(&bytes[UTF16_LE_BOM.len()..]);
+        if !had_errors {
+            return (cow.into_owned(), "utf-16-le");
+        }
+    }
+    if bytes.starts_with(UTF16_BE_BOM) {
+        let (cow, _, had_errors) = encoding_rs::UTF_16BE.decode(&bytes[UTF16_BE_BOM.len()..]);
+        if !had_errors {
+            return (cow.into_owned(), "utf-16-be");
+        }
+    }
+
+    // UTF-8 with BOM
+    let payload = if bytes.starts_with(UTF8_BOM) {
+        &bytes[UTF8_BOM.len()..]
+    } else {
+        bytes
+    };
+
+    // Try strict UTF-8 first
+    if let Ok(s) = std::str::from_utf8(payload) {
+        let label = if bytes.starts_with(UTF8_BOM) {
+            "utf-8-bom"
+        } else {
+            "utf-8"
+        };
+        return (s.to_owned(), label);
+    }
+
+    // Fall back to GBK (covers GB2312, GB18030 subset)
+    let (cow, _, had_errors) = encoding_rs::GBK.decode(bytes);
+    if !had_errors {
+        return (cow.into_owned(), "gbk");
+    }
+
+    // Last resort: lossy UTF-8
+    (String::from_utf8_lossy(bytes).into_owned(), "utf-8-lossy")
+}
+
 pub struct FileReadTool;
 
 #[async_trait]
@@ -120,7 +172,7 @@ impl Tool for FileReadTool {
             )));
         }
 
-        let content = std::fs::read_to_string(&path).map_err(|e| {
+        let raw = std::fs::read(&path).map_err(|e| {
             let hint = if e.kind() == std::io::ErrorKind::PermissionDenied {
                 format!(
                     "Failed to read file: {} (os error 5 - 拒绝访问)\n\
@@ -134,6 +186,13 @@ impl Tool for FileReadTool {
             };
             anyhow::anyhow!("{}", hint)
         })?;
+
+        let (content, encoding) = decode_bytes(&raw);
+        let encoding_note = if encoding != "utf-8" {
+            format!(" [encoding: {}]", encoding)
+        } else {
+            String::new()
+        };
 
         let lines: Vec<&str> = content.lines().collect();
         let total = lines.len();
@@ -151,8 +210,9 @@ impl Tool for FileReadTool {
             .join("\n");
 
         Ok(ToolResult::ok(format!(
-            "File: {} ({} lines total, showing lines {}-{})\n\n{}",
+            "File: {}{} ({} lines total, showing lines {}-{})\n\n{}",
             path.display(),
+            encoding_note,
             total,
             start + 1,
             end,
