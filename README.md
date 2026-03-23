@@ -338,6 +338,10 @@ OpenPisci
 
 ## 📋 更新日志
 
+### v0.5.18
+- **Koi 超时修复**：Koi 超时后自动将其 in_progress 任务改为 blocked 状态，并向鱼池发送 @pisci 通知；心跳扫描新增对 blocked todo 的持久唤醒逻辑，确保项目不会因 Koi 超时而永久卡死
+- **文件编码增强**：ile_read 自动识别并透明处理 UTF-8 BOM、UTF-16 LE/BE、GBK/GB18030；ile_write/ile_edit 写回时自动保留原文件 BOM；工具描述和系统提示词新增文件编码操作指南
+
 ### v0.5.17
 - **微信接入**：直接对接腾讯 iLink Bot HTTP API，无需安装 Node.js 或任何 CLI；在设置页启用微信通道后点击「绑定微信」，扫描二维码即可完成绑定；Agent 回复通过 iLink sendmessage 接口实时送达微信用户
 

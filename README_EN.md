@@ -335,6 +335,10 @@ OpenPisci
 
 ## 📋 Changelog
 
+### v0.5.18
+- **Koi timeout fix**: when a Koi times out, its in_progress todos are automatically blocked and a @pisci notice is posted to the pool; the heartbeat scanner now wakes Pisci whenever blocked todos exist, preventing projects from stalling permanently after a Koi failure
+- **File encoding improvements**: ile_read transparently handles UTF-8 BOM, UTF-16 LE/BE, and GBK/GB18030; ile_write/ile_edit preserve the original BOM on write-back; tool descriptions and the system prompt now include a Windows file encoding guide
+
 ### v0.5.17
 - **WeChat integration**: Connects directly to the Tencent iLink Bot HTTP API — no Node.js or CLI required; enable the WeChat channel in Settings, click 'Bind WeChat', and scan the QR code to complete binding; Agent replies are delivered to WeChat users in real time via the iLink sendmessage API
 
