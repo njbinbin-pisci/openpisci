@@ -75,7 +75,7 @@ jobs:
         with:
           name: pisci-desktop-windows
           path: src-tauri/target/release/pisci-desktop.exe
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   # ──────────────────────────────────────────────────────────────────────────
