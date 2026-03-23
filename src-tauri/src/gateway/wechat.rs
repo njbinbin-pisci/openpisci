@@ -18,6 +18,7 @@
 use super::{Channel, ChannelStatus, InboundMessage, OutboundMessage};
 use anyhow::Result;
 use async_trait::async_trait;
+use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,7 +27,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex, Notify};
 use tracing::{info, warn};
-use reqwest;
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -200,11 +200,8 @@ impl Channel for WechatChannel {
                 return Ok(());
             }
 
-            let accept = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                listener.accept(),
-            )
-            .await;
+            let accept =
+                tokio::time::timeout(std::time::Duration::from_secs(2), listener.accept()).await;
 
             match accept {
                 Ok(Ok((stream, addr))) => {
@@ -213,9 +210,7 @@ impl Channel for WechatChannel {
                     let state = state.clone();
                     let shutdown = shutdown.clone();
                     tokio::spawn(async move {
-                        if let Err(e) =
-                            handle_http(stream, tx, &token, state, shutdown).await
-                        {
+                        if let Err(e) = handle_http(stream, tx, &token, state, shutdown).await {
                             warn!("WeChat HTTP: connection error from {}: {}", addr, e);
                         }
                     });
@@ -303,13 +298,23 @@ async fn handle_http(
                 let auth = extract_header(header_str, "Authorization");
                 let expected = format!("Bearer {}", gateway_token);
                 if auth.trim() != expected.trim() {
-                    write_json_response(&mut stream, 401, &json!({"ret": -1, "errmsg": "unauthorized"})).await?;
+                    write_json_response(
+                        &mut stream,
+                        401,
+                        &json!({"ret": -1, "errmsg": "unauthorized"}),
+                    )
+                    .await?;
                     return Ok(());
                 }
             }
 
             if method != "POST" {
-                write_json_response(&mut stream, 405, &json!({"ret": -1, "errmsg": "method not allowed"})).await?;
+                write_json_response(
+                    &mut stream,
+                    405,
+                    &json!({"ret": -1, "errmsg": "method not allowed"}),
+                )
+                .await?;
                 return Ok(());
             }
 
@@ -335,11 +340,7 @@ async fn dispatch(
     shutdown: &Arc<AtomicBool>,
 ) -> Value {
     // Strip any leading path components; we only care about the last segment.
-    let endpoint = path
-        .trim_start_matches('/')
-        .split('/')
-        .last()
-        .unwrap_or("");
+    let endpoint = path.trim_start_matches('/').split('/').last().unwrap_or("");
 
     match endpoint {
         "getupdates" => handle_getupdates(body, tx, state, shutdown).await,
@@ -367,10 +368,7 @@ async fn handle_getupdates(
     state: &Arc<WechatState>,
     shutdown: &Arc<AtomicBool>,
 ) -> Value {
-    let sync_buf_in = body["get_updates_buf"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let sync_buf_in = body["get_updates_buf"].as_str().unwrap_or("").to_string();
 
     // Check for inbound messages embedded in the getupdates request.
     // The plugin sends user messages as part of the getupdates body when
@@ -521,9 +519,7 @@ fn weixin_message_to_inbound(msg: &Value) -> Option<InboundMessage> {
 /// Find the byte offset of the start of the HTTP body (after `\r\n\r\n`).
 /// Returns `None` if the header terminator has not been received yet.
 fn find_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|p| p + 4)
+    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
 }
 
 /// Extract the numeric value of the `Content-Length` header.

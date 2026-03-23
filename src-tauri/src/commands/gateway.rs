@@ -220,7 +220,10 @@ pub async fn start_wechat_login(state: State<'_, AppState>) -> Result<WechatLogi
         .unwrap_or(&qrcode_token)
         .to_string();
 
-    tracing::info!("WeChat QR code obtained, token length={}", qrcode_token.len());
+    tracing::info!(
+        "WeChat QR code obtained, token length={}",
+        qrcode_token.len()
+    );
 
     // Generate a PNG QR code image as base64 data URL for the frontend.
     let qr_data_url = generate_qr_data_url(&qrcode_url)?;
@@ -336,16 +339,13 @@ pub async fn poll_wechat_login(
 
 /// Generate a `data:image/png;base64,...` QR code from a URL string.
 fn generate_qr_data_url(content: &str) -> Result<String, String> {
-    use qrcode::QrCode;
     use qrcode::render::svg;
+    use qrcode::QrCode;
 
     let code = QrCode::new(content.as_bytes())
         .map_err(|e| format!("Failed to generate QR code: {}", e))?;
 
-    let svg_str = code
-        .render::<svg::Color>()
-        .min_dimensions(200, 200)
-        .build();
+    let svg_str = code.render::<svg::Color>().min_dimensions(200, 200).build();
 
     // Encode SVG as base64 data URL
     use base64::Engine;
