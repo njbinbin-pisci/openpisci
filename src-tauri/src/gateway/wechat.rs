@@ -340,7 +340,11 @@ async fn dispatch(
     shutdown: &Arc<AtomicBool>,
 ) -> Value {
     // Strip any leading path components; we only care about the last segment.
-    let endpoint = path.trim_start_matches('/').split('/').last().unwrap_or("");
+    let endpoint = path
+        .trim_start_matches('/')
+        .split('/')
+        .next_back()
+        .unwrap_or("");
 
     match endpoint {
         "getupdates" => handle_getupdates(body, tx, state, shutdown).await,
