@@ -434,6 +434,12 @@ impl KoiRuntime {
             )),
         };
 
+        let is_timeout = exec_result
+            .as_ref()
+            .err()
+            .map(|e| e.to_string().contains("timed out"))
+            .unwrap_or(false);
+
         let (success, reply) = match &exec_result {
             Ok(reply) => (true, reply.clone()),
             Err(e) => (false, format!("Error: {}", e)),
@@ -473,6 +479,43 @@ impl KoiRuntime {
                 Err(_) => None,
             }
         };
+
+        // On timeout: block any in_progress todos owned by this Koi and post a
+        // @pisci mention so the heartbeat cursor sees a fresh attention event.
+        if is_timeout {
+            let block_reason = format!(
+                "Koi '{}' timed out (10 min limit). Needs Pisci intervention.",
+                koi_def.name
+            );
+            let db = self.db().lock().await;
+            if let Ok(todos) = db.list_active_todos_by_pool(&pool_session_id) {
+                for todo in todos.iter().filter(|t| {
+                    t.claimed_by.as_deref() == Some(koi_id) && t.status == "in_progress"
+                }) {
+                    let _ = db.block_koi_todo(&todo.id, &block_reason);
+                }
+            }
+            let pisci_notice = format!(
+                "[ProjectStatus] follow_up_needed @pisci — Koi '{}' timed out while checking messages. \
+                 Please inspect the pool and reassign or unblock the stalled work.",
+                koi_def.name
+            );
+            if let Ok(notice_msg) = db.insert_pool_message_ext(
+                &pool_session_id,
+                koi_id,
+                &pisci_notice,
+                "status_update",
+                "{}",
+                None,
+                None,
+                Some("task_blocked"),
+            ) {
+                self.bus.emit_event(
+                    &format!("pool_message_{}", pool_session_id),
+                    serde_json::to_value(&notice_msg).unwrap_or_default(),
+                );
+            }
+        }
 
         self.set_koi_status(koi_id, "idle").await;
 

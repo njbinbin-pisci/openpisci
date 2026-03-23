@@ -60,6 +60,14 @@ pub fn assess_project_state(
         .count();
     let active_todo_count = active_todos.len();
 
+    // Count recent task_failed events (from any Koi) — these indicate a Koi
+    // crashed or timed out and Pisci should intervene even if no @pisci mention
+    // was explicitly sent.
+    let recent_task_failed_count = messages
+        .iter()
+        .filter(|m| m.event_type.as_deref() == Some("task_failed"))
+        .count();
+
     let koi_id_set: HashSet<&str> = koi_ids.iter().map(|s| s.as_str()).collect();
     let mut latest_signals: HashMap<String, SenderState> = HashMap::new();
 
@@ -92,9 +100,17 @@ pub fn assess_project_state(
 
     if active_todo_count > 0 {
         let summary = if blocked_todo_count > 0 {
+            let failure_hint = if recent_task_failed_count > 0 {
+                format!(
+                    " ({} task_failed event(s) detected — a Koi may have timed out or crashed)",
+                    recent_task_failed_count
+                )
+            } else {
+                String::new()
+            };
             format!(
-                "Project still has {} active todo(s), including {} blocked todo(s). More work or intervention is needed before Pisci should conclude.",
-                active_todo_count, blocked_todo_count
+                "Project still has {} active todo(s), including {} blocked todo(s){}. Pisci must intervene to unblock or reassign.",
+                active_todo_count, blocked_todo_count, failure_hint
             )
         } else {
             format!(

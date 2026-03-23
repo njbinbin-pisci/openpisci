@@ -130,10 +130,18 @@ pub fn collect_pool_attention(
 
     let assessment = assess_project_state(messages, todos, koi_ids);
 
-    // Always wake Pisci when all todos are done — even if no new attention events arrived
-    // (the last complete_todo event may have already been consumed by a prior heartbeat)
+    // Wake Pisci when:
+    // 1. There are new attention events since last heartbeat, OR
+    // 2. All todos are done (ReadyForPisciReview) — even if no new events, OR
+    // 3. There are blocked todos — these are persistent state, not events, so they
+    //    will never appear as "new" messages after the cursor advances. Without this
+    //    check a Koi timeout would permanently stall the project: the task_failed
+    //    event gets consumed by the cursor, the blocked todo stays forever, but
+    //    Pisci is never woken again.
+    let has_blocked_todos = assessment.blocked_todo_count > 0;
     if new_attention_messages.is_empty()
         && assessment.decision != ProjectDecision::ReadyForPisciReview
+        && !has_blocked_todos
     {
         return None;
     }
