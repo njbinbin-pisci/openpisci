@@ -1,25 +1,25 @@
-﻿# 馃悷 OpenPisci
+# 🐟 OpenPisci
 
 **Open-source Windows AI Agent Desktop**
 
 OpenPisci is a local-first AI Agent desktop application for Windows, built with Tauri 2 + Rust + React. **Pisci** is the main agent, **Koi** are persistent collaboration agents, and **Fish** are stateless temporary sub-agents.
 
-[涓枃](./README.md) | English
+[中文](./README.md) | English
 
 ---
 
-## 鉁?Key Features
+## ✨ Key Features
 
-### 馃 Powerful Agent Capabilities
+### 🤖 Powerful Agent Capabilities
 - **Multi-LLM support**: Claude (Anthropic), GPT (OpenAI), DeepSeek, Qwen, Zhipu, Kimi, MiniMax, and any OpenAI-compatible endpoint
-- **Automatic memory extraction**: After each conversation, an LLM pass extracts 0鈥? key facts and stores them as long-term memories; relevant memories are injected automatically in future sessions
+- **Automatic memory extraction**: After each conversation, an LLM pass extracts 0–3 key facts and stores them as long-term memories; relevant memories are injected automatically in future sessions
 - **Active memory**: The agent can call the `memory_store` tool mid-conversation to save important information
 - **Task decomposition**: Complex tasks are broken down and executed step-by-step via HostAgent
 - **Crash recovery**: Checkpoints are written every iteration; the agent resumes from the last checkpoint after a crash
 - **Heartbeat mechanism**: Configurable periodic heartbeat for proactive task checking
 - **Loop detection**: Four detectors (GenericRepeat / KnownPollNoProgress / PingPong / GlobalCircuitBreaker) prevent the agent from getting stuck in infinite loops
 
-### 馃悷 Pisci / Koi / Fish: Three Layers of Agents
+### 🐟 Pisci / Koi / Fish: Three Layers of Agents
 
 | Role | Positioning | Lifecycle | Typical Responsibility | Relationship |
 |------|-------------|-----------|------------------------|--------------|
@@ -37,7 +37,7 @@ OpenPisci is a local-first AI Agent desktop application for Windows, built with 
 - `Koi` have stable identities, their own todo ownership, and project-aware persistent collaboration behavior.
 - `Fish` do not maintain long-term project state and are designed to protect the main context window from intermediate noise.
 
-### 馃彏锔?What Is Inside the Pond
+### 🏞️ What Is Inside the Pond
 
 The Pond is not a single agent. It is the collaboration workspace around a project:
 
@@ -49,7 +49,7 @@ The Pond is not a single agent. It is the collaboration workspace around a proje
 - **Knowledge Base (`kb/`)**: shared project documentation space for architecture, API notes, bugs, decisions, and research
 - **Project Directory / Git Worktrees**: when `project_dir` is configured, Koi can work in isolated branches/worktrees to reduce file conflicts
 
-### 馃 How Collaboration Works in a Pond
+### 🤝 How Collaboration Works in a Pond
 
 A typical pond project follows this mechanism:
 
@@ -80,7 +80,7 @@ A typical pond project follows this mechanism:
    - Koi may suggest that a project looks ready, but they do not get to unilaterally declare it finished
    - Pisci reviews the overall state, confirms with the user, and only then archives the pool through `pool_org(action="archive")`
 
-### 馃洜锔?Rich Windows Toolset
+### 🛠️ Rich Windows Toolset
 
 | Tool | Description |
 |------|-------------|
@@ -94,7 +94,7 @@ A typical pond project follows this mechanism:
 | `wmi` | WMI/WQL queries for hardware and system information |
 | `web_search` | Parallel multi-engine search (DuckDuckGo, Bing, Baidu, 360); results merged and deduplicated |
 | `browser` | Chrome browser automation via CDP |
-| `uia` | Windows UI Automation 鈥?control any desktop application |
+| `uia` | Windows UI Automation — control any desktop application |
 | `screen_capture` | Screenshots (full screen / window / region), with optional Vision AI analysis |
 | `com` / `com_invoke` | COM/ActiveX object invocation (32-bit and 64-bit) |
 | `office` | Automate Word, Excel, PowerPoint, Outlook via COM |
@@ -107,14 +107,14 @@ A typical pond project follows this mechanism:
 | User-defined tools | TypeScript plugins with custom configuration interfaces |
 | MCP tools | Connect to external tool servers via the MCP protocol |
 
-### 馃悹 Fish (灏忛奔) Sub-Agent System
+### 🐠 Fish (小鱼) Sub-Agent System
 - Define custom sub-agents via `FISH.toml` with their own persona, tool permissions, and configuration
 - Fish are **stateless, ephemeral workers**: the main Agent or a Koi delegates sub-tasks via the `call_fish` tool; the Fish returns only the final result
 - **Key benefit**: intermediate reasoning and tool calls inside the Fish do NOT pollute the main Agent or Koi context, effectively saving context window budget
 - User Fish definitions live in `%APPDATA%\com.pisci.desktop\fish\`
 - Ideal for batch file processing, data collection, code scanning, and other focused multi-step tasks, not long-running project collaboration
 
-### 鈿?Skills System
+### ⚡ Skills System
 - Skills are defined in `SKILL.md` format: YAML frontmatter (name, description, tool list, etc.) + Markdown body (instructions)
 - Skill content is injected into the system prompt on every agent call, guiding the agent to use specific tools and workflows
 - **Auto-trigger**: the agent calls `skill_search` at the start of every task to find matching skills and follows their instructions automatically
@@ -122,29 +122,30 @@ A typical pond project follows this mechanism:
 - **Skill persistence**: installed skills are written to disk and synced to the database; they survive restarts
 - Built-in skills: Office Automation, File Management, Web Automation, System Administration, Desktop Control
 
-> **Note**: SKILL.md is OpenPisci's own skill format. It is **not** the same as Anthropic's MCP (Model Context Protocol) 鈥?they are two separate specifications.
+> **Note**: SKILL.md is OpenPisci's own skill format. It is **not** the same as Anthropic's MCP (Model Context Protocol) — they are two separate specifications.
 
-### 馃捇 Coding Capabilities (new in v0.3.0)
-- **`code_run` tool**: Designed for coding tasks 鈥?returns structured `exit_code` / `stdout` / `stderr` / `duration_ms` and automatically diagnoses common Rust/Python/Node errors
-- **`file_edit` batch edits**: `edits` array atomically applies multiple replacements in one call 鈥?validates all first, then writes once
-- **`file_diff` tool**: Preview unified diff before applying changes, or compare two files 鈥?helps the agent self-verify edits
+### 💻 Coding Capabilities (new in v0.3.0)
+- **`code_run` tool**: Designed for coding tasks — returns structured `exit_code` / `stdout` / `stderr` / `duration_ms` and automatically diagnoses common Rust/Python/Node errors
+- **`file_edit` batch edits**: `edits` array atomically applies multiple replacements in one call — validates all first, then writes once
+- **`file_diff` tool**: Preview unified diff before applying changes, or compare two files — helps the agent self-verify edits
 - **`file_search` enhancements**: Result limit raised to 500, new `file_extensions` filter, per-file grep limit raised to 200 KB
-- **Coding workflow guidance**: System prompt includes a complete "understand 鈫?edit 鈫?verify 鈫?debug" loop
+- **Coding workflow guidance**: System prompt includes a complete "understand → edit → verify → debug" loop
 
-### 馃攳 Context Preview (new in v0.3.0)
-- Click the 馃攳 button in the chat UI to inspect the exact message sequence that will be sent to the LLM on the next turn
+### 🔍 Context Preview (new in v0.3.0)
+- Click the 🔍 button in the chat UI to inspect the exact message sequence that will be sent to the LLM on the next turn
 - Structured display of each message's role and blocks (text / tool_use / tool_result), with collapsible tool calls and results
 - Shows token usage vs. context budget with a progress bar, making context compression effects visible
 
-### 馃敆 Clickable File Links (new in v0.3.0)
+### 🔗 Clickable File Links (new in v0.3.0)
 - Local paths in LLM output (e.g. `C:\Users\...\file.md`) are automatically converted to clickable links
 - Clicking opens the file or directory with the system's default application
 - Supports Windows paths, UNC paths, Unix paths, and `file://` URIs
 
-### 馃摫 Multi-Platform IM Gateway
+### 📱 Multi-Platform IM Gateway
 
 | Platform | Mode |
 |----------|------|
+| WeChat | QR-code binding, bidirectional inbound + outbound (iLink Bot API, no CLI required) |
 | Feishu / Lark | WebSocket long-connection inbound + outbound reply |
 | WeCom (Enterprise WeChat) | Local relay inbound + outbound reply |
 | DingTalk | Stream-mode WebSocket inbound + outbound reply |
@@ -157,19 +158,19 @@ A typical pond project follows this mechanism:
 
 > IM messages and the Agent communicate bidirectionally: each IM channel/user has its own persistent session with full message history.
 
-### 鈴?Scheduled Tasks
+### ⏰ Scheduled Tasks
 - Cron expression scheduling
 - Task history (run count, last execution time, status)
 - Immediate trigger support
 
-### 馃敀 Security
+### 🔒 Security
 - API keys encrypted with ChaCha20Poly1305
 - Three policy modes: Strict / Balanced / Dev
 - Prompt injection detection (v2)
 - Tool call rate limiting
 - Dangerous operation confirmation
 
-### 馃帹 UI Features
+### 🎨 UI Features
 - Minimal mode: floating HUD panel, tool calls shown as toast notifications
 - Two themes: Violet / Black-Gold
 - Window border color dynamically matches the active theme (Windows 11+)
@@ -177,7 +178,7 @@ A typical pond project follows this mechanism:
 
 ---
 
-## 馃殌 Quick Start
+## 🚀 Quick Start
 
 ### Requirements
 
@@ -188,7 +189,7 @@ A typical pond project follows this mechanism:
 
 Go to [Releases](https://github.com/njbinbin-pisci/openpisci/releases) and download the latest installer (`.exe`).
 
-> **鈿狅笍 Security Warning**: OpenPisci is an AI Agent with high-privilege capabilities including file read/write, command execution, and UI automation. It is strongly recommended to run it inside a virtual machine (VMware, VirtualBox, Hyper-V) to prevent accidental damage to your host system. The developers are not responsible for any data loss or system damage caused by running it directly on a host machine.
+> **⚠️ Security Warning**: OpenPisci is an AI Agent with high-privilege capabilities including file read/write, command execution, and UI automation. It is strongly recommended to run it inside a virtual machine (VMware, VirtualBox, Hyper-V) to prevent accidental damage to your host system. The developers are not responsible for any data loss or system damage caused by running it directly on a host machine.
 
 ### First-time Setup
 
@@ -199,11 +200,11 @@ Go to [Releases](https://github.com/njbinbin-pisci/openpisci/releases) and downl
 
 ---
 
-## 馃敡 Development Setup
+## 🔧 Development Setup
 
 ### Prerequisites
 
-- [Rust](https://rustup.rs/) stable (鈮?1.77.2)
+- [Rust](https://rustup.rs/) stable (≥ 1.77.2)
 - [Node.js](https://nodejs.org/) 20 LTS
 - [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/) (Desktop C++ workload)
 
@@ -231,7 +232,7 @@ npm run icon:emoji
 
 ---
 
-## 馃悹 Creating a Custom Fish
+## 🐠 Creating a Custom Fish
 
 Create `%APPDATA%\com.pisci.desktop\fish\my-fish\FISH.toml`:
 
@@ -239,7 +240,7 @@ Create `%APPDATA%\com.pisci.desktop\fish\my-fish\FISH.toml`:
 id = "my-fish"
 name = "My Fish"
 description = "An assistant focused on a specific task"
-icon = "馃悺"
+icon = "🐡"
 tools = ["file_read", "shell", "memory_store"]
 
 [agent]
@@ -259,7 +260,7 @@ Restart the app and the new Fish will appear on the Fish page. The main Agent wi
 
 ---
 
-## 鈿?Creating a Custom Skill
+## ⚡ Creating a Custom Skill
 
 Create `%APPDATA%\com.pisci.desktop\skills\my-skill\SKILL.md`:
 
@@ -284,7 +285,7 @@ When the user needs to..., follow these steps:
 
 ---
 
-## 馃敡 User-Defined Tools
+## 🔧 User-Defined Tools
 
 Install TypeScript plugins from the Tools page. Each plugin can declare its own configuration interface (e.g. SMTP credentials, API keys).
 
@@ -292,7 +293,7 @@ User tools are stored in: `%APPDATA%\com.pisci.desktop\user-tools\`
 
 ---
 
-## 馃搧 Data Directories
+## 📁 Data Directories
 
 | Path | Contents |
 |------|----------|
@@ -304,65 +305,65 @@ User tools are stored in: `%APPDATA%\com.pisci.desktop\user-tools\`
 
 ---
 
-## 馃彈锔?Architecture
+## 🏗️ Architecture
 
 ```
 OpenPisci
-鈹溾攢鈹€ src-tauri/          # Rust backend
-鈹?  鈹溾攢鈹€ src/
-鈹?  鈹?  鈹溾攢鈹€ agent/      # Agent loop, HostAgent, message management
-鈹?  鈹?  鈹溾攢鈹€ commands/   # Tauri IPC command layer
-鈹?  鈹?  鈹溾攢鈹€ fish/       # Fish sub-agent system
-鈹?  鈹?  鈹溾攢鈹€ gateway/    # IM gateways (Feishu, DingTalk, Telegram, etc.)
-鈹?  鈹?  鈹溾攢鈹€ llm/        # LLM clients (Claude, OpenAI, DeepSeek, Qwen, etc.)
-鈹?  鈹?  鈹溾攢鈹€ memory/     # Memory system (vector search, FTS)
-鈹?  鈹?  鈹溾攢鈹€ policy/     # Policy gate, injection detection
-鈹?  鈹?  鈹溾攢鈹€ scheduler/  # Cron scheduler
-鈹?  鈹?  鈹溾攢鈹€ security/   # Encryption, key management
-鈹?  鈹?  鈹溾攢鈹€ skills/     # Skill loader (SKILL.md format)
-鈹?  鈹?  鈹溾攢鈹€ store/      # SQLite database, settings persistence
-鈹?  鈹?  鈹斺攢鈹€ tools/      # Tool implementations (incl. code_run, file_diff)
-鈹?  鈹斺攢鈹€ Cargo.toml
-鈹斺攢鈹€ src/                # React frontend
-    鈹溾攢鈹€ components/     # Page components
-    鈹溾攢鈹€ i18n/           # Chinese / English translations
-    鈹溾攢鈹€ services/       # Tauri IPC service layer
-    鈹斺攢鈹€ store/          # Redux state management
+├── src-tauri/          # Rust backend
+│   ├── src/
+│   │   ├── agent/      # Agent loop, HostAgent, message management
+│   │   ├── commands/   # Tauri IPC command layer
+│   │   ├── fish/       # Fish sub-agent system
+│   │   ├── gateway/    # IM gateways (Feishu, DingTalk, Telegram, etc.)
+│   │   ├── llm/        # LLM clients (Claude, OpenAI, DeepSeek, Qwen, etc.)
+│   │   ├── memory/     # Memory system (vector search, FTS)
+│   │   ├── policy/     # Policy gate, injection detection
+│   │   ├── scheduler/  # Cron scheduler
+│   │   ├── security/   # Encryption, key management
+│   │   ├── skills/     # Skill loader (SKILL.md format)
+│   │   ├── store/      # SQLite database, settings persistence
+│   │   └── tools/      # Tool implementations (incl. code_run, file_diff)
+│   └── Cargo.toml
+└── src/                # React frontend
+    ├── components/     # Page components
+    ├── i18n/           # Chinese / English translations
+    ├── services/       # Tauri IPC service layer
+    └── store/          # Redux state management
 ```
 
 ---
 
-## 馃搵 Changelog
+## 📋 Changelog
 
 ### v0.5.17
 - **WeChat integration**: Connects directly to the Tencent iLink Bot HTTP API — no Node.js or CLI required; enable the WeChat channel in Settings, click 'Bind WeChat', and scan the QR code to complete binding; Agent replies are delivered to WeChat users in real time via the iLink sendmessage API
 
 ### v0.5.16
-- **UAC execution fix**: Fixed two root causes of elevated command result parsing failures: 鈶?Windows `[System.Text.Encoding]::UTF8` writes files with a UTF-8 BOM by default, causing `serde_json` to fail with `expected value at line 1 column 1`; 鈶?native executables such as `regsvr32` and `reg` do not set `$LASTEXITCODE` correctly when run inside a `& { } 2>&1` block, causing the exit code to always be 0; the new approach writes the user command to a separate inner script file, runs it via `Start-Process -Wait -PassThru` and reads the real exit code from `$proc.ExitCode`, and writes the result file with BOM-free UTF-8 encoding
+- **UAC execution fix**: Fixed two root causes of elevated command result parsing failures: ① Windows `[System.Text.Encoding]::UTF8` writes files with a UTF-8 BOM by default, causing `serde_json` to fail with `expected value at line 1 column 1`; ② native executables such as `regsvr32` and `reg` do not set `$LASTEXITCODE` correctly when run inside a `& { } 2>&1` block, causing the exit code to always be 0; the new approach writes the user command to a separate inner script file, runs it via `Start-Process -Wait -PassThru` and reads the real exit code from `$proc.ExitCode`, and writes the result file with BOM-free UTF-8 encoding
 
 ### v0.5.15
-- **Real-time persistence**: Completely fixed the message loss problem 鈥?previously messages were batch-written to the database only when `run()` finished, so any mid-run exit (compilation restart, crash, etc.) would lose all in-progress messages; now every message is written to the database immediately as it is produced, so no completed steps are ever lost regardless of when the process exits
+- **Real-time persistence**: Completely fixed the message loss problem — previously messages were batch-written to the database only when `run()` finished, so any mid-run exit (compilation restart, crash, etc.) would lose all in-progress messages; now every message is written to the database immediately as it is produced, so no completed steps are ever lost regardless of when the process exits
 
 ### v0.5.14
-- **Final summary persistence fix**: Fixed the root cause of the final summary message being lost after context compaction 鈥?the previous approach relied on a `context_len` offset to locate new messages, but compaction shrinks the list causing the offset to overshoot and discard all new messages; the new approach maintains a dedicated `new_messages` buffer inside `AgentLoop::run()` that is completely separate from the LLM context window 鈥?compaction only affects the context, never the persistence buffer, eliminating this class of bug entirely
+- **Final summary persistence fix**: Fixed the root cause of the final summary message being lost after context compaction — the previous approach relied on a `context_len` offset to locate new messages, but compaction shrinks the list causing the offset to overshoot and discard all new messages; the new approach maintains a dedicated `new_messages` buffer inside `AgentLoop::run()` that is completely separate from the LLM context window — compaction only affects the context, never the persistence buffer, eliminating this class of bug entirely
 - **About page redesign**: GitHub link now appears alongside the product description; added an "About Us" card with team introduction and official website link; updated product description to include Koi and the three-tier multi-agent architecture
-- **Internal session auto-open fix**: On startup, heartbeat/patrol internal sessions are no longer automatically activated 鈥?a user-visible session is always selected first
+- **Internal session auto-open fix**: On startup, heartbeat/patrol internal sessions are no longer automatically activated — a user-visible session is always selected first
 
 ### v0.5.13
-- **Session switching fix**: Fixed messages not updating when switching sessions 鈥?the message area always reflects the selected session now; fixed IM sessions missing from the session list causing them to be unreachable
+- **Session switching fix**: Fixed messages not updating when switching sessions — the message area always reflects the selected session now; fixed IM sessions missing from the session list causing them to be unreachable
 - **Wide content local scrolling**: Tables, code blocks and other wide content now generate a local horizontal scrollbar inside the bubble instead of stretching the bubble or causing the entire message area to scroll horizontally
 - **Streaming event ownership fix**: `done`/`error` events now use the session ID captured at listener registration time, preventing state corruption when the user switches sessions while an agent is running
 
 ### v0.5.12
 - **Compression algorithm unit tests**: Added 11 dedicated tests inside `AgentLoop` covering Level-1 tool result trimming (`compact_trim_tool_results`), Level-2 LLM summarisation (`compact_summarise`), `estimate_message_tokens` for all message types, and a regression test for the 154-message crash scenario
 - **Per-Koi `max_iterations`**: Each Koi can now have its own maximum iteration limit configured in its detail view, overriding the global default
-- **Compression algorithm fixes**: Fixed `compact_summarise` extracting empty content from ToolUse/ToolResult messages 鈥?the summarisation prompt now includes real tool call information; fixed an infinite loop when summarisation fails; added proactive compression trigger (compresses when context exceeds 80% of budget before calling the LLM); injected a continuation reminder after compression to prevent the LLM from treating the summary as a completed task
+- **Compression algorithm fixes**: Fixed `compact_summarise` extracting empty content from ToolUse/ToolResult messages — the summarisation prompt now includes real tool call information; fixed an infinite loop when summarisation fails; added proactive compression trigger (compresses when context exceeds 80% of budget before calling the LLM); injected a continuation reminder after compression to prevent the LLM from treating the summary as a completed task
 - **Chat bubble stability**: After an agent turn ends, the merged streaming message view is preserved instead of being split into many individual bubbles
 - **Chat scroll fix**: Fixed the entire main window jumping upward when messages refresh
 
 ### v0.5.8
 - **Project pause / resume / archive**: users can now pause, resume, or archive projects directly from the Pond UI without going through Pisci; pausing automatically cancels running Koi tasks and resets in-progress todos
-- **`complete_todo` required summary**: the `complete_todo` tool now requires a `summary` parameter, ensuring a concise completion summary is always shown in the chat after a Koi finishes a task 鈥?no more empty Result messages
+- **`complete_todo` required summary**: the `complete_todo` tool now requires a `summary` parameter, ensuring a concise completion summary is always shown in the chat after a Koi finishes a task — no more empty Result messages
 - **Koi limit raised to 10**: the maximum number of Koi agents is increased from 5 to 10
 - **Pisci can manage Koi**: `app_control` gains `koi_list` / `koi_create` / `koi_delete` actions so Pisci can create or delete Koi when explicitly asked (the prompt instructs Pisci never to do this proactively)
 - **Strict Koi worktree isolation**: when a Koi is working inside a Git worktree, `allow_outside_workspace` is always forced to `false`, preventing accidental writes to the main project directory
@@ -410,7 +411,7 @@ OpenPisci
 - **Coding capabilities**: New `code_run` tool (structured output + error diagnosis), `file_diff` tool (unified diff preview)
 - **`file_edit` batch edits**: `edits` array for atomic multi-location edits in one call
 - **`file_search` enhancements**: Result limit 500, new `file_extensions` filter, grep limit 200 KB per file
-- **Context preview**: New 馃攳 button in chat UI 鈥?inspect the exact message sequence sent to the LLM with token stats
+- **Context preview**: New 🔍 button in chat UI — inspect the exact message sequence sent to the LLM with token stats
 - **Clickable file links**: Local paths in LLM output auto-converted to clickable links that open with the system default app
 
 ### v0.2.0
@@ -421,10 +422,10 @@ OpenPisci
 
 ---
 
-## 馃搫 License
+## 📄 License
 
 [MIT License](./LICENSE)
 
 ---
 
-<p align="center">Built with 鉂わ笍 by the OpenPisci community</p>
+<p align="center">Built with ❤️ by the OpenPisci community</p>

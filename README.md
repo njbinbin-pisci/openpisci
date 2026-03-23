@@ -1,232 +1,233 @@
-﻿# 馃悷 OpenPisci
+# 🐟 OpenPisci
 
-**寮€婧?Windows AI Agent 妗岄潰搴旂敤**
+**开源 Windows AI Agent 桌面应用**
 
-OpenPisci 鏄竴娆捐繍琛屽湪 Windows 妗岄潰鐨勬湰鍦颁紭鍏?AI Agent锛屽熀浜?Tauri 2 + Rust + React 鏋勫缓銆傚ぇ楸硷紙Pisci锛夋槸涓?Agent锛岄敠椴わ紙Koi锛夋槸鎸佷箙鍖栧崗浣?Agent锛屽皬楸硷紙Fish锛夋槸鏃犵姸鎬佷复鏃跺瓙 Agent銆?
+OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tauri 2 + Rust + React 构建。大鱼（Pisci）是主 Agent，锦鲤（Koi）是持久化协作 Agent，小鱼（Fish）是无状态临时子 Agent。
 
-[English](./README_EN.md) | 涓枃
+[English](./README_EN.md) | 中文
 
 ---
 
-## 鉁?鏍稿績鐗规€?
+## ✨ 核心特性
 
-### 馃 寮哄ぇ鐨?Agent 鑳藉姏
-- **澶?LLM 鏀寔**锛欳laude锛圓nthropic锛夈€丟PT锛圤penAI锛夈€丏eepSeek銆侀€氫箟鍗冮棶锛圦wen锛夈€佹櫤璋便€並imi銆丮iniMax锛屼互鍙婁换鎰?OpenAI 鍏煎鎺ュ彛
-- **鑷姩璁板繂**锛氬璇濈粨鏉熷悗鑷姩璋冪敤 LLM 鎻愬彇鍏抽敭淇℃伅瀛樺叆闀挎湡璁板繂锛屼笅娆″璇濊嚜鍔ㄦ敞鍏ョ浉鍏充笂涓嬫枃
-- **涓诲姩璁板繂**锛欰gent 鍦ㄥ璇濅腑鍙富鍔ㄨ皟鐢?`memory_store` 宸ュ叿淇濆瓨閲嶈淇℃伅
-- **浠诲姟鍒嗚В**锛氬鏉備换鍔¤嚜鍔ㄥ垎瑙ｄ负瀛愪换鍔″苟渚濇鎵ц锛圚ostAgent锛?
-- **宕╂簝鎭㈠**锛氭瘡娆¤凯浠ｅ啓鍏?checkpoint锛岀▼搴忓穿婧冨悗鍙粠鏂偣鎭㈠
-- **蹇冭烦鏈哄埗**锛氬彲閰嶇疆瀹氭椂蹇冭烦锛孉gent 鑷富妫€鏌ュ緟澶勭悊浠诲姟
-- **寰幆妫€娴?*锛氬洓绉嶆娴嬪櫒锛圙enericRepeat / KnownPollNoProgress / PingPong / GlobalCircuitBreaker锛夐槻姝?Agent 闄峰叆姝诲惊鐜?
+### 🤖 强大的 Agent 能力
+- **多 LLM 支持**：Claude（Anthropic）、GPT（OpenAI）、DeepSeek、通义千问（Qwen）、智谱、Kimi、MiniMax，以及任意 OpenAI 兼容接口
+- **自动记忆**：对话结束后自动调用 LLM 提取关键信息存入长期记忆，下次对话自动注入相关上下文
+- **主动记忆**：Agent 在对话中可主动调用 `memory_store` 工具保存重要信息
+- **任务分解**：复杂任务自动分解为子任务并依次执行（HostAgent）
+- **崩溃恢复**：每次迭代写入 checkpoint，程序崩溃后可从断点恢复
+- **心跳机制**：可配置定时心跳，Agent 自主检查待处理任务
+- **循环检测**：四种检测器（GenericRepeat / KnownPollNoProgress / PingPong / GlobalCircuitBreaker）防止 Agent 陷入死循环
 
-### 馃悷 Pisci / Koi / Fish锛氫笁灞?Agent 鏋舵瀯
+### 🐟 Pisci / Koi / Fish：三层 Agent 架构
 
-| 瑙掕壊 | 瀹氫綅 | 鐢熷懡鍛ㄦ湡 | 鍏稿瀷鑱岃矗 | 涓庡叾浠栬鑹茬殑鍏崇郴 |
+| 角色 | 定位 | 生命周期 | 典型职责 | 与其他角色的关系 |
 |------|------|----------|----------|------------------|
-| `Pisci` | 涓?Agent / 椤圭洰缁忕悊 / 鐢ㄦ埛鍏ュ彛 | 甯搁┗ | 涓庣敤鎴峰璇濄€佽皟鐢ㄥ伐鍏枫€佸垱寤洪奔姹犮€佸崗璋冨 Agent銆佸垽鏂」鐩槸鍚﹀彲鏀跺熬 | 璐熻矗缁勭粐 Koi锛屼篃鍙皟鐢?Fish 澶勭悊涓存椂瀛愪换鍔?|
-| `Koi` | 鎸佷箙鍖栧崗浣?Agent | 鎸佷箙鍖栧瓨鍦紝鍙椤圭洰澶嶇敤 | 鍦ㄩ奔姹犱腑鎵挎媴瑙掕壊鍒嗗伐锛屽鏋舵瀯銆佺紪鐮併€佹祴璇曘€佸鏌ャ€佺爺绌?| 閫氳繃 `pool_chat` 鍦ㄩ奔姹犱腑鍗忎綔锛屽繀瑕佹椂 @mention 褰兼鎴?@pisci |
-| `Fish` | 鏃犵姸鎬佷复鏃跺瓙 Agent | 涓€娆℃€?/ 鎸夐渶鍒涘缓 | 澶勭悊鎵归噺鎵弿銆佽祫鏂欐暣鐞嗐€佸崟娆″垎鏋愩€佷笂涓嬫枃闅旂鐨勫姝ラ宸ヤ綔 | 鐢?Pisci 鎴?Koi 閫氳繃 `call_fish` 濮旀淳锛屼笉鐩存帴鍙備笌楸兼睜鍗忎綔 |
+| `Pisci` | 主 Agent / 项目经理 / 用户入口 | 常驻 | 与用户对话、调用工具、创建鱼池、协调多 Agent、判断项目是否可收尾 | 负责组织 Koi，也可调用 Fish 处理临时子任务 |
+| `Koi` | 持久化协作 Agent | 持久化存在，可多项目复用 | 在鱼池中承担角色分工，如架构、编码、测试、审查、研究 | 通过 `pool_chat` 在鱼池中协作，必要时 @mention 彼此或 @pisci |
+| `Fish` | 无状态临时子 Agent | 一次性 / 按需创建 | 处理批量扫描、资料整理、单次分析、上下文隔离的多步骤工作 | 由 Pisci 或 Koi 通过 `call_fish` 委派，不直接参与鱼池协作 |
 
-**鐞嗚В鏂瑰紡锛?*
-- `Pisci` 鏄€绘帶鍏ュ彛锛岃礋璐ｅ鐢ㄦ埛璐熻矗銆?
-- `Koi` 鏄暱鏈熷洟闃熸垚鍛橈紝閫傚悎鎸佺画椤圭洰鍗忎綔銆?
-- `Fish` 鏄复鏃跺伐锛岄€傚悎鈥滃仛瀹屽嵆璧扳€濈殑瀛愪换鍔°€?
+**理解方式：**
+- `Pisci` 是总控入口，负责对用户负责。
+- `Koi` 是长期团队成员，适合持续项目协作。
+- `Fish` 是临时工，适合“做完即走”的子任务。
 
-**鍏抽敭鍖哄埆锛?*
-- `Pisci` 鍐冲畾鏄惁寤烘睜銆佸浣曞垎宸ャ€佷綍鏃剁户缁帹杩涖€佷綍鏃惰姹傜敤鎴风‘璁ゆ敹灏俱€?
-- `Koi` 鏈夌嫭绔嬭韩浠姐€佺嫭绔嬭蹇嗗綊灞炪€佺嫭绔嬪緟鍔烇紝鑳藉湪澶氫釜椤圭洰涓鍙嶅鍞ら啋銆?
-- `Fish` 涓嶇淮鎶ら暱鏈熼」鐩姸鎬侊紝涓嶅崰鐢ㄤ富浼氳瘽涓婁笅鏂囷紝鍙繑鍥炴渶缁堢粨鏋溿€?
+**关键区别：**
+- `Pisci` 决定是否建池、如何分工、何时继续推进、何时请求用户确认收尾。
+- `Koi` 有独立身份、独立记忆归属、独立待办，能在多个项目中被反复唤醒。
+- `Fish` 不维护长期项目状态，不占用主会话上下文，只返回最终结果。
 
-### 馃彏锔?楸兼睜锛圥ond锛夐噷鏈変粈涔?
+### 🏞️ 鱼池（Pond）里有什么
 
-楸兼睜涓嶆槸涓€涓崟鐙?Agent锛岃€屾槸涓€濂楀洿缁曢」鐩崗浣滄瀯寤虹殑鍙鍖栧伐浣滃尯锛?
+鱼池不是一个单独 Agent，而是一套围绕项目协作构建的可视化工作区：
 
-- **椤圭洰姹狅紙Pool Session锛?*锛氫竴涓」鐩搴斾竴涓睜锛屽寘鍚」鐩悕銆佺姸鎬併€佺粍缁囪鑼冿紙`org_spec`锛夊拰鍙€?`project_dir`
-- **Pool Chat**锛歅isci銆並oi 鍦ㄨ繖閲岃嚜鐒跺璇濄€佷氦鎺ャ€佹彁闂€丂mention 鍗忎綔
-- **鐪嬫澘锛圔oard / Kanban锛?*锛氬睍绀?Koi todo 鐨?`todo / in_progress / blocked / done / cancelled`
-- **Koi 闈㈡澘**锛氬睍绀烘瘡涓?Koi 鐨勮韩浠姐€佽鑹层€佸湪绾跨姸鎬併€佸綋鍓嶅伐浣滆礋杞?
-- **Pisci Inbox / Heartbeat**锛歅isci 鐨勯」鐩骇鏀朵欢绠憋紝鐢ㄤ簬鎺ユ敹 `@pisci`銆佺姸鎬佷俊鍙枫€佸績璺冲贰妫€缁撴灉
-- **鐭ヨ瘑搴擄紙`kb/`锛?*锛氶」鐩叡浜煡璇嗗尯锛岀敤浜庢矇娣€鏋舵瀯銆丄PI銆佺己闄枫€佸喅绛栫瓑鏂囨。
-- **椤圭洰鐩綍 / Git worktree**锛氳嫢璁剧疆 `project_dir`锛屾瘡涓?Koi 鍙湪鑷繁鐨勫垎鏀拰 worktree 涓伐浣滐紝鍑忓皯鏂囦欢鍐茬獊
+- **项目池（Pool Session）**：一个项目对应一个池，包含项目名、状态、组织规范（`org_spec`）和可选 `project_dir`
+- **Pool Chat**：Pisci、Koi 在这里自然对话、交接、提问、@mention 协作
+- **看板（Board / Kanban）**：展示 Koi todo 的 `todo / in_progress / blocked / done / cancelled`
+- **Koi 面板**：展示每个 Koi 的身份、角色、在线状态、当前工作负载
+- **Pisci Inbox / Heartbeat**：Pisci 的项目级收件箱，用于接收 `@pisci`、状态信号、心跳巡检结果
+- **知识库（`kb/`）**：项目共享知识区，用于沉淀架构、API、缺陷、决策等文档
+- **项目目录 / Git worktree**：若设置 `project_dir`，每个 Koi 可在自己的分支和 worktree 中工作，减少文件冲突
 
-### 馃 楸兼睜濡備綍鍗忓悓
+### 🤝 鱼池如何协同
 
-涓€涓爣鍑嗙殑楸兼睜椤圭洰閫氬父鎸変笅闈㈢殑鏈哄埗杩愯锛?
+一个标准的鱼池项目通常按下面的机制运行：
 
-1. **鐢ㄦ埛鍙戣捣椤圭洰**
-   - 鐢ㄦ埛鍙互鍦ㄥ簲鐢ㄥ唴鑱婂ぉ锛屼篃鍙互閫氳繃椋炰功绛?IM 鐩存帴鍛婅瘔 Pisci鈥滃垱寤轰竴涓奔姹犻」鐩€?
-   - Pisci 閫氳繃 `pool_org(action="create")` 鍒涘缓椤圭洰姹狅紝骞跺啓鍏?`org_spec`
+1. **用户发起项目**
+   - 用户可以在应用内聊天，也可以通过飞书等 IM 直接告诉 Pisci“创建一个鱼池项目”
+   - Pisci 通过 `pool_org(action="create")` 创建项目池，并写入 `org_spec`
 
-2. **Pisci 缁勭粐鍥㈤槦**
-   - Pisci 鏍规嵁椤圭洰鐩爣閫夋嫨鍚堥€傜殑 Koi 瑙掕壊
-   - Pisci 浼樺厛閫氳繃 `pool_chat` 鍙戦€佸甫 `@KoiName` 鐨勬秷鎭潵鍙戣捣宸ヤ綔锛岃€屼笉鏄鏉夸覆琛屽垎閰?
+2. **Pisci 组织团队**
+   - Pisci 根据项目目标选择合适的 Koi 角色
+   - Pisci 优先通过 `pool_chat` 发送带 `@KoiName` 的消息来发起工作，而不是死板串行分配
 
-3. **Koi 鑷富鍗忎綔**
-   - Koi 鍦?`pool_chat` 涓眹鎶ヨ繘灞曘€佷氦鎺ュ伐浣溿€佹彁鍑洪棶棰樸€佽姹傚瀹?
-   - `@mention` 鏄秷鎭紝涓嶆槸纭懡浠わ細琚彁鍙婄殑 Koi 浼氳嚜涓诲垽鏂槸绔嬪嵆鍝嶅簲銆佺户缁綋鍓嶅伐浣滐紝杩樻槸璇锋眰 Pisci 鍗忚皟
-   - `@all` 鍙悜鏁翠釜椤圭洰鍥㈤槦骞挎挱
+3. **Koi 自主协作**
+   - Koi 在 `pool_chat` 中汇报进展、交接工作、提出问题、请求复审
+   - `@mention` 是消息，不是硬命令：被提及的 Koi 会自主判断是立即响应、继续当前工作，还是请求 Pisci 协调
+   - `@all` 可向整个项目团队广播
 
-4. **寰呭姙涓庣姸鎬佸悓姝?*
-   - 浠诲姟閫氳繃 `koi_todos` 杩借釜锛岀姸鎬佹祦杞负 `todo -> in_progress -> done / blocked / cancelled`
-   - Pisci 鍜屼换鍔℃墍鏈夎€呭彲浠ユ洿鏂颁换鍔＄姸鎬侊紱鍏朵粬 Koi 闇€瑕侀€氳繃 `@pisci` 璇锋眰鍙樻洿
-   - `pool_chat` 涓殑 `[ProjectStatus] follow_up_needed / waiting / ready_for_pisci_review` 淇″彿浼氳緟鍔?Pisci鍒ゆ柇椤圭洰鏄惁缁х画鎺ㄨ繘
+4. **待办与状态同步**
+   - 任务通过 `koi_todos` 追踪，状态流转为 `todo -> in_progress -> done / blocked / cancelled`
+   - Pisci 和任务所有者可以更新任务状态；其他 Koi 需要通过 `@pisci` 请求变更
+   - `pool_chat` 中的 `[ProjectStatus] follow_up_needed / waiting / ready_for_pisci_review` 信号会辅助 Pisci判断项目是否继续推进
 
-5. **Pisci 蹇冭烦涓庣户缁帹杩?*
-   - 蹇冭烦浼氭壂鎻忔睜鍐呮柊娑堟伅銆佸緟鍔炲拰鐘舵€佷俊鍙?
-   - 鍙浠嶆湁 active todo锛屾垨鏈変汉鍙戝嚭 `follow_up_needed / waiting`锛孭isci 灏卞簲缁х画鍗忚皟锛岃€屼笉鏄妸椤圭洰璇垽涓虹粨鏉?
-   - 鍙湁褰撳伐浣滅湡姝ｆ敹鏁涳紝骞朵笖鏈変汉鏄庣‘鐢?`ready_for_pisci_review @pisci` 鎶婂垽鏂潈浜ゅ洖鏃讹紝Pisci 鎵嶈繘鍏ユ敹灏惧鏌?
+5. **Pisci 心跳与继续推进**
+   - 心跳会扫描池内新消息、待办和状态信号
+   - 只要仍有 active todo，或有人发出 `follow_up_needed / waiting`，Pisci 就应继续协调，而不是把项目误判为结束
+   - 只有当工作真正收敛，并且有人明确用 `ready_for_pisci_review @pisci` 把判断权交回时，Pisci 才进入收尾审查
 
-6. **椤圭洰鏀跺熬**
-   - Koi 鍙兘寤鸿鈥滃彲鐢?Pisci 瀹℃煡鏄惁缁撴潫鈥濓紝涓嶈兘鍗曟柟闈㈠甯冮」鐩粨鏉?
-   - 鏈€缁堟槸鍚﹀綊妗ｏ紝鐢?Pisci 姹囨€诲悗鍚戠敤鎴风‘璁わ紝鍐嶆墽琛?`pool_org(action="archive")`
+6. **项目收尾**
+   - Koi 只能建议“可由 Pisci 审查是否结束”，不能单方面宣布项目结束
+   - 最终是否归档，由 Pisci 汇总后向用户确认，再执行 `pool_org(action="archive")`
 
-### 馃洜锔?涓板瘜鐨?Windows 宸ュ叿闆?
+### 🛠️ 丰富的 Windows 工具集
 
-| 宸ュ叿 | 璇存槑 |
+| 工具 | 说明 |
 |------|------|
-| `file_read` / `file_write` | 鏂囦欢璇诲啓锛堟敮鎸佸垎鍧楄鍙栧ぇ鏂囦欢锛?|
-| `file_edit` | 绮剧‘瀛楃涓叉浛鎹紝鏀寔 `edits` 鏁扮粍鎵归噺鍘熷瓙淇敼 |
-| `file_diff` | 淇敼鍓嶉瑙?unified diff锛屾垨瀵规瘮涓や釜鏂囦欢 |
-| `file_list` | 缁撴瀯鍖栫洰褰曞垪琛紙JSON锛屽惈澶у皬/淇敼鏃堕棿锛?|
-| `file_search` | 鎸夊悕绉?glob 鎼滅储鎴栨寜鍐呭 grep 鎼滅储锛堟敮鎸?`file_extensions` 杩囨护锛?|
-| `code_run` | 涓撲负缂栫▼鍦烘櫙璁捐鐨勫懡浠ゆ墽琛屽伐鍏凤紝杩斿洖缁撴瀯鍖栬緭鍑哄苟鑷姩璇婃柇甯歌閿欒 |
-| `shell` / `powershell_query` | PowerShell 鍛戒护鎵ц / 缁撴瀯鍖栫郴缁熸煡璇?|
-| `wmi` | WMI/WQL 鏌ヨ纭欢鍜岀郴缁熶俊鎭?|
-| `web_search` | 澶氬紩鎿庡苟琛屾悳绱紙DuckDuckGo銆丅ing銆佺櫨搴︺€?60锛夛紝缁撴灉鍚堝苟鍘婚噸 |
-| `browser` | Chrome 娴忚鍣ㄨ嚜鍔ㄥ寲锛圕DP 鍗忚锛?|
-| `uia` | Windows UI Automation 鈥?鎺у埗浠绘剰妗岄潰搴旂敤 |
-| `screen_capture` | 鎴浘锛堝叏灞?绐楀彛/鍖哄煙锛夛紝鏀寔 Vision AI 鍒嗘瀽 |
-| `com` / `com_invoke` | COM/ActiveX 瀵硅薄璋冪敤锛堟敮鎸?32/64 浣嶏級 |
-| `office` | 閫氳繃 COM 鑷姩鍖?Word銆丒xcel銆丳owerPoint銆丱utlook |
-| `email` | 鍙戦€?鎺ユ敹閭欢锛圫MTP/IMAP锛?|
-| `ssh` | SSH 杩滅▼杩炴帴涓庡懡浠ゆ墽琛?|
-| `pdf` | PDF 璇诲啓銆侀〉闈㈡覆鏌撲负鍥惧儚锛坄render_page_image` / `render_region_image`锛?|
-| `vision_context` | 瑙嗚涓婁笅鏂囩鐞嗭細璺ㄨ疆娆′繚瀛?閫夋嫨鍥惧儚锛屼緵 Agent 涓诲姩鍐崇瓥涓嬩竴姝ョ湅浠€涔?|
-| `memory_store` | 鍚戦暱鏈熻蹇嗗啓鍏ヤ俊鎭?|
-| `plan_todo` | 涓哄鏉備换鍔＄淮鎶ゅ彲瑙嗗寲鎵ц璁″垝涓庡緟鍔炵姸鎬?|
-| 鐢ㄦ埛鑷畾涔夊伐鍏?| TypeScript 鎻掍欢锛屾敮鎸佽嚜瀹氫箟閰嶇疆鎺ュ彛 |
-| MCP 宸ュ叿 | 閫氳繃 MCP 鍗忚鎺ュ叆澶栭儴宸ュ叿鏈嶅姟鍣?|
+| `file_read` / `file_write` | 文件读写（支持分块读取大文件） |
+| `file_edit` | 精确字符串替换，支持 `edits` 数组批量原子修改 |
+| `file_diff` | 修改前预览 unified diff，或对比两个文件 |
+| `file_list` | 结构化目录列表（JSON，含大小/修改时间） |
+| `file_search` | 按名称 glob 搜索或按内容 grep 搜索（支持 `file_extensions` 过滤） |
+| `code_run` | 专为编程场景设计的命令执行工具，返回结构化输出并自动诊断常见错误 |
+| `shell` / `powershell_query` | PowerShell 命令执行 / 结构化系统查询 |
+| `wmi` | WMI/WQL 查询硬件和系统信息 |
+| `web_search` | 多引擎并行搜索（DuckDuckGo、Bing、百度、360），结果合并去重 |
+| `browser` | Chrome 浏览器自动化（CDP 协议） |
+| `uia` | Windows UI Automation — 控制任意桌面应用 |
+| `screen_capture` | 截图（全屏/窗口/区域），支持 Vision AI 分析 |
+| `com` / `com_invoke` | COM/ActiveX 对象调用（支持 32/64 位） |
+| `office` | 通过 COM 自动化 Word、Excel、PowerPoint、Outlook |
+| `email` | 发送/接收邮件（SMTP/IMAP） |
+| `ssh` | SSH 远程连接与命令执行 |
+| `pdf` | PDF 读写、页面渲染为图像（`render_page_image` / `render_region_image`） |
+| `vision_context` | 视觉上下文管理：跨轮次保存/选择图像，供 Agent 主动决策下一步看什么 |
+| `memory_store` | 向长期记忆写入信息 |
+| `plan_todo` | 为复杂任务维护可视化执行计划与待办状态 |
+| 用户自定义工具 | TypeScript 插件，支持自定义配置接口 |
+| MCP 工具 | 通过 MCP 协议接入外部工具服务器 |
 
-### 馃悹 灏忛奔锛團ish锛夊瓙 Agent 绯荤粺
-- 閫氳繃 `FISH.toml` 瀹氫箟涓撳睘瀛?Agent锛屾嫢鏈夌嫭绔嬩汉璁俱€佸伐鍏锋潈闄愬拰閰嶇疆
-- 灏忛奔鏄?*鏃犵姸鎬佷复鏃跺伐浣滆€?*锛氫富 Agent 鎴?Koi 閫氳繃 `call_fish` 宸ュ叿濮旀淳瀛愪换鍔★紝灏忛奔鎵ц瀹屾瘯鍚庝粎杩斿洖鏈€缁堢粨鏋?
-- **鏍稿績浠峰€?*锛氬皬楸肩殑涓棿鎺ㄧ悊鍜屽伐鍏疯皟鐢ㄤ笉浼氭薄鏌撲富 Agent / Koi 鐨勪笂涓嬫枃锛屾湁鏁堣妭鐪佷笂涓嬫枃绐楀彛
-- 鐢ㄦ埛鍙湪 `%APPDATA%\com.pisci.desktop\fish\` 鐩綍鏀剧疆鑷畾涔夊皬楸?
-- 閫傜敤浜庢壒閲忔枃浠跺鐞嗐€佹暟鎹敹闆嗐€佷唬鐮佹壂鎻忕瓑澶氭楠や换鍔★紝鑰屼笉鏄暱鏈熼」鐩崗浣?
+### 🐠 小鱼（Fish）子 Agent 系统
+- 通过 `FISH.toml` 定义专属子 Agent，拥有独立人设、工具权限和配置
+- 小鱼是**无状态临时工作者**：主 Agent 或 Koi 通过 `call_fish` 工具委派子任务，小鱼执行完毕后仅返回最终结果
+- **核心价值**：小鱼的中间推理和工具调用不会污染主 Agent / Koi 的上下文，有效节省上下文窗口
+- 用户可在 `%APPDATA%\com.pisci.desktop\fish\` 目录放置自定义小鱼
+- 适用于批量文件处理、数据收集、代码扫描等多步骤任务，而不是长期项目协作
 
-### 鈿?鎶€鑳界郴缁燂紙Skills锛?
-- 浣跨敤 `SKILL.md` 鏍煎紡瀹氫箟鎶€鑳斤細YAML frontmatter锛堝悕绉般€佹弿杩般€佸伐鍏峰垪琛ㄧ瓑锛? Markdown 姝ｆ枃锛堜娇鐢ㄨ鏄庯級
-- 鎶€鑳藉唴瀹瑰湪姣忔 Agent 璋冪敤鏃惰嚜鍔ㄦ敞鍏ョ郴缁熸彁绀鸿瘝锛屽紩瀵?Agent 浣跨敤鐗瑰畾宸ュ叿鍜屾祦绋?
-- **鑷姩瑙﹀彂**锛欰gent 姣忔鏀跺埌浠诲姟鏃朵紭鍏堣皟鐢?`skill_search` 鏌ユ壘鍖归厤鎶€鑳斤紝鎵惧埌鍒欐寜鎶€鑳芥寚浠ゆ墽琛?
-- **zip 鍖呭畨瑁?*锛氭敮鎸佸皢 `SKILL.md` + `reference.md` + `examples.md` 绛夋墦鍖呬负 `.zip` 涓€閿畨瑁?
-- 鏀寔浠?URL 鎴栨湰鍦拌矾寰勫畨瑁呮妧鑳斤紙鍗曟枃浠舵垨 zip 鍖咃級
-- 鎶€鑳芥寔涔呭寲锛氬畨瑁呯殑鎶€鑳藉啓鍏ョ鐩樺苟鍚屾鍒版暟鎹簱锛岄噸鍚悗鑷姩鎭㈠
-- 鍐呯疆鎶€鑳斤細Office 鑷姩鍖栥€佹枃浠剁鐞嗐€乄eb 鑷姩鍖栥€佺郴缁熺鐞嗐€佹闈㈡帶鍒?
+### ⚡ 技能系统（Skills）
+- 使用 `SKILL.md` 格式定义技能：YAML frontmatter（名称、描述、工具列表等）+ Markdown 正文（使用说明）
+- 技能内容在每次 Agent 调用时自动注入系统提示词，引导 Agent 使用特定工具和流程
+- **自动触发**：Agent 每次收到任务时优先调用 `skill_search` 查找匹配技能，找到则按技能指令执行
+- **zip 包安装**：支持将 `SKILL.md` + `reference.md` + `examples.md` 等打包为 `.zip` 一键安装
+- 支持从 URL 或本地路径安装技能（单文件或 zip 包）
+- 技能持久化：安装的技能写入磁盘并同步到数据库，重启后自动恢复
+- 内置技能：Office 自动化、文件管理、Web 自动化、系统管理、桌面控制
 
-> **娉ㄦ剰**锛歋KILL.md 鏄?OpenPisci 鑷畾涔夌殑鎶€鑳芥牸寮忥紝涓?Anthropic MCP锛圡odel Context Protocol锛夋槸涓ゅ涓嶅悓鐨勮鑼冦€?
+> **注意**：SKILL.md 是 OpenPisci 自定义的技能格式，与 Anthropic MCP（Model Context Protocol）是两套不同的规范。
 
-### 馃捇 缂栫▼鑳藉姏锛坴0.3.0 鏂板锛?
-- **`code_run` 宸ュ叿**锛氫笓涓虹紪绋嬩换鍔¤璁★紝杩斿洖缁撴瀯鍖?`exit_code` / `stdout` / `stderr` / `duration_ms`锛屽苟瀵?Rust/Python/Node 甯歌閿欒鑷姩璇婃柇
-- **`file_edit` 鎵归噺鏇挎崲**锛歚edits` 鏁扮粍涓€娆¤皟鐢ㄥ師瀛愪慨鏀瑰澶勶紝鍏堝叏閲忛獙璇佸啀缁熶竴鍐欏叆
-- **`file_diff` 宸ュ叿**锛氫慨鏀瑰墠棰勮 unified diff锛屾垨瀵规瘮涓や釜鏂囦欢锛屽府鍔?Agent 鑷垜鏍￠獙
-- **`file_search` 澧炲己**锛氱粨鏋滀笂闄愭彁鍗囪嚦 500锛屾柊澧?`file_extensions` 绮剧‘杩囨护锛屽崟鏂囦欢 grep 涓婇檺鎻愬崌鑷?200KB
-- **缂栫▼宸ヤ綔娴佹寚瀵?*锛氱郴缁熸彁绀鸿瘝鍐呯疆瀹屾暣鐨?鐞嗚В鈫掍慨鏀光啋楠岃瘉鈫掕皟璇?闂幆鎸囧
+### 💻 编程能力（v0.3.0 新增）
+- **`code_run` 工具**：专为编程任务设计，返回结构化 `exit_code` / `stdout` / `stderr` / `duration_ms`，并对 Rust/Python/Node 常见错误自动诊断
+- **`file_edit` 批量替换**：`edits` 数组一次调用原子修改多处，先全量验证再统一写入
+- **`file_diff` 工具**：修改前预览 unified diff，或对比两个文件，帮助 Agent 自我校验
+- **`file_search` 增强**：结果上限提升至 500，新增 `file_extensions` 精确过滤，单文件 grep 上限提升至 200KB
+- **编程工作流指导**：系统提示词内置完整的"理解→修改→验证→调试"闭环指导
 
-### 馃攳 涓婁笅鏂囬瑙堬紙v0.3.0 鏂板锛?
-- 鐐瑰嚮鑱婂ぉ鐣岄潰鐨?馃攳 鎸夐挳锛屾煡鐪嬩笅涓€杞皢瑕佸彂缁?LLM 鐨勫畬鏁存秷鎭簭鍒?
-- 缁撴瀯鍖栧睍绀烘瘡鏉℃秷鎭殑 role銆乥locks锛堟枃鏈?宸ュ叿璋冪敤/宸ュ叿缁撴灉锛夛紝宸ュ叿璋冪敤鍜岀粨鏋滃彲鎶樺彔灞曞紑
-- 鏄剧ず token 浣跨敤閲忎笌涓婁笅鏂囬绠楄繘搴︽潯锛屽府鍔╀簡瑙ｄ笂涓嬫枃鍘嬬缉鏁堟灉
+### 🔍 上下文预览（v0.3.0 新增）
+- 点击聊天界面的 🔍 按钮，查看下一轮将要发给 LLM 的完整消息序列
+- 结构化展示每条消息的 role、blocks（文本/工具调用/工具结果），工具调用和结果可折叠展开
+- 显示 token 使用量与上下文预算进度条，帮助了解上下文压缩效果
 
-### 馃敆 鏂囦欢閾炬帴锛坴0.3.0 鏂板锛?
-- LLM 杈撳嚭涓殑鏈湴璺緞锛堝 `C:\Users\...\file.md`锛夎嚜鍔ㄨ浆涓哄彲鐐瑰嚮閾炬帴
-- 鐐瑰嚮鍚庣敤绯荤粺榛樿绋嬪簭鎵撳紑瀵瑰簲鏂囦欢鎴栫洰褰?
-- 鏀寔 Windows 璺緞銆乁NC 璺緞銆乁nix 璺緞锛屼互鍙?`file://` URI
+### 🔗 文件链接（v0.3.0 新增）
+- LLM 输出中的本地路径（如 `C:\Users\...\file.md`）自动转为可点击链接
+- 点击后用系统默认程序打开对应文件或目录
+- 支持 Windows 路径、UNC 路径、Unix 路径，以及 `file://` URI
 
-### 馃摫 澶氬钩鍙?IM 缃戝叧
+### 📱 多平台 IM 网关
 
-| 骞冲彴 | 妯″紡 |
+| 平台 | 模式 |
 |------|------|
-| 椋炰功锛團eishu/Lark锛?| WebSocket 闀胯繛鎺ユ敹浠?+ 鍑虹珯鍥炲 |
-| 浼佷笟寰俊锛圵eCom锛?| 鏈湴涓户鏀朵欢 + 鍑虹珯鍥炲 |
-| 閽夐拤锛圖ingTalk锛?| Stream 妯″紡 WebSocket 鏀朵欢 + 鍑虹珯鍥炲 |
-| Telegram | 闀胯疆璇㈡敹浠?+ 鍑虹珯鍥炲 |
-| Slack | 鍑虹珯 Webhook |
-| Discord | 鍑虹珯 Webhook |
-| Microsoft Teams | 鍑虹珯 Webhook |
-| Matrix | 鍑虹珯鍙戦€?|
-| 閫氱敤 Webhook | 鍑虹珯 Webhook |
+| 微信（WeChat） | 扫码绑定，双向收发（iLink Bot API，无需 CLI） |
+| 飞书（Feishu/Lark） | WebSocket 长连接收件 + 出站回复 |
+| 企业微信（WeCom） | 本地中继收件 + 出站回复 |
+| 钉钉（DingTalk） | Stream 模式 WebSocket 收件 + 出站回复 |
+| Telegram | 长轮询收件 + 出站回复 |
+| Slack | 出站 Webhook |
+| Discord | 出站 Webhook |
+| Microsoft Teams | 出站 Webhook |
+| Matrix | 出站发送 |
+| 通用 Webhook | 出站 Webhook |
 
-> IM 娑堟伅涓?Agent 鍙屽悜閫氫俊锛氭瘡涓?IM 棰戦亾/鐢ㄦ埛鎷ユ湁鐙珛鐨勬寔涔呬細璇濓紝娑堟伅鍘嗗彶瀹屾暣淇濈暀銆?
+> IM 消息与 Agent 双向通信：每个 IM 频道/用户拥有独立的持久会话，消息历史完整保留。
 
-### 鈴?瀹氭椂浠诲姟
-- Cron 琛ㄨ揪寮忚皟搴?
-- 浠诲姟鍘嗗彶璁板綍锛堣繍琛屾鏁般€佹渶鍚庢墽琛屾椂闂淬€佺姸鎬侊級
-- 鏀寔绔嬪嵆瑙﹀彂
+### ⏰ 定时任务
+- Cron 表达式调度
+- 任务历史记录（运行次数、最后执行时间、状态）
+- 支持立即触发
 
-### 馃敀 瀹夊叏鏈哄埗
-- API 瀵嗛挜 ChaCha20Poly1305 鍔犲瘑瀛樺偍
-- 涓夌绛栫暐妯″紡锛歋trict锛堜弗鏍硷級/ Balanced锛堝潎琛★級/ Dev锛堝紑鍙戯級
-- 鎻愮ず娉ㄥ叆妫€娴嬶紙v2锛?
-- 宸ュ叿璋冪敤棰戠巼闄愬埗
-- 鍗遍櫓鎿嶄綔浜屾纭
+### 🔒 安全机制
+- API 密钥 ChaCha20Poly1305 加密存储
+- 三种策略模式：Strict（严格）/ Balanced（均衡）/ Dev（开发）
+- 提示注入检测（v2）
+- 工具调用频率限制
+- 危险操作二次确认
 
-### 馃帹 鐣岄潰鐗规€?
-- 鏋佺畝妯″紡锛氭偓娴?HUD 闈㈡澘锛屽伐鍏疯皟鐢ㄤ互 Toast 姘旀场灞曠ず
-- 鍙屼富棰橈細绱綏鍏?/ 榛戦噾
-- 绐楀彛杈规棰滆壊闅忎富棰樺姩鎬佸彉鍖栵紙Windows 11+锛?
-- 涓嫳鏂囧浗闄呭寲
+### 🎨 界面特性
+- 极简模式：悬浮 HUD 面板，工具调用以 Toast 气泡展示
+- 双主题：紫罗兰 / 黑金
+- 窗口边框颜色随主题动态变化（Windows 11+）
+- 中英文国际化
 
 ---
 
-## 馃殌 蹇€熷紑濮?
+## 🚀 快速开始
 
-### 绯荤粺瑕佹眰
+### 系统要求
 
-- Windows 10 / 11锛?4-bit锛?
-- WebView2 Runtime锛圵indows 11 宸查瑁咃紱Windows 10 鍙粠 [Microsoft 瀹樼綉](https://developer.microsoft.com/microsoft-edge/webview2/) 涓嬭浇锛?
+- Windows 10 / 11（64-bit）
+- WebView2 Runtime（Windows 11 已预装；Windows 10 可从 [Microsoft 官网](https://developer.microsoft.com/microsoft-edge/webview2/) 下载）
 
-### 涓嬭浇瀹夎
+### 下载安装
 
-瀹樼綉锛歔www.dimnuo.com](https://www.dimnuo.com)
+官网：[www.dimnuo.com](https://www.dimnuo.com)
 
-鍓嶅線 [Releases](https://github.com/njbinbin-pisci/openpisci/releases) 涓嬭浇鏈€鏂板畨瑁呭寘锛坄.exe`锛夈€?
+前往 [Releases](https://github.com/njbinbin-pisci/openpisci/releases) 下载最新安装包（`.exe`）。
 
-> **鈿狅笍 瀹夊叏璀﹀憡**锛歄penPisci 鏄竴娆惧叿澶囨枃浠惰鍐欍€佸懡浠ゆ墽琛屻€乁I 鑷姩鍖栫瓑楂樻潈闄愭搷浣滆兘鍔涚殑 AI Agent銆傚缓璁湪铏氭嫙鏈猴紙濡?VMware銆乂irtualBox銆丠yper-V锛変腑杩愯锛屼互闃叉 AI 璇搷浣滃鑷村涓绘満鏁版嵁鎹熷け銆傚紑鍙戣€呬笉瀵瑰洜鐩存帴鍦ㄥ涓绘満杩愯鑰岄€犳垚鐨勪换浣曟暟鎹涪澶辨垨绯荤粺鎹熷潖鎵挎媴璐ｄ换銆?
+> **⚠️ 安全警告**：OpenPisci 是一款具备文件读写、命令执行、UI 自动化等高权限操作能力的 AI Agent。建议在虚拟机（如 VMware、VirtualBox、Hyper-V）中运行，以防止 AI 误操作导致宿主机数据损失。开发者不对因直接在宿主机运行而造成的任何数据丢失或系统损坏承担责任。
 
-### 棣栨閰嶇疆
+### 首次配置
 
-1. 鍚姩鍚庤繘鍏ュ紩瀵煎悜瀵?
-2. 閫夋嫨 LLM 鎻愪緵鍟嗗苟濉叆 API Key
-3. 璁剧疆宸ヤ綔鍖虹洰褰曪紙Agent 鏂囦欢鎿嶄綔鐨勯粯璁ゆ牴鐩綍锛?
-4. 寮€濮嬩娇鐢?
+1. 启动后进入引导向导
+2. 选择 LLM 提供商并填入 API Key
+3. 设置工作区目录（Agent 文件操作的默认根目录）
+4. 开始使用
 
 ---
 
-## 馃敡 寮€鍙戠幆澧冩惌寤?
+## 🔧 开发环境搭建
 
-### 渚濊禆
+### 依赖
 
-- [Rust](https://rustup.rs/) stable锛堚墺 1.77.2锛?
+- [Rust](https://rustup.rs/) stable（≥ 1.77.2）
 - [Node.js](https://nodejs.org/) 20 LTS
-- [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/)锛圖esktop C++ 宸ヤ綔璐熻浇锛?
+- [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/)（Desktop C++ 工作负载）
 
-### 鍏嬮殕涓庤繍琛?
+### 克隆与运行
 
 ```bash
 git clone https://github.com/njbinbin-pisci/openpisci.git
 cd openpisci
 
-# 瀹夎鍓嶇渚濊禆
+# 安装前端依赖
 npm install
 
-# 寮€鍙戞ā寮忥紙鐑噸杞斤級
+# 开发模式（热重载）
 npm run tauri dev
 
-# 鏋勫缓鍙戣鐗?
+# 构建发行版
 npm run tauri build
 ```
 
-### 閲嶆柊鐢熸垚鍥炬爣
+### 重新生成图标
 
 ```bash
 npm run icon:emoji
@@ -234,42 +235,42 @@ npm run icon:emoji
 
 ---
 
-## 馃悹 鑷畾涔夊皬楸硷紙Fish锛?
+## 🐠 自定义小鱼（Fish）
 
-鍦?`%APPDATA%\com.pisci.desktop\fish\my-fish\FISH.toml` 鍒涘缓鏂囦欢锛?
+在 `%APPDATA%\com.pisci.desktop\fish\my-fish\FISH.toml` 创建文件：
 
 ```toml
 id = "my-fish"
-name = "鎴戠殑灏忛奔"
-description = "涓撴敞浜庢煇绫讳换鍔＄殑鍔╂墜"
-icon = "馃悺"
+name = "我的小鱼"
+description = "专注于某类任务的助手"
+icon = "🐡"
 tools = ["file_read", "shell", "memory_store"]
 
 [agent]
-system_prompt = "浣犳槸涓€鏉′笓娉ㄤ簬..."
+system_prompt = "你是一条专注于..."
 max_iterations = 20
 model = "default"
 
 [[settings]]
 key = "workspace"
-label = "宸ヤ綔鐩綍"
+label = "工作目录"
 setting_type = "text"
 default = ""
-placeholder = "渚嬪锛欳:\\Users\\浣犵殑鐢ㄦ埛鍚峔\Documents"
+placeholder = "例如：C:\\Users\\你的用户名\\Documents"
 ```
 
-閲嶅惎搴旂敤鍚庡湪"灏忛奔"椤甸潰鍗冲彲鐪嬪埌鏂板皬楸笺€備富 Agent 浼氶€氳繃 `call_fish` 宸ュ叿鑷姩濮旀淳鍖归厤鐨勪换鍔＄粰灏忛奔銆?
+重启应用后在"小鱼"页面即可看到新小鱼。主 Agent 会通过 `call_fish` 工具自动委派匹配的任务给小鱼。
 
 ---
 
-## 鈿?鑷畾涔夋妧鑳斤紙Skills锛?
+## ⚡ 自定义技能（Skills）
 
-鍦?`%APPDATA%\com.pisci.desktop\skills\my-skill\SKILL.md` 鍒涘缓鏂囦欢锛?
+在 `%APPDATA%\com.pisci.desktop\skills\my-skill\SKILL.md` 创建文件：
 
 ```markdown
 ---
 name: My Skill
-description: 鎻忚堪杩欎釜鎶€鑳界殑鐢ㄩ€?
+description: 描述这个技能的用途
 version: "1.0"
 tools:
   - file_read
@@ -278,171 +279,171 @@ tools:
 
 # My Skill
 
-## 浣跨敤璇存槑
+## 使用说明
 
-褰撶敤鎴烽渶瑕?..鏃讹紝鎸夌収浠ヤ笅姝ラ鎿嶄綔锛?
-1. 棣栧厛...
-2. 鐒跺悗...
+当用户需要...时，按照以下步骤操作：
+1. 首先...
+2. 然后...
 ```
 
 ---
 
-## 馃敡 鑷畾涔夊伐鍏凤紙User Tools锛?
+## 🔧 自定义工具（User Tools）
 
-鍦?宸ュ叿"椤甸潰瀹夎 TypeScript 鎻掍欢锛屾敮鎸佽嚜瀹氫箟閰嶇疆鎺ュ彛锛堝 SMTP 璐﹀彿銆丄PI Key 绛夛級銆?
+在"工具"页面安装 TypeScript 插件，支持自定义配置接口（如 SMTP 账号、API Key 等）。
 
-鐢ㄦ埛宸ュ叿瀛樻斁璺緞锛歚%APPDATA%\com.pisci.desktop\user-tools\`
+用户工具存放路径：`%APPDATA%\com.pisci.desktop\user-tools\`
 
 ---
 
-## 馃搧 鏁版嵁鐩綍
+## 📁 数据目录
 
-| 璺緞 | 鍐呭 |
+| 路径 | 内容 |
 |------|------|
-| `%APPDATA%\com.pisci.desktop\` | 閰嶇疆鏂囦欢銆佹暟鎹簱 |
-| `%APPDATA%\com.pisci.desktop\skills\` | 鎶€鑳界洰褰?|
-| `%APPDATA%\com.pisci.desktop\fish\` | 鐢ㄦ埛鑷畾涔夊皬楸?|
-| `%APPDATA%\com.pisci.desktop\user-tools\` | 鐢ㄦ埛鑷畾涔夊伐鍏?|
-| `%LOCALAPPDATA%\pisci\logs\` | 鏃ュ織鏂囦欢銆佸穿婧冩姤鍛?|
+| `%APPDATA%\com.pisci.desktop\` | 配置文件、数据库 |
+| `%APPDATA%\com.pisci.desktop\skills\` | 技能目录 |
+| `%APPDATA%\com.pisci.desktop\fish\` | 用户自定义小鱼 |
+| `%APPDATA%\com.pisci.desktop\user-tools\` | 用户自定义工具 |
+| `%LOCALAPPDATA%\pisci\logs\` | 日志文件、崩溃报告 |
 
 ---
 
-## 馃彈锔?鎶€鏈灦鏋?
+## 🏗️ 技术架构
 
 ```
 OpenPisci
-鈹溾攢鈹€ src-tauri/          # Rust 鍚庣
-鈹?  鈹溾攢鈹€ src/
-鈹?  鈹?  鈹溾攢鈹€ agent/      # Agent Loop銆丠ostAgent銆佹秷鎭鐞?
-鈹?  鈹?  鈹溾攢鈹€ commands/   # Tauri IPC 鍛戒护灞?
-鈹?  鈹?  鈹溾攢鈹€ fish/       # Fish 瀛?Agent 绯荤粺
-鈹?  鈹?  鈹溾攢鈹€ gateway/    # IM 缃戝叧锛堥涔︺€侀拤閽夈€乀elegram 绛夛級
-鈹?  鈹?  鈹溾攢鈹€ llm/        # LLM 瀹㈡埛绔紙Claude銆丱penAI銆丏eepSeek銆丵wen 绛夛級
-鈹?  鈹?  鈹溾攢鈹€ memory/     # 璁板繂绯荤粺锛堝悜閲忔悳绱€丗TS锛?
-鈹?  鈹?  鈹溾攢鈹€ policy/     # 绛栫暐闂ㄦ帶銆佹敞鍏ユ娴?
-鈹?  鈹?  鈹溾攢鈹€ scheduler/  # Cron 璋冨害鍣?
-鈹?  鈹?  鈹溾攢鈹€ security/   # 鍔犲瘑銆佸瘑閽ョ鐞?
-鈹?  鈹?  鈹溾攢鈹€ skills/     # 鎶€鑳藉姞杞藉櫒锛圫KILL.md 鏍煎紡锛?
-鈹?  鈹?  鈹溾攢鈹€ store/      # SQLite 鏁版嵁搴撱€佽缃寔涔呭寲
-鈹?  鈹?  鈹斺攢鈹€ tools/      # 宸ュ叿瀹炵幇锛堝惈 code_run銆乫ile_diff 绛夛級
-鈹?  鈹斺攢鈹€ Cargo.toml
-鈹斺攢鈹€ src/                # React 鍓嶇
-    鈹溾攢鈹€ components/     # 椤甸潰缁勪欢
-    鈹溾攢鈹€ i18n/           # 涓嫳鏂囩炕璇?
-    鈹溾攢鈹€ services/       # Tauri IPC 鏈嶅姟灞?
-    鈹斺攢鈹€ store/          # Redux 鐘舵€佺鐞?
+├── src-tauri/          # Rust 后端
+│   ├── src/
+│   │   ├── agent/      # Agent Loop、HostAgent、消息管理
+│   │   ├── commands/   # Tauri IPC 命令层
+│   │   ├── fish/       # Fish 子 Agent 系统
+│   │   ├── gateway/    # IM 网关（飞书、钉钉、Telegram 等）
+│   │   ├── llm/        # LLM 客户端（Claude、OpenAI、DeepSeek、Qwen 等）
+│   │   ├── memory/     # 记忆系统（向量搜索、FTS）
+│   │   ├── policy/     # 策略门控、注入检测
+│   │   ├── scheduler/  # Cron 调度器
+│   │   ├── security/   # 加密、密钥管理
+│   │   ├── skills/     # 技能加载器（SKILL.md 格式）
+│   │   ├── store/      # SQLite 数据库、设置持久化
+│   │   └── tools/      # 工具实现（含 code_run、file_diff 等）
+│   └── Cargo.toml
+└── src/                # React 前端
+    ├── components/     # 页面组件
+    ├── i18n/           # 中英文翻译
+    ├── services/       # Tauri IPC 服务层
+    └── store/          # Redux 状态管理
 ```
 
 ---
 
-## 馃搵 鏇存柊鏃ュ織
+## 📋 更新日志
 
 ### v0.5.17
 - **微信接入**：直接对接腾讯 iLink Bot HTTP API，无需安装 Node.js 或任何 CLI；在设置页启用微信通道后点击「绑定微信」，扫描二维码即可完成绑定；Agent 回复通过 iLink sendmessage 接口实时送达微信用户
 
 ### v0.5.16
-- **UAC 鎵ц淇**锛氫慨澶?elevated 鍛戒护杩斿洖鍊艰В鏋愬け璐ョ殑涓や釜鏍规湰鍘熷洜锛氣憼 Windows `[System.Text.Encoding]::UTF8` 鍐欐枃浠舵椂榛樿甯?UTF-8 BOM锛屽鑷?`serde_json` 瑙ｆ瀽澶辫触锛坄expected value at line 1 column 1`锛夛紱鈶?`regsvr32`銆乣reg` 绛夊師鐢熷彲鎵ц鏂囦欢鍦?`& { } 2>&1` 鍧楀唴鎵ц鏃?`$LASTEXITCODE` 涓嶄細琚纭缃紝瀵艰嚧閫€鍑虹爜濮嬬粓涓?0锛涙柊鏂规灏嗙敤鎴峰懡浠ゅ啓鍏ョ嫭绔?inner 鑴氭湰锛岄€氳繃 `Start-Process -Wait -PassThru` 鎵ц骞剁敤 `$proc.ExitCode` 鑾峰彇鐪熷疄閫€鍑虹爜锛岀粨鏋滄枃浠舵敼鐢ㄦ棤 BOM 鐨?UTF-8 缂栫爜鍐欏叆
+- **UAC 执行修复**：修复 elevated 命令返回值解析失败的两个根本原因：① Windows `[System.Text.Encoding]::UTF8` 写文件时默认带 UTF-8 BOM，导致 `serde_json` 解析失败（`expected value at line 1 column 1`）；② `regsvr32`、`reg` 等原生可执行文件在 `& { } 2>&1` 块内执行时 `$LASTEXITCODE` 不会被正确设置，导致退出码始终为 0；新方案将用户命令写入独立 inner 脚本，通过 `Start-Process -Wait -PassThru` 执行并用 `$proc.ExitCode` 获取真实退出码，结果文件改用无 BOM 的 UTF-8 编码写入
 
 ### v0.5.15
-- **瀹炴椂鎸佷箙鍖?*锛氬交搴曚慨澶嶆秷鎭涪澶遍棶棰樷€斺€斾箣鍓嶆寔涔呭寲鍦?`run()` 缁撴潫鏃舵壒閲忓啓鍏ワ紝鑻ョ▼搴忓湪杩唬涓€旈€€鍑猴紙缂栬瘧閲嶅惎銆佸穿婧冪瓑锛夊垯鎵€鏈変腑闂存秷鎭叏閮ㄤ涪澶憋紱鐜板湪姣忎骇鐢熶竴鏉℃秷鎭珛鍗冲啓鍏ユ暟鎹簱锛岀▼搴忎换浣曟椂鍒婚€€鍑洪兘涓嶄細涓㈠け宸插畬鎴愮殑姝ラ
+- **实时持久化**：彻底修复消息丢失问题——之前持久化在 `run()` 结束时批量写入，若程序在迭代中途退出（编译重启、崩溃等）则所有中间消息全部丢失；现在每产生一条消息立即写入数据库，程序任何时刻退出都不会丢失已完成的步骤
 
 ### v0.5.14
-- **鏈€缁堟€荤粨鎸佷箙鍖栦慨澶?*锛氫慨澶嶄笂涓嬫枃鍘嬬缉锛坈ompaction锛夊悗鏈€缁堟€荤粨娑堟伅涓㈠け鐨勬牴鏈師鍥犫€斺€斿師鏂规渚濊禆 `context_len` 鍋忕Щ閲忓畾浣嶆柊娑堟伅锛屽帇缂╁悗鍒楄〃缂╃煭瀵艰嚧鍋忕Щ瓒婄晫銆佹柊娑堟伅鍏ㄩ儴涓㈠け锛涙柊鏂规鍦?`AgentLoop::run()` 鍐呴儴缁存姢鐙珛鐨?`new_messages` buffer锛屼笌 LLM 涓婁笅鏂囩獥鍙ｅ畬鍏ㄥ垎绂伙紝鍘嬬缉鍙奖鍝嶄笂涓嬫枃锛屼笉褰卞搷鎸佷箙鍖栵紝浠庢牴鏈笂娑堥櫎浜嗚绫婚棶棰?
-- **鍏充簬椤甸潰閲嶆柊璁捐**锛欸itHub 閾炬帴涓庝骇鍝佷粙缁嶅苟鎺掑睍绀猴紱鏂板"鍏充簬鎴戜滑"鍗＄墖锛屽寘鍚洟闃熶粙缁嶅拰瀹樼綉閾炬帴锛涙洿鏂颁骇鍝佹弿杩帮紝鍔犲叆 Koi 涓夊眰澶氭櫤鑳戒綋鏋舵瀯璇存槑
-- **鍐呴儴浼氳瘽鑷姩鎵撳紑淇**锛氬惎鍔ㄦ椂涓嶅啀鑷姩婵€娲诲績璺?宸℃绛夊唴閮ㄤ細璇濓紝濮嬬粓浼樺厛閫夋嫨鐢ㄦ埛鍙浼氳瘽
+- **最终总结持久化修复**：修复上下文压缩（compaction）后最终总结消息丢失的根本原因——原方案依赖 `context_len` 偏移量定位新消息，压缩后列表缩短导致偏移越界、新消息全部丢失；新方案在 `AgentLoop::run()` 内部维护独立的 `new_messages` buffer，与 LLM 上下文窗口完全分离，压缩只影响上下文，不影响持久化，从根本上消除了该类问题
+- **关于页面重新设计**：GitHub 链接与产品介绍并排展示；新增"关于我们"卡片，包含团队介绍和官网链接；更新产品描述，加入 Koi 三层多智能体架构说明
+- **内部会话自动打开修复**：启动时不再自动激活心跳/巡检等内部会话，始终优先选择用户可见会话
 
 ### v0.5.13
-- **浼氳瘽鍒囨崲淇**锛氫慨澶嶅垏鎹細璇濆悗娑堟伅鍖轰笉鏇存柊銆佸缁堟樉绀哄悓涓€浼氳瘽鍐呭鐨勯棶棰橈紱淇 IM 浼氳瘽涓嶅湪浼氳瘽鍒楄〃涓鑷存棤娉曞垏鎹㈢殑闂
-- **瓒呭鍐呭灞€閮ㄦ粴鍔?*锛氳〃鏍笺€佷唬鐮佸潡绛夎秴瀹藉唴瀹瑰湪姘旀场鍐呯敓鎴愬眬閮ㄦí鍚戞粴鍔ㄦ潯锛屼笉鍐嶆拺瀹芥皵娉℃垨瀵艰嚧鏁翠釜娑堟伅鍖哄嚭鐜版í鍚戞粴鍔ㄦ潯
-- **娴佸紡浜嬩欢褰掑睘淇**锛歚done`/`error` 浜嬩欢浣跨敤娉ㄥ唽鏃剁殑浼氳瘽 ID锛岄槻姝㈢敤鎴峰垏鎹細璇濇椂姹℃煋鍏朵粬浼氳瘽鐨勭姸鎬?
+- **会话切换修复**：修复切换会话后消息区不更新、始终显示同一会话内容的问题；修复 IM 会话不在会话列表中导致无法切换的问题
+- **超宽内容局部滚动**：表格、代码块等超宽内容在气泡内生成局部横向滚动条，不再撑宽气泡或导致整个消息区出现横向滚动条
+- **流式事件归属修复**：`done`/`error` 事件使用注册时的会话 ID，防止用户切换会话时污染其他会话的状态
 
 ### v0.5.12
-- **鍘嬬缉绠楁硶鍗曞厓娴嬭瘯**锛氬湪 `AgentLoop` 涓柊澧?11 涓笓椤规祴璇曪紝瑕嗙洊 Level-1 宸ュ叿缁撴灉鎴柇锛坄compact_trim_tool_results`锛夈€丩evel-2 LLM 鎽樿鍘嬬缉锛坄compact_summarise`锛夈€乣estimate_message_tokens` 鍚勬秷鎭被鍨嬩及绠楋紝浠ュ強 154 鏉℃秷鎭穿婧冨満鏅殑鍥炲綊楠岃瘉
-- **姣忎釜 Koi 鐙珛 `max_iterations`**锛氬彲鍦?Koi 璇︽儏涓崟鐙缃渶澶ц凯浠ｆ鏁帮紝瑕嗙洊鍏ㄥ眬榛樿鍊?
-- **鍘嬬缉绠楁硶淇**锛氫慨澶?`compact_summarise` 瀵?ToolUse/ToolResult 娑堟伅鍐呭鎻愬彇涓虹┖鐨勯棶棰橈紝纭繚鎽樿鎻愮ず璇嶅寘鍚湡瀹炲伐鍏疯皟鐢ㄤ俊鎭紱淇鍘嬬缉澶辫触鏃舵棤闄愬惊鐜殑闂锛涙柊澧炰富鍔ㄥ帇缂╄Е鍙戯紙涓婁笅鏂囪秴杩囬绠?80% 鏃舵彁鍓嶅帇缂╋級锛涘帇缂╁悗娉ㄥ叆缁换鍔℃彁绀猴紝闃叉 LLM 璇垽浠诲姟宸插畬鎴?
-- **鑱婂ぉ姘旀场绋冲畾鎬?*锛氳凯浠ｇ粨鏉熷悗淇濈暀娴佸紡娑堟伅鐨勫悎骞惰鍥撅紝涓嶅啀鎷嗗垎涓哄ぇ閲忕嫭绔嬫皵娉?
-- **鑱婂ぉ婊氬姩淇**锛氫慨澶嶆秷鎭埛鏂版椂鏁翠釜涓荤晫闈㈠悜涓婅烦鍔ㄧ殑闂
+- **压缩算法单元测试**：在 `AgentLoop` 中新增 11 个专项测试，覆盖 Level-1 工具结果截断（`compact_trim_tool_results`）、Level-2 LLM 摘要压缩（`compact_summarise`）、`estimate_message_tokens` 各消息类型估算，以及 154 条消息崩溃场景的回归验证
+- **每个 Koi 独立 `max_iterations`**：可在 Koi 详情中单独设置最大迭代次数，覆盖全局默认值
+- **压缩算法修复**：修复 `compact_summarise` 对 ToolUse/ToolResult 消息内容提取为空的问题，确保摘要提示词包含真实工具调用信息；修复压缩失败时无限循环的问题；新增主动压缩触发（上下文超过预算 80% 时提前压缩）；压缩后注入续任务提示，防止 LLM 误判任务已完成
+- **聊天气泡稳定性**：迭代结束后保留流式消息的合并视图，不再拆分为大量独立气泡
+- **聊天滚动修复**：修复消息刷新时整个主界面向上跳动的问题
 
 ### v0.5.8
-- **椤圭洰鏆傚仠 / 鎭㈠ / 褰掓。**锛氱敤鎴峰彲鐩存帴鍦ㄩ奔姹?UI 涓殏鍋溿€佹仮澶嶃€佸綊妗ｉ」鐩紝鏃犻渶閫氳繃 Pisci 瀵硅瘽鎿嶄綔锛涙殏鍋滄椂鑷姩鍙栨秷姝ｅ湪杩愯鐨?Koi 浠诲姟骞堕噸缃繘琛屼腑鐨勫緟鍔?
-- **`complete_todo` 寮哄埗鎽樿**锛歚complete_todo` 宸ュ叿鐜板湪蹇呴』浼犲叆 `summary` 鍙傛暟锛岀‘淇?Koi 瀹屾垚浠诲姟鍚庤亰澶╃晫闈㈠缁堟樉绀虹畝娲佺殑瀹屾垚鎽樿锛屼笉鍐嶅嚭鐜扮┖鐧?Result 娑堟伅
-- **Koi 涓婇檺鎻愬崌鑷?10**锛氭渶澶?Koi 鏁伴噺浠?5 鎻愬崌鑷?10
-- **Pisci 鍙鐞?Koi**锛歚app_control` 宸ュ叿鏂板 `koi_list` / `koi_create` / `koi_delete` 鍔ㄤ綔锛孭isci 鍙湪鐢ㄦ埛鏄庣‘瑕佹眰鏃跺府鍔╁垱寤烘垨鍒犻櫎 Koi锛堟彁绀鸿瘝瑕佹眰涓嶄富鍔ㄥ垱寤猴級
-- **Koi worktree 涓ユ牸闅旂**锛欿oi 鍦?Git worktree 涓伐浣滄椂锛宍allow_outside_workspace` 濮嬬粓涓?`false`锛岄槻姝㈡剰澶栧啓鍏ヤ富椤圭洰鐩綍
+- **项目暂停 / 恢复 / 归档**：用户可直接在鱼池 UI 中暂停、恢复、归档项目，无需通过 Pisci 对话操作；暂停时自动取消正在运行的 Koi 任务并重置进行中的待办
+- **`complete_todo` 强制摘要**：`complete_todo` 工具现在必须传入 `summary` 参数，确保 Koi 完成任务后聊天界面始终显示简洁的完成摘要，不再出现空白 Result 消息
+- **Koi 上限提升至 10**：最大 Koi 数量从 5 提升至 10
+- **Pisci 可管理 Koi**：`app_control` 工具新增 `koi_list` / `koi_create` / `koi_delete` 动作，Pisci 可在用户明确要求时帮助创建或删除 Koi（提示词要求不主动创建）
+- **Koi worktree 严格隔离**：Koi 在 Git worktree 中工作时，`allow_outside_workspace` 始终为 `false`，防止意外写入主项目目录
 
 ### v0.5.7
-- **鐪嬫澘绮惧害鎻愬崌**锛氫慨澶嶇湅鏉?todo 鐘舵€佸悓姝ラ棶棰橈紝鏀瑰杽 Pool Chat 娑堟伅鍒嗛〉鍔犺浇
-- **Koi 鐘舵€佺鐞嗘敼杩?*锛欿oi 韬唤寮哄寲銆佷换鍔℃彁绀鸿瘝浼樺寲锛岄槻姝㈣鑹叉贩娣?
-- **娑堟伅鍒嗛〉涓?UI 鏀硅繘**锛歅ool Chat 鍜?Coordinator Inbox 鏀寔鍒嗛〉鍔犺浇锛屾柊澧?Koi tooltip 闈㈡澘
-- **Koi 缁撴灉鎴柇涓婇檺鎻愬崌**锛歚call_koi` 缁撴灉鎴柇涓婇檺澶у箙鎻愰珮锛岄伩鍏嶆憳瑕佽鎴柇
-- **Inbox 绌烘秷鎭姂鍒?*锛氫慨澶?Coordinator Inbox 涓嚭鐜扮┖蹇冭烦娑堟伅鐨勯棶棰?
+- **看板精度提升**：修复看板 todo 状态同步问题，改善 Pool Chat 消息分页加载
+- **Koi 状态管理改进**：Koi 身份强化、任务提示词优化，防止角色混淆
+- **消息分页与 UI 改进**：Pool Chat 和 Coordinator Inbox 支持分页加载，新增 Koi tooltip 面板
+- **Koi 结果截断上限提升**：`call_koi` 结果截断上限大幅提高，避免摘要被截断
+- **Inbox 空消息抑制**：修复 Coordinator Inbox 中出现空心跳消息的问题
 
 ### v0.5.6
-- **Pool Chat Markdown 娓叉煋**锛氶奔姹犺亰澶╂秷鎭敮鎸?Markdown 娓叉煋锛屾湰鍦版枃浠惰矾寰勮嚜鍔ㄨ浆涓哄彲鐐瑰嚮閾炬帴
-- **Coordinator Inbox 澧炲己**锛氭柊澧炲垹闄ゆ寜閽€丮arkdown 娓叉煋銆佷細璇濆垹闄ょ‘璁ゅ璇濇
-- **`file://` 鍗忚鏀寔**锛氫慨澶?ReactMarkdown 涓?`file://` 閾炬帴鏃犳硶鐐瑰嚮鐨勯棶棰?
+- **Pool Chat Markdown 渲染**：鱼池聊天消息支持 Markdown 渲染，本地文件路径自动转为可点击链接
+- **Coordinator Inbox 增强**：新增删除按钮、Markdown 渲染、会话删除确认对话框
+- **`file://` 协议支持**：修复 ReactMarkdown 中 `file://` 链接无法点击的问题
 
 ### v0.5.5
-- **姣忎釜 Koi 鐙珛 LLM 閰嶇疆**锛氭瘡涓?Koi 鍙崟鐙€夋嫨 LLM 鎻愪緵鍟嗗拰妯″瀷锛屼笉鍐嶅叡浜叏灞€璁剧疆
-- **鍗曞疄渚嬮攣**锛氬簲鐢ㄥ惎鍔ㄦ椂妫€娴嬪凡杩愯瀹炰緥锛岄槻姝㈤噸澶嶅惎鍔?
-- **LLM 鎻愪緵鍟嗙鐞嗗叆鍙ｈ皟鏁?*锛歀LM 鎻愪緵鍟嗙鐞嗙Щ鍏?AI Provider 璁剧疆鍖?
+- **每个 Koi 独立 LLM 配置**：每个 Koi 可单独选择 LLM 提供商和模型，不再共享全局设置
+- **单实例锁**：应用启动时检测已运行实例，防止重复启动
+- **LLM 提供商管理入口调整**：LLM 提供商管理移入 AI Provider 设置区
 
 ### v0.5.4
-- **鏂囦欢宸ュ叿鐩稿璺緞鎰熺煡**锛歚file_read` / `file_write` 绛夊伐鍏峰湪 Koi worktree 鍦烘櫙涓嬫纭鐞嗙浉瀵硅矾寰勶紝闃叉 Koi 缁曡繃 worktree 闅旂
-- **Git 鍗忎綔娴佺▼淇**锛氫慨澶?Koi 涓?Pisci 閫氳繃 Git 鍒嗘敮鍗忎綔鐨勬祦绋嬶紝纭繚 Koi 鍦ㄧ嫭绔嬪垎鏀伐浣溿€丳isci 璐熻矗鍚堝苟
-- **蹇冭烦涓庡崗浣滄彁绀鸿瘝閲嶅啓**锛氶噸鍐欏績璺冲拰 Koi 鍗忎綔鎻愮ず璇嶏紝淇 Pisci 璇垽椤圭洰缁撴潫鐨勯棶棰?
+- **文件工具相对路径感知**：`file_read` / `file_write` 等工具在 Koi worktree 场景下正确处理相对路径，防止 Koi 绕过 worktree 隔离
+- **Git 协作流程修复**：修复 Koi 与 Pisci 通过 Git 分支协作的流程，确保 Koi 在独立分支工作、Pisci 负责合并
+- **心跳与协作提示词重写**：重写心跳和 Koi 协作提示词，修复 Pisci 误判项目结束的问题
 
 ### v0.5.3
-- **琛ュ厖澶?Agent 鏂囨。**锛氭柊澧?Pisci / Koi / Fish 鍒嗗眰璇存槑锛屼互鍙婇奔姹犵粍浠朵笌鍗忓悓鏈哄埗璇存槑
-- **淇 Pisci 蹇冭烦璇垽**锛氭湁 `follow_up_needed / waiting` 浣嗘棤 active todo 鏃讹紝涓嶅啀璇姤 `HEARTBEAT_OK`锛岃€屾槸瑕佹眰缁х画鍗忚皟
-- **鍗忓悓娴嬭瘯瑕嗙洊澧炲己**锛氬 Agent 闆嗘垚娴嬭瘯鏂板蹇冭烦淇濇姢銆佺煭 `pool_id` 瑙ｆ瀽涓庨檲鏃х姸鎬佹仮澶嶈鐩?
+- **补充多 Agent 文档**：新增 Pisci / Koi / Fish 分层说明，以及鱼池组件与协同机制说明
+- **修复 Pisci 心跳误判**：有 `follow_up_needed / waiting` 但无 active todo 时，不再误报 `HEARTBEAT_OK`，而是要求继续协调
+- **协同测试覆盖增强**：多 Agent 集成测试新增心跳保护、短 `pool_id` 解析与陈旧状态恢复覆盖
 
 ### v0.5.2
-- **淇 unnamed 鎶€鑳藉菇鐏甸棶棰?*锛氬嵏杞芥妧鑳藉悗鍒囧洖鎶€鑳介〉涓嶅啀鍑虹幇 unnamed 鍗犱綅鎶€鑳斤紱鍦?FS鈫扗B 鍚屾銆丏B鈫扚S 鍙嶅悜鍚屾銆乣list_skills` 杩斿洖鍊煎洓澶勫潎杩囨护鏃犳晥璁板綍锛屽苟鍦ㄥ惎鍔ㄦ椂涓诲姩娓呯悊鍘嗗彶閬楃暀鐨?unnamed 鏉＄洰
+- **修复 unnamed 技能幽灵问题**：卸载技能后切回技能页不再出现 unnamed 占位技能；在 FS→DB 同步、DB→FS 反向同步、`list_skills` 返回值四处均过滤无效记录，并在启动时主动清理历史遗留的 unnamed 条目
 
 ### v0.5.1
-- **璁剧疆瀹炴椂鍒锋柊**锛欰gent 閫氳繃宸ュ叿淇敼閰嶇疆锛圫SH 鏈嶅姟鍣ㄣ€丄PI Key銆佸伐鍏峰紑鍏崇瓑锛夊悗锛岃缃〉闈㈢珛鍗宠嚜鍔ㄥ埛鏂帮紝鏃犻渶閲嶅惎
-- **MCP 閰嶇疆鍏ュ彛璇存槑**锛歁CP 宸ュ叿閰嶇疆鍏ュ彛鍦ㄤ晶杈规爮 鈫?馃敡 宸ュ叿 鈫?馃敆 MCP 鏍囩椤碉紝鏀寔 stdio / SSE 涓ょ浼犺緭鏂瑰紡
+- **设置实时刷新**：Agent 通过工具修改配置（SSH 服务器、API Key、工具开关等）后，设置页面立即自动刷新，无需重启
+- **MCP 配置入口说明**：MCP 工具配置入口在侧边栏 → 🔧 工具 → 🔗 MCP 标签页，支持 stdio / SSE 两种传输方式
 
 ### v0.5.0
-- **澶氭ā鎬佽瑙夎凯浠ｏ紙Vision Artifact Store锛?*锛氭柊澧?`vision_context` 宸ュ叿锛孉gent 鍙法杞涓诲姩淇濆瓨銆侀€夋嫨鍥惧儚锛汸DF 宸ュ叿鏂板 `render_page_image` / `render_region_image` 鍔ㄤ綔锛孉gent 鍙嚜涓诲喅瀹?涓嬩竴姝ョ湅鍝噷"
-- **鎶€鑳?zip 鍖呭畨瑁?*锛氬畨瑁呮妧鑳芥敮鎸?`.zip` 鍘嬬缉鍖咃紙鏈湴璺緞鎴?URL锛夛紝涓€娆″畨瑁呭甫涓?`SKILL.md` + `reference.md` + `examples.md` + 杈呭姪鑴氭湰绛夋墍鏈夋枃浠?
-- **宸ュ叿璋冪敤鍙腑鏂?*锛氬仠姝㈡寜閽幇鍦ㄥ彲鍦?200ms 鍐呬腑鏂鍦ㄦ墽琛岀殑宸ュ叿璋冪敤锛坄tokio::select!` 鍙栨秷鐩戝惉锛夛紝涓嶅啀闇€瑕佺瓑寰呭伐鍏疯窇瀹?
-- **鎶€鑳借嚜鍔ㄨЕ鍙?*锛氱郴缁熸彁绀鸿瘝寮€澶存柊澧炲己鍒惰鍒欙紝Agent 姣忔鏀跺埌浠诲姟浼樺厛璋冪敤 `skill_search` 鏌ユ壘鍖归厤鎶€鑳?
-- **鎶€鑳芥寔涔呭寲淇**锛氬惎鍔ㄦ椂涓诲姩鎵弿纾佺洏鎶€鑳界洰褰曞悓姝ュ埌鏁版嵁搴擄紝閲嶅惎鍚庡凡瀹夎鎶€鑳戒笉鍐嶆秷澶?
-- **璺緞鐗规畩瀛楃娓呯悊**锛氬畨瑁呮妧鑳芥椂鑷姩杩囨护浠?Windows 璧勬簮绠＄悊鍣ㄥ鍒惰矾寰勬椂鎻掑叆鐨?Unicode 涓嶅彲瑙佸瓧绗︼紙`U+202A` 绛夛級
+- **多模态视觉迭代（Vision Artifact Store）**：新增 `vision_context` 工具，Agent 可跨轮次主动保存、选择图像；PDF 工具新增 `render_page_image` / `render_region_image` 动作，Agent 可自主决定"下一步看哪里"
+- **技能 zip 包安装**：安装技能支持 `.zip` 压缩包（本地路径或 URL），一次安装带上 `SKILL.md` + `reference.md` + `examples.md` + 辅助脚本等所有文件
+- **工具调用可中断**：停止按钮现在可在 200ms 内中断正在执行的工具调用（`tokio::select!` 取消监听），不再需要等待工具跑完
+- **技能自动触发**：系统提示词开头新增强制规则，Agent 每次收到任务优先调用 `skill_search` 查找匹配技能
+- **技能持久化修复**：启动时主动扫描磁盘技能目录同步到数据库，重启后已安装技能不再消失
+- **路径特殊字符清理**：安装技能时自动过滤从 Windows 资源管理器复制路径时插入的 Unicode 不可见字符（`U+202A` 等）
 
 ### v0.4.1
-- **鏂板 `plan_todo` 宸ュ叿**锛欰gent 鍙儚 Cursor 涓€鏍风淮鎶ゅ綋鍓嶅鏉備换鍔＄殑寰呭姙璁″垝锛屾敮鎸?`pending / in_progress / completed / cancelled` 鐘舵€佹洿鏂?
-- **璁″垝闈㈡澘瀹炴椂鍙鍖?*锛氳亰澶╃晫闈㈡柊澧炶鍒掗潰鏉匡紝鎵ц涓拰鎵ц鍚庨兘鍙煡鐪嬪綋鍓嶄换鍔¤鍒掍笌杩涘害
-- **璁″垝绛栫暐鎻愮ず璇?*锛氱郴缁熸彁绀鸿瘝鏂板 Planning 娈佃惤锛屽紩瀵?Agent 鍦ㄥ鏉備换鍔′腑涓诲姩缁存姢鐭鍒?
-- **宸ュ叿鎺у埗鑳藉姏缁х画寮€鏀?*锛氫富棰樺垏鎹€佹瀬绠€妯″紡銆佺獥鍙ｇЩ鍔ㄣ€佸唴缃伐鍏峰紑鍏炽€佺敤鎴峰伐鍏烽厤缃凡鍙€氳繃 Agent 鐨?`app_control` 宸ュ叿鎿嶄綔
+- **新增 `plan_todo` 工具**：Agent 可像 Cursor 一样维护当前复杂任务的待办计划，支持 `pending / in_progress / completed / cancelled` 状态更新
+- **计划面板实时可视化**：聊天界面新增计划面板，执行中和执行后都可查看当前任务计划与进度
+- **计划策略提示词**：系统提示词新增 Planning 段落，引导 Agent 在复杂任务中主动维护短计划
+- **工具控制能力继续开放**：主题切换、极简模式、窗口移动、内置工具开关、用户工具配置已可通过 Agent 的 `app_control` 工具操作
 
 ### v0.4.0
-- **灏忛奔鏃犵姸鎬侀噸鏋?*锛氬皬楸硷紙Fish锛変粠鐙珛浼氳瘽妯″紡閲嶆瀯涓烘棤鐘舵€佷复鏃跺伐浣滆€咃紝鐢变富 Agent 閫氳繃 `call_fish` 濮旀淳瀛愪换鍔★紝涓棿杩囩▼涓嶆薄鏌撲富涓婁笅鏂?
-- **call_fish 鎻愮ず璇嶅寮?*锛氱郴缁熸彁绀鸿瘝鏂板 Sub-Agent Delegation 绛栫暐娈佃惤锛屽紩瀵间富 Agent 涓诲姩浣跨敤灏忛奔澶勭悊澶氭楠や换鍔?
-- **缁熶竴纭瀵硅瘽妗?*锛氬垱寤哄叡浜?`ConfirmDialog` 缁勪欢锛屾浛鎹㈡墍鏈?`window.confirm()` 璋冪敤锛堟妧鑳藉嵏杞姐€佸伐鍏峰嵏杞姐€丮CP 鍒犻櫎銆佸畾鏃朵换鍔″垹闄ゃ€佽蹇嗘竻绌恒€佸璁℃棩蹇楁竻绌猴級
-- **鎶€鑳藉姞杞戒慨澶?*锛氫慨澶嶅悗瀹夎鎶€鑳借閿欒鍒嗙被涓哄唴缃妧鑳藉鑷翠笉鏄剧ず鐨勯棶棰?
+- **小鱼无状态重构**：小鱼（Fish）从独立会话模式重构为无状态临时工作者，由主 Agent 通过 `call_fish` 委派子任务，中间过程不污染主上下文
+- **call_fish 提示词增强**：系统提示词新增 Sub-Agent Delegation 策略段落，引导主 Agent 主动使用小鱼处理多步骤任务
+- **统一确认对话框**：创建共享 `ConfirmDialog` 组件，替换所有 `window.confirm()` 调用（技能卸载、工具卸载、MCP 删除、定时任务删除、记忆清空、审计日志清空）
+- **技能加载修复**：修复后安装技能被错误分类为内置技能导致不显示的问题
 
 ### v0.3.0
-- **缂栫▼鑳藉姏澧炲己**锛氭柊澧?`code_run` 宸ュ叿锛堢粨鏋勫寲杈撳嚭 + 閿欒璇婃柇锛夈€乣file_diff` 宸ュ叿锛坲nified diff 棰勮锛?
-- **`file_edit` 鎵归噺鏇挎崲**锛氭敮鎸?`edits` 鏁扮粍锛屼竴娆¤皟鐢ㄥ師瀛愪慨鏀瑰澶?
-- **`file_search` 澧炲己**锛氱粨鏋滀笂闄?500锛屾柊澧?`file_extensions` 杩囨护锛実rep 鍗曟枃浠朵笂闄?200KB
-- **涓婁笅鏂囬瑙?*锛氳亰澶╃晫闈㈡柊澧?馃攳 鎸夐挳锛岀粨鏋勫寲鏌ョ湅鍙戠粰 LLM 鐨勬秷鎭簭鍒楋紙鍚?token 缁熻锛?
-- **鏂囦欢閾炬帴**锛歀LM 杈撳嚭涓殑鏈湴璺緞鑷姩杞负鍙偣鍑婚摼鎺ワ紝鐐瑰嚮鐢ㄧ郴缁熺▼搴忔墦寮€
+- **编程能力增强**：新增 `code_run` 工具（结构化输出 + 错误诊断）、`file_diff` 工具（unified diff 预览）
+- **`file_edit` 批量替换**：支持 `edits` 数组，一次调用原子修改多处
+- **`file_search` 增强**：结果上限 500，新增 `file_extensions` 过滤，grep 单文件上限 200KB
+- **上下文预览**：聊天界面新增 🔍 按钮，结构化查看发给 LLM 的消息序列（含 token 统计）
+- **文件链接**：LLM 输出中的本地路径自动转为可点击链接，点击用系统程序打开
 
 ### v0.2.0
-- 澶氭ā鎬佽瑙?Agent锛堟埅鍥?+ Vision AI锛?
-- UIA 绮惧害娴嬭瘯
-- MCP / SSH / PDF 宸ュ叿
-- 澶?LLM 鏀寔鎵╁睍锛堟櫤璋便€並imi銆丮iniMax锛?
+- 多模态视觉 Agent（截图 + Vision AI）
+- UIA 精度测试
+- MCP / SSH / PDF 工具
+- 多 LLM 支持扩展（智谱、Kimi、MiniMax）
 
 ---
 
-## 馃搫 璁稿彲璇?
+## 📄 许可证
 
 [MIT License](./LICENSE)
 
 ---
 
-<p align="center">Built with 鉂わ笍 by the OpenPisci community</p>
+<p align="center">Built with ❤️ by the OpenPisci community</p>
