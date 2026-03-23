@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { RootState, settingsActions } from "../../store";
-import { settingsApi, gatewayApi, systemApi, Settings as SettingsData, ChannelInfo, RuntimeCheckItem, SshServerConfig, LlmProviderConfig } from "../../services/tauri";
+import { settingsApi, gatewayApi, systemApi, wechatApi, Settings as SettingsData, ChannelInfo, RuntimeCheckItem, SshServerConfig, LlmProviderConfig } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
 
 const DEFAULT_SETTINGS: SettingsData = {
@@ -32,6 +32,12 @@ const DEFAULT_SETTINGS: SettingsData = {
   wecom_agent_id: "",
   wecom_enabled: false,
   wecom_inbox_file: "",
+  wechat_enabled: false,
+  wechat_gateway_token: "",
+  wechat_gateway_port: 18789,
+  wechat_bot_token: "",
+  wechat_base_url: "",
+  wechat_bot_id: "",
   dingtalk_app_key: "",
   dingtalk_app_secret: "",
   dingtalk_enabled: false,
@@ -98,6 +104,65 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
   const [runtimesLoading, setRuntimesLoading] = useState(false);
   const [runtimesSettingKey, setRuntimesSettingKey] = useState<string | null>(null);
   const [defaultWorkspace, setDefaultWorkspace] = useState<string>("");
+
+  // WeChat binding flow
+  const [wechatQr, setWechatQr] = useState<string | null>(null);
+  const [wechatQrToken, setWechatQrToken] = useState<string | null>(null);
+  const [wechatBindState, setWechatBindState] = useState<"idle" | "loading" | "scan" | "scaned" | "success" | "error">("idle");
+  const [wechatBindError, setWechatBindError] = useState<string | null>(null);
+
+  const handleWechatBind = async () => {
+    setWechatBindState("loading");
+    setWechatQr(null);
+    setWechatQrToken(null);
+    setWechatBindError(null);
+    try {
+      const result = await wechatApi.startLogin();
+      if (result.connected) {
+        setWechatBindState("success");
+      } else if (result.qr_data_url && result.qrcode_token) {
+        setWechatQr(result.qr_data_url);
+        setWechatQrToken(result.qrcode_token);
+        setWechatBindState("scan");
+        // Start polling for scan status
+        pollWechatStatus(result.qrcode_token);
+      } else {
+        setWechatBindState("error");
+        setWechatBindError(result.message);
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setWechatBindState("error");
+      setWechatBindError(msg);
+    }
+  };
+
+  const pollWechatStatus = async (token: string) => {
+    const maxAttempts = 150; // ~5 minutes at 2s intervals
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const status = await wechatApi.pollLogin(token);
+        if (status.connected) {
+          setWechatBindState("success");
+          setWechatQr(null);
+          return;
+        }
+        if (status.message === "scaned") {
+          setWechatBindState("scaned");
+        }
+        if (status.message === "expired") {
+          setWechatBindState("error");
+          setWechatBindError(t("settings.wechatQrExpired"));
+          return;
+        }
+      } catch {
+        // network hiccup, keep polling
+      }
+    }
+    setWechatBindState("error");
+    setWechatBindError(t("settings.wechatBindFailed"));
+  };
 
   // SSH Servers
   const [sshServers, setSshServers] = useState<SshServerConfig[]>([]);
@@ -837,6 +902,72 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
                   </select>
                 </div>
                 <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0" }}>{t("settings.feishuHelp")}</p>
+              </>
+            )}
+          </div>
+
+          {/* WeChat (OpenClaw-compat) */}
+          <div style={{ marginBottom: 20, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: form.wechat_enabled ? 12 : 0 }}>
+              <div>
+                <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{t("settings.wechat")}</span>
+                <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 8 }}>{t("settings.wechatDesc")}</span>
+              </div>
+              <input type="checkbox" checked={form.wechat_enabled} onChange={(e) => update("wechat_enabled", e.target.checked)} />
+            </div>
+            {form.wechat_enabled && (
+              <>
+                <div className="form-group">
+                  <label className="label">{t("settings.wechatGatewayToken")} <span style={{ fontSize: 11, color: "var(--text-muted)" }}>({t("common.optional")})</span></label>
+                  <input className="input" type={showKeys ? "text" : "password"} value={form.wechat_gateway_token} onChange={(e) => update("wechat_gateway_token", e.target.value)} placeholder="" />
+                </div>
+                <div className="form-group">
+                  <label className="label">{t("settings.wechatGatewayPort")}</label>
+                  <input className="input" type="number" value={form.wechat_gateway_port} onChange={(e) => update("wechat_gateway_port", parseInt(e.target.value) || 18789)} placeholder="18789" />
+                </div>
+
+                {/* Bind button and QR display */}
+                <div style={{ marginTop: 12 }}>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ fontSize: 13 }}
+                    disabled={wechatBindState === "loading"}
+                    onClick={handleWechatBind}
+                  >
+                    {wechatBindState === "loading"
+                      ? t("settings.wechatBindLoading")
+                      : t("settings.wechatBindBtn")}
+                  </button>
+
+                  {(wechatBindState === "scan" || wechatBindState === "scaned") && wechatQr && (
+                    <div style={{ marginTop: 12, textAlign: "center" }}>
+                      <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
+                        {wechatBindState === "scaned"
+                          ? t("settings.wechatScaned")
+                          : t("settings.wechatBindScanPrompt")}
+                      </p>
+                      <img
+                        src={wechatQr}
+                        alt="WeChat QR"
+                        style={{ width: 200, height: 200, border: "1px solid var(--border)", borderRadius: 8, opacity: wechatBindState === "scaned" ? 0.4 : 1 }}
+                      />
+                    </div>
+                  )}
+
+                  {wechatBindState === "success" && (
+                    <p style={{ fontSize: 13, color: "var(--success, #22c55e)", marginTop: 8 }}>
+                      ✓ {t("settings.wechatBindSuccess")}
+                    </p>
+                  )}
+
+                  {wechatBindState === "error" && wechatBindError && (
+                    <p style={{ fontSize: 12, color: "var(--error, #ef4444)", marginTop: 8, whiteSpace: "pre-line" }}>
+                      {wechatBindError}
+                    </p>
+                  )}
+                </div>
+
+                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "12px 0 0", whiteSpace: "pre-line" }}>{t("settings.wechatHelp")}</p>
               </>
             )}
           </div>

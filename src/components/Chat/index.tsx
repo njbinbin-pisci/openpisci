@@ -109,7 +109,8 @@ function sourceIcon(source: string): string {
   if (source === "chat" || !source) return "👤";
   if (source.includes("telegram")) return "✈";
   if (source.includes("feishu") || source.includes("lark")) return "📘";
-  if (source.includes("wecom") || source.includes("wechat")) return "💬";
+  if (source.includes("wechat")) return "🟢";
+  if (source.includes("wecom")) return "💬";
   if (source.includes("dingtalk")) return "📎";
   if (source.includes("slack")) return "⚡";
   if (source.includes("discord")) return "🎮";

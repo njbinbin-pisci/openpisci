@@ -5,6 +5,7 @@ pub mod matrix;
 pub mod slack;
 pub mod teams;
 pub mod telegram;
+pub mod wechat;
 pub mod webhook;
 pub mod wecom;
 

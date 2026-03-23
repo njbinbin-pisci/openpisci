@@ -892,6 +892,8 @@ pub fn run() {
             commands::gateway::diagnose_gateway_channels,
             commands::gateway::connect_gateway_channels,
             commands::gateway::disconnect_gateway_channels,
+            commands::gateway::start_wechat_login,
+            commands::gateway::poll_wechat_login,
             // User Tools
             commands::user_tools::list_user_tools,
             commands::user_tools::install_user_tool,

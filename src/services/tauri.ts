@@ -121,6 +121,13 @@ export interface Settings {
   webhook_enabled: boolean;
   // WeCom relay inbox file
   wecom_inbox_file: string;
+  // WeChat (iLink Bot HTTP server)
+  wechat_enabled: boolean;
+  wechat_gateway_token: string;
+  wechat_gateway_port: number;
+  wechat_bot_token: string;
+  wechat_base_url: string;
+  wechat_bot_id: string;
   // Email (SMTP / IMAP)
   smtp_host: string;
   smtp_port: number;
@@ -840,6 +847,24 @@ export interface CollabTrialStatus {
 export function openPath(path: string): Promise<void> {
   return invoke<void>("open_path", { path });
 }
+
+// ---------------------------------------------------------------------------
+// WeChat login
+// ---------------------------------------------------------------------------
+
+export interface WechatLoginStatus {
+  qr_data_url: string | null;
+  qrcode_token: string | null;
+  message: string;   // "scan_qr" | "wait" | "scaned" | "confirmed" | "connected" | "expired"
+  connected: boolean;
+  bot_id: string | null;
+}
+
+export const wechatApi = {
+  startLogin: () => invoke<WechatLoginStatus>("start_wechat_login"),
+  pollLogin: (qrcodeToken: string) =>
+    invoke<WechatLoginStatus>("poll_wechat_login", { qrcodeToken }),
+};
 
 // ---------------------------------------------------------------------------
 // System / Diagnostics

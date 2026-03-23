@@ -15,6 +15,7 @@ Status values:
 | Telegram | implemented | implemented | `src-tauri/src/gateway/telegram.rs` |
 | Feishu / Lark | implemented | implemented | `src-tauri/src/gateway/feishu.rs` |
 | DingTalk | implemented | implemented | `src-tauri/src/gateway/dingtalk.rs` |
+| WeChat (OpenClaw-compat gateway) | implemented | implemented | `src-tauri/src/gateway/wechat.rs` |
 | WeCom inbound + outbound | implemented | partial | `src-tauri/src/gateway/wecom.rs` |
 | Slack | implemented | planned | `src-tauri/src/gateway` |
 | Discord | implemented | planned | `src-tauri/src/gateway` |

@@ -227,6 +227,25 @@ pub struct Settings {
     #[serde(default)]
     pub wecom_inbox_file: String,
 
+    /// WeChat (iLink Bot HTTP server) enabled
+    #[serde(default)]
+    pub wechat_enabled: bool,
+    /// Optional Bearer token for the local iLink Bot HTTP server (guards the listener)
+    #[serde(default)]
+    pub wechat_gateway_token: String,
+    /// Local HTTP server port for the iLink Bot API (default 18788)
+    #[serde(default = "default_wechat_gateway_port")]
+    pub wechat_gateway_port: u16,
+    /// bot_token obtained after QR-code login (encrypted at rest)
+    #[serde(default)]
+    pub wechat_bot_token: String,
+    /// baseurl returned by the iLink login API (e.g. https://ilinkai.weixin.qq.com)
+    #[serde(default)]
+    pub wechat_base_url: String,
+    /// ilink_bot_id of the bound WeChat account
+    #[serde(default)]
+    pub wechat_bot_id: String,
+
     // ── Email (SMTP / IMAP) ──────────────────────────────────────────────────
     /// SMTP server hostname (e.g. smtp.gmail.com)
     #[serde(default)]
@@ -338,6 +357,9 @@ pub struct Settings {
 
 fn default_feishu_domain() -> String {
     "feishu".into()
+}
+fn default_wechat_gateway_port() -> u16 {
+    18789
 }
 fn default_smtp_port() -> u16 {
     587
@@ -459,6 +481,12 @@ impl Default for Settings {
             webhook_auth_token: String::new(),
             webhook_enabled: false,
             wecom_inbox_file: String::new(),
+            wechat_enabled: false,
+            wechat_gateway_token: String::new(),
+            wechat_gateway_port: default_wechat_gateway_port(),
+            wechat_bot_token: String::new(),
+            wechat_base_url: String::new(),
+            wechat_bot_id: String::new(),
             smtp_host: String::new(),
             smtp_port: default_smtp_port(),
             smtp_username: String::new(),
@@ -529,6 +557,8 @@ impl Settings {
             Self::try_decrypt_field(&store, &mut settings.telegram_bot_token);
             Self::try_decrypt_field(&store, &mut settings.matrix_access_token);
             Self::try_decrypt_field(&store, &mut settings.webhook_auth_token);
+            Self::try_decrypt_field(&store, &mut settings.wechat_gateway_token);
+            Self::try_decrypt_field(&store, &mut settings.wechat_bot_token);
             Self::try_decrypt_field(&store, &mut settings.smtp_password);
             // Decrypt SSH server credentials
             for srv in &mut settings.ssh_servers {
@@ -563,6 +593,8 @@ impl Settings {
             Self::encrypt_field(&store, &mut clone.telegram_bot_token);
             Self::encrypt_field(&store, &mut clone.matrix_access_token);
             Self::encrypt_field(&store, &mut clone.webhook_auth_token);
+            Self::encrypt_field(&store, &mut clone.wechat_gateway_token);
+            Self::encrypt_field(&store, &mut clone.wechat_bot_token);
             Self::encrypt_field(&store, &mut clone.smtp_password);
             // Encrypt SSH server credentials
             for srv in &mut clone.ssh_servers {

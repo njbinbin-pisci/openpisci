@@ -217,6 +217,9 @@ impl Tool for AppControlTool {
                 "webhook_auth_token": { "type": "string" },
                 "webhook_enabled": { "type": "boolean" },
                 "wecom_inbox_file": { "type": "string" },
+                "wechat_enabled": { "type": "boolean" },
+                "wechat_gateway_token": { "type": "string" },
+                "wechat_gateway_port": { "type": "integer" },
                 "smtp_host": { "type": "string" },
                 "smtp_port": { "type": "integer" },
                 "smtp_username": { "type": "string" },
@@ -501,6 +504,8 @@ impl AppControlTool {
              - dingtalk_enabled: {dingtalk_enabled}\n\
              - dingtalk_app_key: {dingtalk_app_key}\n\
              - dingtalk_app_secret: {dingtalk_app_secret}\n\
+             - wechat_enabled: {wechat_enabled}\n\
+             - wechat_gateway_port: {wechat_gateway_port}\n\
              - wecom_enabled: {wecom_enabled}\n\
              - wecom_corp_id: {wecom_corp_id}\n\
              - telegram_enabled: {telegram_enabled}\n\
@@ -536,6 +541,8 @@ impl AppControlTool {
             dingtalk_enabled = s.dingtalk_enabled,
             dingtalk_app_key = configured(&s.dingtalk_app_key),
             dingtalk_app_secret = configured(&s.dingtalk_app_secret),
+            wechat_enabled = s.wechat_enabled,
+            wechat_gateway_port = s.wechat_gateway_port,
             wecom_enabled = s.wecom_enabled,
             wecom_corp_id = configured(&s.wecom_corp_id),
             telegram_enabled = s.telegram_enabled,
@@ -653,6 +660,11 @@ impl AppControlTool {
         apply_str!(webhook_auth_token, "webhook_auth_token");
         apply_bool!(webhook_enabled, "webhook_enabled");
         apply_str!(wecom_inbox_file, "wecom_inbox_file");
+        apply_bool!(wechat_enabled, "wechat_enabled");
+        apply_str!(wechat_gateway_token, "wechat_gateway_token");
+        if let Some(v) = input["wechat_gateway_port"].as_u64() {
+            s.wechat_gateway_port = v as u16;
+        }
         apply_str!(smtp_host, "smtp_host");
         if let Some(v) = input["smtp_port"].as_u64() {
             s.smtp_port = v as u16;
