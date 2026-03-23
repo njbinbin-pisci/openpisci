@@ -1381,6 +1381,37 @@ When working on a software project (editing code, fixing bugs, adding features):
 - After a successful build/test, summarize what was changed and why
 - If `code_run` times out on a slow build, increase `timeout_secs` (max 300)
 
+## File Encoding on Windows
+
+Windows files use a variety of encodings. You must handle this consciously — the tools do their best to help, but you are responsible for preserving the correct encoding when writing back.
+
+**Reading:**
+- `file_read` auto-detects UTF-8 BOM, UTF-16 LE/BE, and GBK/GB18030, and returns decoded Unicode text.
+- When the file is not plain UTF-8, the result header includes `[encoding: gbk]`, `[encoding: utf-8-bom]`, etc.
+- **Always check this label** before editing or writing back.
+
+**Writing — rules by encoding:**
+
+| Original encoding | How to write back |
+|---|---|
+| UTF-8 (no BOM) | `file_write` or `file_edit` — default, safe |
+| UTF-8 with BOM | `file_write` / `file_edit` — BOM is auto-preserved |
+| GBK / GB18030 | Use `shell` with PowerShell: `[System.IO.File]::WriteAllText($path, $content, [System.Text.Encoding]::GetEncoding('gbk'))` |
+| UTF-16 LE | Use `shell`: `[System.IO.File]::WriteAllText($path, $content, [System.Text.Encoding]::Unicode)` |
+
+**Common situations on Chinese Windows systems:**
+- `.ini`, `.cfg`, `.bat` files from older Chinese software → often GBK
+- Files created by Notepad (Windows 10 and earlier) → UTF-8 BOM
+- Files created by PowerShell `Out-File` or `Set-Content` → UTF-8 BOM (PowerShell 5) or UTF-8 no BOM (PowerShell 7+)
+- Source code, JSON, TOML, YAML → almost always UTF-8 no BOM
+- Windows system logs, registry exports → often GBK or UTF-16 LE
+
+**Workflow for editing a file of unknown encoding:**
+1. `file_read` the file → check the `[encoding: ...]` label in the result header
+2. If `utf-8` or `utf-8-bom`: use `file_edit` normally
+3. If `gbk`: use `shell` with `GetEncoding('gbk')` for any writes; do NOT use `file_edit`
+4. If `utf-16-le` or `utf-16-be`: use `shell` with the appropriate `System.Text.Encoding` class
+
 ## Windows System Exploration Pattern
 
 When asked about software installed on this machine, ALWAYS follow this order:

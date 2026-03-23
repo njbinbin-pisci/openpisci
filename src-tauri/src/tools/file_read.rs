@@ -72,7 +72,16 @@ impl Tool for FileReadTool {
          To list files in a directory, use file_list or shell with 'dir C:\\SomePath /b'. \
          If you get 'permission denied', use shell with 'Get-Content \"path\"' or 'type \"path\"' instead. \
          Paths: relative paths (e.g. src/auth/auth.service.ts) are resolved from workspace root — prefer relative paths when reading files inside the workspace. \
-         Use offset/limit for large files to avoid reading the whole file at once."
+         Use offset/limit for large files to avoid reading the whole file at once.\n\
+         \n\
+         Encoding: the tool auto-detects and transparently handles UTF-8 BOM, UTF-16 LE/BE, and GBK/GB18030. \
+         When the file is not plain UTF-8, the result header will include '[encoding: gbk]' or similar. \
+         You MUST pay attention to this label: if a file is GBK-encoded (common in legacy Chinese projects, \
+         system logs, .ini/.cfg files from older Windows software), the content you receive has been \
+         decoded to Unicode for you to read — but if you need to write it back, you must be aware that \
+         the original encoding is GBK, not UTF-8. Use shell with PowerShell to write GBK files: \
+         `[System.IO.File]::WriteAllText(path, content, [System.Text.Encoding]::GetEncoding('gbk'))`. \
+         For UTF-8-BOM files, file_write and file_edit will automatically preserve the BOM on write-back."
     }
 
     fn input_schema(&self) -> Value {

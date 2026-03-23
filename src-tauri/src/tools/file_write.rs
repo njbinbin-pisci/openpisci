@@ -47,7 +47,15 @@ impl Tool for FileWriteTool {
          Paths: use relative paths (e.g. src/auth/auth.service.ts) to write inside the current workspace root. \
          Use absolute paths only when writing outside the workspace. \
          Note: writing to system directories (C:\\Windows\\, C:\\Program Files\\) will fail with permission denied — \
-         write to user directories (C:\\Users\\name\\, Desktop, Documents) or the workspace instead."
+         write to user directories (C:\\Users\\name\\, Desktop, Documents) or the workspace instead.\n\
+         \n\
+         Encoding: this tool always writes UTF-8. If the target file already exists and has a UTF-8 BOM \
+         (common for files created by Notepad or PowerShell on Windows), the BOM is automatically preserved. \
+         WARNING: do NOT use file_write for files that must stay in GBK/GB18030 or other non-UTF-8 encodings \
+         (e.g. legacy config files, files consumed by older Chinese software). For those, use shell with \
+         `[System.IO.File]::WriteAllText(path, content, [System.Text.Encoding]::GetEncoding('gbk'))` instead. \
+         If you are unsure of a file's original encoding, read it first with file_read and check the \
+         '[encoding: ...]' label in the result header."
     }
 
     fn input_schema(&self) -> Value {
@@ -125,7 +133,13 @@ impl Tool for FileEditTool {
          2. Batch edits: provide `edits` array of `{old_string, new_string}` objects — \
             all replacements are validated first (each old_string must appear exactly once) \
             then applied atomically in a single write. Prefer batch mode when making \
-            multiple changes to the same file to reduce round-trips."
+            multiple changes to the same file to reduce round-trips.\n\
+         \n\
+         Encoding: file_edit reads the file as bytes, strips any UTF-8 BOM before matching, \
+         then restores the BOM on write-back — so BOM-bearing files are handled transparently. \
+         However, file_edit only supports UTF-8 and UTF-8-BOM files. Do NOT use file_edit on \
+         GBK/GB18030 files — the byte-level mismatch will corrupt the file. If file_read reports \
+         '[encoding: gbk]' for a file, edit it via shell with PowerShell string replacement instead."
     }
 
     fn input_schema(&self) -> Value {
