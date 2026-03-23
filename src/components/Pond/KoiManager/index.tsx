@@ -238,7 +238,7 @@ function KoiCard({
           {t("koi.todoCount")} {koi.active_todo_count}
         </span>
         {koi.max_iterations > 0 && (
-          <span className="koi-stat" title="最大迭代次数">
+          <span className="koi-stat" title={t("koi.maxIterationsStatTooltip")}>
             🔁 {koi.max_iterations}
           </span>
         )}
@@ -425,13 +425,13 @@ function KoiDialog({
         </div>
 
         <div className="koi-form-field">
-          <label className="koi-form-label">🤖 LLM 供应商</label>
+          <label className="koi-form-label">{t("koi.llmProvider")}</label>
           <select
             className="koi-input"
             value={form.llm_provider_id}
             onChange={(e) => set("llm_provider_id", e.target.value)}
           >
-            <option value="">全局默认（继承系统设置）</option>
+            <option value="">{t("koi.llmProviderDefaultOption")}</option>
             {llmProviders.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.label || p.id} — {p.provider} / {p.model}
@@ -440,13 +440,13 @@ function KoiDialog({
           </select>
           {llmProviders.length === 0 && (
             <p className="koi-form-help" style={{ color: "var(--text-muted)" }}>
-              在"设置 → LLM 供应商管理"中添加命名供应商后，可在此为每个 Koi 单独选择。
+              {t("koi.llmProviderEmptyHint")}
             </p>
           )}
         </div>
 
         <div className="koi-form-field">
-          <label className="koi-form-label">🔁 最大迭代次数</label>
+          <label className="koi-form-label">{t("koi.maxIterationsField")}</label>
           <input
             className="koi-input"
             type="number"
@@ -458,9 +458,7 @@ function KoiDialog({
               set("max_iterations", isNaN(v) ? 0 : Math.max(0, Math.min(200, v)));
             }}
           />
-          <p className="koi-form-help">
-            0 = 使用系统默认值（30）；可设置 1–200 自定义上限。
-          </p>
+          <p className="koi-form-help">{t("koi.maxIterationsKoiHelp")}</p>
         </div>
 
         <div className="koi-modal-actions">

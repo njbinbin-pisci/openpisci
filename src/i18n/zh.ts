@@ -135,6 +135,14 @@ const zh = {
     editRenameWarning: "⚠️ 改名后，其他 Koi 在对话中使用的 @{{oldName}} 将无法自动更新，请在相关项目中手动通知团队成员。",
     editPromptWarning: "提示词更新对正在执行的任务无影响，下次接任务时生效。",
     returnFromVacation: "回归上班",
+    llmProvider: "🤖 LLM 供应商",
+    llmProviderDefaultOption: "全局默认（继承系统设置）",
+    llmProviderEmptyHint:
+      '在「设置 → LLM 供应商管理」中添加命名供应商后，可在此为每个 Koi 单独选择。',
+    maxIterationsField: "🔁 最大迭代次数",
+    maxIterationsKoiHelp:
+      "0 = 使用系统默认值（30）；可设置 1–200 自定义上限。",
+    maxIterationsStatTooltip: "最大迭代次数",
   },
 
   // 聊天室

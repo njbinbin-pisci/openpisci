@@ -135,6 +135,14 @@ const en = {
     editRenameWarning: "⚠️ After renaming, @{{oldName}} mentions in other Kois' conversations won't update automatically. Please notify team members in relevant projects.",
     editPromptWarning: "Prompt updates take effect on the next task, not the current one.",
     returnFromVacation: "Return to Work",
+    llmProvider: "🤖 LLM provider",
+    llmProviderDefaultOption: "Global default (inherit system settings)",
+    llmProviderEmptyHint:
+      "After adding named providers in Settings → LLM Provider Management, you can pick one per Koi here.",
+    maxIterationsField: "🔁 Max iterations",
+    maxIterationsKoiHelp:
+      "0 = use the system default (30); set 1–200 for a custom per-Koi cap.",
+    maxIterationsStatTooltip: "Max iterations",
   },
 
   // Chat Pool
