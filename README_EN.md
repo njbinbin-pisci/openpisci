@@ -335,6 +335,9 @@ OpenPisci
 
 ## 📋 Changelog
 
+### v0.5.19
+- **Excel chart fix**: fixed a logic inversion in sheet_check that caused named-sheet selection to always fall through to ActiveSheet; dd_chart now re-applies ChartType after SetSourceData to prevent Excel from silently resetting it to the default type; strengthened tool description to require explicit chart_type (line/column/bar/pie/scatter/area) so the AI no longer defaults to pie charts
+
 ### v0.5.18
 - **Koi timeout fix**: when a Koi times out, its in_progress todos are automatically blocked and a @pisci notice is posted to the pool; the heartbeat scanner now wakes Pisci whenever blocked todos exist, preventing projects from stalling permanently after a Koi failure
 - **File encoding improvements**: ile_read transparently handles UTF-8 BOM, UTF-16 LE/BE, and GBK/GB18030; ile_write/ile_edit preserve the original BOM on write-back; tool descriptions and the system prompt now include a Windows file encoding guide

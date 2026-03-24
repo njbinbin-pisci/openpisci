@@ -338,6 +338,9 @@ OpenPisci
 
 ## 📋 更新日志
 
+### v0.5.19
+- **Excel 图表修复**：修复 sheet_check 逻辑错误导致指定工作表时条件判断反转的 bug；dd_chart 在 SetSourceData 之后再次强制设置图表类型，防止 Excel 自动重置为默认类型；强化工具描述，要求 AI 必须显式传 chart_type（折线图=line，柱状图=column，饼图=pie 等），避免误生成饼图
+
 ### v0.5.18
 - **Koi 超时修复**：Koi 超时后自动将其 in_progress 任务改为 blocked 状态，并向鱼池发送 @pisci 通知；心跳扫描新增对 blocked todo 的持久唤醒逻辑，确保项目不会因 Koi 超时而永久卡死
 - **文件编码增强**：ile_read 自动识别并透明处理 UTF-8 BOM、UTF-16 LE/BE、GBK/GB18030；ile_write/ile_edit 写回时自动保留原文件 BOM；工具描述和系统提示词新增文件编码操作指南

@@ -54,7 +54,11 @@ impl Tool for OfficeTool {
            send_email, read_emails, get_calendar\n\
          \n\
          For complex Excel tasks (regression, charts), use write_cells with a cells array,\n\
-         then add_chart. For PowerPoint decks, use add_slides with a slides array."
+         then add_chart. For PowerPoint decks, use add_slides with a slides array.\n\
+         \n\
+         **IMPORTANT for add_chart**: always pass chart_type explicitly.\n\
+         折线图=line, 柱状图=column, 条形图=bar, 饼图=pie, 散点图=scatter, 面积图=area.\n\
+         Never omit chart_type — the default is 'line' but always state it clearly."
     }
 
     fn input_schema(&self) -> Value {
@@ -104,7 +108,7 @@ impl Tool for OfficeTool {
                 "chart_type": {
                     "type": "string",
                     "enum": ["line", "bar", "column", "pie", "scatter", "area"],
-                    "description": "[Excel add_chart] Chart type. Use 'line' for trend/time-series data, 'column' for comparisons, 'bar' for horizontal bars, 'pie' for proportions, 'scatter' for XY data, 'area' for cumulative trends. Default: line."
+                    "description": "[Excel add_chart] Chart type. IMPORTANT: always specify this explicitly — do NOT omit it or guess. Use 'line' for trends/time-series (折线图), 'column' for category comparisons (柱状图), 'bar' for horizontal bars (条形图), 'pie' ONLY for part-of-whole proportions with a single data series (饼图), 'scatter' for XY correlation data (散点图), 'area' for cumulative trends (面积图). When the user asks for 折线图/line chart, you MUST pass chart_type='line'."
                 },
                 "chart_title": {
                     "type": "string",
@@ -419,6 +423,7 @@ $result | ConvertTo-Json -Depth 4
                 Ok(format!(r#"
 $path = {path_var}
 $title = {title_var}
+$xlType = {xl_type}
 $excel = New-Object -ComObject Excel.Application
 $excel.Visible = $false
 $excel.DisplayAlerts = $false
@@ -426,8 +431,9 @@ $wb = $excel.Workbooks.Open($path)
 $ws = if ({sheet_check}) {{ $wb.ActiveSheet }} else {{ $wb.Sheets[{sheet_var}] }}
 $chartObj = $ws.ChartObjects().Add(300, 20, 480, 320)
 $chart = $chartObj.Chart
-$chart.ChartType = {xl_type}
+$chart.ChartType = $xlType
 $chart.SetSourceData($ws.Range("{range}"))
+$chart.ChartType = $xlType
 $chart.HasTitle = $true
 $chart.ChartTitle.Text = $title
 $wb.Save()
@@ -435,7 +441,7 @@ $wb.Close($false)
 $excel.Quit()
 [System.Runtime.Interopservices.Marshal]::ReleaseComObject($wb) | Out-Null
 [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel) | Out-Null
-"Chart (type={xl_type}) added to $path"
+"Chart (type=$xlType) added to $path"
 "#,
                     path_var = ps_str(path), title_var = ps_str(chart_title),
                     sheet_check = sheet_check(sheet), sheet_var = ps_str(sheet),
@@ -1247,11 +1253,12 @@ fn ps_str(s: &str) -> String {
 }
 
 /// Generate the PowerShell condition for selecting a worksheet.
-/// Returns "$true" (use ActiveSheet) when sheet name is empty.
+/// Returns "$true" (use ActiveSheet) when sheet name is empty,
+/// "$false" (use named sheet) when a sheet name is provided.
 fn sheet_check(sheet: &str) -> String {
     if sheet.is_empty() {
         "$true".into()
     } else {
-        format!("\"{}\" -eq \"\"", sheet)
+        "$false".into()
     }
 }
