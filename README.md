@@ -6,6 +6,8 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 
 [English](./README_EN.md) | 中文
 
+![会话界面](./resources/pisci2.jpg)
+
 ---
 
 ## ✨ 核心特性
@@ -39,6 +41,8 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 
 ### 🏞️ 鱼池（Pond）里有什么
 
+![鱼池 Koi 管理](./resources/pisci3.jpg)
+
 鱼池不是一个单独 Agent，而是一套围绕项目协作构建的可视化工作区：
 
 - **项目池（Pool Session）**：一个项目对应一个池，包含项目名、状态、组织规范（`org_spec`）和可选 `project_dir`
@@ -50,6 +54,8 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 - **项目目录 / Git worktree**：若设置 `project_dir`，每个 Koi 可在自己的分支和 worktree 中工作，减少文件冲突
 
 ### 🤝 鱼池如何协同
+
+![鱼池聊天室多 Koi 协作](./resources/pisci4.jpg) ![鱼池看板](./resources/pisci5.jpg)
 
 一个标准的鱼池项目通常按下面的机制运行：
 
@@ -143,6 +149,8 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 - 支持 Windows 路径、UNC 路径、Unix 路径，以及 `file://` URI
 
 ### 📱 多平台 IM 网关
+
+![IM 渠道设置](./resources/pisci1.jpg)
 
 | 平台 | 模式 |
 |------|------|

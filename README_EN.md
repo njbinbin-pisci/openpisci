@@ -6,6 +6,8 @@ OpenPisci is a local-first AI Agent desktop application for Windows, built with 
 
 [中文](./README.md) | English
 
+![Chat Interface](./resources/pisci2.jpg)
+
 ---
 
 ## ✨ Key Features
@@ -39,6 +41,8 @@ OpenPisci is a local-first AI Agent desktop application for Windows, built with 
 
 ### 🏞️ What Is Inside the Pond
 
+![Koi Management](./resources/pisci3.jpg)
+
 The Pond is not a single agent. It is the collaboration workspace around a project:
 
 - **Project Pool (`Pool Session`)**: a project container with name, status, organization spec (`org_spec`), and optional `project_dir`
@@ -50,6 +54,8 @@ The Pond is not a single agent. It is the collaboration workspace around a proje
 - **Project Directory / Git Worktrees**: when `project_dir` is configured, Koi can work in isolated branches/worktrees to reduce file conflicts
 
 ### 🤝 How Collaboration Works in a Pond
+
+![Pool Chat Multi-Koi Collaboration](./resources/pisci4.jpg) ![Pool Kanban Board](./resources/pisci5.jpg)
 
 A typical pond project follows this mechanism:
 
@@ -142,6 +148,8 @@ A typical pond project follows this mechanism:
 - Supports Windows paths, UNC paths, Unix paths, and `file://` URIs
 
 ### 📱 Multi-Platform IM Gateway
+
+![IM Channel Settings](./resources/pisci1.jpg)
 
 | Platform | Mode |
 |----------|------|
