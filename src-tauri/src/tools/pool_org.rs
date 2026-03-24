@@ -980,6 +980,26 @@ impl PoolOrgTool {
                 .map_err(|e| anyhow::anyhow!(e))?;
         }
 
+        // Post a "task_claimed" message to pool chat so the coordinator tab shows it
+        if let Some(ref psid) = todo.pool_session_id {
+            let db = self.db.lock().await;
+            if let Ok(msg) = db.insert_pool_message_ext(
+                psid,
+                &ctx.memory_owner_id,
+                &format!("接受了任务: {}", todo.title),
+                "task_claimed",
+                "{}",
+                Some(&todo.id),
+                None,
+                Some("task_claimed"),
+            ) {
+                let _ = self.app.emit(
+                    &format!("pool_message_{}", psid),
+                    serde_json::to_value(&msg).unwrap_or_default(),
+                );
+            }
+        }
+
         let _ = self.app.emit(
             "koi_todo_updated",
             serde_json::json!({ "id": todo.id, "action": "claimed", "claimed_by": ctx.memory_owner_id }),
@@ -1108,13 +1128,18 @@ impl PoolOrgTool {
 
         if let Some(ref psid) = todo.pool_session_id {
             let db = self.db.lock().await;
-            let _ = db.insert_pool_message(
+            if let Ok(msg) = db.insert_pool_message(
                 psid,
                 &ctx.memory_owner_id,
                 &format!("[Task Cancelled] \"{}\" — {}", todo.title, reason),
                 "system",
                 "{}",
-            );
+            ) {
+                let _ = self.app.emit(
+                    &format!("pool_message_{}", psid),
+                    serde_json::to_value(&msg).unwrap_or_default(),
+                );
+            }
         }
 
         Ok(ToolResult::ok(format!(

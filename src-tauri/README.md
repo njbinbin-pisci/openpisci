@@ -1,147 +1,34 @@
-# 坦克大战游戏 - 安装和运行说明
+# OpenPisci — Tauri 后端（Rust）
 
-## 版本1：HTML5网页版 (推荐)
+本目录为 **Tauri 2** 桌面壳与 **Rust** 业务逻辑（Agent、工具、存储、LLM 客户端等）。产品说明、架构与功能请见仓库根目录 [**README.md**](../README.md)；英文见 [**README_EN.md**](../README_EN.md)。
 
-### 特点：
-- 无需安装，直接在浏览器中运行
-- 支持所有现代浏览器
-- 完整的游戏功能
-- 精美的视觉效果
+## 环境要求
 
-### 运行方法：
-1. 双击 `tank_game.html` 文件
-2. 或者用浏览器打开该文件
+- **Rust**（stable，`rustup` 安装）
+- 前端与完整构建还需 **Node.js 20+**（在仓库根目录执行 `npm ci`）
 
-### 游戏控制：
-- **WASD** - 移动坦克
-- **方向键** - 控制炮塔方向  
-- **空格键** - 发射炮弹
+## 常用命令（在仓库根目录执行）
 
-### 游戏目标：
-- 摧毁敌方坦克获得分数
-- 避免被敌方炮弹击中
-- 生命值归零游戏结束
+| 命令 | 说明 |
+|------|------|
+| `npm run tauri dev` | 开发模式：Vite + `cargo run` |
+| `npm run tauri build` | 生产构建：前端打包 + 安装包（NSIS/MSI 等） |
+| `cd src-tauri && cargo test --lib` | 仅运行 Rust 单元测试 |
+| `cd src-tauri && cargo clippy --lib -- -D warnings` | Clippy（与 CI 一致） |
 
----
+## 目录结构（概要）
 
-## 版本2：Python版 (需要Python环境)
+| 路径 | 说明 |
+|------|------|
+| `src/main.rs` | 入口、`tauri::Builder`、插件注册 |
+| `src/lib.rs` | 库入口、命令与状态注册 |
+| `src/agent/` | Agent 循环、工具上下文、压缩与 checkpoint |
+| `src/commands/` | Tauri 命令（聊天、会话、设置等） |
+| `src/tools/` | 内置工具（shell、浏览器、Koi/Fish 调用等） |
+| `src/llm/` | LLM 客户端与 token 估算 |
+| `src/store/` | SQLite、设置与会话存储 |
+| `Cargo.toml` / `tauri.conf.json` | 依赖与 Tauri 配置 |
 
-### 系统要求：
-- Python 3.6+
-- Pygame 库
+## CI
 
-### 安装步骤：
-
-#### 1. 安装Python
-- 访问 https://www.python.org/downloads/
-- 下载并安装Python 3.x
-- 安装时勾选 "Add Python to PATH"
-
-#### 2. 安装Pygame
-打开命令提示符或终端，运行：
-```bash
-pip install pygame
-```
-
-#### 3. 运行游戏
-```bash
-python tank_game.py
-```
-
-### 游戏控制：
-- **WASD** - 移动坦克
-- **方向键** - 控制炮塔方向
-- **空格键** - 发射炮弹
-- **ESC** - 退出游戏
-- **R** - 游戏结束后重新开始
-
-### 游戏特点：
-- 完整的2D图形界面
-- AI控制的敌方坦克
-- 碰撞检测系统
-- 生命值和分数系统
-- 墙壁障碍物
-
----
-
-## 游戏功能对比
-
-| 功能 | HTML5版 | Python版 |
-|------|---------|----------|
-| 无需安装 | ✅ | ❌ |
-| 2D图形 | ✅ | ✅ |
-| 声音效果 | ❌ | ❌ |
-| 多关卡 | ❌ | ❌ |
-| 保存进度 | ❌ | ❌ |
-| 难度调整 | ❌ | ❌ |
-
----
-
-## 扩展建议
-
-### 可以添加的功能：
-1. **音效和背景音乐**
-2. **多个关卡和BOSS战**
-3. **不同类型的坦克和武器**
-4. **道具系统**（生命恢复、护盾、加速等）
-5. **地图编辑器**
-6. **多人对战模式**
-7. **高分排行榜**
-
-### 代码改进：
-1. 添加注释和文档
-2. 优化碰撞检测算法
-3. 实现对象池管理子弹
-4. 添加粒子效果
-5. 实现更智能的AI
-
----
-
-## 故障排除
-
-### HTML5版问题：
-1. **游戏不显示**：确保使用现代浏览器（Chrome、Firefox、Edge）
-2. **控制无效**：检查键盘是否正常工作
-3. **画面卡顿**：关闭其他占用资源的程序
-
-### Python版问题：
-1. **ModuleNotFoundError: No module named 'pygame'**
-   ```bash
-   pip install pygame
-   ```
-
-2. **游戏窗口无法关闭**
-   - 按ESC键退出
-   - 或使用Alt+F4强制关闭
-
-3. **游戏运行缓慢**
-   - 降低游戏分辨率
-   - 关闭后台程序
-
----
-
-## 开发说明
-
-### 文件结构：
-```
-坦克大战游戏/
-├── tank_game.html      # HTML5网页版
-├── tank_game.py       # Python版
-└── README.md          # 本说明文件
-```
-
-### 学习资源：
-1. **HTML5游戏开发**：MDN Web Docs
-2. **Pygame教程**：Pygame官方文档
-3. **游戏设计**：Game Design Patterns
-
----
-
-## 联系和支持
-
-如有问题或建议，请：
-1. 检查游戏文件是否完整
-2. 确保满足系统要求
-3. 参考故障排除部分
-
-祝你游戏愉快！ 🎮
+GitHub Actions 工作流见 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)（前端检查、Rust `fmt`/`clippy`/测试、Windows 上 Tauri 打包等）。

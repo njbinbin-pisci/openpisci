@@ -279,11 +279,37 @@ impl KoiRuntime {
                 if let Some(msg_id) = existing_id {
                     // Link the existing message to this todo
                     let _ = db.link_pool_message_to_todo(msg_id, &todo.id);
-                    drop(db);
+                    // Re-emit the message so the frontend receives it even if it missed
+                    // the original event (e.g. pool tab was not open when complete_todo ran).
+                    if let Ok(Some(msg)) = db.get_pool_message_by_id(msg_id) {
+                        drop(db);
+                        self.bus.emit_event(
+                            &format!("pool_message_{}", psid),
+                            serde_json::to_value(&msg).unwrap_or_default(),
+                        );
+                    } else {
+                        drop(db);
+                    }
                     Some(msg_id)
                 } else {
+                    // complete_todo did not write a result message; write one now so the
+                    // coordinator tab is never left empty after a successful task.
+                    let msg = db.insert_pool_message_ext(
+                        psid,
+                        koi_id,
+                        &format!("任务完成: {}", todo.title),
+                        "result",
+                        &json!({ "todo_id": todo.id, "success": true }).to_string(),
+                        Some(&todo.id),
+                        assign_msg_id,
+                        Some("task_completed"),
+                    )?;
                     drop(db);
-                    None
+                    self.bus.emit_event(
+                        &format!("pool_message_{}", psid),
+                        serde_json::to_value(&msg).unwrap_or_default(),
+                    );
+                    Some(msg.id)
                 }
             } else {
                 let summary = if raw_reply.chars().count() > 5000 {
