@@ -457,8 +457,27 @@ OpenPisci
 
 ## 📄 许可证
 
-[MIT License](./LICENSE)
+本项目采用 **[Business Source License 1.1](./LICENSE)**（BSL 1.1）。
+
+| 用途 | 是否允许 |
+|------|----------|
+| 个人学习、研究、非商业自用 | ✅ 免费 |
+| 学术研究与发表（需署名） | ✅ 免费 |
+| 企业内部自用（不对外提供服务） | ✅ 免费 |
+| 商业部署 / SaaS / 集成到商业产品 | ❌ 需获得商业授权 |
+
+> 2029-03-24 起自动转为 MIT License，届时无任何限制。
+>
+> 商业授权咨询：contact@dimnuo.com
 
 ---
 
-<p align="center">Built with ❤️ by the OpenPisci community</p>
+## ⭐ 支持项目
+
+如果 OpenPisci 对你有帮助，请给项目点一个 **Star** ——这是我们判断项目影响力、决定是否继续投入的最直接依据。
+
+[![GitHub Stars](https://img.shields.io/github/stars/njbinbin-pisci/openpisci?style=social)](https://github.com/njbinbin-pisci/openpisci)
+
+---
+
+<p align="center">Built with ❤️ by the <a href="https://www.dimnuo.com">Dimnuo</a> team</p>
