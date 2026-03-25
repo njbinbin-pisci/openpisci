@@ -471,7 +471,7 @@ OpenPisci
 
 > 2029-03-24 起自动转为 MIT License，届时无任何限制。
 >
-> 商业授权咨询：contact@dimnuo.com
+> 商业授权咨询：info@dimnuo.com
 
 ---
 

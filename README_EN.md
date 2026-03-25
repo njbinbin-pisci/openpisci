@@ -453,7 +453,7 @@ This project is licensed under the **[Business Source License 1.1](./LICENSE)** 
 
 > On 2029-03-24 the license automatically converts to the MIT License with no restrictions.
 >
-> Commercial licensing inquiries: contact@dimnuo.com
+> Commercial licensing inquiries: info@dimnuo.com
 
 ---
 
