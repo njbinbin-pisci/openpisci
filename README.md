@@ -6,6 +6,9 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 
 [English](./README_EN.md) | 中文
 
+> 如果你 clone 了这个项目，请花 2 秒点一个 ⭐ — 这是我们了解项目去向的唯一方式。
+> [![GitHub Stars](https://img.shields.io/github/stars/njbinbin-pisci/openpisci?style=social)](https://github.com/njbinbin-pisci/openpisci)
+
 ![会话界面](./resources/pisci2.jpg)
 
 ---

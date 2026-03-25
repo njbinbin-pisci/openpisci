@@ -6,6 +6,9 @@ OpenPisci is a local-first AI Agent desktop application for Windows, built with 
 
 [中文](./README.md) | English
 
+> If you cloned this project, please take 2 seconds to give it a ⭐ — it's the only way we know where the code ends up.
+> [![GitHub Stars](https://img.shields.io/github/stars/njbinbin-pisci/openpisci?style=social)](https://github.com/njbinbin-pisci/openpisci)
+
 ![Chat Interface](./resources/pisci2.jpg)
 
 ---
