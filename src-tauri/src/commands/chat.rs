@@ -1,7 +1,7 @@
 use crate::agent::loop_::AgentLoop;
 use crate::agent::messages::AgentEvent;
 use crate::agent::tool::ToolContext;
-use crate::llm::{build_client, ContentBlock, LlmMessage, MessageContent};
+use crate::llm::{build_client_with_timeout, ContentBlock, LlmMessage, MessageContent};
 use crate::policy::PolicyGate;
 use crate::store::{db::ChatMessage, db::Session, AppState};
 use crate::tools;
@@ -134,6 +134,7 @@ pub async fn chat_send(
         builtin_tool_enabled,
         allow_outside_workspace,
         vision_enabled,
+        llm_read_timeout_secs,
     ) = {
         let settings = state.settings.lock().await;
         (
@@ -153,6 +154,7 @@ pub async fn chat_send(
             settings.builtin_tool_enabled.clone(),
             settings.allow_outside_workspace,
             settings.vision_enabled,
+            settings.llm_read_timeout_secs,
         )
     };
 
@@ -333,7 +335,7 @@ pub async fn chat_send(
     }
 
     // Build agent components
-    let client = build_client(
+    let client = build_client_with_timeout(
         &provider,
         &api_key,
         if base_url.is_empty() {
@@ -341,6 +343,7 @@ pub async fn chat_send(
         } else {
             Some(&base_url)
         },
+        llm_read_timeout_secs,
     );
 
     let user_tools_dir = app.path().app_data_dir().map(|d| d.join("user-tools")).ok();
@@ -541,7 +544,7 @@ pub async fn chat_send(
                     let sid_for_mem = session_id_clone.clone();
                     let msgs_for_mem = final_messages.clone();
                     let model_for_mem = model_clone.clone();
-                    let mem_client = build_client(
+                    let mem_client = build_client_with_timeout(
                         &provider_clone,
                         &api_key_clone,
                         if base_url_clone.is_empty() {
@@ -549,6 +552,7 @@ pub async fn chat_send(
                         } else {
                             Some(&base_url_clone)
                         },
+                        120, // memory extraction uses default timeout
                     );
                     tokio::spawn(async move {
                         auto_extract_memories(
@@ -742,6 +746,7 @@ pub async fn run_agent_headless(
         builtin_tool_enabled,
         allow_outside_workspace,
         vision_setting,
+        llm_read_timeout_secs,
     ) = {
         let settings = state.settings.lock().await;
         (
@@ -759,6 +764,7 @@ pub async fn run_agent_headless(
             settings.builtin_tool_enabled.clone(),
             settings.allow_outside_workspace,
             settings.vision_enabled,
+            settings.llm_read_timeout_secs,
         )
     };
     if api_key.is_empty() {
@@ -868,7 +874,7 @@ pub async fn run_agent_headless(
         }
     }
 
-    let client = build_client(
+    let client = build_client_with_timeout(
         &provider,
         &api_key,
         if base_url.is_empty() {
@@ -876,6 +882,7 @@ pub async fn run_agent_headless(
         } else {
             Some(&base_url)
         },
+        llm_read_timeout_secs,
     );
     let user_tools_dir_h = state
         .app_handle

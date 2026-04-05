@@ -143,6 +143,8 @@ export interface Settings {
   builtin_tool_enabled: Record<string, boolean>;
   // Agent config
   max_iterations: number;
+  llm_read_timeout_secs: number;
+  koi_timeout_secs: number;
   heartbeat_enabled: boolean;
   heartbeat_interval_mins: number;
   heartbeat_prompt: string;

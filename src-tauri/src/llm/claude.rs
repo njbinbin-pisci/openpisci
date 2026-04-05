@@ -18,8 +18,13 @@ pub struct ClaudeClient {
 
 impl ClaudeClient {
     pub fn new(api_key: &str) -> Self {
+        Self::with_timeout(api_key, 120)
+    }
+
+    pub fn with_timeout(api_key: &str, read_timeout_secs: u32) -> Self {
+        let secs = read_timeout_secs.max(30) as u64;
         let http = Client::builder()
-            .read_timeout(std::time::Duration::from_secs(120))
+            .read_timeout(std::time::Duration::from_secs(secs))
             .build()
             .unwrap_or_default();
         Self {

@@ -17,6 +17,7 @@ use once_cell::sync::Lazy;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use tauri::Manager;
 use tokio::sync::{mpsc, Mutex};
 
 /// Global registry of running Koi sessions.
@@ -239,9 +240,16 @@ impl KoiRuntime {
             id = &todo.id[..8.min(todo.id.len())]
         );
 
-        // Execute via CallKoiTool with timeout protection (10 min default)
+        // Execute via CallKoiTool with configurable timeout (default 10 min)
+        let koi_timeout_secs: u64 = if let Some(app) = self.try_get_app_handle() {
+            let state = app.state::<crate::store::AppState>();
+            let secs = state.settings.lock().await.koi_timeout_secs as u64;
+            secs
+        } else {
+            600
+        };
         let exec_result = match tokio::time::timeout(
-            std::time::Duration::from_secs(600),
+            std::time::Duration::from_secs(koi_timeout_secs),
             self.execute_koi_agent(
                 &koi_def,
                 &task_with_meta,
@@ -253,8 +261,9 @@ impl KoiRuntime {
         {
             Ok(result) => result,
             Err(_) => Err(anyhow::anyhow!(
-                "Koi '{}' timed out after 10 minutes on task: {}",
+                "Koi '{}' timed out after {} seconds on task: {}",
                 koi_def.name,
+                koi_timeout_secs,
                 task
             )),
         };
@@ -447,16 +456,24 @@ impl KoiRuntime {
             pool_id = pool_session_id
         );
 
+        let koi_timeout_secs: u64 = if let Some(app) = self.try_get_app_handle() {
+            let state = app.state::<crate::store::AppState>();
+            let secs = state.settings.lock().await.koi_timeout_secs as u64;
+            secs
+        } else {
+            600
+        };
         let exec_result = match tokio::time::timeout(
-            std::time::Duration::from_secs(600),
+            std::time::Duration::from_secs(koi_timeout_secs),
             self.execute_koi_agent(&koi_def, &task, Some(&pool_session_id), None),
         )
         .await
         {
             Ok(result) => result,
             Err(_) => Err(anyhow::anyhow!(
-                "Koi '{}' timed out checking messages",
-                koi_def.name
+                "Koi '{}' timed out after {} seconds checking messages",
+                koi_def.name,
+                koi_timeout_secs
             )),
         };
 

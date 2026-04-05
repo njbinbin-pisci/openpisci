@@ -1,0 +1,7 @@
+{
+  "tag_name": "v0.5.18",
+  "name": "v0.5.18",
+  "body": "## v0.5.18\n\n- WeChat integration via Tencent iLink Bot API (no CLI required)\n- Koi timeout fix: auto-block stalled todos and notify Pisci via heartbeat\n- File encoding: transparent UTF-8 BOM / UTF-16 / GBK detection and write-back",
+  "draft": false,
+  "prerelease": false
+}

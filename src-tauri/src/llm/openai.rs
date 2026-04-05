@@ -44,12 +44,15 @@ pub fn model_supports_vision(model: &str) -> bool {
 
 impl OpenAiClient {
     pub fn new(api_key: &str, base_url: &str) -> Self {
-        // 120s read timeout: prevents indefinite hang when the server accepts the
+        Self::with_timeout(api_key, base_url, 120)
+    }
+
+    pub fn with_timeout(api_key: &str, base_url: &str, read_timeout_secs: u32) -> Self {
+        // Configurable read timeout: prevents indefinite hang when the server accepts the
         // connection but stops sending data mid-stream (common with DeepSeek under load).
-        // The agent loop's cancel-select will also interrupt this, but the timeout
-        // ensures we get a retryable error even if the cancel flag is not set.
+        let secs = read_timeout_secs.max(30) as u64;
         let http = Client::builder()
-            .read_timeout(std::time::Duration::from_secs(120))
+            .read_timeout(std::time::Duration::from_secs(secs))
             .build()
             .unwrap_or_default();
         Self {

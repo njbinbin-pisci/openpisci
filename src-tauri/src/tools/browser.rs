@@ -159,7 +159,7 @@ impl Tool for BrowserTool {
                 },
                 "headless": {
                     "type": "boolean",
-                    "description": "Launch in headless mode (for 'launch' action, default: true)"
+                    "description": "Launch in headless mode (for 'launch' action). Omit or set false for a visible browser window. Set true only when you explicitly want a background/hidden browser."
                 },
                 "save_path": {
                     "type": "string",
@@ -241,16 +241,16 @@ impl BrowserTool {
     // ─── Browser lifecycle ────────────────────────────────────────────────────
 
     async fn launch_browser(&self, input: &Value) -> Result<ToolResult> {
-        let requested_headless = input["headless"].as_bool();
+        // Default to headed (visible) when the caller doesn't specify headless.
+        // Agents should see browser activity; headless=true must be explicit.
+        let requested_headless = input["headless"].as_bool().unwrap_or(false);
         let mut mgr = self.manager.lock().await;
-        if let Some(h) = requested_headless {
-            let current = mgr.headless();
-            if current != h {
-                if mgr.is_running() {
-                    mgr.close().await;
-                }
-                mgr.set_headless(h);
+        let current = mgr.headless();
+        if current != requested_headless {
+            if mgr.is_running() {
+                mgr.close().await;
             }
+            mgr.set_headless(requested_headless);
         }
         if mgr.is_running() {
             return Ok(ToolResult::ok(format!(

@@ -1,0 +1,6 @@
+﻿fix(office): fix Excel chart type and sheet_check logic
+
+- Fix sheet_check always returning false for named sheets
+- Re-apply ChartType after SetSourceData to prevent Excel reset
+- Strengthen chart_type description to prevent AI from defaulting to pie
+- Bump version to 0.5.19

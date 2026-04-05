@@ -233,16 +233,27 @@ pub fn compute_context_budget(context_window: u32, max_tokens: u32) -> usize {
 
 /// Build the appropriate client based on provider name
 pub fn build_client(provider: &str, api_key: &str, base_url: Option<&str>) -> Box<dyn LlmClient> {
+    build_client_with_timeout(provider, api_key, base_url, 120)
+}
+
+/// Build the appropriate client with a configurable read timeout (seconds).
+pub fn build_client_with_timeout(
+    provider: &str,
+    api_key: &str,
+    base_url: Option<&str>,
+    read_timeout_secs: u32,
+) -> Box<dyn LlmClient> {
     match provider {
-        "openai" | "custom" => Box::new(openai::OpenAiClient::new(
+        "openai" | "custom" => Box::new(openai::OpenAiClient::with_timeout(
             api_key,
             base_url.unwrap_or("https://api.openai.com/v1"),
+            read_timeout_secs,
         )),
-        "deepseek" => Box::new(deepseek::DeepSeekClient::new(api_key)),
-        "qwen" | "tongyi" => Box::new(qwen::QwenClient::new(api_key)),
-        "minimax" => Box::new(minimax::MiniMaxClient::new(api_key)),
-        "zhipu" => Box::new(zhipu::ZhipuClient::new(api_key)),
-        "kimi" | "moonshot" => Box::new(kimi::KimiClient::new(api_key)),
-        _ => Box::new(claude::ClaudeClient::new(api_key)),
+        "deepseek" => Box::new(deepseek::DeepSeekClient::with_timeout(api_key, read_timeout_secs)),
+        "qwen" | "tongyi" => Box::new(qwen::QwenClient::with_timeout(api_key, read_timeout_secs)),
+        "minimax" => Box::new(minimax::MiniMaxClient::with_timeout(api_key, read_timeout_secs)),
+        "zhipu" => Box::new(zhipu::ZhipuClient::with_timeout(api_key, read_timeout_secs)),
+        "kimi" | "moonshot" => Box::new(kimi::KimiClient::with_timeout(api_key, read_timeout_secs)),
+        _ => Box::new(claude::ClaudeClient::with_timeout(api_key, read_timeout_secs)),
     }
 }

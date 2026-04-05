@@ -15,8 +15,11 @@ pub struct ZhipuClient {
 
 impl ZhipuClient {
     pub fn new(api_key: &str) -> Self {
+        Self::with_timeout(api_key, 120)
+    }
+    pub fn with_timeout(api_key: &str, read_timeout_secs: u32) -> Self {
         Self {
-            inner: OpenAiClient::new(api_key, ZHIPU_API_URL),
+            inner: OpenAiClient::with_timeout(api_key, ZHIPU_API_URL, read_timeout_secs),
         }
     }
 }

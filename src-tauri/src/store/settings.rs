@@ -276,6 +276,12 @@ pub struct Settings {
     /// Maximum tool-call iterations per agent run (default 50)
     #[serde(default = "default_max_iterations")]
     pub max_iterations: u32,
+    /// LLM read timeout in seconds (default 120). Increase for slow models.
+    #[serde(default = "default_llm_read_timeout_secs")]
+    pub llm_read_timeout_secs: u32,
+    /// Koi task execution timeout in seconds (default 600 = 10 min). Increase for complex tasks.
+    #[serde(default = "default_koi_timeout_secs")]
+    pub koi_timeout_secs: u32,
 
     // ── Heartbeat ───────────────────────────────────────────────────────────
     /// Whether the heartbeat runner is enabled
@@ -369,6 +375,12 @@ fn default_imap_port() -> u16 {
 }
 fn default_max_iterations() -> u32 {
     50
+}
+fn default_llm_read_timeout_secs() -> u32 {
+    120
+}
+fn default_koi_timeout_secs() -> u32 {
+    600
 }
 fn default_heartbeat_interval() -> u32 {
     30
@@ -496,6 +508,8 @@ impl Default for Settings {
             smtp_from_name: String::new(),
             email_enabled: false,
             max_iterations: default_max_iterations(),
+            llm_read_timeout_secs: default_llm_read_timeout_secs(),
+            koi_timeout_secs: default_koi_timeout_secs(),
             heartbeat_enabled: false,
             heartbeat_interval_mins: default_heartbeat_interval(),
             heartbeat_prompt: default_heartbeat_prompt(),

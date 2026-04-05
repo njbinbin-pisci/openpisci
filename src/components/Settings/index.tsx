@@ -74,6 +74,8 @@ const DEFAULT_SETTINGS: SettingsData = {
   builtin_tool_enabled: {},
   // Agent config
   max_iterations: 50,
+  llm_read_timeout_secs: 120,
+  koi_timeout_secs: 600,
   heartbeat_enabled: false,
   heartbeat_interval_mins: 30,
   heartbeat_prompt: "检查是否有待处理任务，如无则回复 HEARTBEAT_OK",
@@ -729,6 +731,32 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
               onChange={(e) => update("max_iterations", Math.min(200, Math.max(10, Number(e.target.value))))}
             />
             <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{t("settings.maxIterationsDesc")}</p>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div className="form-group">
+              <label className="label">{t("settings.llmReadTimeout")}</label>
+              <input
+                className="input"
+                type="number"
+                min={30}
+                max={600}
+                value={form.llm_read_timeout_secs ?? 120}
+                onChange={(e) => update("llm_read_timeout_secs", Math.min(600, Math.max(30, Number(e.target.value))))}
+              />
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{t("settings.llmReadTimeoutDesc")}</p>
+            </div>
+            <div className="form-group">
+              <label className="label">{t("settings.koiTimeout")}</label>
+              <input
+                className="input"
+                type="number"
+                min={60}
+                max={7200}
+                value={form.koi_timeout_secs ?? 600}
+                onChange={(e) => update("koi_timeout_secs", Math.min(7200, Math.max(60, Number(e.target.value))))}
+              />
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{t("settings.koiTimeoutDesc")}</p>
+            </div>
           </div>
           <div className="form-group" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>

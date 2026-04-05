@@ -244,6 +244,12 @@ pub async fn save_settings(state: State<'_, AppState>, updates: Value) -> Result
     if let Some(v) = updates["max_iterations"].as_u64() {
         settings.max_iterations = v as u32;
     }
+    if let Some(v) = updates["llm_read_timeout_secs"].as_u64() {
+        settings.llm_read_timeout_secs = v.max(30) as u32; // minimum 30s
+    }
+    if let Some(v) = updates["koi_timeout_secs"].as_u64() {
+        settings.koi_timeout_secs = v.max(60) as u32; // minimum 60s
+    }
 
     // Heartbeat
     if let Some(v) = updates["heartbeat_enabled"].as_bool() {
@@ -307,6 +313,42 @@ pub async fn save_settings(state: State<'_, AppState>, updates: Value) -> Result
             });
         }
         settings.ssh_servers = servers;
+    }
+
+    // Named LLM providers — full replacement when provided, preserving existing api_key if blank
+    if let Some(arr) = updates["llm_providers"].as_array() {
+        let mut providers: Vec<crate::store::settings::LlmProviderConfig> = Vec::new();
+        for item in arr {
+            let id = item["id"].as_str().unwrap_or("").to_string();
+            if id.is_empty() {
+                continue;
+            }
+            // Keep the existing api_key if the frontend sends an empty string
+            // (frontend never sends back decrypted keys after initial load)
+            let existing_api_key = settings
+                .llm_providers
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| p.api_key.clone())
+                .unwrap_or_default();
+            providers.push(crate::store::settings::LlmProviderConfig {
+                id,
+                label: item["label"].as_str().unwrap_or("").to_string(),
+                provider: item["provider"].as_str().unwrap_or("openai").to_string(),
+                model: item["model"].as_str().unwrap_or("").to_string(),
+                api_key: {
+                    let v = item["api_key"].as_str().unwrap_or("");
+                    if v.is_empty() {
+                        existing_api_key
+                    } else {
+                        v.to_string()
+                    }
+                },
+                base_url: item["base_url"].as_str().unwrap_or("").to_string(),
+                max_tokens: item["max_tokens"].as_u64().unwrap_or(0) as u32,
+            });
+        }
+        settings.llm_providers = providers;
     }
 
     // User tool configs

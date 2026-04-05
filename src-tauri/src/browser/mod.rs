@@ -209,6 +209,7 @@ impl BrowserManager {
 
     /// Get or create a page (tab) by ID.
     pub async fn get_or_create_page(&mut self, tab_id: &str) -> Result<Arc<Page>> {
+        let just_launched = !self.is_running();
         self.launch().await?;
 
         if let Some(page) = self.pages.get(tab_id) {
@@ -219,10 +220,30 @@ impl BrowserManager {
             .browser
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Browser not running"))?;
-        let page = browser
-            .new_page("about:blank")
-            .await
-            .context("Failed to create new page")?;
+
+        // In headed mode, the browser already has an open tab when launched.
+        // Reuse it instead of creating a new one — otherwise the user sees the
+        // browser window but Pisci operates on a hidden second tab.
+        let page = if just_launched && !self.options.headless {
+            // Give the browser a moment to register its initial tab
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+            let existing = browser.pages().await.unwrap_or_default();
+            if let Some(first) = existing.into_iter().next() {
+                info!("Reusing existing browser tab for headed mode");
+                first
+            } else {
+                browser
+                    .new_page("about:blank")
+                    .await
+                    .context("Failed to create new page")?
+            }
+        } else {
+            browser
+                .new_page("about:blank")
+                .await
+                .context("Failed to create new page")?
+        };
+
         let page = Arc::new(page);
         self.pages.insert(tab_id.to_string(), page.clone());
         self.active_tab = Some(tab_id.to_string());
