@@ -133,6 +133,39 @@ pub struct TaskState {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TaskSpine {
+    #[serde(default)]
+    pub goal: String,
+    #[serde(default)]
+    pub current_step: String,
+    #[serde(default)]
+    pub done: Vec<String>,
+    #[serde(default)]
+    pub pending: Vec<String>,
+    #[serde(default)]
+    pub blockers: Vec<String>,
+    #[serde(default)]
+    pub facts: Vec<String>,
+    #[serde(default)]
+    pub decisions: Vec<String>,
+    #[serde(default)]
+    pub next_questions: Vec<String>,
+}
+
+impl TaskState {
+    pub fn to_task_spine(&self) -> TaskSpine {
+        let mut spine = serde_json::from_str::<TaskSpine>(&self.state_json).unwrap_or_default();
+        if spine.goal.trim().is_empty() {
+            spine.goal = self.goal.clone();
+        }
+        if spine.current_step.trim().is_empty() && !self.summary.trim().is_empty() {
+            spine.current_step = self.summary.clone();
+        }
+        spine
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------

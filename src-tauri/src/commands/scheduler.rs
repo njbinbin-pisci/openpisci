@@ -2,6 +2,7 @@ use crate::agent::loop_::AgentLoop;
 use crate::agent::messages::AgentEvent;
 use crate::agent::tool::ToolContext;
 use crate::browser::SharedBrowserManager;
+use crate::commands::chat::{persist_task_spine_from_plan_state, render_task_state_section};
 use crate::llm::{build_client, LlmMessage, MessageContent};
 use crate::policy::PolicyGate;
 use crate::store::{db::ScheduledTask, AppState, Database, Settings};
@@ -321,17 +322,7 @@ pub async fn execute_task(
             Ok(Some(ts))
                 if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) =>
             {
-                let mut ctx = String::from("\n\n## Previous Task State\n");
-                if !ts.goal.is_empty() {
-                    ctx.push_str(&format!("**Goal:** {}\n", ts.goal));
-                }
-                if !ts.summary.is_empty() {
-                    ctx.push_str(&format!("**Progress from last run:** {}\n", ts.summary));
-                }
-                if ts.state_json != "{}" && !ts.state_json.is_empty() {
-                    ctx.push_str(&format!("**Details:** {}\n", ts.state_json));
-                }
-                ctx
+                render_task_state_section("Previous Task State", "Progress from last run", &ts)
             }
             _ => String::new(),
         }
@@ -436,6 +427,17 @@ pub async fn execute_task(
     }
 
     // Write final run status
+    let scope_id = format!("sched_{}", task_id);
+    persist_task_spine_from_plan_state(
+        &app,
+        &db,
+        &scope_id,
+        "scheduled_task",
+        &scope_id,
+        &task_prompt,
+    )
+    .await;
+
     {
         let db_lock = db.lock().await;
         let final_status = if run_success { "success" } else { "failed" };

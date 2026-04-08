@@ -1,10 +1,13 @@
 use crate::agent::loop_::AgentLoop;
 use crate::agent::messages::AgentEvent;
+use crate::agent::plan::summarize_todos;
 use crate::agent::tool::ToolContext;
 use crate::llm::{build_client_with_timeout, ContentBlock, LlmMessage, MessageContent, ToolDef};
 use crate::policy::PolicyGate;
 use crate::project_context::render_project_instruction_context;
-use crate::store::{db::ChatMessage, db::Session, db::SessionContextState, AppState};
+use crate::store::{
+    db::ChatMessage, db::Session, db::SessionContextState, db::TaskSpine, db::TaskState, AppState,
+};
 use crate::tools;
 use serde::{Deserialize, Serialize};
 use std::sync::{atomic::AtomicBool, Arc};
@@ -40,6 +43,126 @@ struct ChatPromptArtifacts {
     system_prompt: String,
     registry: Arc<crate::agent::tool::ToolRegistry>,
     tool_defs: Vec<ToolDef>,
+}
+
+fn append_task_spine_list(ctx: &mut String, label: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
+    ctx.push_str(&format!("**{}:**\n", label));
+    for item in items.iter().take(4) {
+        ctx.push_str(&format!("- {}\n", item));
+    }
+}
+
+pub(crate) fn render_task_state_section(
+    title: &str,
+    progress_label: &str,
+    task_state: &TaskState,
+) -> String {
+    let spine = task_state.to_task_spine();
+    let has_spine_content = !spine.goal.trim().is_empty()
+        || !spine.current_step.trim().is_empty()
+        || !spine.done.is_empty()
+        || !spine.pending.is_empty()
+        || !spine.blockers.is_empty()
+        || !spine.facts.is_empty()
+        || !spine.decisions.is_empty()
+        || !spine.next_questions.is_empty();
+    if !has_spine_content && task_state.summary.trim().is_empty() {
+        return String::new();
+    }
+
+    let mut ctx = format!("\n\n## {}\n", title);
+    if !spine.goal.trim().is_empty() {
+        ctx.push_str(&format!("**Goal:** {}\n", spine.goal));
+    }
+    if !spine.current_step.trim().is_empty() {
+        ctx.push_str(&format!("**{}:** {}\n", progress_label, spine.current_step));
+    } else if !task_state.summary.trim().is_empty() {
+        ctx.push_str(&format!("**{}:** {}\n", progress_label, task_state.summary));
+    }
+    append_task_spine_list(&mut ctx, "Done", &spine.done);
+    append_task_spine_list(&mut ctx, "Pending", &spine.pending);
+    append_task_spine_list(&mut ctx, "Blockers", &spine.blockers);
+    append_task_spine_list(&mut ctx, "Facts", &spine.facts);
+    append_task_spine_list(&mut ctx, "Decisions", &spine.decisions);
+    append_task_spine_list(&mut ctx, "Next Questions", &spine.next_questions);
+    if ctx.ends_with('\n') {
+        ctx.pop();
+    }
+    ctx
+}
+
+pub(crate) async fn persist_task_spine_from_plan_state(
+    app: &AppHandle,
+    db_arc: &Arc<tokio::sync::Mutex<crate::store::Database>>,
+    plan_session_id: &str,
+    scope_type: &str,
+    scope_id: &str,
+    fallback_goal: &str,
+) {
+    let state = app.state::<AppState>();
+    let todos = {
+        let plan_state = state.plan_state.lock().await;
+        plan_state.get(plan_session_id).cloned().unwrap_or_default()
+    };
+    if todos.is_empty() {
+        return;
+    }
+
+    let current_step = todos
+        .iter()
+        .find(|t| t.status == "in_progress")
+        .or_else(|| todos.iter().find(|t| t.status == "pending"))
+        .map(|t| t.content.clone())
+        .unwrap_or_default();
+    let spine = TaskSpine {
+        goal: fallback_goal.to_string(),
+        current_step,
+        done: todos
+            .iter()
+            .filter(|t| t.status == "completed")
+            .map(|t| t.content.clone())
+            .collect(),
+        pending: todos
+            .iter()
+            .filter(|t| t.status == "pending" || t.status == "in_progress")
+            .map(|t| t.content.clone())
+            .collect(),
+        blockers: Vec::new(),
+        facts: Vec::new(),
+        decisions: Vec::new(),
+        next_questions: Vec::new(),
+    };
+    let summary = summarize_todos(&todos);
+    let status = if todos
+        .iter()
+        .all(|t| t.status == "completed" || t.status == "cancelled")
+    {
+        "completed"
+    } else {
+        "active"
+    };
+
+    let db = db_arc.lock().await;
+    if let Ok(existing) = db.get_or_create_task_state(scope_type, scope_id) {
+        let goal = if existing.goal.trim().is_empty() {
+            fallback_goal
+        } else {
+            existing.goal.as_str()
+        };
+        let mut persisted_spine = spine;
+        persisted_spine.goal = goal.to_string();
+        let state_json = serde_json::to_string(&persisted_spine).unwrap_or_else(|_| "{}".into());
+        let _ = db.update_task_state(
+            &existing.id,
+            Some(goal),
+            Some(&state_json),
+            Some(&summary),
+            Some(status),
+        );
+    }
 }
 
 async fn build_session_message_context(
@@ -149,17 +272,7 @@ async fn build_chat_prompt_artifacts(
             Ok(Some(ts))
                 if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) =>
             {
-                let mut ctx = String::from("\n\n## Active Task State\n");
-                if !ts.goal.is_empty() {
-                    ctx.push_str(&format!("**Goal:** {}\n", ts.goal));
-                }
-                if !ts.summary.is_empty() {
-                    ctx.push_str(&format!("**Progress:** {}\n", ts.summary));
-                }
-                if ts.state_json != "{}" && !ts.state_json.is_empty() {
-                    ctx.push_str(&format!("**Details:** {}\n", ts.state_json));
-                }
-                ctx
+                render_task_state_section("Active Task State", "Progress", &ts)
             }
             _ => String::new(),
         }
@@ -586,6 +699,7 @@ pub async fn chat_send(
     let provider_clone = provider.clone();
     let api_key_clone = api_key.clone();
     let base_url_clone = base_url.clone();
+    let effective_content_clone = effective_content.clone();
     tracing::info!(
         "chat_send: spawning agent background task for session={}",
         session_id
@@ -636,6 +750,15 @@ pub async fn chat_send(
                     persist_agent_turn(&db, &session_id_clone, final_messages);
                     let _ = db.update_session_status(&session_id_clone, "idle");
                 }
+                persist_task_spine_from_plan_state(
+                    &app_clone,
+                    &db_arc,
+                    &session_id_clone,
+                    "session",
+                    &session_id_clone,
+                    &effective_content_clone,
+                )
+                .await;
 
                 // Auto-extract memories from this conversation (non-blocking, best-effort)
                 {
