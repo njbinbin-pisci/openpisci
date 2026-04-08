@@ -200,6 +200,9 @@ export default function Chat() {
     total_tokens: number;
     model: string;
     context_budget: number;
+    total_input_budget: number;
+    request_overhead_tokens: number;
+    tool_count: number;
     rolling_summary_version: number;
     total_input_tokens: number;
     total_output_tokens: number;
@@ -1401,7 +1404,10 @@ export default function Chat() {
                   {contextPreview.model}
                 </span>
                 <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                  {contextPreview.messages.length} 条消息 · ~{contextPreview.messages_tokens.toLocaleString()} / {contextPreview.context_budget.toLocaleString()} tok
+                  {contextPreview.messages.length} 条消息 · 总计 ~{contextPreview.total_tokens.toLocaleString()} / {contextPreview.total_input_budget.toLocaleString()} tok
+                </span>
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  消息体 ~{contextPreview.messages_tokens.toLocaleString()} tok · 工具 {contextPreview.tool_count} 个
                 </span>
                 {contextPreview.rolling_summary_version > 0 && (
                   <span style={{ fontSize: 11, color: "var(--text-muted)", background: "var(--bg-secondary)", padding: "2px 7px", borderRadius: 8, border: "1px solid var(--border)" }}>
@@ -1422,8 +1428,8 @@ export default function Chat() {
                 <div style={{ width: 60, height: 4, borderRadius: 2, background: "var(--bg-secondary)", overflow: "hidden" }}>
                   <div style={{
                     height: "100%",
-                    width: `${Math.min(100, Math.round(contextPreview.messages_tokens / contextPreview.context_budget * 100))}%`,
-                    background: contextPreview.messages_tokens / contextPreview.context_budget > 0.85 ? "#e05c5c" : "var(--accent)",
+                    width: `${Math.min(100, Math.round(contextPreview.total_tokens / contextPreview.total_input_budget * 100))}%`,
+                    background: contextPreview.total_tokens / contextPreview.total_input_budget > 0.85 ? "#e05c5c" : "var(--accent)",
                     borderRadius: 2,
                   }} />
                 </div>

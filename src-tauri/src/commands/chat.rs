@@ -1,10 +1,10 @@
 use crate::agent::loop_::AgentLoop;
 use crate::agent::messages::AgentEvent;
 use crate::agent::tool::ToolContext;
-use crate::llm::{build_client_with_timeout, ContentBlock, LlmMessage, MessageContent};
+use crate::llm::{build_client_with_timeout, ContentBlock, LlmMessage, MessageContent, ToolDef};
 use crate::policy::PolicyGate;
 use crate::project_context::render_project_instruction_context;
-use crate::store::{db::ChatMessage, db::Session, AppState};
+use crate::store::{db::ChatMessage, db::Session, db::SessionContextState, AppState};
 use crate::tools;
 use serde::{Deserialize, Serialize};
 use std::sync::{atomic::AtomicBool, Arc};
@@ -28,6 +28,177 @@ pub struct FrontendAttachment {
 pub struct SessionList {
     pub sessions: Vec<Session>,
     pub total: usize,
+}
+
+struct SessionMessageContext {
+    llm_messages: Vec<LlmMessage>,
+    session_state: Option<SessionContextState>,
+    latest_user_text: String,
+}
+
+struct ChatPromptArtifacts {
+    system_prompt: String,
+    registry: Arc<crate::agent::tool::ToolRegistry>,
+    tool_defs: Vec<ToolDef>,
+}
+
+async fn build_session_message_context(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    budget: usize,
+) -> Result<SessionMessageContext, String> {
+    let db = state.db.lock().await;
+    let history = db
+        .get_messages_latest(session_id, 2000)
+        .map_err(|e| e.to_string())?;
+    let session_state = db
+        .get_session_context_state(session_id)
+        .map_err(|e| e.to_string())?;
+    let rolling_summary = session_state
+        .as_ref()
+        .map(|s| s.rolling_summary.as_str())
+        .unwrap_or("");
+    let latest_user_text = history
+        .iter()
+        .rev()
+        .find(|m| m.role == "user" && !m.content.trim().is_empty())
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
+    let llm_messages = build_context_messages(
+        &history,
+        budget,
+        (!rolling_summary.trim().is_empty()).then_some(rolling_summary),
+    );
+    Ok(SessionMessageContext {
+        llm_messages,
+        session_state,
+        latest_user_text,
+    })
+}
+
+async fn build_chat_prompt_artifacts(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session_id: &str,
+    query_text: &str,
+    workspace_root: &str,
+    context_window: u32,
+    allow_outside_workspace: bool,
+    builtin_tool_enabled: &std::collections::HashMap<String, bool>,
+    project_instruction_budget_chars: u32,
+    enable_project_instructions: bool,
+) -> Result<ChatPromptArtifacts, String> {
+    let user_tools_dir = app.path().app_data_dir().map(|d| d.join("user-tools")).ok();
+    let app_data_dir = app.path().app_data_dir().ok();
+
+    let (skill_context, skill_loader_arc) = {
+        let app_dir = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
+        let skills_dir = app_dir.join("skills");
+        let mut loader = crate::skills::loader::SkillLoader::new(skills_dir);
+        if let Err(e) = loader.load_all() {
+            tracing::warn!("Failed to load skills: {}", e);
+        }
+        let enabled_names: Vec<String> = {
+            let db = state.db.lock().await;
+            db.list_skills()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|s| s.enabled)
+                .map(|s| s.name)
+                .collect()
+        };
+        let dir = loader.generate_skill_directory(&enabled_names);
+        let arc = Arc::new(tokio::sync::Mutex::new(loader));
+        (dir, arc)
+    };
+
+    let registry = Arc::new(tools::build_registry(
+        state.browser.clone(),
+        user_tools_dir.as_deref(),
+        Some(state.db.clone()),
+        Some(builtin_tool_enabled),
+        Some(app.clone()),
+        Some(state.settings.clone()),
+        app_data_dir,
+        Some(skill_loader_arc),
+    ));
+    let tool_defs = registry.to_tool_defs();
+
+    let memory_context = {
+        let db = state.db.lock().await;
+        let keywords: Vec<&str> = query_text.split_whitespace().take(10).collect();
+        let query = keywords.join(" ");
+        match db.search_memories_scoped(&query, "pisci", None, 5) {
+            Ok(mems) if !mems.is_empty() => {
+                let mut ctx = String::from("\n\n## Personal Context (from memory)\n");
+                for m in &mems {
+                    ctx.push_str(&format!("- {}\n", m.content));
+                }
+                ctx
+            }
+            _ => String::new(),
+        }
+    };
+
+    let task_state_context = {
+        let db = state.db.lock().await;
+        match db.load_task_state("session", session_id) {
+            Ok(Some(ts))
+                if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) =>
+            {
+                let mut ctx = String::from("\n\n## Active Task State\n");
+                if !ts.goal.is_empty() {
+                    ctx.push_str(&format!("**Goal:** {}\n", ts.goal));
+                }
+                if !ts.summary.is_empty() {
+                    ctx.push_str(&format!("**Progress:** {}\n", ts.summary));
+                }
+                if ts.state_json != "{}" && !ts.state_json.is_empty() {
+                    ctx.push_str(&format!("**Details:** {}\n", ts.state_json));
+                }
+                ctx
+            }
+            _ => String::new(),
+        }
+    };
+
+    let injection_budget = compute_injection_budget(context_window);
+    let full_memory_context = budget_truncate(
+        &format!("{}{}", memory_context, task_state_context),
+        injection_budget,
+    );
+    let project_instruction_context = if enable_project_instructions {
+        match render_project_instruction_context(
+            std::path::Path::new(workspace_root),
+            project_instruction_budget_chars as usize,
+        ) {
+            Ok(content) => content,
+            Err(error) => {
+                tracing::warn!("Failed to load project instructions: {}", error);
+                String::new()
+            }
+        }
+    } else {
+        String::new()
+    };
+
+    let mut system_prompt = build_system_prompt_with_env(
+        &full_memory_context,
+        &skill_context,
+        workspace_root,
+        allow_outside_workspace,
+    );
+    if !project_instruction_context.is_empty() {
+        system_prompt.push_str(&project_instruction_context);
+    }
+    Ok(ChatPromptArtifacts {
+        system_prompt,
+        registry,
+        tool_defs,
+    })
 }
 
 #[tauri::command]
@@ -300,23 +471,9 @@ pub async fn chat_send(
 
     // Load message history and build context with layered compression.
     let budget = compute_context_budget(context_window, max_tokens);
-
-    let mut llm_messages = {
-        let db = state.db.lock().await;
-        let history = db
-            .get_messages_latest(&session_id, 2000)
-            .map_err(|e| e.to_string())?;
-        let rolling_summary = db
-            .get_session_context_state(&session_id)
-            .map_err(|e| e.to_string())?
-            .map(|state| state.rolling_summary)
-            .unwrap_or_default();
-        build_context_messages(
-            &history,
-            budget,
-            (!rolling_summary.trim().is_empty()).then_some(rolling_summary.as_str()),
-        )
-    };
+    let mut llm_messages = build_session_message_context(&state, &session_id, budget)
+        .await?
+        .llm_messages;
 
     // For vision-capable models: inject the attachment image into the last user message
     if let Some(ref media) = media_attachment {
@@ -362,44 +519,20 @@ pub async fn chat_send(
         llm_read_timeout_secs,
     );
 
-    let user_tools_dir = app.path().app_data_dir().map(|d| d.join("user-tools")).ok();
-    let app_data_dir = app.path().app_data_dir().ok();
-
-    // Load skills: build lightweight directory for system prompt + shared loader for skill_search tool
-    let (skill_context, skill_loader_arc) = {
-        let app_dir = app
-            .path()
-            .app_data_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
-        let skills_dir = app_dir.join("skills");
-        let mut loader = crate::skills::loader::SkillLoader::new(skills_dir);
-        if let Err(e) = loader.load_all() {
-            tracing::warn!("Failed to load skills: {}", e);
-        }
-        let enabled_names: Vec<String> = {
-            let db = state.db.lock().await;
-            db.list_skills()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|s| s.enabled)
-                .map(|s| s.name)
-                .collect()
-        };
-        let dir = loader.generate_skill_directory(&enabled_names);
-        let arc = Arc::new(tokio::sync::Mutex::new(loader));
-        (dir, arc)
-    };
-
-    let registry = Arc::new(tools::build_registry(
-        state.browser.clone(),
-        user_tools_dir.as_deref(),
-        Some(state.db.clone()),
-        Some(&builtin_tool_enabled),
-        Some(app.clone()),
-        Some(state.settings.clone()),
-        app_data_dir,
-        Some(skill_loader_arc),
-    ));
+    let prompt_artifacts = build_chat_prompt_artifacts(
+        &app,
+        &state,
+        &session_id,
+        &effective_content,
+        &workspace_root,
+        context_window,
+        allow_outside_workspace,
+        &builtin_tool_enabled,
+        project_instruction_budget_chars,
+        enable_project_instructions,
+    )
+    .await?;
+    let registry = prompt_artifacts.registry.clone();
 
     let policy = Arc::new(PolicyGate::with_profile_and_flags(
         &workspace_root,
@@ -408,80 +541,11 @@ pub async fn chat_send(
         allow_outside_workspace,
     ));
 
-    // Inject relevant memories into the system prompt (scoped to Pisci)
-    let memory_context = {
-        let db = state.db.lock().await;
-        let keywords: Vec<&str> = effective_content.split_whitespace().take(10).collect();
-        let query = keywords.join(" ");
-        match db.search_memories_scoped(&query, "pisci", None, 5) {
-            Ok(mems) if !mems.is_empty() => {
-                let mut ctx = String::from("\n\n## Personal Context (from memory)\n");
-                for m in &mems {
-                    ctx.push_str(&format!("- {}\n", m.content));
-                }
-                ctx
-            }
-            _ => String::new(),
-        }
-    };
-
-    // Inject task state into the system prompt if one exists for this session
-    let task_state_context = {
-        let db = state.db.lock().await;
-        match db.load_task_state("session", &session_id) {
-            Ok(Some(ts))
-                if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) =>
-            {
-                let mut ctx = String::from("\n\n## Active Task State\n");
-                if !ts.goal.is_empty() {
-                    ctx.push_str(&format!("**Goal:** {}\n", ts.goal));
-                }
-                if !ts.summary.is_empty() {
-                    ctx.push_str(&format!("**Progress:** {}\n", ts.summary));
-                }
-                if ts.state_json != "{}" && !ts.state_json.is_empty() {
-                    ctx.push_str(&format!("**Details:** {}\n", ts.state_json));
-                }
-                ctx
-            }
-            _ => String::new(),
-        }
-    };
-
-    let injection_budget = compute_injection_budget(context_window);
-    let full_memory_context = budget_truncate(
-        &format!("{}{}", memory_context, task_state_context),
-        injection_budget,
-    );
-    let project_instruction_context = if enable_project_instructions {
-        match render_project_instruction_context(
-            std::path::Path::new(&workspace_root),
-            project_instruction_budget_chars as usize,
-        ) {
-            Ok(content) => content,
-            Err(error) => {
-                tracing::warn!("Failed to load project instructions: {}", error);
-                String::new()
-            }
-        }
-    } else {
-        String::new()
-    };
-    let mut system_prompt = build_system_prompt_with_env(
-        &full_memory_context,
-        &skill_context,
-        &workspace_root,
-        allow_outside_workspace,
-    );
-    if !project_instruction_context.is_empty() {
-        system_prompt.push_str(&project_instruction_context);
-    }
-
     let agent = AgentLoop {
         client,
         registry,
         policy,
-        system_prompt,
+        system_prompt: prompt_artifacts.system_prompt,
         model: model.clone(),
         max_tokens,
         context_window,
@@ -2679,6 +2743,9 @@ pub struct ContextPreview {
     pub total_tokens: usize,
     pub model: String,
     pub context_budget: usize,
+    pub total_input_budget: usize,
+    pub request_overhead_tokens: usize,
+    pub tool_count: usize,
     pub rolling_summary_version: i64,
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
@@ -2694,38 +2761,47 @@ pub async fn get_context_preview(
     session_id: String,
 ) -> Result<ContextPreview, String> {
     // Load settings
-    let (model, max_tokens, context_window) = {
+    let (
+        model,
+        max_tokens,
+        context_window,
+        workspace_root,
+        allow_outside_workspace,
+        builtin_tool_enabled,
+        project_instruction_budget_chars,
+        enable_project_instructions,
+    ) = {
         let settings = state.settings.lock().await;
         (
             settings.model.clone(),
             settings.max_tokens,
             settings.context_window,
+            settings.workspace_root.clone(),
+            settings.allow_outside_workspace,
+            settings.builtin_tool_enabled.clone(),
+            settings.project_instruction_budget_chars,
+            settings.enable_project_instructions,
         )
     };
 
     // Build context messages from history — this is the exact payload sent to the LLM
     let budget = compute_context_budget(context_window, max_tokens);
-    let (llm_messages, session_state) = {
-        let db = state.db.lock().await;
-        let history = db
-            .get_messages_latest(&session_id, 2000)
-            .map_err(|e| e.to_string())?;
-        let session_state = db
-            .get_session_context_state(&session_id)
-            .map_err(|e| e.to_string())?;
-        let rolling_summary = session_state
-            .as_ref()
-            .map(|state| state.rolling_summary.as_str())
-            .unwrap_or("");
-        (
-            build_context_messages(
-                &history,
-                budget,
-                (!rolling_summary.trim().is_empty()).then_some(rolling_summary),
-            ),
-            session_state,
-        )
-    };
+    let session_context = build_session_message_context(&state, &session_id, budget).await?;
+    let prompt_artifacts = build_chat_prompt_artifacts(
+        &state.app_handle,
+        &state,
+        &session_id,
+        &session_context.latest_user_text,
+        &workspace_root,
+        context_window,
+        allow_outside_workspace,
+        &builtin_tool_enabled,
+        project_instruction_budget_chars,
+        enable_project_instructions,
+    )
+    .await?;
+    let llm_messages = session_context.llm_messages;
+    let session_state = session_context.session_state;
     let llm_messages =
         crate::agent::vision::inject_selected_context(&llm_messages, &session_id).await;
 
@@ -2787,20 +2863,7 @@ pub async fn get_context_preview(
                     })
                     .collect(),
             };
-            // Estimate tokens from text representation
-            let token_text: String = blocks
-                .iter()
-                .map(|b| match b {
-                    ContextPreviewBlock::Text { text } => text.clone(),
-                    ContextPreviewBlock::ToolUse { name, input, .. } => {
-                        format!("{} {}", name, input)
-                    }
-                    ContextPreviewBlock::ToolResult { content, .. } => content.clone(),
-                    ContextPreviewBlock::Image { .. } => String::new(),
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            let tokens = estimate_tokens(&token_text);
+            let tokens = crate::llm::estimate_message_tokens(m);
             ContextPreviewMessage {
                 role: m.role.clone(),
                 blocks,
@@ -2810,13 +2873,26 @@ pub async fn get_context_preview(
         .collect();
 
     let messages_tokens: usize = messages.iter().map(|m| m.tokens).sum();
+    let request_overhead_tokens = crate::llm::estimate_request_overhead_tokens(
+        Some(&prompt_artifacts.system_prompt),
+        &prompt_artifacts.tool_defs,
+    );
+    let total_input_budget = crate::llm::compute_total_input_budget(context_window, max_tokens);
+    let total_tokens = crate::llm::estimate_request_input_tokens(
+        &llm_messages,
+        Some(&prompt_artifacts.system_prompt),
+        &prompt_artifacts.tool_defs,
+    );
 
     Ok(ContextPreview {
         messages,
         messages_tokens,
-        total_tokens: messages_tokens,
+        total_tokens,
         model,
         context_budget: budget,
+        total_input_budget,
+        request_overhead_tokens,
+        tool_count: prompt_artifacts.tool_defs.len(),
         rolling_summary_version: session_state
             .as_ref()
             .map(|state| state.rolling_summary_version)
