@@ -411,6 +411,10 @@ struct CompactionOutcome {
     summary: String,
 }
 
+fn is_compaction_summary_text(text: &str) -> bool {
+    text.starts_with("[会话滚动摘要]") || text.starts_with("[对话摘要]")
+}
+
 /// Level-2 compaction: call LLM to summarise old messages, optionally merging
 /// an existing rolling summary with the newly compacted history.
 async fn compact_summarise(
@@ -504,7 +508,7 @@ async fn compact_summarise(
                     .collect::<Vec<_>>()
                     .join("\n"),
             };
-            if text.is_empty() || text.starts_with("[会话滚动摘要]") {
+            if text.is_empty() || is_compaction_summary_text(&text) {
                 return String::new();
             }
             let snippet = if text.chars().count() > 500 {
@@ -553,24 +557,9 @@ async fn compact_summarise(
     match client.complete(req).await {
         Ok(resp) if !resp.content.is_empty() => {
             let merged_summary = resp.content.trim().to_string();
-            let summary_msg = crate::llm::LlmMessage {
-                role: "user".into(),
-                content: crate::llm::MessageContent::text(format!(
-                    "[对话摘要] {}",
-                    merged_summary
-                )),
-            };
+            let summary_msg = crate::commands::chat::rolling_summary_message(&merged_summary);
             let mut new_messages = vec![summary_msg];
             new_messages.extend_from_slice(&messages[split_idx..]);
-            // After compaction, inject a continuation reminder so the LLM doesn't
-            // mistake the summary for a completed task and stop prematurely.
-            new_messages.push(crate::llm::LlmMessage {
-                role: "user".into(),
-                content: crate::llm::MessageContent::text(
-                    "[系统提示] 以上是对话历史的压缩摘要。请根据摘要中的「当前状态」继续完成尚未完成的任务，不要重复已完成的工作。"
-                        .to_string(),
-                ),
-            });
             Some(CompactionOutcome {
                 messages: new_messages,
                 summary: merged_summary,
@@ -2432,16 +2421,9 @@ mod tests {
         // First message should be the summary
         let first_content = compacted.messages[0].content.as_text();
         assert!(
-            first_content.contains("[对话摘要]"),
-            "first message should contain [对话摘要], got: {}",
+            first_content.contains("[会话滚动摘要]"),
+            "first message should contain [会话滚动摘要], got: {}",
             &first_content[..first_content.len().min(100)]
-        );
-
-        // Last message should be the continuation reminder
-        let last_content = compacted.messages.last().unwrap().content.as_text();
-        assert!(
-            last_content.contains("[系统提示]"),
-            "last message should contain [系统提示]"
         );
     }
 
@@ -2473,7 +2455,7 @@ mod tests {
         let summary_msg = &compacted.messages[0];
         let summary_content = summary_msg.content.as_text();
         assert!(
-            summary_content.contains("[对话摘要]"),
+            summary_content.contains("[会话滚动摘要]"),
             "first message should be summary"
         );
         assert!(
@@ -2522,7 +2504,7 @@ mod tests {
         .expect("merged compaction");
 
         assert!(result.summary.contains("合并旧摘要与新历史"));
-        assert!(result.messages[0].content.as_text().contains("[对话摘要]"));
+        assert!(result.messages[0].content.as_text().contains("[会话滚动摘要]"));
     }
 
     // ── T10: estimate_message_tokens handles all content types ───────────────
@@ -2605,20 +2587,10 @@ mod tests {
             original_len
         );
 
-        // Summary should be first, continuation reminder last
+        // Summary should be first
         assert!(
-            compacted.messages[0].content.as_text().contains("[对话摘要]"),
+            compacted.messages[0].content.as_text().contains("[会话滚动摘要]"),
             "first message should be summary"
-        );
-        assert!(
-            compacted
-                .messages
-                .last()
-                .unwrap()
-                .content
-                .as_text()
-                .contains("[系统提示]"),
-            "last message should be continuation reminder"
         );
     }
 }

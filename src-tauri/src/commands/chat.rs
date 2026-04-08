@@ -2133,7 +2133,7 @@ fn extract_key_artifact(tool_name: &str, input: &serde_json::Value) -> Option<St
     }
 }
 
-fn rolling_summary_message(summary: &str) -> LlmMessage {
+pub(crate) fn rolling_summary_message(summary: &str) -> LlmMessage {
     LlmMessage {
         role: "user".into(),
         content: MessageContent::text(format!(
