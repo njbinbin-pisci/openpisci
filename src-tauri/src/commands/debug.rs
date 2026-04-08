@@ -1141,6 +1141,7 @@ pub async fn run_debug_scenario(
         },
         vision_override: None,
         notification_rx: None,
+        auto_compact_input_tokens_threshold: 100_000,
     };
 
     let ctx = ToolContext {
@@ -1675,6 +1676,7 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
         },
         vision_override: Some(vision_enabled),
         notification_rx: None,
+        auto_compact_input_tokens_threshold: 100_000,
     };
 
     let ctx = ToolContext {

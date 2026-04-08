@@ -201,6 +201,49 @@ pub fn estimate_message_tokens(msg: &LlmMessage) -> usize {
     content_tokens + MSG_OVERHEAD
 }
 
+/// Estimate the token count for a single tool definition.
+pub fn estimate_tool_def_tokens(tool: &ToolDef) -> usize {
+    const TOOL_OVERHEAD: usize = 16; // name/description/schema framing
+    TOOL_OVERHEAD
+        + estimate_tokens(&tool.name)
+        + estimate_tokens(&tool.description)
+        + estimate_tokens(&tool.input_schema.to_string())
+}
+
+/// Estimate the token count consumed by non-message request inputs.
+pub fn estimate_request_overhead_tokens(system: Option<&str>, tools: &[ToolDef]) -> usize {
+    const REQUEST_FRAMING: usize = 24; // request-level framing and provider metadata
+    let system_tokens = system.map(estimate_tokens).unwrap_or(0);
+    let tool_tokens: usize = tools.iter().map(estimate_tool_def_tokens).sum();
+    REQUEST_FRAMING + system_tokens + tool_tokens
+}
+
+/// Estimate the token count consumed by the full request input payload.
+pub fn estimate_request_input_tokens(
+    messages: &[LlmMessage],
+    system: Option<&str>,
+    tools: &[ToolDef],
+) -> usize {
+    estimate_request_overhead_tokens(system, tools)
+        + messages.iter().map(estimate_message_tokens).sum::<usize>()
+}
+
+/// Compute the safe total token budget for the full input payload
+/// (`system + tools + messages`), excluding model output tokens.
+pub fn compute_total_input_budget(context_window: u32, max_tokens: u32) -> usize {
+    let window = if context_window > 0 {
+        context_window as usize
+    } else {
+        match max_tokens {
+            t if t >= 8192 => 128_000,
+            t if t >= 4096 => 64_000,
+            _ => 32_000,
+        }
+    };
+    let usable = window.saturating_sub(max_tokens as usize);
+    (usable as f64 * 0.85) as usize
+}
+
 /// Compute the usable token budget for *input messages*.
 ///
 /// `context_window` is the user-configured input context limit (0 = auto).
@@ -216,19 +259,56 @@ pub fn estimate_message_tokens(msg: &LlmMessage) -> usize {
 /// Empirically, actual token counts run ~10-15% higher than estimates.
 pub fn compute_context_budget(context_window: u32, max_tokens: u32) -> usize {
     const SYSTEM_OVERHEAD: usize = 3_000; // system prompt + framing
-    let window = if context_window > 0 {
-        context_window as usize
-    } else {
-        match max_tokens {
-            t if t >= 8192 => 128_000,
-            t if t >= 4096 => 64_000,
-            _ => 32_000,
-        }
+    compute_total_input_budget(context_window, max_tokens).saturating_sub(SYSTEM_OVERHEAD)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        compute_context_budget, compute_total_input_budget, estimate_request_input_tokens, ContentBlock,
+        LlmMessage, MessageContent, ToolDef,
     };
-    // Reserve output tokens + system overhead, then apply 0.85 safety factor
-    // to account for token estimation underestimation.
-    let usable = window.saturating_sub(max_tokens as usize + SYSTEM_OVERHEAD);
-    (usable as f64 * 0.85) as usize
+    use serde_json::json;
+
+    #[test]
+    fn total_input_budget_exceeds_message_budget() {
+        let total = compute_total_input_budget(32_000, 4_096);
+        let message = compute_context_budget(32_000, 4_096);
+        assert!(total > message);
+        assert_eq!(total - message, 3_000);
+    }
+
+    #[test]
+    fn request_input_estimate_includes_system_and_tools() {
+        let messages = vec![LlmMessage {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Text {
+                    text: "帮我总结一下".into(),
+                },
+                ContentBlock::ToolUse {
+                    id: "tool_1".into(),
+                    name: "search".into(),
+                    input: json!({"query": "pisci"}),
+                },
+            ]),
+        }];
+        let tools = vec![ToolDef {
+            name: "search".into(),
+            description: "Search workspace".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"}
+                }
+            }),
+        }];
+
+        let with_overhead =
+            estimate_request_input_tokens(&messages, Some("你是一个助手"), &tools);
+        let messages_only: usize = messages.iter().map(super::estimate_message_tokens).sum();
+        assert!(with_overhead > messages_only);
+    }
 }
 
 /// Build the appropriate client based on provider name

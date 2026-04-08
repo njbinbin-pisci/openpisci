@@ -13,6 +13,7 @@ mod llm;
 mod memory;
 mod pisci;
 mod policy;
+mod project_context;
 mod scheduler;
 mod security;
 mod skills;

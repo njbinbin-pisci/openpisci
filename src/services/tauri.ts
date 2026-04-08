@@ -17,6 +17,11 @@ export interface Session {
   created_at: string;
   updated_at: string;
   message_count: number;
+  rolling_summary?: string;
+  rolling_summary_version?: number;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  last_compacted_at?: string | null;
 }
 
 export interface ChatMessage {
@@ -143,6 +148,9 @@ export interface Settings {
   builtin_tool_enabled: Record<string, boolean>;
   // Agent config
   max_iterations: number;
+  auto_compact_input_tokens_threshold: number;
+  project_instruction_budget_chars: number;
+  enable_project_instructions: boolean;
   llm_read_timeout_secs: number;
   koi_timeout_secs: number;
   heartbeat_enabled: boolean;

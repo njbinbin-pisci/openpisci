@@ -50,7 +50,7 @@
 
 .session-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   padding: 10px 16px;
   border: none;
@@ -62,6 +62,14 @@
   transition: all 0.15s;
   width: 100%;
   gap: 8px;
+}
+
+.session-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .session-item-right {
@@ -112,6 +120,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-muted);
 }
 
 .session-count {

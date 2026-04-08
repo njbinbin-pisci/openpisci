@@ -3,6 +3,7 @@ use crate::agent::messages::AgentEvent;
 use crate::agent::tool::ToolContext;
 use crate::llm::{build_client_with_timeout, ContentBlock, LlmMessage, MessageContent};
 use crate::policy::PolicyGate;
+use crate::project_context::render_project_instruction_context;
 use crate::store::{db::ChatMessage, db::Session, AppState};
 use crate::tools;
 use serde::{Deserialize, Serialize};
@@ -135,6 +136,9 @@ pub async fn chat_send(
         allow_outside_workspace,
         vision_enabled,
         llm_read_timeout_secs,
+        auto_compact_input_tokens_threshold,
+        project_instruction_budget_chars,
+        enable_project_instructions,
     ) = {
         let settings = state.settings.lock().await;
         (
@@ -155,6 +159,9 @@ pub async fn chat_send(
             settings.allow_outside_workspace,
             settings.vision_enabled,
             settings.llm_read_timeout_secs,
+            settings.auto_compact_input_tokens_threshold,
+            settings.project_instruction_budget_chars,
+            settings.enable_project_instructions,
         )
     };
 
@@ -299,7 +306,16 @@ pub async fn chat_send(
         let history = db
             .get_messages_latest(&session_id, 2000)
             .map_err(|e| e.to_string())?;
-        build_context_messages(&history, budget)
+        let rolling_summary = db
+            .get_session_context_state(&session_id)
+            .map_err(|e| e.to_string())?
+            .map(|state| state.rolling_summary)
+            .unwrap_or_default();
+        build_context_messages(
+            &history,
+            budget,
+            (!rolling_summary.trim().is_empty()).then_some(rolling_summary.as_str()),
+        )
     };
 
     // For vision-capable models: inject the attachment image into the last user message
@@ -437,17 +453,35 @@ pub async fn chat_send(
         &format!("{}{}", memory_context, task_state_context),
         injection_budget,
     );
+    let project_instruction_context = if enable_project_instructions {
+        match render_project_instruction_context(
+            std::path::Path::new(&workspace_root),
+            project_instruction_budget_chars as usize,
+        ) {
+            Ok(content) => content,
+            Err(error) => {
+                tracing::warn!("Failed to load project instructions: {}", error);
+                String::new()
+            }
+        }
+    } else {
+        String::new()
+    };
+    let mut system_prompt = build_system_prompt_with_env(
+        &full_memory_context,
+        &skill_context,
+        &workspace_root,
+        allow_outside_workspace,
+    );
+    if !project_instruction_context.is_empty() {
+        system_prompt.push_str(&project_instruction_context);
+    }
 
     let agent = AgentLoop {
         client,
         registry,
         policy,
-        system_prompt: build_system_prompt_with_env(
-            &full_memory_context,
-            &skill_context,
-            &workspace_root,
-            allow_outside_workspace,
-        ),
+        system_prompt,
         model: model.clone(),
         max_tokens,
         context_window,
@@ -461,6 +495,7 @@ pub async fn chat_send(
         },
         vision_override: Some(vision_capable),
         notification_rx: None,
+        auto_compact_input_tokens_threshold,
     };
 
     let ctx = ToolContext {
@@ -747,6 +782,9 @@ pub async fn run_agent_headless(
         allow_outside_workspace,
         vision_setting,
         llm_read_timeout_secs,
+        auto_compact_input_tokens_threshold,
+        project_instruction_budget_chars,
+        enable_project_instructions,
     ) = {
         let settings = state.settings.lock().await;
         (
@@ -765,6 +803,9 @@ pub async fn run_agent_headless(
             settings.allow_outside_workspace,
             settings.vision_enabled,
             settings.llm_read_timeout_secs,
+            settings.auto_compact_input_tokens_threshold,
+            settings.project_instruction_budget_chars,
+            settings.enable_project_instructions,
         )
     };
     if api_key.is_empty() {
@@ -1014,6 +1055,16 @@ pub async fn run_agent_headless(
     if !pool_context.is_empty() {
         system_prompt.push_str(&pool_context);
     }
+    if enable_project_instructions {
+        match render_project_instruction_context(
+            std::path::Path::new(&workspace_root),
+            project_instruction_budget_chars as usize,
+        ) {
+            Ok(content) if !content.is_empty() => system_prompt.push_str(&content),
+            Ok(_) => {}
+            Err(error) => tracing::warn!("Failed to load project instructions: {}", error),
+        }
+    }
     if !extra_system_context.trim().is_empty() {
         system_prompt.push_str("\n\n## Additional Context\n");
         system_prompt.push_str(&extra_system_context);
@@ -1037,6 +1088,7 @@ pub async fn run_agent_headless(
         },
         vision_override: Some(vision_capable),
         notification_rx: None,
+        auto_compact_input_tokens_threshold,
     };
     let ctx = ToolContext {
         session_id: session_id.to_string(),
@@ -1061,8 +1113,16 @@ pub async fn run_agent_headless(
             history.len(),
             session_id
         );
-        let msgs =
-            build_context_messages(&history, compute_context_budget(context_window, max_tokens));
+        let rolling_summary = db
+            .get_session_context_state(session_id)
+            .map_err(|e| e.to_string())?
+            .map(|state| state.rolling_summary)
+            .unwrap_or_default();
+        let msgs = build_context_messages(
+            &history,
+            compute_context_budget(context_window, max_tokens),
+            (!rolling_summary.trim().is_empty()).then_some(rolling_summary.as_str()),
+        );
         let sanitized = sanitize_tool_use_result_pairing(msgs);
         tracing::info!(
             "run_agent_headless: context has {} LLM messages after sanitize for {}",
@@ -2009,6 +2069,16 @@ fn extract_key_artifact(tool_name: &str, input: &serde_json::Value) -> Option<St
     }
 }
 
+fn rolling_summary_message(summary: &str) -> LlmMessage {
+    LlmMessage {
+        role: "user".into(),
+        content: MessageContent::text(format!(
+            "[会话滚动摘要]\n{}\n\n[系统提示] 上述摘要覆盖了更早的对话历史，请结合后续真实消息继续任务，不要重复已完成的工作。",
+            summary.trim()
+        )),
+    }
+}
+
 /// Build LLM context messages from stored history using layered compression.
 ///
 /// Strategy (from newest to oldest):
@@ -2016,9 +2086,19 @@ fn extract_key_artifact(tool_name: &str, input: &serde_json::Value) -> Option<St
 /// - Middle turns (up to `CTX_COMPACT_AFTER`): tool results trimmed to head+tail
 /// - Older turns: entire turn collapsed to a single summary message
 /// - Token budget exceeded: stop adding older turns
-pub fn build_context_messages(history: &[ChatMessage], budget: usize) -> Vec<LlmMessage> {
+pub fn build_context_messages(
+    history: &[ChatMessage],
+    budget: usize,
+    rolling_summary: Option<&str>,
+) -> Vec<LlmMessage> {
+    let rolling_summary = rolling_summary
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty());
     if history.is_empty() {
-        return Vec::new();
+        return rolling_summary
+            .map(rolling_summary_message)
+            .into_iter()
+            .collect();
     }
 
     // Split history into turns (each turn starts at a user message that has content,
@@ -2054,13 +2134,21 @@ pub fn build_context_messages(history: &[ChatMessage], budget: usize) -> Vec<Llm
     }
 
     let total_turns = turns.len();
+    let turn_slice = if rolling_summary.is_some() && total_turns > CTX_COMPACT_AFTER {
+        &turns[total_turns - CTX_COMPACT_AFTER..]
+    } else {
+        &turns[..]
+    };
     // Collect each turn's messages as a separate group so we can prepend older turns
     // without reversing the internal message order within each turn.
     let mut turn_groups: Vec<Vec<LlmMessage>> = Vec::new();
-    let mut token_est: usize = 0;
+    let mut token_est: usize = rolling_summary
+        .map(rolling_summary_message)
+        .map(|message| crate::llm::estimate_message_tokens(&message))
+        .unwrap_or(0);
 
     // Process turns from newest to oldest; we prepend each group later.
-    for (rev_idx, turn) in turns.iter().rev().enumerate() {
+    for (rev_idx, turn) in turn_slice.iter().rev().enumerate() {
         let turn_age = rev_idx; // 0 = most recent turn
 
         if token_est >= budget {
@@ -2162,6 +2250,9 @@ pub fn build_context_messages(history: &[ChatMessage], budget: usize) -> Vec<Llm
     // inside each group) to restore chronological turn order.
     turn_groups.reverse();
     let mut result: Vec<LlmMessage> = turn_groups.into_iter().flatten().collect();
+    if let Some(summary) = rolling_summary {
+        result.insert(0, rolling_summary_message(summary));
+    }
 
     // Post-process: remove trailing orphaned tool_call messages (interrupted mid-turn).
     result = sanitize_tool_call_pairs(result);
@@ -2588,6 +2679,10 @@ pub struct ContextPreview {
     pub total_tokens: usize,
     pub model: String,
     pub context_budget: usize,
+    pub rolling_summary_version: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub last_compacted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Build and return the exact context (system prompt + messages + tool list)
@@ -2610,12 +2705,26 @@ pub async fn get_context_preview(
 
     // Build context messages from history — this is the exact payload sent to the LLM
     let budget = compute_context_budget(context_window, max_tokens);
-    let llm_messages = {
+    let (llm_messages, session_state) = {
         let db = state.db.lock().await;
         let history = db
             .get_messages_latest(&session_id, 2000)
             .map_err(|e| e.to_string())?;
-        build_context_messages(&history, budget)
+        let session_state = db
+            .get_session_context_state(&session_id)
+            .map_err(|e| e.to_string())?;
+        let rolling_summary = session_state
+            .as_ref()
+            .map(|state| state.rolling_summary.as_str())
+            .unwrap_or("");
+        (
+            build_context_messages(
+                &history,
+                budget,
+                (!rolling_summary.trim().is_empty()).then_some(rolling_summary),
+            ),
+            session_state,
+        )
     };
     let llm_messages =
         crate::agent::vision::inject_selected_context(&llm_messages, &session_id).await;
@@ -2708,5 +2817,91 @@ pub async fn get_context_preview(
         total_tokens: messages_tokens,
         model,
         context_budget: budget,
+        rolling_summary_version: session_state
+            .as_ref()
+            .map(|state| state.rolling_summary_version)
+            .unwrap_or(0),
+        total_input_tokens: session_state
+            .as_ref()
+            .map(|state| state.total_input_tokens)
+            .unwrap_or(0),
+        total_output_tokens: session_state
+            .as_ref()
+            .map(|state| state.total_output_tokens)
+            .unwrap_or(0),
+        last_compacted_at: session_state.and_then(|state| state.last_compacted_at),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_context_messages;
+    use crate::store::db::ChatMessage;
+    use chrono::Utc;
+
+    fn make_chat_message(
+        session_id: &str,
+        role: &str,
+        content: &str,
+        turn_index: i64,
+    ) -> ChatMessage {
+        ChatMessage {
+            id: format!("{}-{}-{}", session_id, role, turn_index),
+            session_id: session_id.to_string(),
+            role: role.to_string(),
+            content: content.to_string(),
+            created_at: Utc::now(),
+            tool_calls_json: None,
+            tool_results_json: None,
+            turn_index: Some(turn_index),
+        }
+    }
+
+    #[test]
+    fn build_context_messages_prepends_rolling_summary() {
+        let history = vec![
+            make_chat_message("s1", "user", "用户请求 A", 1),
+            make_chat_message("s1", "assistant", "回复 A", 1),
+            make_chat_message("s1", "user", "用户请求 B", 2),
+            make_chat_message("s1", "assistant", "回复 B", 2),
+        ];
+
+        let messages = build_context_messages(&history, 20_000, Some("用户目标[修复问题]"));
+        assert!(!messages.is_empty());
+        assert!(messages[0].content.as_text().contains("[会话滚动摘要]"));
+    }
+
+    #[test]
+    fn build_context_messages_limits_older_turns_when_rolling_summary_exists() {
+        let mut history = Vec::new();
+        for turn in 1..=12 {
+            history.push(make_chat_message(
+                "s2",
+                "user",
+                &format!("[turn:{}] 用户请求", turn),
+                turn,
+            ));
+            history.push(make_chat_message(
+                "s2",
+                "assistant",
+                &format!("[turn:{}] 回复", turn),
+                turn,
+            ));
+        }
+
+        let messages = build_context_messages(&history, 50_000, Some("已有滚动摘要"));
+        assert!(messages[0].content.as_text().contains("[会话滚动摘要]"));
+        assert!(
+            !messages
+                .iter()
+                .any(|msg| msg.content.as_text().contains("[turn:1]")),
+            "oldest turn should be omitted once rolling summary is present"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|msg| msg.content.as_text().contains("[turn:12]")),
+            "recent turns should still be preserved"
+        );
+    }
 }

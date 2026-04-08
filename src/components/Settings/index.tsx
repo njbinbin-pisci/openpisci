@@ -74,6 +74,9 @@ const DEFAULT_SETTINGS: SettingsData = {
   builtin_tool_enabled: {},
   // Agent config
   max_iterations: 50,
+  auto_compact_input_tokens_threshold: 100000,
+  project_instruction_budget_chars: 8000,
+  enable_project_instructions: true,
   llm_read_timeout_secs: 120,
   koi_timeout_secs: 600,
   heartbeat_enabled: false,
@@ -732,6 +735,25 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
             />
             <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{t("settings.maxIterationsDesc")}</p>
           </div>
+          <div className="form-group">
+            <label className="label">{t("settings.autoCompactThreshold")}</label>
+            <input
+              className="input"
+              type="number"
+              min={0}
+              max={10000000}
+              value={form.auto_compact_input_tokens_threshold ?? 100000}
+              onChange={(e) =>
+                update(
+                  "auto_compact_input_tokens_threshold",
+                  Math.max(0, Number(e.target.value) || 0)
+                )
+              }
+            />
+            <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+              {t("settings.autoCompactThresholdDesc")}
+            </p>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div className="form-group">
               <label className="label">{t("settings.llmReadTimeout")}</label>
@@ -757,6 +779,36 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
               />
               <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{t("settings.koiTimeoutDesc")}</p>
             </div>
+          </div>
+          <div className="form-group" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div>
+              <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>{t("settings.enableProjectInstructions")}</div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{t("settings.enableProjectInstructionsDesc")}</div>
+            </div>
+            <input
+              type="checkbox"
+              checked={form.enable_project_instructions ?? true}
+              onChange={(e) => update("enable_project_instructions", e.target.checked)}
+            />
+          </div>
+          <div className="form-group">
+            <label className="label">{t("settings.projectInstructionBudget")}</label>
+            <input
+              className="input"
+              type="number"
+              min={512}
+              max={200000}
+              value={form.project_instruction_budget_chars ?? 8000}
+              onChange={(e) =>
+                update(
+                  "project_instruction_budget_chars",
+                  Math.max(512, Number(e.target.value) || 512)
+                )
+              }
+            />
+            <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+              {t("settings.projectInstructionBudgetDesc")}
+            </p>
           </div>
           <div className="form-group" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>

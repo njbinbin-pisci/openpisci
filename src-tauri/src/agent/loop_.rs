@@ -406,18 +406,21 @@ fn compact_trim_tool_results(messages: &mut [LlmMessage], single_limit: usize) -
     changed
 }
 
-/// Level-2 compaction: call LLM to summarise old messages.
-///
-/// Keeps the newest `keep_chars` worth of messages intact and summarises
-/// everything older into a single user message prepended to the list.
-/// Returns the new message list, or None if there was nothing to summarise.
+struct CompactionOutcome {
+    messages: Vec<LlmMessage>,
+    summary: String,
+}
+
+/// Level-2 compaction: call LLM to summarise old messages, optionally merging
+/// an existing rolling summary with the newly compacted history.
 async fn compact_summarise(
     messages: Vec<LlmMessage>,
     keep_chars: usize,
     client: &dyn crate::llm::LlmClient,
     model: &str,
     max_tokens: u32,
-) -> Option<Vec<LlmMessage>> {
+    existing_summary: Option<&str>,
+) -> Option<CompactionOutcome> {
     if messages.len() < 2 {
         // Nothing meaningful to summarise if there are fewer than 2 messages.
         return None;
@@ -501,7 +504,7 @@ async fn compact_summarise(
                     .collect::<Vec<_>>()
                     .join("\n"),
             };
-            if text.is_empty() {
+            if text.is_empty() || text.starts_with("[会话滚动摘要]") {
                 return String::new();
             }
             let snippet = if text.chars().count() > 500 {
@@ -514,13 +517,22 @@ async fn compact_summarise(
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
+    if history_text.trim().is_empty() && existing_summary.unwrap_or("").trim().is_empty() {
+        return None;
+    }
 
+    let existing_summary_block = existing_summary
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .map(|summary| format!("已有滚动摘要：\n{}\n\n", summary))
+        .unwrap_or_default();
     let summary_prompt = format!(
-        "请将以下对话历史压缩为一条简洁的摘要消息。\n\
-         格式：用户要求[用户请求摘要]，智能体已完成[已完成的工作摘要]，当前状态[未完成事项或中间状态]。\n\
-         保留关键文件路径、数据和结论，省略中间步骤细节。\n\n\
-         对话历史：\n{}",
-        history_text
+        "请将以下内容合并为一条新的滚动摘要。\n\
+         输出纯摘要正文，不要添加标题或围栏。\n\
+         摘要必须覆盖四部分：用户目标、已完成工作、当前状态、关键文件/命令/结果。\n\
+         保留关键路径、命令、错误和结论，省略重复中间步骤。\n\n\
+         {}新近待压缩的对话历史：\n{}",
+        existing_summary_block, history_text
     );
 
     let req = crate::llm::LlmRequest {
@@ -540,11 +552,12 @@ async fn compact_summarise(
 
     match client.complete(req).await {
         Ok(resp) if !resp.content.is_empty() => {
+            let merged_summary = resp.content.trim().to_string();
             let summary_msg = crate::llm::LlmMessage {
                 role: "user".into(),
                 content: crate::llm::MessageContent::text(format!(
                     "[对话摘要] {}",
-                    resp.content.trim()
+                    merged_summary
                 )),
             };
             let mut new_messages = vec![summary_msg];
@@ -558,7 +571,10 @@ async fn compact_summarise(
                         .to_string(),
                 ),
             });
-            Some(new_messages)
+            Some(CompactionOutcome {
+                messages: new_messages,
+                summary: merged_summary,
+            })
         }
         Ok(_) | Err(_) => None,
     }
@@ -618,6 +634,9 @@ pub struct AgentLoop {
     /// Receives runtime notifications (e.g. @mention alerts) injected into the
     /// message stream so the agent can react mid-execution.
     pub notification_rx: Option<Mutex<mpsc::Receiver<String>>>,
+    /// Automatically trigger rolling-summary compaction once cumulative input
+    /// tokens reach this threshold. `0` disables threshold-driven compaction.
+    pub auto_compact_input_tokens_threshold: u32,
 }
 
 impl AgentLoop {
@@ -930,7 +949,13 @@ impl AgentLoop {
 
         let mut guarded_content = guard_tool_result_content(
             &result.content,
-            dynamic_result_limit(self.max_tokens as usize * 4),
+            dynamic_result_limit(
+                crate::llm::compute_total_input_budget(self.context_window, self.max_tokens)
+                    .saturating_sub(crate::llm::estimate_request_overhead_tokens(
+                        Some(&self.system_prompt),
+                        &self.registry.to_tool_defs(),
+                    )),
+            ),
         );
         if let Some(img) = result.image.as_ref() {
             let artifact = vision::store_tool_image(&ctx.session_id, name, None, img).await;
@@ -1114,11 +1139,29 @@ impl AgentLoop {
 
         let max_iterations = ctx.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS as u32) as usize;
         let mut loop_detector = LoopDetectorState::new();
+        let mut rolling_summary = String::new();
+        let mut rolling_summary_version = 0i64;
+        let mut cumulative_input_tokens = 0i64;
+        let mut cumulative_output_tokens = 0i64;
+        if let Some(ref db_arc) = self.db {
+            let db = db_arc.lock().await;
+            match db.get_session_context_state(&ctx.session_id) {
+                Ok(Some(state)) => {
+                    rolling_summary = state.rolling_summary;
+                    rolling_summary_version = state.rolling_summary_version;
+                    cumulative_input_tokens = state.total_input_tokens;
+                    cumulative_output_tokens = state.total_output_tokens;
+                }
+                Ok(None) => {}
+                Err(error) => warn!("Failed to load session context state: {}", error),
+            }
+        }
 
         for _iteration in 0..max_iterations {
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
+            let tool_defs = self.registry.to_tool_defs();
 
             // Drain pending notifications (e.g. @mention alerts from other Koi)
             if let Some(ref rx_mutex) = self.notification_rx {
@@ -1141,10 +1184,16 @@ impl AgentLoop {
             // single_limit is in chars (not tokens): budget tokens × share × ~4 chars/token.
             // Bug fix: previously multiplied by 4 again, making the limit 4× too large.
             {
-                let budget =
-                    crate::llm::compute_context_budget(self.context_window, self.max_tokens);
-                // single_limit in chars: budget_tokens × share × 4 chars/token
-                let single_limit = (budget as f64 * CONTEXT_SINGLE_RESULT_SHARE * 4.0) as usize;
+                let total_budget =
+                    crate::llm::compute_total_input_budget(self.context_window, self.max_tokens);
+                let static_overhead_tokens = crate::llm::estimate_request_overhead_tokens(
+                    Some(&self.system_prompt),
+                    &tool_defs,
+                );
+                let message_budget = total_budget.saturating_sub(static_overhead_tokens);
+                // single_limit in chars: message_budget_tokens × share × 4 chars/token
+                let single_limit =
+                    (message_budget as f64 * CONTEXT_SINGLE_RESULT_SHARE * 4.0) as usize;
                 compact_trim_tool_results(&mut messages, single_limit);
 
                 // Dynamic compaction (Level-2 proactive): if estimated token count exceeds
@@ -1154,28 +1203,35 @@ impl AgentLoop {
                 //
                 // We retry with a smaller keep_chars if the first pass still leaves too
                 // many tokens (can happen when the budget estimate is conservative).
-                let mut estimated: usize = messages
-                    .iter()
-                    .map(crate::llm::estimate_message_tokens)
-                    .sum();
+                let req_messages =
+                    vision::inject_selected_context(&messages, &ctx.session_id).await;
+                let mut estimated = crate::llm::estimate_request_input_tokens(
+                    &req_messages,
+                    Some(&self.system_prompt),
+                    &tool_defs,
+                );
                 info!(
-                    "context check: {} messages, ~{} estimated tokens (budget={}, threshold={})",
+                    "context check: {} messages, ~{} estimated request tokens (total_budget={}, message_budget={}, threshold={})",
                     messages.len(),
                     estimated,
-                    budget,
-                    (budget as f64 * 0.60) as usize,
+                    total_budget,
+                    message_budget,
+                    (total_budget as f64 * 0.60) as usize,
                 );
                 // Up to 2 compaction passes: first at 60% keep, then at 30% keep
                 let keep_ratios: &[f64] =
                     &[SUMMARY_KEEP_RECENT_RATIO, SUMMARY_KEEP_RECENT_RATIO * 0.5];
                 for (pass, &ratio) in keep_ratios.iter().enumerate() {
-                    if estimated <= (budget as f64 * 0.60) as usize {
+                    let threshold_reached = self.auto_compact_input_tokens_threshold > 0
+                        && cumulative_input_tokens
+                            >= i64::from(self.auto_compact_input_tokens_threshold);
+                    if estimated <= (total_budget as f64 * 0.60) as usize && !threshold_reached {
                         break;
                     }
-                    let keep_chars = (budget as f64 * ratio * 4.0) as usize;
+                    let keep_chars = (message_budget as f64 * ratio * 4.0) as usize;
                     warn!(
-                        "proactive compaction pass={} estimated_tokens={} > 60% of budget={}, keep_chars={}",
-                        pass + 1, estimated, budget, keep_chars
+                        "proactive compaction pass={} estimated_tokens={} total_budget={} message_budget={} keep_chars={} cumulative_input_tokens={} threshold_reached={}",
+                        pass + 1, estimated, total_budget, message_budget, keep_chars, cumulative_input_tokens, threshold_reached
                     );
                     if let Some(compacted) = compact_summarise(
                         messages.clone(),
@@ -1183,23 +1239,50 @@ impl AgentLoop {
                         self.client.as_ref(),
                         &self.model,
                         self.max_tokens,
+                        (!rolling_summary.trim().is_empty()).then_some(rolling_summary.as_str()),
                     )
                     .await
                     {
-                        let new_estimated: usize = compacted
-                            .iter()
-                            .map(crate::llm::estimate_message_tokens)
-                            .sum();
+                        let compacted_req_messages =
+                            vision::inject_selected_context(&compacted.messages, &ctx.session_id)
+                                .await;
+                        let new_estimated = crate::llm::estimate_request_input_tokens(
+                            &compacted_req_messages,
+                            Some(&self.system_prompt),
+                            &tool_defs,
+                        );
                         info!(
                             "proactive summarisation pass={} complete: {} → {} messages, tokens {} → {}",
                             pass + 1,
                             messages.len(),
-                            compacted.len(),
+                            compacted.messages.len(),
                             estimated,
                             new_estimated,
                         );
-                        messages = compacted;
+                        rolling_summary = compacted.summary;
+                        rolling_summary_version += 1;
+                        messages = compacted.messages;
                         estimated = new_estimated;
+                        if let Some(ref db_arc) = self.db {
+                            let db = db_arc.lock().await;
+                            if let Err(error) = db.update_session_rolling_summary(
+                                &ctx.session_id,
+                                &rolling_summary,
+                                rolling_summary_version,
+                            ) {
+                                warn!("Failed to persist rolling summary: {}", error);
+                            }
+                        }
+                        let _ = event_tx
+                            .send(AgentEvent::TextDelta {
+                                delta: format!(
+                                    "\n\n[系统] 已自动压缩上下文并更新滚动摘要（v{}，累计输入/输出 tokens: {}/{}）。\n",
+                                    rolling_summary_version,
+                                    cumulative_input_tokens,
+                                    cumulative_output_tokens
+                                ),
+                            })
+                            .await;
                     } else {
                         // Summarisation failed — stop trying
                         warn!("proactive summarisation pass={} failed, proceeding with current context", pass + 1);
@@ -1245,7 +1328,7 @@ impl AgentLoop {
                     let req = LlmRequest {
                         messages: req_messages,
                         system: Some(self.system_prompt.clone()),
-                        tools: self.registry.to_tool_defs(),
+                        tools: tool_defs.clone(),
                         model: model_candidate.clone(),
                         max_tokens: self.max_tokens,
                         stream: true,
@@ -1293,13 +1376,21 @@ impl AgentLoop {
 
                                 if is_context_overflow_error(&msg) && !context_overflow_attempted {
                                     context_overflow_attempted = true;
-                                    let budget = crate::llm::compute_context_budget(
+                                    let total_budget = crate::llm::compute_total_input_budget(
                                         self.context_window,
                                         self.max_tokens,
                                     );
+                                    let static_overhead_tokens =
+                                        crate::llm::estimate_request_overhead_tokens(
+                                            Some(&self.system_prompt),
+                                            &tool_defs,
+                                        );
+                                    let message_budget =
+                                        total_budget.saturating_sub(static_overhead_tokens);
                                     // keep_chars: newest 60% of budget in chars
                                     let keep_chars =
-                                        (budget as f64 * SUMMARY_KEEP_RECENT_RATIO * 4.0) as usize;
+                                        (message_budget as f64 * SUMMARY_KEEP_RECENT_RATIO * 4.0)
+                                            as usize;
                                     warn!("context overflow — attempting LLM summarisation (keep_chars={})", keep_chars);
                                     let compacted = compact_summarise(
                                         messages.clone(),
@@ -1307,10 +1398,27 @@ impl AgentLoop {
                                         self.client.as_ref(),
                                         model_candidate,
                                         self.max_tokens,
+                                        (!rolling_summary.trim().is_empty())
+                                            .then_some(rolling_summary.as_str()),
                                     )
                                     .await;
                                     if let Some(c) = compacted {
-                                        messages = c;
+                                        rolling_summary = c.summary;
+                                        rolling_summary_version += 1;
+                                        messages = c.messages;
+                                        if let Some(ref db_arc) = self.db {
+                                            let db = db_arc.lock().await;
+                                            if let Err(error) = db.update_session_rolling_summary(
+                                                &ctx.session_id,
+                                                &rolling_summary,
+                                                rolling_summary_version,
+                                            ) {
+                                                warn!(
+                                                    "Failed to persist rolling summary after overflow: {}",
+                                                    error
+                                                );
+                                            }
+                                        }
                                         info!(
                                             "summarisation complete, messages={}",
                                             messages.len()
@@ -1390,6 +1498,18 @@ impl AgentLoop {
             );
             total_input += response.input_tokens;
             total_output += response.output_tokens;
+            cumulative_input_tokens += i64::from(response.input_tokens);
+            cumulative_output_tokens += i64::from(response.output_tokens);
+            if let Some(ref db_arc) = self.db {
+                let db = db_arc.lock().await;
+                if let Err(error) = db.update_session_usage_totals(
+                    &ctx.session_id,
+                    response.input_tokens,
+                    response.output_tokens,
+                ) {
+                    warn!("Failed to persist usage totals: {}", error);
+                }
+            }
 
             let text_buf = response.content.clone();
             let tool_calls: Vec<(String, String, serde_json::Value)> = response
@@ -2256,7 +2376,7 @@ mod tests {
     async fn t5_too_few_messages_returns_none() {
         let client = MockLlmClient::new("摘要内容");
         let msgs = vec![make_text_msg("user", "只有一条消息")];
-        let result = compact_summarise(msgs, 100_000, &client, "test-model", 1024).await;
+        let result = compact_summarise(msgs, 100_000, &client, "test-model", 1024, None).await;
         assert!(result.is_none(), "single message should return None");
     }
 
@@ -2271,7 +2391,7 @@ mod tests {
             make_text_msg("user", "短消息2"),
         ];
         // keep_chars=100000 >> total size of 3 short messages
-        let result = compact_summarise(msgs, 100_000, &client, "test-model", 1024).await;
+        let result = compact_summarise(msgs, 100_000, &client, "test-model", 1024, None).await;
         assert!(
             result.is_none(),
             "all messages fit in budget, should return None"
@@ -2295,7 +2415,7 @@ mod tests {
         msgs[0] = make_text_msg("user", &format!("用户请求: {}", "x".repeat(500)));
 
         // keep_chars=2000 forces compaction of older messages
-        let result = compact_summarise(msgs.clone(), 2_000, &client, "test-model", 1024).await;
+        let result = compact_summarise(msgs.clone(), 2_000, &client, "test-model", 1024, None).await;
         assert!(
             result.is_some(),
             "should compact when messages exceed keep_chars"
@@ -2303,14 +2423,14 @@ mod tests {
 
         let compacted = result.unwrap();
         assert!(
-            compacted.len() < msgs.len(),
+            compacted.messages.len() < msgs.len(),
             "compacted messages ({}) should be fewer than original ({})",
-            compacted.len(),
+            compacted.messages.len(),
             msgs.len()
         );
 
         // First message should be the summary
-        let first_content = compacted[0].content.as_text();
+        let first_content = compacted.messages[0].content.as_text();
         assert!(
             first_content.contains("[对话摘要]"),
             "first message should contain [对话摘要], got: {}",
@@ -2318,7 +2438,7 @@ mod tests {
         );
 
         // Last message should be the continuation reminder
-        let last_content = compacted.last().unwrap().content.as_text();
+        let last_content = compacted.messages.last().unwrap().content.as_text();
         assert!(
             last_content.contains("[系统提示]"),
             "last message should contain [系统提示]"
@@ -2338,19 +2458,19 @@ mod tests {
         let original_len = msgs.len();
 
         // keep_chars=5000 forces compaction of the bulk of the history
-        let result = compact_summarise(msgs, 5_000, &client, "deepseek-chat", 4096).await;
+        let result = compact_summarise(msgs, 5_000, &client, "deepseek-chat", 4096, None).await;
         assert!(result.is_some(), "30-round session should be compacted");
 
         let compacted = result.unwrap();
         assert!(
-            compacted.len() < original_len,
+            compacted.messages.len() < original_len,
             "compacted ({}) should be fewer than original ({})",
-            compacted.len(),
+            compacted.messages.len(),
             original_len
         );
 
         // Summary message should contain tool names (not empty)
-        let summary_msg = &compacted[0];
+        let summary_msg = &compacted.messages[0];
         let summary_content = summary_msg.content.as_text();
         assert!(
             summary_content.contains("[对话摘要]"),
@@ -2377,11 +2497,32 @@ mod tests {
     async fn t9_llm_failure_returns_none() {
         let client = FailingLlmClient;
         let msgs = make_realistic_session(20);
-        let result = compact_summarise(msgs, 1_000, &client, "test-model", 1024).await;
+        let result = compact_summarise(msgs, 1_000, &client, "test-model", 1024, None).await;
         assert!(
             result.is_none(),
             "LLM failure should return None from compact_summarise"
         );
+    }
+
+    #[tokio::test]
+    async fn t9b_merges_existing_rolling_summary() {
+        let client = MockLlmClient::new(
+            "用户目标[整理上下文]；已完成工作[合并旧摘要与新历史]；当前状态[继续执行]；关键结果[src-tauri/src/agent/loop_.rs]",
+        );
+        let msgs = make_realistic_session(12);
+        let result = compact_summarise(
+            msgs,
+            1_500,
+            &client,
+            "test-model",
+            1024,
+            Some("用户目标[旧目标]；已完成工作[旧工作]；当前状态[旧状态]"),
+        )
+        .await
+        .expect("merged compaction");
+
+        assert!(result.summary.contains("合并旧摘要与新历史"));
+        assert!(result.messages[0].content.as_text().contains("[对话摘要]"));
     }
 
     // ── T10: estimate_message_tokens handles all content types ───────────────
@@ -2446,7 +2587,8 @@ mod tests {
 
         // keep_chars matching the real crash: budget(49000) × 0.60 × 4 = 117600
         let keep_chars = 117_600usize;
-        let result = compact_summarise(msgs, keep_chars, &client, "deepseek-chat", 4096).await;
+        let result =
+            compact_summarise(msgs, keep_chars, &client, "deepseek-chat", 4096, None).await;
 
         assert!(result.is_some(), "154-message session should be compacted");
         let compacted = result.unwrap();
@@ -2454,22 +2596,23 @@ mod tests {
         // Key regression check: must keep more than just 2 tail messages.
         // Before the fix, split_idx defaulted to len-2, leaving only 3 messages total.
         // After the fix, split_idx is computed from actual content sizes.
-        let tail_count = compacted.len() - 1; // subtract the summary message
+        let tail_count = compacted.messages.len() - 1; // subtract the summary message
         assert!(
             tail_count >= 6,
             "should keep at least 6 tail messages (3 tool rounds), got {} tail + 1 summary = {} total (original={})",
             tail_count,
-            compacted.len(),
+            compacted.messages.len(),
             original_len
         );
 
         // Summary should be first, continuation reminder last
         assert!(
-            compacted[0].content.as_text().contains("[对话摘要]"),
+            compacted.messages[0].content.as_text().contains("[对话摘要]"),
             "first message should be summary"
         );
         assert!(
             compacted
+                .messages
                 .last()
                 .unwrap()
                 .content

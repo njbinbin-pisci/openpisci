@@ -572,6 +572,7 @@ impl CallKoiTool {
                 .unwrap()
                 .take()
                 .map(|rx| tokio::sync::Mutex::new(rx)),
+            auto_compact_input_tokens_threshold: 100_000,
         };
 
         let koi_ctx = ToolContext {

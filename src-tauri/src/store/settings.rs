@@ -276,6 +276,17 @@ pub struct Settings {
     /// Maximum tool-call iterations per agent run (default 50)
     #[serde(default = "default_max_iterations")]
     pub max_iterations: u32,
+    /// Automatically compact long-running sessions once cumulative input tokens
+    /// reach this threshold. Set to 0 to disable threshold-based compaction.
+    #[serde(default = "default_auto_compact_input_tokens_threshold")]
+    pub auto_compact_input_tokens_threshold: u32,
+    /// Maximum characters from project instruction files injected into the system prompt.
+    #[serde(default = "default_project_instruction_budget_chars")]
+    pub project_instruction_budget_chars: u32,
+    /// Whether project-level instruction files (PISCI.md, .pisci/instructions.md, etc.)
+    /// should be discovered and injected into the system prompt.
+    #[serde(default = "default_true")]
+    pub enable_project_instructions: bool,
     /// LLM read timeout in seconds (default 120). Increase for slow models.
     #[serde(default = "default_llm_read_timeout_secs")]
     pub llm_read_timeout_secs: u32,
@@ -375,6 +386,12 @@ fn default_imap_port() -> u16 {
 }
 fn default_max_iterations() -> u32 {
     50
+}
+fn default_auto_compact_input_tokens_threshold() -> u32 {
+    100_000
+}
+fn default_project_instruction_budget_chars() -> u32 {
+    8_000
 }
 fn default_llm_read_timeout_secs() -> u32 {
     120
@@ -508,6 +525,9 @@ impl Default for Settings {
             smtp_from_name: String::new(),
             email_enabled: false,
             max_iterations: default_max_iterations(),
+            auto_compact_input_tokens_threshold: default_auto_compact_input_tokens_threshold(),
+            project_instruction_budget_chars: default_project_instruction_budget_chars(),
+            enable_project_instructions: true,
             llm_read_timeout_secs: default_llm_read_timeout_secs(),
             koi_timeout_secs: default_koi_timeout_secs(),
             heartbeat_enabled: false,

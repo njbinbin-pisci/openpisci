@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use uuid::Uuid;
@@ -19,6 +19,26 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub message_count: i64,
+    #[serde(default)]
+    pub rolling_summary: String,
+    #[serde(default)]
+    pub rolling_summary_version: i64,
+    #[serde(default)]
+    pub total_input_tokens: i64,
+    #[serde(default)]
+    pub total_output_tokens: i64,
+    #[serde(default)]
+    pub last_compacted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionContextState {
+    pub session_id: String,
+    pub rolling_summary: String,
+    pub rolling_summary_version: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub last_compacted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +141,31 @@ pub struct Database {
     pub(crate) conn: Connection,
 }
 
+fn parse_datetime(value: String) -> DateTime<Utc> {
+    value.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now())
+}
+
+fn parse_optional_datetime(value: Option<String>) -> Option<DateTime<Utc>> {
+    value.and_then(|raw| raw.parse::<DateTime<Utc>>().ok())
+}
+
+fn map_session_row(r: &Row<'_>) -> rusqlite::Result<Session> {
+    Ok(Session {
+        id: r.get(0)?,
+        title: r.get(1)?,
+        status: r.get(2)?,
+        source: r.get(3)?,
+        created_at: parse_datetime(r.get::<_, String>(4)?),
+        updated_at: parse_datetime(r.get::<_, String>(5)?),
+        message_count: r.get(6)?,
+        rolling_summary: r.get(7)?,
+        rolling_summary_version: r.get(8)?,
+        total_input_tokens: r.get(9)?,
+        total_output_tokens: r.get(10)?,
+        last_compacted_at: parse_optional_datetime(r.get::<_, Option<String>>(11)?),
+    })
+}
+
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)
@@ -153,7 +198,12 @@ impl Database {
                 status TEXT NOT NULL DEFAULT 'idle',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                message_count INTEGER NOT NULL DEFAULT 0
+                message_count INTEGER NOT NULL DEFAULT 0,
+                rolling_summary TEXT NOT NULL DEFAULT '',
+                rolling_summary_version INTEGER NOT NULL DEFAULT 0,
+                total_input_tokens INTEGER NOT NULL DEFAULT 0,
+                total_output_tokens INTEGER NOT NULL DEFAULT 0,
+                last_compacted_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -226,6 +276,25 @@ impl Database {
             "ALTER TABLE sessions ADD COLUMN source TEXT NOT NULL DEFAULT 'chat'",
             [],
         );
+        let _ = self.conn.execute(
+            "ALTER TABLE sessions ADD COLUMN rolling_summary TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE sessions ADD COLUMN rolling_summary_version INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE sessions ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = self
+            .conn
+            .execute("ALTER TABLE sessions ADD COLUMN last_compacted_at TEXT", []);
 
         // Memory enhancement: add embedding and memory_type columns (ignore if already exist)
         let _ = self
@@ -656,30 +725,22 @@ impl Database {
             created_at: now,
             updated_at: now,
             message_count: 0,
+            rolling_summary: String::new(),
+            rolling_summary_version: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            last_compacted_at: None,
         })
     }
 
     pub fn get_session(&self, id: &str) -> Result<Option<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, status, COALESCE(source, 'chat'), created_at, updated_at, message_count FROM sessions WHERE id = ?1"
+            "SELECT id, title, status, COALESCE(source, 'chat'), created_at, updated_at, message_count, \
+                    COALESCE(rolling_summary, ''), COALESCE(rolling_summary_version, 0), \
+                    COALESCE(total_input_tokens, 0), COALESCE(total_output_tokens, 0), last_compacted_at \
+             FROM sessions WHERE id = ?1"
         )?;
-        let mut rows = stmt.query_map(params![id], |r| {
-            Ok(Session {
-                id: r.get(0)?,
-                title: r.get(1)?,
-                status: r.get(2)?,
-                source: r.get(3)?,
-                created_at: r
-                    .get::<_, String>(4)?
-                    .parse::<DateTime<Utc>>()
-                    .unwrap_or_else(|_| Utc::now()),
-                updated_at: r
-                    .get::<_, String>(5)?
-                    .parse::<DateTime<Utc>>()
-                    .unwrap_or_else(|_| Utc::now()),
-                message_count: r.get(6)?,
-            })
-        })?;
+        let mut rows = stmt.query_map(params![id], map_session_row)?;
         Ok(rows.next().transpose()?)
     }
 
@@ -713,25 +774,12 @@ impl Database {
 
     pub fn list_sessions(&self, limit: i64, offset: i64) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, status, COALESCE(source, 'chat'), created_at, updated_at, message_count FROM sessions ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2"
+            "SELECT id, title, status, COALESCE(source, 'chat'), created_at, updated_at, message_count, \
+                    COALESCE(rolling_summary, ''), COALESCE(rolling_summary_version, 0), \
+                    COALESCE(total_input_tokens, 0), COALESCE(total_output_tokens, 0), last_compacted_at \
+             FROM sessions ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2"
         )?;
-        let rows = stmt.query_map(params![limit, offset], |r| {
-            Ok(Session {
-                id: r.get(0)?,
-                title: r.get(1)?,
-                status: r.get(2)?,
-                source: r.get(3)?,
-                created_at: r
-                    .get::<_, String>(4)?
-                    .parse::<DateTime<Utc>>()
-                    .unwrap_or_else(|_| Utc::now()),
-                updated_at: r
-                    .get::<_, String>(5)?
-                    .parse::<DateTime<Utc>>()
-                    .unwrap_or_else(|_| Utc::now()),
-                message_count: r.get(6)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![limit, offset], map_session_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
@@ -756,6 +804,60 @@ impl Database {
         self.conn.execute(
             "UPDATE sessions SET status = ?1, updated_at = ?2 WHERE id = ?3",
             params![status, now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_session_context_state(&self, id: &str) -> Result<Option<SessionContextState>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, COALESCE(rolling_summary, ''), COALESCE(rolling_summary_version, 0), \
+                    COALESCE(total_input_tokens, 0), COALESCE(total_output_tokens, 0), last_compacted_at \
+             FROM sessions WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |r| {
+            Ok(SessionContextState {
+                session_id: r.get(0)?,
+                rolling_summary: r.get(1)?,
+                rolling_summary_version: r.get(2)?,
+                total_input_tokens: r.get(3)?,
+                total_output_tokens: r.get(4)?,
+                last_compacted_at: parse_optional_datetime(r.get::<_, Option<String>>(5)?),
+            })
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn update_session_usage_totals(
+        &self,
+        session_id: &str,
+        input_delta: u32,
+        output_delta: u32,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions
+             SET total_input_tokens = total_input_tokens + ?1,
+                 total_output_tokens = total_output_tokens + ?2
+             WHERE id = ?3",
+            params![i64::from(input_delta), i64::from(output_delta), session_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_session_rolling_summary(
+        &self,
+        session_id: &str,
+        summary: &str,
+        version: i64,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE sessions
+             SET rolling_summary = ?1,
+                 rolling_summary_version = ?2,
+                 last_compacted_at = ?3,
+                 updated_at = ?3
+             WHERE id = ?4",
+            params![summary, version, now, session_id],
         )?;
         Ok(())
     }
@@ -2844,5 +2946,41 @@ impl Database {
             )?
         };
         Ok(count as u32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Database;
+
+    #[test]
+    fn session_context_state_defaults_and_updates_roundtrip() {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let session = db.create_session(Some("Context")).expect("session");
+
+        let initial = db
+            .get_session_context_state(&session.id)
+            .expect("state query")
+            .expect("state exists");
+        assert_eq!(initial.rolling_summary, "");
+        assert_eq!(initial.rolling_summary_version, 0);
+        assert_eq!(initial.total_input_tokens, 0);
+        assert_eq!(initial.total_output_tokens, 0);
+        assert!(initial.last_compacted_at.is_none());
+
+        db.update_session_usage_totals(&session.id, 123, 45)
+            .expect("usage update");
+        db.update_session_rolling_summary(&session.id, "summary body", 2)
+            .expect("summary update");
+
+        let updated = db
+            .get_session(&session.id)
+            .expect("session query")
+            .expect("session exists");
+        assert_eq!(updated.total_input_tokens, 123);
+        assert_eq!(updated.total_output_tokens, 45);
+        assert_eq!(updated.rolling_summary, "summary body");
+        assert_eq!(updated.rolling_summary_version, 2);
+        assert!(updated.last_compacted_at.is_some());
     }
 }

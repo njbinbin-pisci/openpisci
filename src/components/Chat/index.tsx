@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { RootState, chatActions, sessionsActions, ToolStep, StreamingState, PlanTodoItem } from "../../store";
-import { chatApi, sessionsApi, gatewayApi, AgentEventType, ChannelInfo, ChatAttachment } from "../../services/tauri";
+import { chatApi, sessionsApi, gatewayApi, AgentEventType, ChannelInfo, ChatAttachment, type Session } from "../../services/tauri";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openPath } from "../../services/tauri";
@@ -120,6 +120,34 @@ function sourceIcon(source: string): string {
   return "📩";
 }
 
+function formatTokenCount(value: number | null | undefined): string {
+  const safe = Math.max(0, value ?? 0);
+  if (safe >= 1_000_000) return `${(safe / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (safe >= 1_000) return `${(safe / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  return `${safe}`;
+}
+
+function formatContextTime(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString();
+}
+
+function buildSessionContextBadges(session: Session, t: (key: string, options?: Record<string, unknown>) => string): string[] {
+  const badges: string[] = [];
+  if ((session.rolling_summary_version ?? 0) > 0) {
+    badges.push(t("chat.contextSummaryBadge", { version: session.rolling_summary_version }));
+  }
+  if ((session.total_input_tokens ?? 0) > 0) {
+    badges.push(t("chat.contextTokensBadge", { value: formatTokenCount(session.total_input_tokens) }));
+  }
+  if (session.last_compacted_at) {
+    badges.push(t("chat.contextCompactedBadge"));
+  }
+  return badges;
+}
+
 export default function Chat() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -172,6 +200,10 @@ export default function Chat() {
     total_tokens: number;
     model: string;
     context_budget: number;
+    rolling_summary_version: number;
+    total_input_tokens: number;
+    total_output_tokens: number;
+    last_compacted_at?: string | null;
   } | null>(null);
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false);
   // Track which tool_use/tool_result blocks are expanded (by index key "msgIdx-blockIdx")
@@ -970,16 +1002,28 @@ export default function Chat() {
           {filteredSessions.map((s) => {
               const icon = sourceIcon(s.source);
               const sessionTitle = (s.title ?? t("chat.defaultTitle")).replace(/^🐠\s*/, "");
+              const contextBadges = buildSessionContextBadges(s, t);
+              const compactedAtLabel = formatContextTime(s.last_compacted_at);
+              const sessionMetaTitle = compactedAtLabel
+                ? t("chat.contextLastCompacted", { time: compactedAtLabel })
+                : undefined;
               return (
                 <div
                   key={s.id}
                   className={`session-item ${s.id === activeSessionId ? "active" : ""}`}
                   onClick={() => dispatch(sessionsActions.setActiveSession(s.id))}
                 >
-                  <span className="session-title">
-                    {icon && <span style={{ marginRight: 4, fontSize: 12 }}>{icon}</span>}
-                    {sessionTitle}
-                  </span>
+                  <div className="session-main">
+                    <span className="session-title">
+                      {icon && <span style={{ marginRight: 4, fontSize: 12 }}>{icon}</span>}
+                      {sessionTitle}
+                    </span>
+                    {contextBadges.length > 0 && (
+                      <span className="session-meta" title={sessionMetaTitle}>
+                        {contextBadges.join(" · ")}
+                      </span>
+                    )}
+                  </div>
                   <span className="session-item-right">
                     <span className="session-count">{s.message_count}</span>
                     <button
@@ -1359,6 +1403,22 @@ export default function Chat() {
                 <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
                   {contextPreview.messages.length} 条消息 · ~{contextPreview.messages_tokens.toLocaleString()} / {contextPreview.context_budget.toLocaleString()} tok
                 </span>
+                {contextPreview.rolling_summary_version > 0 && (
+                  <span style={{ fontSize: 11, color: "var(--text-muted)", background: "var(--bg-secondary)", padding: "2px 7px", borderRadius: 8, border: "1px solid var(--border)" }}>
+                    {t("chat.contextSummaryBadge", { version: contextPreview.rolling_summary_version })}
+                  </span>
+                )}
+                <span style={{ fontSize: 11, color: "var(--text-muted)", background: "var(--bg-secondary)", padding: "2px 7px", borderRadius: 8, border: "1px solid var(--border)" }}>
+                  {t("chat.contextInputTokens", { value: formatTokenCount(contextPreview.total_input_tokens) })}
+                </span>
+                <span style={{ fontSize: 11, color: "var(--text-muted)", background: "var(--bg-secondary)", padding: "2px 7px", borderRadius: 8, border: "1px solid var(--border)" }}>
+                  {t("chat.contextOutputTokens", { value: formatTokenCount(contextPreview.total_output_tokens) })}
+                </span>
+                {contextPreview.last_compacted_at && (
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                    {t("chat.contextLastCompacted", { time: formatContextTime(contextPreview.last_compacted_at) ?? contextPreview.last_compacted_at })}
+                  </span>
+                )}
                 <div style={{ width: 60, height: 4, borderRadius: 2, background: "var(--bg-secondary)", overflow: "hidden" }}>
                   <div style={{
                     height: "100%",

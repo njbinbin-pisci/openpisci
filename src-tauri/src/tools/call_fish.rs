@@ -255,6 +255,7 @@ impl CallFishTool {
             },
             vision_override: Some(vision_capable),
             notification_rx: None,
+            auto_compact_input_tokens_threshold: 100_000,
         };
 
         let fish_ctx = ToolContext {

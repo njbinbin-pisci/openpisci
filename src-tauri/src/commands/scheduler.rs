@@ -362,6 +362,7 @@ pub async fn execute_task(
         },
         vision_override: None,
         notification_rx: None,
+        auto_compact_input_tokens_threshold: 100_000,
     };
 
     let ctx = ToolContext {

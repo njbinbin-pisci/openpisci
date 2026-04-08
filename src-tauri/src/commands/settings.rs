@@ -244,6 +244,15 @@ pub async fn save_settings(state: State<'_, AppState>, updates: Value) -> Result
     if let Some(v) = updates["max_iterations"].as_u64() {
         settings.max_iterations = v as u32;
     }
+    if let Some(v) = updates["auto_compact_input_tokens_threshold"].as_u64() {
+        settings.auto_compact_input_tokens_threshold = v as u32;
+    }
+    if let Some(v) = updates["project_instruction_budget_chars"].as_u64() {
+        settings.project_instruction_budget_chars = v.max(512) as u32;
+    }
+    if let Some(v) = updates["enable_project_instructions"].as_bool() {
+        settings.enable_project_instructions = v;
+    }
     if let Some(v) = updates["llm_read_timeout_secs"].as_u64() {
         settings.llm_read_timeout_secs = v.max(30) as u32; // minimum 30s
     }
