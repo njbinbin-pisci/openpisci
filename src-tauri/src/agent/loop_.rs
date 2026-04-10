@@ -15,8 +15,9 @@ use crate::store::Database;
 use anyhow::Result;
 use futures::future::join_all;
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -37,6 +38,9 @@ const TOOL_CALL_HISTORY_SIZE: usize = 25;
 const WARNING_THRESHOLD: usize = 8;
 const CRITICAL_THRESHOLD: usize = 16;
 const CIRCUIT_BREAKER_THRESHOLD: usize = 25;
+const RESEARCH_WARNING_THRESHOLD: usize = 4;
+const RESEARCH_CRITICAL_THRESHOLD: usize = 6;
+const RESEARCH_RECENT_WINDOW: usize = 10;
 const PING_PONG_WARNING: usize = 8;
 const PING_PONG_CRITICAL: usize = 16;
 const TOOL_RESULT_HARD_MAX_CHARS: usize = 48_000;
@@ -46,6 +50,7 @@ const CHECKPOINT_MAX_BYTES: usize = 8_000_000;
 /// Tools that are known polling/status-checking tools. These get stricter
 /// no-progress detection (inspired by OpenClaw's known_poll_no_progress).
 const KNOWN_POLL_TOOLS: &[&str] = &["process_control", "shell", "powershell_query"];
+const KNOWLEDGE_GATHERING_TOOLS: &[&str] = &["web_search", "browser"];
 
 static TOOL_RATE_STATE: Lazy<Mutex<HashMap<String, Vec<std::time::Instant>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -99,11 +104,20 @@ impl LoopDetectionResult {
 }
 
 /// A single recorded tool call with its outcome, for per-tool history tracking.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct ToolCallRecord {
     name: String,
     input_hash: u64,
     result_hash: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct AgentCheckpointPayload {
+    base_context_hash: u64,
+    base_message_count: usize,
+    messages: Vec<LlmMessage>,
+    loop_history: Vec<ToolCallRecord>,
+    seen_notifications: Vec<String>,
 }
 
 /// Per-session tool call history for loop detection.
@@ -113,12 +127,6 @@ struct LoopDetectorState {
 }
 
 impl LoopDetectorState {
-    fn new() -> Self {
-        Self {
-            history: Vec::new(),
-        }
-    }
-
     /// Record a completed tool call with its result hash.
     fn record(&mut self, name: &str, input: &serde_json::Value, result_hash: u64) {
         let input_hash = stable_hash_input(name, input);
@@ -173,6 +181,37 @@ impl LoopDetectorState {
                     message: format!(
                         "轮询工具 '{}' 已连续调用{}次，结果无变化。建议检查是否需要换一种方法或增加等待时间。",
                         pending_name, streak
+                    ),
+                };
+            }
+        }
+
+        // 2.5. Research tools: allow query refinement, but stop endless "one more search"
+        let is_research = KNOWLEDGE_GATHERING_TOOLS
+            .iter()
+            .any(|t| pending_name.contains(t));
+        if is_research {
+            let recent_family_count =
+                self.count_recent_tool_family_occurrences(pending_name, RESEARCH_RECENT_WINDOW) + 1;
+            if recent_family_count >= RESEARCH_CRITICAL_THRESHOLD {
+                return LoopDetectionResult {
+                    level: LoopLevel::Critical,
+                    detector: Some(LoopDetector::GenericRepeat),
+                    count: recent_family_count,
+                    message: format!(
+                        "调研工具 '{}' 在最近步骤中已累计调用{}次。请停止继续搜集，先基于现有证据总结结论、明确不确定性，再决定是否还需要补充一轮查询。",
+                        pending_name, recent_family_count
+                    ),
+                };
+            }
+            if recent_family_count >= RESEARCH_WARNING_THRESHOLD {
+                return LoopDetectionResult {
+                    level: LoopLevel::Warning,
+                    detector: Some(LoopDetector::GenericRepeat),
+                    count: recent_family_count,
+                    message: format!(
+                        "调研工具 '{}' 在最近步骤中已累计调用{}次。请优先收束：总结已有发现、列出分歧点，只在确有信息缺口时再补充搜索。",
+                        pending_name, recent_family_count
                     ),
                 };
             }
@@ -272,6 +311,15 @@ impl LoopDetectorState {
             .count()
     }
 
+    fn count_recent_tool_family_occurrences(&self, name: &str, window: usize) -> usize {
+        self.history
+            .iter()
+            .rev()
+            .take(window)
+            .filter(|r| same_tool_family(&r.name, name))
+            .count()
+    }
+
     /// Detect A→B→A→B alternating pattern at the tail of history.
     /// Returns the number of alternating pairs found.
     fn detect_ping_pong(&self, pending_name: &str, pending_hash: u64) -> usize {
@@ -316,6 +364,23 @@ fn stable_hash_input(name: &str, input: &serde_json::Value) -> u64 {
     }
     normalized.to_string().hash(&mut hasher);
     hasher.finish()
+}
+
+fn stable_hash_messages(messages: &[LlmMessage]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    serde_json::to_string(messages)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
+fn same_tool_family(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let a_research = KNOWLEDGE_GATHERING_TOOLS.iter().any(|t| a.contains(t));
+    let b_research = KNOWLEDGE_GATHERING_TOOLS.iter().any(|t| b.contains(t));
+    a_research && b_research
 }
 
 /// Compute a stable hash of a single tool result content string.
@@ -533,8 +598,9 @@ async fn compact_summarise(
     let summary_prompt = format!(
         "请将以下内容合并为一条新的滚动摘要。\n\
          输出纯摘要正文，不要添加标题或围栏。\n\
-         摘要必须覆盖四部分：用户目标、已完成工作、当前状态、关键文件/命令/结果。\n\
-         保留关键路径、命令、错误和结论，省略重复中间步骤。\n\n\
+         摘要必须覆盖五部分：当前任务契约/用户目标、已完成工作、当前状态、未完成或待交接事项、关键文件/命令/结果。\n\
+         必须保留仍然有效的任务目标、todo id、显式 handoff 目标（如 @Reviewer）、`[ProjectStatus]` 信号、阻塞原因、关键路径、错误和结论，省略重复中间步骤。\n\
+         如果历史里出现了明确的下一位执行者、完成条件或待验证项，除非后续内容已经明确覆盖，否则不要丢失这些信息。\n\n\
          {}新近待压缩的对话历史：\n{}",
         existing_summary_block, history_text
     );
@@ -903,7 +969,9 @@ impl AgentLoop {
             }
         };
 
-        let end_result = format!("[trace_id:{}] {}", trace_id, result.content);
+        let final_result_content =
+            decorate_tool_failure_for_agent(name, input, &result.content, result.is_error);
+        let end_result = format!("[trace_id:{}] {}", trace_id, final_result_content);
         let _ = event_tx
             .send(AgentEvent::ToolEnd {
                 id: id.to_string(),
@@ -916,7 +984,7 @@ impl AgentLoop {
         if let Some(ref db_arc) = self.db {
             let action = format!("{} [trace:{}]", audit_action_label(name, input), trace_id);
             let redacted_input = self.policy.redact_text(&summarize_tool_input(name, input));
-            let redacted_result = self.policy.redact_text(&result.content);
+            let redacted_result = self.policy.redact_text(&final_result_content);
             let input_summary = Some(truncate_str(&redacted_input, 300));
             let result_summary = Some(truncate_str(&redacted_result, 200));
             let is_err = result.is_error;
@@ -937,7 +1005,7 @@ impl AgentLoop {
         }
 
         let mut guarded_content = guard_tool_result_content(
-            &result.content,
+            &final_result_content,
             dynamic_result_limit(
                 crate::llm::compute_total_input_budget(self.context_window, self.max_tokens)
                     .saturating_sub(crate::llm::estimate_request_overhead_tokens(
@@ -1098,24 +1166,46 @@ impl AgentLoop {
         } else {
             None
         };
+        let base_context_hash = stable_hash_messages(&messages);
+        let base_message_count = messages.len();
+        let mut restored_loop_history: Option<Vec<ToolCallRecord>> = None;
+        let mut restored_seen_notifications: Option<HashSet<String>> = None;
 
         // Check for a resumable checkpoint from a previous (crashed) run
         if let Some(ref db_arc) = self.db {
             let db = db_arc.lock().await;
             match db.load_checkpoint(&ctx.session_id) {
                 Ok(Some((iter, json))) => {
-                    info!(
-                        "Resuming from checkpoint at iteration {} for session {}",
-                        iter, ctx.session_id
-                    );
-                    match serde_json::from_str::<Vec<LlmMessage>>(&json) {
-                        Ok(saved) if !saved.is_empty() => {
-                            messages = saved;
+                    match serde_json::from_str::<AgentCheckpointPayload>(&json) {
+                        Ok(payload)
+                            if !payload.messages.is_empty()
+                                && payload.base_context_hash == base_context_hash
+                                && payload.base_message_count == base_message_count =>
+                        {
+                            info!(
+                                "Resuming from checkpoint at iteration {} for session {}",
+                                iter, ctx.session_id
+                            );
+                            restored_loop_history = Some(payload.loop_history.clone());
+                            restored_seen_notifications = Some(
+                                payload.seen_notifications.into_iter().collect(),
+                            );
+                            messages = payload.messages;
                             info!("Checkpoint restored: {} messages", messages.len());
-                            // Mark checkpoint as consumed immediately to prevent re-use on next run
                             let _ = db.finish_checkpoint(&ctx.session_id, "resumed");
                         }
-                        _ => {
+                        Ok(payload) => {
+                            warn!(
+                                "Checkpoint stale for session {} (base hash/count mismatch: {}:{}, current {}:{}); ignoring",
+                                ctx.session_id,
+                                payload.base_context_hash,
+                                payload.base_message_count,
+                                base_context_hash,
+                                base_message_count
+                            );
+                            let _ = db.finish_checkpoint(&ctx.session_id, "stale");
+                        }
+                        Err(_) => {
                             warn!("Checkpoint JSON invalid; clearing and starting from scratch");
                             let _ = db.finish_checkpoint(&ctx.session_id, "invalid");
                         }
@@ -1127,8 +1217,12 @@ impl AgentLoop {
         }
 
         let max_iterations = ctx.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS as u32) as usize;
-        let mut loop_detector = LoopDetectorState::new();
+        let mut loop_detector = LoopDetectorState {
+            history: restored_loop_history.unwrap_or_default(),
+        };
         let mut rolling_summary = String::new();
+        let mut seen_notifications: HashSet<String> =
+            restored_seen_notifications.unwrap_or_default();
         let mut rolling_summary_version = 0i64;
         let mut cumulative_input_tokens = 0i64;
         let mut cumulative_output_tokens = 0i64;
@@ -1156,6 +1250,10 @@ impl AgentLoop {
             if let Some(ref rx_mutex) = self.notification_rx {
                 let mut rx = rx_mutex.lock().await;
                 while let Ok(msg) = rx.try_recv() {
+                    if !seen_notifications.insert(msg.clone()) {
+                        info!("Skipping duplicate notification already seen in this run");
+                        continue;
+                    }
                     let preview = if msg.chars().count() > 80 {
                         format!("{}...", msg.chars().take(80).collect::<String>())
                     } else {
@@ -1553,7 +1651,8 @@ impl AgentLoop {
                     self.persist_message(&ctx.session_id, &asst_msg, turn_index)
                         .await;
                     let reminder = format!(
-                        "⚠️ 你的计划中还有未完成的步骤，请继续执行或将其标记为 cancelled：\n{}\n\n请继续完成这些步骤，或者用 plan_todo 将无法完成的步骤标记为 cancelled 并向用户说明原因。",
+                        "⚠️ 你的计划中还有未完成的步骤，请继续执行或将其标记为 cancelled：\n{}\n\n\
+                         `plan_todo` 只更新计划板，本身不算实际进展。请继续使用能真正推进任务的工具，或直接产出可交付结果；如果这些步骤无法完成，再用 `plan_todo` 标记为 cancelled 并说明原因。",
                         unfinished_todos.join("\n")
                     );
                     let reminder_msg = LlmMessage {
@@ -1606,23 +1705,19 @@ impl AgentLoop {
                 }
             }
 
-            // If ALL tool calls in this iteration are blocked, break the loop.
-            if !blocked_tool_ids.is_empty() && blocked_tool_ids.len() == tool_calls.len() {
+            let all_tools_blocked =
+                !blocked_tool_ids.is_empty() && blocked_tool_ids.len() == tool_calls.len();
+
+            // If all tool calls are blocked, surface a stronger reminder but still
+            // let the agent see synthetic tool failures and produce a final answer
+            // from the evidence it already has.
+            if all_tools_blocked {
                 let combined_msg = warning_messages.join("\n");
                 let _ = event_tx
                     .send(AgentEvent::TextDelta {
                         delta: format!("\n\n[系统] {}\n", combined_msg),
                     })
                     .await;
-                let asst_msg = LlmMessage {
-                    role: "assistant".into(),
-                    content: MessageContent::text(&text_buf),
-                };
-                new_messages.push(asst_msg.clone());
-                messages.push(asst_msg.clone());
-                self.persist_message(&ctx.session_id, &asst_msg, turn_index)
-                    .await;
-                break;
             }
 
             // Build assistant message with tool calls
@@ -1758,15 +1853,19 @@ impl AgentLoop {
                 }
             }
 
-            // Inject any warning messages (non-blocking) into the tool results
-            if !warning_messages.is_empty() && blocked_tool_ids.is_empty() {
-                let combined = warning_messages.join("\n");
-                tool_result_blocks.push(ContentBlock::ToolResult {
-                    tool_use_id: "system_loop_warning".to_string(),
-                    content: format!("[循环检测警告] {}", combined),
-                    is_error: true,
-                });
-            }
+            let warning_reminder = if all_tools_blocked {
+                Some(format!(
+                    "[系统提醒]\n{}\n本轮所有工具调用都已被循环检测器阻断。现在必须停止继续沿用刚才的工具路径，直接基于已有证据给出当前最佳答复；如果信息仍有缺口，请明确列出不确定项、现有判断依据与后续建议，不要继续调用工具。",
+                    warning_messages.join("\n")
+                ))
+            } else if !warning_messages.is_empty() && blocked_tool_ids.is_empty() {
+                Some(format!(
+                    "[系统提醒]\n{}\n请先基于现有结果收束、总结或切换方法，不要机械重复刚才的工具路径。",
+                    warning_messages.join("\n")
+                ))
+            } else {
+                None
+            };
 
             // Add tool results as user message
             let tool_result_msg = LlmMessage {
@@ -1777,11 +1876,35 @@ impl AgentLoop {
             messages.push(tool_result_msg.clone());
             self.persist_message(&ctx.session_id, &tool_result_msg, turn_index)
                 .await;
+            messages = crate::commands::chat::collapse_superseded_tool_failures(messages);
+
+            if let Some(reminder) = warning_reminder {
+                let reminder_msg = LlmMessage {
+                    role: "user".into(),
+                    content: MessageContent::text(&reminder),
+                };
+                let _ = event_tx
+                    .send(AgentEvent::TextDelta {
+                        delta: format!("\n\n{}\n", reminder),
+                    })
+                    .await;
+                new_messages.push(reminder_msg.clone());
+                messages.push(reminder_msg.clone());
+                self.persist_message(&ctx.session_id, &reminder_msg, turn_index)
+                    .await;
+            }
 
             // Write checkpoint after each iteration (with size guard)
             if let Some(ref db_arc) = self.db {
                 let db = db_arc.lock().await;
-                match serde_json::to_string(&messages) {
+                let payload = AgentCheckpointPayload {
+                    base_context_hash,
+                    base_message_count,
+                    messages: messages.clone(),
+                    loop_history: loop_detector.history.clone(),
+                    seen_notifications: seen_notifications.iter().cloned().collect(),
+                };
+                match serde_json::to_string(&payload) {
                     Ok(json) => {
                         if json.len() > CHECKPOINT_MAX_BYTES {
                             warn!(
@@ -1789,6 +1912,7 @@ impl AgentLoop {
                                 json.len(),
                                 CHECKPOINT_MAX_BYTES
                             );
+                            let _ = db.finish_checkpoint(&ctx.session_id, "oversized");
                         } else if let Err(e) =
                             db.upsert_checkpoint(&ctx.session_id, _iteration, &json)
                         {
@@ -1957,6 +2081,82 @@ fn friendly_tool_error(tool_name: &str, raw_error: &str) -> String {
 
     // Generic fallback
     format!("[{}] 工具执行失败：{}", tool_name, raw_error)
+}
+
+fn decorate_tool_failure_for_agent(
+    tool_name: &str,
+    input: &serde_json::Value,
+    content: &str,
+    is_error: bool,
+) -> String {
+    if !is_error || content.contains("[ConstraintViolation]") {
+        return content.to_string();
+    }
+
+    let lower = content.to_lowercase();
+    let looks_like_constraint = lower.contains("missing required parameter")
+        || lower.contains(" requires ")
+        || lower.contains("requires '")
+        || lower.contains("requires \"")
+        || lower.contains("unknown action")
+        || lower.contains("not configured")
+        || lower.contains("tool is disabled")
+        || lower.contains("working directory does not exist")
+        || lower.contains("file not found")
+        || lower.contains("path_a not found")
+        || lower.contains("path_b not found")
+        || lower.contains("too large")
+        || lower.contains("permission denied")
+        || lower.contains("access is denied")
+        || lower.contains("denied by policy");
+
+    if !looks_like_constraint {
+        return content.to_string();
+    }
+
+    let input_preview = serde_json::to_string(input).unwrap_or_default();
+    let mut suggestions: Vec<&str> = Vec::new();
+    if lower.contains("missing required parameter")
+        || lower.contains(" requires ")
+        || lower.contains("requires '")
+        || lower.contains("requires \"")
+    {
+        suggestions.push("补齐工具要求的必填参数后重试");
+    }
+    if lower.contains("not configured") || lower.contains("tool is disabled") {
+        suggestions.push("先在 Settings 中启用或配置该工具");
+    }
+    if lower.contains("working directory does not exist")
+        || lower.contains("file not found")
+        || lower.contains("path_a not found")
+        || lower.contains("path_b not found")
+    {
+        suggestions.push("先确认路径存在，必要时先列目录或创建目标");
+    }
+    if lower.contains("too large") {
+        suggestions.push("改用 offset/limit、分页、分块或更小范围参数");
+    }
+    if lower.contains("permission denied")
+        || lower.contains("access is denied")
+        || lower.contains("denied by policy")
+    {
+        suggestions.push("改用允许的路径/命令，或请求用户确认后再重试");
+    }
+    if suggestions.is_empty() {
+        suggestions.push("修正输入或先满足前置条件后再重试");
+    }
+
+    let mut deduped = HashSet::new();
+    let suggestion_text = suggestions
+        .into_iter()
+        .filter(|item| deduped.insert(*item))
+        .collect::<Vec<_>>()
+        .join("；");
+
+    format!(
+        "[ConstraintViolation] 工具 `{}` 本次调用未生效。请不要重复相同调用，先按提示调整后再试。\n建议：{}\n输入：{}\n原始结果：{}",
+        tool_name, suggestion_text, input_preview, content
+    )
 }
 
 fn truncate_str(s: &str, max: usize) -> String {

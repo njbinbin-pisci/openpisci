@@ -181,7 +181,6 @@ pub fn build_registry(
                 app: app.clone(),
                 db: db_arc.clone(),
                 sender_id: "pisci".to_string(),
-                sender_name: "Pisci".to_string(),
             }));
         }
     }

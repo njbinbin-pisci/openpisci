@@ -10,6 +10,7 @@ use crate::store::{
 };
 use crate::tools;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -165,12 +166,46 @@ pub(crate) async fn persist_task_spine_from_plan_state(
     }
 }
 
-async fn build_session_message_context(
-    state: &State<'_, AppState>,
+async fn persist_session_task_contract(
+    db_arc: &Arc<tokio::sync::Mutex<crate::store::Database>>,
+    session_id: &str,
+    latest_user_text: &str,
+    replace_goal: bool,
+) {
+    let trimmed = latest_user_text.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let db = db_arc.lock().await;
+    if let Ok(existing) = db.get_or_create_task_state("session", session_id) {
+        let mut spine = if replace_goal {
+            TaskSpine::default()
+        } else {
+            existing.to_task_spine()
+        };
+        if replace_goal || spine.goal.trim().is_empty() {
+            spine.goal = trimmed.to_string();
+        }
+        spine.current_step = trimmed.to_string();
+        let summary = spine.current_step.clone();
+        let goal = spine.goal.clone();
+        let state_json = serde_json::to_string(&spine).unwrap_or_else(|_| "{}".into());
+        let _ = db.update_task_state(
+            &existing.id,
+            Some(&goal),
+            Some(&state_json),
+            Some(&summary),
+            Some("active"),
+        );
+    }
+}
+
+async fn build_session_message_context_from_db(
+    db_arc: &Arc<tokio::sync::Mutex<crate::store::Database>>,
     session_id: &str,
     budget: usize,
 ) -> Result<SessionMessageContext, String> {
-    let db = state.db.lock().await;
+    let db = db_arc.lock().await;
     let history = db
         .get_messages_latest(session_id, 2000)
         .map_err(|e| e.to_string())?;
@@ -197,6 +232,14 @@ async fn build_session_message_context(
         session_state,
         latest_user_text,
     })
+}
+
+async fn build_session_message_context(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    budget: usize,
+) -> Result<SessionMessageContext, String> {
+    build_session_message_context_from_db(&state.db, session_id, budget).await
 }
 
 async fn build_chat_prompt_artifacts(
@@ -568,7 +611,8 @@ pub async fn chat_send(
 
     // Save user message to DB (use effective_content which may include file path annotation)
     // clear_plan defaults to true; pass false to preserve an existing plan (continue previous tasks).
-    if clear_plan.unwrap_or(true) {
+    let replace_task_contract = clear_plan.unwrap_or(true);
+    if replace_task_contract {
         let mut plans = state.plan_state.lock().await;
         plans.remove(&session_id);
     }
@@ -581,6 +625,13 @@ pub async fn chat_send(
         db.update_session_status(&session_id, "running")
             .map_err(|e| e.to_string())?;
     }
+    persist_session_task_contract(
+        &state.db,
+        &session_id,
+        &effective_content,
+        replace_task_contract,
+    )
+    .await;
 
     // Load message history and build context with layered compression.
     let budget = compute_context_budget(context_window, max_tokens);
@@ -1101,6 +1152,7 @@ pub async fn run_agent_headless(
             let _ = db.append_message(session_id, "user", &effective_user_message);
         }
     }
+    persist_session_task_contract(&state.db, session_id, &effective_user_message, true).await;
 
     let client = build_client_with_timeout(
         &provider,
@@ -1234,10 +1286,24 @@ pub async fn run_agent_headless(
     } else {
         String::new()
     };
+    let task_state_context = {
+        let db = state.db.lock().await;
+        match db.load_task_state("session", session_id) {
+            Ok(Some(ts))
+                if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) =>
+            {
+                render_task_state_section("Active Task State", "Progress", &ts)
+            }
+            _ => String::new(),
+        }
+    };
 
     let mut system_prompt = build_im_system_prompt(channel, vision_capable);
     if !scoped_memory_context.is_empty() {
         system_prompt.push_str(&scoped_memory_context);
+    }
+    if !task_state_context.is_empty() {
+        system_prompt.push_str(&task_state_context);
     }
     if !pool_context.is_empty() {
         system_prompt.push_str(&pool_context);
@@ -1290,34 +1356,23 @@ pub async fn run_agent_headless(
     // After building LLM messages, sanitize any orphaned tool_use blocks (tool calls without
     // a matching tool_result) that can occur when a previous agent run was cancelled mid-turn.
     // Orphaned tool_use blocks cause API errors and confuse the LLM into re-executing old tasks.
-    let mut llm_messages = {
-        let db = state.db.lock().await;
-        let history = db
-            .get_messages_latest(session_id, 2000)
-            .map_err(|e| e.to_string())?;
-        tracing::info!(
-            "run_agent_headless: loaded {} history messages for {}",
-            history.len(),
-            session_id
-        );
-        let rolling_summary = db
-            .get_session_context_state(session_id)
-            .map_err(|e| e.to_string())?
-            .map(|state| state.rolling_summary)
-            .unwrap_or_default();
-        let msgs = build_context_messages(
-            &history,
-            compute_context_budget(context_window, max_tokens),
-            (!rolling_summary.trim().is_empty()).then_some(rolling_summary.as_str()),
-        );
-        let sanitized = sanitize_tool_use_result_pairing(msgs);
-        tracing::info!(
-            "run_agent_headless: context has {} LLM messages after sanitize for {}",
-            sanitized.len(),
-            session_id
-        );
-        sanitized
-    };
+    let session_context = build_session_message_context_from_db(
+        &state.db,
+        session_id,
+        compute_context_budget(context_window, max_tokens),
+    )
+    .await?;
+    tracing::info!(
+        "run_agent_headless: context has {} LLM messages before sanitize for {}",
+        session_context.llm_messages.len(),
+        session_id
+    );
+    let mut llm_messages = sanitize_tool_use_result_pairing(session_context.llm_messages);
+    tracing::info!(
+        "run_agent_headless: context has {} LLM messages after sanitize for {}",
+        llm_messages.len(),
+        session_id
+    );
 
     // For vision-capable models: inject the inbound image into the last user message as a ContentBlock
     if let Some(ref media) = inbound_media {
@@ -1383,7 +1438,7 @@ pub async fn run_agent_headless(
         let _ = db.update_session_status(session_id, "idle");
     }
 
-    let (final_msgs, _, _) = match run_result {
+    let (final_msgs, total_in, total_out) = match run_result {
         Ok(messages) => messages,
         Err(e) => {
             // Emit an error event so the frontend clears the running state without
@@ -1445,11 +1500,20 @@ pub async fn run_agent_headless(
         persist_agent_turn(&db, session_id, &final_msgs);
         tracing::info!("run_agent_headless: persist done for {}", session_id);
     }
+    persist_task_spine_from_plan_state(
+        &state.app_handle,
+        &state.db,
+        session_id,
+        "session",
+        session_id,
+        &effective_user_message,
+    )
+    .await;
 
     // Emit Done event for tool-steps panel
     let done_payload = serde_json::to_value(&AgentEvent::Done {
-        total_input_tokens: 0,
-        total_output_tokens: 0,
+        total_input_tokens: total_in,
+        total_output_tokens: total_out,
     })
     .unwrap_or_default();
     let _ = state
@@ -2448,6 +2512,10 @@ pub fn build_context_messages(
     // tool_result in the next message. Previously only applied in the headless path.
     result = sanitize_tool_use_result_pairing(result);
 
+    // If a later retry of the same tool call succeeded, remove the earlier failed
+    // ToolUse/ToolResult pair from context so the agent sees the corrected state.
+    result = collapse_superseded_tool_failures(result);
+
     tracing::debug!(
         "build_context_messages: {} turns → {} LlmMessages, ~{} tokens (budget={})",
         total_turns,
@@ -2637,6 +2705,112 @@ fn blocks_to_token_text(blocks: &[ContentBlock]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn tool_call_signature(name: &str, input: &serde_json::Value) -> String {
+    let mut normalized = input.clone();
+    if let Some(obj) = normalized.as_object_mut() {
+        obj.remove("_trace_id");
+    }
+    let input_json = serde_json::to_string(&normalized).unwrap_or_default();
+    format!("{}::{}", name, input_json)
+}
+
+pub(crate) fn collapse_superseded_tool_failures(mut msgs: Vec<LlmMessage>) -> Vec<LlmMessage> {
+    let mut tool_use_meta: HashMap<String, (usize, String)> = HashMap::new();
+    let mut last_success_pos: HashMap<String, usize> = HashMap::new();
+
+    for (msg_idx, msg) in msgs.iter().enumerate() {
+        let MessageContent::Blocks(blocks) = &msg.content else {
+            continue;
+        };
+
+        for block in blocks {
+            if let ContentBlock::ToolUse { id, name, input } = block {
+                tool_use_meta.insert(id.clone(), (msg_idx, tool_call_signature(name, input)));
+            }
+        }
+
+        for block in blocks {
+            if let ContentBlock::ToolResult {
+                tool_use_id,
+                is_error,
+                ..
+            } = block
+            {
+                if *is_error {
+                    continue;
+                }
+                if let Some((tool_msg_idx, signature)) = tool_use_meta.get(tool_use_id) {
+                    last_success_pos
+                        .entry(signature.clone())
+                        .and_modify(|pos| *pos = (*pos).max(*tool_msg_idx))
+                        .or_insert(*tool_msg_idx);
+                }
+            }
+        }
+    }
+
+    if last_success_pos.is_empty() {
+        return msgs;
+    }
+
+    let mut superseded_tool_use_ids: HashSet<String> = HashSet::new();
+    for msg in &msgs {
+        let MessageContent::Blocks(blocks) = &msg.content else {
+            continue;
+        };
+        for block in blocks {
+            if let ContentBlock::ToolResult {
+                tool_use_id,
+                is_error,
+                ..
+            } = block
+            {
+                if !*is_error {
+                    continue;
+                }
+                if let Some((tool_msg_idx, signature)) = tool_use_meta.get(tool_use_id) {
+                    if last_success_pos
+                        .get(signature)
+                        .is_some_and(|success_pos| tool_msg_idx < success_pos)
+                    {
+                        superseded_tool_use_ids.insert(tool_use_id.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    if superseded_tool_use_ids.is_empty() {
+        return msgs;
+    }
+
+    for msg in msgs.iter_mut() {
+        let MessageContent::Blocks(blocks) = &mut msg.content else {
+            continue;
+        };
+        blocks.retain(|block| match block {
+            ContentBlock::ToolUse { id, .. } => !superseded_tool_use_ids.contains(id),
+            ContentBlock::ToolResult {
+                tool_use_id,
+                is_error,
+                ..
+            } => !(*is_error && superseded_tool_use_ids.contains(tool_use_id)),
+            _ => true,
+        });
+    }
+
+    msgs.retain(|msg| match &msg.content {
+        MessageContent::Blocks(blocks) => !blocks.is_empty(),
+        MessageContent::Text(text) => !text.trim().is_empty(),
+    });
+
+    tracing::info!(
+        "collapse_superseded_tool_failures: removed {} superseded failed tool attempt(s)",
+        superseded_tool_use_ids.len()
+    );
+    msgs
 }
 
 /// Remove orphaned tool_use blocks from LLM messages.

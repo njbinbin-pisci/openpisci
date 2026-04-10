@@ -931,7 +931,9 @@ impl PoolOrgTool {
         );
 
         Ok(ToolResult::ok(format!(
-            "Todo '{}' created with ID `{}`. Use claim_todo to start working on it.",
+            "Todo '{}' created with ID `{}`.\n\
+             This only updates the pool task board; it does not start the work for you.\n\
+             Next: claim it if you will do it yourself, then use the real execution tools or `pool_chat` to produce the deliverable.",
             todo.title,
             &todo.id[..8.min(todo.id.len())]
         )))
@@ -1006,7 +1008,9 @@ impl PoolOrgTool {
         );
 
         Ok(ToolResult::ok(format!(
-            "Todo '{}' ({}) claimed. Status is now in_progress.",
+            "Todo '{}' ({}) claimed. Status is now in_progress.\n\
+             This only updates ownership/status on the board; it does not complete the task.\n\
+             Next: do the actual work and publish the deliverable via the appropriate tool (often `pool_chat`, files, code tools, or research tools depending on the task).",
             &todo.id[..8.min(todo.id.len())],
             todo.title
         )))
@@ -1079,7 +1083,9 @@ impl PoolOrgTool {
         );
 
         Ok(ToolResult::ok(format!(
-            "Todo '{}' ({}) marked as completed. Summary recorded.",
+            "Todo '{}' ({}) marked as completed. Summary recorded.\n\
+             This updates the board and records the result, but it does NOT automatically hand off to the next teammate or notify Pisci.\n\
+             Next: if another agent must continue, post `[ProjectStatus] follow_up_needed` with an explicit @mention in `pool_chat`; if the work is ready to conclude, post `[ProjectStatus] ready_for_pisci_review @pisci` in `pool_chat`.",
             &todo.id[..8.min(todo.id.len())],
             todo.title
         )))
@@ -1193,7 +1199,9 @@ impl PoolOrgTool {
         }));
 
         Ok(ToolResult::ok(format!(
-            "Todo '{}' ({}) status changed to '{}'.",
+            "Todo '{}' ({}) status changed to '{}'.\n\
+             This only updates the board state; it does not explain the situation to collaborators by itself.\n\
+             Next: if teammates or Pisci need to react, send a concise `pool_chat` update with the blocker, waiting condition, or requested follow-up.",
             &todo.id[..8.min(todo.id.len())],
             todo.title,
             new_status

@@ -1914,6 +1914,29 @@ impl Database {
         Ok(rows.next().transpose()?)
     }
 
+    pub fn list_recent_task_states(&self, limit: i64) -> Result<Vec<TaskState>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, scope_type, scope_id, goal, state_json, summary, status, version, created_at, updated_at \
+             FROM task_states ORDER BY updated_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |r| {
+            Ok(TaskState {
+                id: r.get(0)?,
+                scope_type: r.get(1)?,
+                scope_id: r.get(2)?,
+                goal: r.get(3)?,
+                state_json: r.get(4)?,
+                summary: r.get(5)?,
+                status: r.get(6)?,
+                version: r.get(7)?,
+                created_at: parse_datetime(r.get(8)?),
+                updated_at: parse_datetime(r.get(9)?),
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     // ------------------------------------------------------------------
     // Koi (persistent Agents)
     // ------------------------------------------------------------------

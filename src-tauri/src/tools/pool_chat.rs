@@ -9,7 +9,7 @@
 /// - Busy Koi: notification injected into their running AgentLoop
 /// - Idle Koi: spawned to check messages and respond autonomously
 use crate::agent::tool::{Tool, ToolContext, ToolResult};
-use crate::koi::runtime::KOI_SESSIONS;
+use crate::koi::runtime::KoiRuntime;
 use crate::store::Database;
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -21,7 +21,6 @@ pub struct PoolChatTool {
     pub app: AppHandle,
     pub db: Arc<Mutex<Database>>,
     pub sender_id: String,
-    pub sender_name: String,
 }
 
 #[async_trait]
@@ -152,7 +151,7 @@ impl PoolChatTool {
             .app
             .emit(&event_name, serde_json::to_value(&msg).unwrap_or_default());
 
-        self.dispatch_mentions(&pool_id, content).await;
+        self.spawn_mention_dispatch(&pool_id, content);
 
         Ok(ToolResult::ok(format!(
             "Message sent to pool (id: {}).",
@@ -250,7 +249,7 @@ impl PoolChatTool {
             .app
             .emit(&event_name, serde_json::to_value(&msg).unwrap_or_default());
 
-        self.dispatch_mentions(&pool_id, content).await;
+        self.spawn_mention_dispatch(&pool_id, content);
 
         Ok(ToolResult::ok(format!(
             "Reply sent (id: {}, replying to #{}).",
@@ -258,62 +257,27 @@ impl PoolChatTool {
         )))
     }
 
-    /// Detect @KoiName / @all mentions in content and dispatch notifications.
-    /// Busy Koi: inject into running AgentLoop.
-    /// Idle Koi: spawn activation to check messages.
-    async fn dispatch_mentions(&self, pool_id: &str, content: &str) {
+    /// Route @mentions through the unified KoiRuntime dispatcher.
+    fn spawn_mention_dispatch(&self, pool_id: &str, content: &str) {
         if !content.contains('@') {
             return;
         }
-
-        let kois = {
-            let db = self.db.lock().await;
-            db.list_kois().unwrap_or_default()
-        };
-
-        let mention_all = content.contains("@all");
-
-        for koi in &kois {
-            if koi.status == "offline" || koi.id == self.sender_id {
-                continue;
+        let app = self.app.clone();
+        let db = self.db.clone();
+        let sender = self.sender_id.clone();
+        let pool_id = pool_id.to_string();
+        let content = content.to_string();
+        tokio::spawn(async move {
+            let runtime = KoiRuntime::from_tauri(app, db);
+            match runtime.handle_mention(&sender, &pool_id, &content).await {
+                Ok(results) if !results.is_empty() => {
+                    tracing::info!("Activated {} Koi(s) from pool_chat mention", results.len());
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!("pool_chat mention dispatch failed: {}", e);
+                }
             }
-            let mention = format!("@{}", koi.name);
-            if !mention_all && !content.contains(&mention) {
-                continue;
-            }
-
-            let session_key = format!("{}:{}", koi.id, pool_id);
-            let sessions = KOI_SESSIONS.lock().await;
-            if let Some(tx) = sessions.get(&session_key) {
-                let notification = format!(
-                    "[Pool Notification] @{} from {} (in pool chat):\n{}\n\n\
-                     Decide autonomously how to respond: use pool_chat to reply, accept the request, \
-                     ask for clarification, decline, or continue your current work. \
-                     This is your decision — you are not required to act on every mention.",
-                    koi.name, self.sender_name, content
-                );
-                let _ = tx.send(notification).await;
-                tracing::info!("Injected @mention notification to busy Koi '{}'", koi.name);
-            } else {
-                drop(sessions);
-                let app = self.app.clone();
-                let db = self.db.clone();
-                let koi_id = koi.id.clone();
-                let koi_name = koi.name.clone();
-                let pool_id = pool_id.to_string();
-                let sender_name = self.sender_name.clone();
-                tokio::spawn(async move {
-                    tracing::info!(
-                        "Activating idle Koi '{}' for @mention from '{}'",
-                        koi_name,
-                        sender_name
-                    );
-                    let runtime = crate::koi::runtime::KoiRuntime::from_tauri(app, db);
-                    if let Err(e) = runtime.activate_for_messages(&koi_id, &pool_id).await {
-                        tracing::warn!("Failed to activate Koi '{}' for messages: {}", koi_name, e);
-                    }
-                });
-            }
-        }
+        });
     }
 }

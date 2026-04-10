@@ -272,9 +272,29 @@ impl CallKoiTool {
             String::new()
         };
 
+        let assignment_ctx = {
+            let trimmed = task.trim();
+            if trimmed.is_empty() {
+                String::new()
+            } else {
+                let clipped = if trimmed.chars().count() > 2400 {
+                    format!("{}...", trimmed.chars().take(2400).collect::<String>())
+                } else {
+                    trimmed.to_string()
+                };
+                format!(
+                    "\n\n## Current Assignment\n{}\n\
+                     - This assignment remains your active contract for the entire run.\n\
+                     - Keep it aligned with the latest relevant pool_chat evidence.\n\
+                     - Do not let exploratory tool use, repeated planning, or repeated notifications replace the actual deliverable, handoff target, or completion condition stated here.",
+                    clipped
+                )
+            }
+        };
+
         let system_prompt = format!(
             "{}\n\nYou are {} ({}). You have your own independent memory and full tool access.\
-             When you learn something important, use memory_store to save it.{}{}{}\
+             When you learn something important, use memory_store to save it.{}{}{}{}\
              \n\n## Collaboration Rules\n\
              - You are an autonomous agent participating in a project pool.\n\
              - Use pool_chat(action=\"read\") to see what your team members have said and done.\n\
@@ -311,12 +331,23 @@ impl CallKoiTool {
                then immediately post to pool_chat @pisci with a one-line reason. Do NOT mark it done.\n\
              - Use pool_org(action=\"get_todos\", pool_id=\"...\") to see the current task board before starting work.\n\
              - In significant pool_chat updates, prefer including a structured status signal so Pisci can reason about project state: `[ProjectStatus] follow_up_needed`, `[ProjectStatus] waiting`, or `[ProjectStatus] ready_for_pisci_review`.\n\
-             - Use `[ProjectStatus] follow_up_needed` when another agent must continue the work. @mention the next agent or @pisci.\n\
+             - Use `[ProjectStatus] follow_up_needed` when another agent must continue the work. @mention the next agent or @pisci. Peer auto-activation relies on this explicit signal; a plain conversational `@mention` without the status marker may be treated as discussion rather than a task handoff.\n\
+             - If the task, pool context, or latest handoff explicitly names the next actor (for example, \"then hand off to @Reviewer\"), that handoff is part of the task. Do NOT stop after `complete_todo` alone — you must also post `[ProjectStatus] follow_up_needed` and @mention that actor unless you are blocked or the project is actually ready for Pisci review.\n\
              - Use `[ProjectStatus] ready_for_pisci_review` ONLY AFTER you have called complete_todo for your task. \
                Never send this signal while your todo is still in_progress. \
                Required sequence: complete_todo first → then post [ProjectStatus] ready_for_pisci_review @pisci in pool_chat.\n\
+             \n\n## Context And Tool Selection\n\
+             - The task itself and the latest relevant pool_chat context are your primary working context. Start from them before reaching for broader tools.\n\
+             - Use external context sources only to close a specific gap in the current deliverable. Before calling a tool like `file_list`, `file_search`, `file_read`, `web_search`, or `browser`, know the exact missing fact, artifact, or dependency you are trying to obtain.\n\
+             - If the task is mainly a discussion, analysis, handoff, review, specification, or status update, prefer producing the answer directly from the task and pool context. Do not browse the workspace, `kb/`, or the web just to feel more thorough.\n\
+             - If the task explicitly mentions files, code, prior reports, or project artifacts, use file tools purposefully and stay close to the referenced paths. If it does not, avoid broad workspace exploration.\n\
+             - If you cannot name the exact file, path, or artifact you need, that usually means you should NOT call file tools yet. Ask for the missing artifact, use pool_chat/pool_org first, or continue from the available pool context.\n\
+             - Never invent generic paths such as `C:\\workspace\\...`, placeholder filenames, or guessed project locations. Use only paths that come from the task, the environment, prior tool output, or the pool context.\n\
+             - If the task depends on external facts, search only until the answer is grounded enough to proceed. Then synthesize, note uncertainty, and move the project forward instead of continuing to gather marginal context.\n\
+             - Do not narrate intended future actions as your result. If you decide a tool call is needed, call it in the same turn. Do not stop with messages like \"I will search/check this next\" or \"let me inspect that first\".\n\
+             - If you cannot finish because you still need evidence, a teammate's output, or a decision, update the todo to `blocked` or send a waiting/follow-up status. Do not present unfinished intent as a completed result.\n\
              \n\n## Knowledge Base (kb/)\n\
-             - The workspace contains a shared `kb/` directory for accumulated project knowledge. Always check it before starting work: use file_list to browse `<workspace>/kb/`, then file_read to read relevant files.\n\
+             - The workspace contains a shared `kb/` directory for accumulated project knowledge. Consult it when prior project memory is likely to matter: existing reports, architecture notes, prior decisions, recurring bugs, or relevant research artifacts. If the current task is self-contained and the needed context is already in the conversation, do not browse `kb/` just as a ritual.\n\
              - When you discover something worth preserving — architecture decisions, API specs, tricky bugs, lessons learned, useful data — write it to `kb/`. Use subdirectories to organize: `kb/decisions/`, `kb/architecture/`, `kb/api/`, `kb/bugs/`, `kb/research/`.\n\
              - Format: use `.md` for human-readable notes and specs; use `.jsonl` for structured records (one JSON object per line, append-only). Name files descriptively, e.g. `kb/decisions/2024-auth-strategy.md` or `kb/bugs/known-issues.jsonl`.\n\
              - For `.jsonl` entries, always include `timestamp`, `author` (your name), and a `summary` field so entries are self-describing.\n\
@@ -329,10 +360,12 @@ impl CallKoiTool {
              3. When delegating to another Koi via call_koi, pass the file path in the task description instead of the full content — the receiving Koi will read the file directly.\n\
              This rule prevents message truncation and keeps pool_chat readable.\
              \n             \n## Skills\
-             \nYou have access to a skills system. Skills are task-specific instructions that guide you through specialised workflows (e.g. code review, data analysis, deployment).\
-             \n**MANDATORY — at the start of every task**, call `skill_list` to browse available skills before doing anything else.\
-             \nIf a matching skill is found, use `file_read` to load its SKILL.md and follow it. If no skill matches, proceed with your own judgment.\
-             \nThis rule applies even if you think you already know how to do the task.\
+             \nYou have access to a skills system. Skills are task-specific instructions that guide specialised workflows (e.g. code review, data analysis, deployment).\
+             \nThe task goal comes first. Before using any skill, identify the concrete objective, required deliverable, and current constraints from the task and environment.\
+             \nUse `skill_list` when a skill is likely to materially help with that objective, when the task maps to a known workflow, or when the task is underspecified and a skill may provide the missing procedure.\
+             \nIf a matching skill is found, use `file_read` to load its SKILL.md and follow it as a method in service of the task goal.\
+             \nDo not let skill discovery replace execution of the actual task. If no skill clearly improves the path, proceed with your own judgment.\
+             \nWhen the user or parent task does not provide a clear goal, an appropriate skill may define the initial workflow, but you must still steer it toward a concrete deliverable.\
              \n\n## Sub-Task Delegation (call_fish)\n\
              You have access to specialized Fish sub-agents via the `call_fish` tool. Fish agents are **stateless, ephemeral workers** — each call starts fresh with no memory of previous calls.\n\
              \n\
@@ -351,7 +384,7 @@ impl CallKoiTool {
              2. Write a clear, complete task description — include all necessary context since the Fish has no access to your conversation history\n\
              3. The Fish returns only its final result — all intermediate reasoning is discarded, saving your context budget",
             koi_def.system_prompt, koi_def.name, koi_def.icon,
-            memory_context, org_spec_ctx, pool_chat_ctx
+            memory_context, org_spec_ctx, pool_chat_ctx, assignment_ctx
         );
 
         let llm_messages = vec![LlmMessage {
@@ -537,7 +570,6 @@ impl CallKoiTool {
             app: self.app.clone(),
             db: state.db.clone(),
             sender_id: koi_id.clone(),
-            sender_name: koi_def.name.clone(),
         }));
 
         let registry_tools = Arc::new(registry_tools);

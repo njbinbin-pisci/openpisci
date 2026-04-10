@@ -14,7 +14,7 @@ use crate::pisci::project_state::{
 use crate::store::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use tauri::{Emitter, State};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,13 +41,140 @@ pub struct TrialStep {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TrialKoiSpec {
-    name: &'static str,
-    role: &'static str,
-    icon: &'static str,
-    color: &'static str,
-    system_prompt: &'static str,
-    description: &'static str,
+    name: String,
+    role: String,
+    icon: String,
+    color: String,
+    system_prompt: String,
+    description: String,
+    max_iterations: u32,
+    step_name: String,
+    task_label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TrialScenario {
+    pool_name: String,
+    project_title: String,
+    goal: String,
+    kickoff_phase: String,
+    kickoff_detail: String,
+    kickoff_message: String,
+    workflow: Vec<String>,
+    success_criteria: Vec<String>,
+    lead: TrialKoiSpec,
+    second: TrialKoiSpec,
+    third: TrialKoiSpec,
+    chain_timeout_secs: u64,
+    poll_interval_secs: u64,
+    quiet_polls_needed: u32,
+}
+
+fn default_trial_scenario() -> TrialScenario {
+    TrialScenario {
+        pool_name: "Collaboration Trial".into(),
+        project_title: "Collaboration Trial".into(),
+        goal: "Test multi-agent collaboration by designing and reviewing a simple utility module."
+            .into(),
+        kickoff_phase: "lead".into(),
+        kickoff_detail: "Pisci starts the collaboration by assigning the first specialist."
+            .into(),
+        kickoff_message: "@Architect Design a small \"string utility\" module with 3 functions: \
+             1) reverse_words(s) - reverses word order in a sentence \
+             2) count_vowels(s) - counts vowels in a string \
+             3) to_title_case(s) - converts a string to title case. \
+             Write a clear, concise specification with function signatures, \
+             parameter descriptions, expected behavior, and edge cases. \
+             Keep it practical. When you finish, share the spec in pool_chat, include `[ProjectStatus] follow_up_needed`, and @Coder to hand off implementation."
+            .into(),
+        workflow: vec![
+            "Pisci assigns the initial design task to Architect.".into(),
+            "Architect produces a specification, then hands off to @Coder.".into(),
+            "Coder implements based on the specification, then hands off to @Reviewer.".into(),
+            "Reviewer requests follow-up work or signals `[ProjectStatus] ready_for_pisci_review` for Pisci to assess."
+                .into(),
+        ],
+        success_criteria: vec![
+            "Each task builds on the previous agent's output.".into(),
+            "Communication flows through the pool chat.".into(),
+            "If more work is needed, agents clearly signal `[ProjectStatus] follow_up_needed`."
+                .into(),
+            "When the project may be ready to conclude, an agent signals `[ProjectStatus] ready_for_pisci_review` and Pisci decides whether the trial can end."
+                .into(),
+        ],
+        lead: TrialKoiSpec {
+            name: "Architect".into(),
+            role: "架构师".into(),
+            icon: "🏗️".into(),
+            color: "#7c6af7".into(),
+            system_prompt:
+                "You are a software architect collaborating inside a multi-agent project. Your job is to produce clear, practical technical specifications that help the next specialist move the work forward. \
+                 Be concise, structured, and explicit about assumptions, interfaces, and edge cases. \
+                 Publish your design in pool_chat, then hand off clearly if another specialist should continue. \
+                 Do not decide that the project is finished yourself."
+                    .into(),
+            description: "Architecture, system design, technical specification".into(),
+            max_iterations: 8,
+            step_name: "design_spec".into(),
+            task_label: "Design string utility module spec".into(),
+        },
+        second: TrialKoiSpec {
+            name: "Coder".into(),
+            role: "程序员".into(),
+            icon: "💻".into(),
+            color: "#45b7d1".into(),
+            system_prompt:
+                "You are a software developer collaborating inside a multi-agent project. Given a specification or concrete handoff, produce a practical implementation summary or implementation-ready output that helps the project advance. \
+                 Focus on correctness, actionable detail, and clear handoff notes. \
+                 If review or further work is needed, signal `[ProjectStatus] follow_up_needed` and @mention the next actor. \
+                 If the work may be ready, signal `[ProjectStatus] ready_for_pisci_review` or hand off to the reviewer as appropriate."
+                    .into(),
+            description: "Implementation, coding, development".into(),
+            max_iterations: 8,
+            step_name: "implement".into(),
+            task_label: "Implement string utility module".into(),
+        },
+        third: TrialKoiSpec {
+            name: "Reviewer".into(),
+            role: "代码审查员".into(),
+            icon: "🔍".into(),
+            color: "#26de81".into(),
+            system_prompt:
+                "You are a reviewer collaborating inside a multi-agent project. Given prior work, provide constructive feedback, identify risks, and state clearly whether follow-up is needed. \
+                 Be specific and actionable. \
+                 If more work is needed, signal `[ProjectStatus] follow_up_needed` and @mention the responsible specialist. \
+                 If the work looks acceptable, signal `[ProjectStatus] ready_for_pisci_review` and @mention Pisci rather than declaring the project finished yourself."
+                    .into(),
+            description: "Review, quality assurance, feedback".into(),
+            max_iterations: 8,
+            step_name: "review".into(),
+            task_label: "Review the implementation".into(),
+        },
+        chain_timeout_secs: 900,
+        poll_interval_secs: 5,
+        quiet_polls_needed: 2,
+    }
+}
+
+fn load_trial_scenario() -> Result<TrialScenario, String> {
+    match std::env::var("PISCI_COLLAB_TRIAL_SPEC_JSON") {
+        Ok(raw) if !raw.trim().is_empty() => serde_json::from_str(&raw).map_err(|e| {
+            format!(
+                "Failed to parse PISCI_COLLAB_TRIAL_SPEC_JSON as TrialScenario JSON: {}",
+                e
+            )
+        }),
+        _ => Ok(default_trial_scenario()),
+    }
+}
+
+fn keep_trial_artifacts() -> bool {
+    std::env::var("PISCI_COLLAB_TRIAL_KEEP_ARTIFACTS")
+        .ok()
+        .as_deref()
+        == Some("1")
 }
 
 fn normalize_trial_text(value: &str) -> String {
@@ -59,50 +186,75 @@ fn ensure_trial_koi(
     all_kois: &mut Vec<crate::koi::KoiDefinition>,
     spec: &TrialKoiSpec,
 ) -> Result<crate::koi::KoiDefinition, String> {
-    let role_key = normalize_trial_text(spec.role);
+    let role_key = normalize_trial_text(spec.role.as_str());
     if let Some(existing) = all_kois
         .iter()
         .find(|k| normalize_trial_text(&k.role) == role_key)
         .cloned()
     {
-        return Ok(existing);
+        db.update_koi(
+            &existing.id,
+            Some(spec.name.as_str()),
+            Some(spec.role.as_str()),
+            Some(spec.icon.as_str()),
+            Some(spec.color.as_str()),
+            Some(spec.system_prompt.as_str()),
+            Some(spec.description.as_str()),
+            None,
+            Some(spec.max_iterations),
+        )
+        .map_err(|e| e.to_string())?;
+        let mut updated = existing.clone();
+        updated.name = spec.name.clone();
+        updated.role = spec.role.clone();
+        updated.icon = spec.icon.clone();
+        updated.color = spec.color.clone();
+        updated.system_prompt = spec.system_prompt.clone();
+        updated.description = spec.description.clone();
+        updated.max_iterations = spec.max_iterations;
+        if let Some(idx) = all_kois.iter().position(|k| k.id == updated.id) {
+            all_kois[idx] = updated.clone();
+        }
+        return Ok(updated);
     }
 
     if let Some(existing) = all_kois.iter().find(|k| k.name == spec.name).cloned() {
-        if existing.role != spec.role {
-            db.update_koi(
-                &existing.id,
-                None,
-                Some(spec.role),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .map_err(|e| e.to_string())?;
-
-            let mut updated = existing.clone();
-            updated.role = spec.role.to_string();
-            if let Some(idx) = all_kois.iter().position(|k| k.id == updated.id) {
-                all_kois[idx] = updated.clone();
-            }
-            return Ok(updated);
+        db.update_koi(
+            &existing.id,
+            Some(spec.name.as_str()),
+            Some(spec.role.as_str()),
+            Some(spec.icon.as_str()),
+            Some(spec.color.as_str()),
+            Some(spec.system_prompt.as_str()),
+            Some(spec.description.as_str()),
+            None,
+            Some(spec.max_iterations),
+        )
+        .map_err(|e| e.to_string())?;
+        let mut updated = existing.clone();
+        updated.name = spec.name.clone();
+        updated.role = spec.role.clone();
+        updated.icon = spec.icon.clone();
+        updated.color = spec.color.clone();
+        updated.system_prompt = spec.system_prompt.clone();
+        updated.description = spec.description.clone();
+        updated.max_iterations = spec.max_iterations;
+        if let Some(idx) = all_kois.iter().position(|k| k.id == updated.id) {
+            all_kois[idx] = updated.clone();
         }
-        return Ok(existing);
+        return Ok(updated);
     }
 
     let created = db
         .create_koi(
-            spec.name,
-            spec.role,
-            spec.icon,
-            spec.color,
-            spec.system_prompt,
-            spec.description,
+            spec.name.as_str(),
+            spec.role.as_str(),
+            spec.icon.as_str(),
+            spec.color.as_str(),
+            spec.system_prompt.as_str(),
+            spec.description.as_str(),
             None,
-            0,
+            spec.max_iterations,
         )
         .map_err(|e| e.to_string())?;
     all_kois.push(created.clone());
@@ -115,6 +267,56 @@ fn set_trial_error(status: &mut TrialStatus, key: &str, params: Value, fallback:
     status.error_params = Some(params);
 }
 
+fn push_trial_observation(
+    status: &mut TrialStatus,
+    name: impl Into<String>,
+    koi_name: impl Into<String>,
+    task: impl Into<String>,
+    success: bool,
+    reply_preview: impl Into<String>,
+    duration_ms: u64,
+) {
+    status.steps.push(TrialStep {
+        name: name.into(),
+        koi_name: koi_name.into(),
+        task: task.into(),
+        success,
+        reply_preview: reply_preview.into(),
+        reply_preview_key: None,
+        reply_preview_params: None,
+        duration_ms,
+    });
+}
+
+fn trial_koi_name<'a>(
+    sender_id: &str,
+    lead: &'a crate::koi::KoiDefinition,
+    second: &'a crate::koi::KoiDefinition,
+    third: &'a crate::koi::KoiDefinition,
+) -> &'a str {
+    if sender_id == lead.id {
+        lead.name.as_str()
+    } else if sender_id == second.id {
+        second.name.as_str()
+    } else if sender_id == third.id {
+        third.name.as_str()
+    } else {
+        "system"
+    }
+}
+
+fn event_task_label(event_type: Option<&str>) -> &'static str {
+    match event_type {
+        Some("task_claimed") => "Claimed a pool todo",
+        Some("task_completed") => "Completed a pool todo",
+        Some("task_failed") => "A pool todo failed",
+        Some("task_assigned") => "A pool todo was assigned",
+        Some("protocol_warning") => "Protocol anomaly observed",
+        Some("task_progress") => "Reported task progress",
+        _ => "Pool event observed",
+    }
+}
+
 pub(crate) fn assess_trial_project_state(
     messages: &[crate::koi::PoolMessage],
     todos: &[crate::koi::KoiTodo],
@@ -125,7 +327,7 @@ pub(crate) fn assess_trial_project_state(
 
 /// Launch a multi-agent collaboration trial.
 ///
-/// Creates 3 Koi agents (Architect, Coder, Reviewer), a project pool,
+/// Creates 3 Koi agents for a scenario-defined workflow, a project pool,
 /// and orchestrates a realistic task flow with @mention handoffs.
 /// All results are observable in the Pond UI.
 #[tauri::command]
@@ -140,7 +342,11 @@ pub async fn run_collaboration_trial_with_state(
     app: tauri::AppHandle,
     state: &AppState,
 ) -> Result<TrialStatus, String> {
-    tracing::info!("=== Collaboration Trial: starting ===");
+    let scenario = load_trial_scenario()?;
+    tracing::info!(
+        "=== Collaboration Trial: starting title={} ===",
+        scenario.project_title
+    );
 
     let app_handle = app.clone();
     let runtime = KoiRuntime::from_tauri(app.clone(), state.db.clone());
@@ -173,83 +379,56 @@ pub async fn run_collaboration_trial_with_state(
         "Checking required Koi roles and creating missing ones...",
     );
 
-    let (architect, coder, reviewer, pool) = {
+    let (lead, second, third, pool) = {
         let db = state.db.lock().await;
         let mut all_kois = db.list_kois().map_err(|e| e.to_string())?;
 
-        let architect = ensure_trial_koi(
-            &db,
-            &mut all_kois,
-            &TrialKoiSpec {
-                name: "Architect",
-                role: "架构师",
-                icon: "🏗️",
-                color: "#7c6af7",
-                system_prompt:
-                    "You are a software architect. Your job is to design clear, practical technical specifications. \
-                     Be concise and structured. Output your design as a numbered specification with clear sections. \
-                     When you finish a design, signal `[ProjectStatus] follow_up_needed` in pool_chat and @mention whoever should implement next. \
-                     Do not decide that the project is finished yourself.",
-                description: "Architecture, system design, technical specification",
-            },
-        )?;
-
-        let coder = ensure_trial_koi(
-            &db,
-            &mut all_kois,
-            &TrialKoiSpec {
-                name: "Coder",
-                role: "程序员",
-                icon: "💻",
-                color: "#45b7d1",
-                system_prompt:
-                    "You are a software developer. Given a specification, write clean, working code. \
-                     Be practical and focus on correctness. If review or further work is needed, signal `[ProjectStatus] follow_up_needed` and @mention the next actor. \
-                     If you address requested changes and believe the work may be ready, signal `[ProjectStatus] ready_for_pisci_review` or @mention the next reviewer as appropriate.",
-                description: "Implementation, coding, development",
-            },
-        )?;
-
-        let reviewer = ensure_trial_koi(
-            &db,
-            &mut all_kois,
-            &TrialKoiSpec {
-                name: "Reviewer",
-                role: "代码审查员",
-                icon: "🔍",
-                color: "#26de81",
-                system_prompt:
-                    "You are a code reviewer. Given code or a design, provide constructive feedback. \
-                     Point out issues, suggest improvements, and give an overall assessment. \
-                     Be specific and actionable. If more work is needed, signal `[ProjectStatus] follow_up_needed` and @mention the responsible Koi. \
-                     If the work looks acceptable, signal `[ProjectStatus] ready_for_pisci_review` and @mention Pisci rather than declaring the project finished yourself.",
-                description: "Code review, quality assurance, feedback",
-            },
-        )?;
+        let lead = ensure_trial_koi(&db, &mut all_kois, &scenario.lead)?;
+        let second = ensure_trial_koi(&db, &mut all_kois, &scenario.second)?;
+        let third = ensure_trial_koi(&db, &mut all_kois, &scenario.third)?;
 
         let pool = db
-            .create_pool_session("Collaboration Trial")
+            .create_pool_session(&scenario.pool_name)
             .map_err(|e| e.to_string())?;
 
+        let workflow = scenario
+            .workflow
+            .iter()
+            .enumerate()
+            .map(|(idx, step)| format!("{}. {}", idx + 1, step))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let success_criteria = scenario
+            .success_criteria
+            .iter()
+            .map(|item| format!("- {}", item))
+            .collect::<Vec<_>>()
+            .join("\n");
         let org_spec = format!(
-            "## Project: Collaboration Trial\n\n\
+            "## Project: {}\n\n\
              ### Goal\n\
-             Test multi-agent collaboration by designing and reviewing a simple utility module.\n\n\
+             {}\n\n\
              ### Team\n\
-             - **Architect** ({}): Design the specification\n\
-             - **Coder** ({}): Implement based on the spec\n\
-             - **Reviewer** ({}): Review the implementation\n\n\
+             - **{}** ({}): {}\n\
+             - **{}** ({}): {}\n\
+             - **{}** ({}): {}\n\n\
              ### Workflow\n\
-             1. Pisci assigns the design task to Architect\n\
-             2. Architect produces a spec, then @Coder implements it\n\
-             3. Coder produces code, then @Reviewer reviews it\n\
-             4. If review requests changes, the work loops until Pisci judges it is ready to wrap up\n\n\
+             {}\n\n\
              ### Success Criteria\n\
-             - Each task builds on the previous agent's output\n\
-             - Communication flows through the pool chat\n\
-             - If more work is needed, agents clearly signal `[ProjectStatus] follow_up_needed`\n\
-             - When the project may be ready to conclude, an agent signals `[ProjectStatus] ready_for_pisci_review` and Pisci decides whether the trial can end",
-            architect.id, coder.id, reviewer.id
+             {}",
+            scenario.project_title,
+            scenario.goal,
+            lead.name,
+            lead.role,
+            scenario.lead.description,
+            second.name,
+            second.role,
+            scenario.second.description,
+            third.name,
+            third.role,
+            scenario.third.description,
+            workflow,
+            success_criteria,
         );
         db.update_pool_org_spec(&pool.id, &org_spec)
             .map_err(|e| e.to_string())?;
@@ -259,48 +438,51 @@ pub async fn run_collaboration_trial_with_state(
             &pool.id,
             "pisci",
             &format!(
-                "🚀 **Collaboration Trial started**\n\n\
-                 Team: {} Architect, {} Coder, {} Reviewer\n\
-                 Goal: Design and review a simple \"string utility\" module.\n\n\
-                 Workflow: Architect → Coder → Reviewer",
-                architect.icon, coder.icon, reviewer.icon
+                "🚀 **{} started**\n\n\
+                 Team: {} {}, {} {}, {} {}\n\
+                 Goal: {}\n\n\
+                 Workflow: {} → {} → {}",
+                scenario.project_title,
+                lead.icon,
+                lead.name,
+                second.icon,
+                second.name,
+                third.icon,
+                third.name,
+                scenario.goal,
+                lead.name,
+                second.name,
+                third.name,
             ),
             "text",
             "{}",
         )
         .map_err(|e| e.to_string())?;
 
-        (architect, coder, reviewer, pool)
+        (lead, second, third, pool)
     };
 
     status.pool_id = pool.id.clone();
-    status.koi_ids = vec![architect.id.clone(), coder.id.clone(), reviewer.id.clone()];
+    status.koi_ids = vec![lead.id.clone(), second.id.clone(), third.id.clone()];
     *pool_id_cell.lock().unwrap() = pool.id.clone();
     emit("pool_ready", "Pool session created, agents ready");
 
     tracing::info!(
-        "Trial setup: pool={}, architect={}, coder={}, reviewer={}",
+        "Trial setup: pool={}, lead={}, second={}, third={}",
         pool.id,
-        architect.id,
-        coder.id,
-        reviewer.id
+        lead.id,
+        second.id,
+        third.id
     );
 
-    // ─── Phase 2: Pisci posts @Architect in pool chat (natural communication) ──
+    // ─── Phase 2: Pisci posts the initial @mention in pool chat (natural communication) ──
     // The entire workflow is driven by @mention cascading:
-    //   Pisci @Architect → Architect designs, @Coder → Coder implements, @Reviewer → Reviewer reviews
+    //   Pisci @lead → lead hands off to second → second hands off to third
     // No direct assign_koi calls — everything flows through pool_chat @mentions.
-    status.phase = "architect".into();
-    emit("architect", "Pisci @Architect in pool chat...");
+    status.phase = scenario.kickoff_phase.clone();
+    emit(&scenario.kickoff_phase, &scenario.kickoff_detail);
 
-    let task_message = "@Architect Design a small \"string utility\" module with 3 functions: \
-         1) reverse_words(s) - reverses word order in a sentence \
-         2) count_vowels(s) - counts vowels in a string \
-         3) to_title_case(s) - converts a string to title case. \
-         Write a clear, concise specification with function signatures, \
-         parameter descriptions, expected behavior, and edge cases. \
-         Keep it practical. When you finish, share the spec in pool_chat, include `[ProjectStatus] follow_up_needed`, and @Coder to hand off implementation."
-        .to_string();
+    let task_message = scenario.kickoff_message.clone();
 
     // Post the message to pool chat (just like Pisci would via pool_chat tool)
     {
@@ -314,52 +496,47 @@ pub async fn run_collaboration_trial_with_state(
         );
     }
 
-    // The @mention dispatch activates Architect (assigns task + blocks until done)
+    // The first @mention dispatch activates the lead specialist and blocks until done.
     let chain_start = std::time::Instant::now();
-    let arch_results = runtime
+    let lead_results = runtime
         .handle_mention("pisci", &pool.id, &task_message)
         .await;
 
-    let arch_step = match &arch_results {
-        Ok(results) if !results.is_empty() && results[0].success => TrialStep {
-            name: "design_spec".into(),
-            koi_name: "Architect".into(),
-            task: "Design string utility module spec".into(),
-            success: true,
-            reply_preview: results[0].reply.chars().take(200).collect(),
-            reply_preview_key: None,
-            reply_preview_params: None,
-            duration_ms: chain_start.elapsed().as_millis() as u64,
-        },
-        Ok(_) | Err(_) => TrialStep {
-            name: "design_spec".into(),
-            koi_name: "Architect".into(),
-            task: "Design string utility module spec".into(),
-            success: false,
-            reply_preview: arch_results
-                .as_ref()
-                .map(|r| r.first().map(|x| x.reply.clone()).unwrap_or_default())
-                .unwrap_or_else(|e| format!("Error: {}", e)),
-            reply_preview_key: Some("debug.multiAgentErrWithDetail".into()),
-            reply_preview_params: Some(json!({ "detail": "Architect dispatch failed" })),
-            duration_ms: chain_start.elapsed().as_millis() as u64,
-        },
+    let kickoff_preview = match &lead_results {
+        Ok(results) if !results.is_empty() => {
+            let first = &results[0];
+            format!(
+                "Initial @mention dispatched to {}. Runtime returned {} result(s). First result success={}, preview={}",
+                lead.name,
+                results.len(),
+                first.success,
+                first.reply.chars().take(160).collect::<String>()
+            )
+        }
+        Ok(_) => {
+            "Initial @mention returned no execution result. The trial could not confirm that the first specialist was activated."
+                .to_string()
+        }
+        Err(e) => format!("Initial @mention dispatch failed: {}", e),
     };
-    tracing::info!(
-        "[Trial] Architect: {} ({}ms)",
-        if arch_step.success { "PASS" } else { "FAIL" },
-        arch_step.duration_ms
+    push_trial_observation(
+        &mut status,
+        "kickoff_dispatch",
+        "Pisci",
+        format!("Kick off collaboration with @{}", lead.name),
+        matches!(&lead_results, Ok(results) if !results.is_empty()),
+        kickoff_preview.clone(),
+        chain_start.elapsed().as_millis() as u64,
     );
-    status.steps.push(arch_step.clone());
 
-    if !arch_step.success {
+    if !matches!(&lead_results, Ok(results) if !results.is_empty()) {
         set_trial_error(
             &mut status,
             "debug.multiAgentTrialTaskFailed",
-            json!({ "subject": "Architect" }),
-            "Architect task failed".into(),
+            json!({ "subject": lead.name }),
+            format!("Initial dispatch to {} failed", lead.name),
         );
-        emit("error", "Architect task failed");
+        emit("error", &kickoff_preview);
         return Ok(status);
     }
 
@@ -372,14 +549,13 @@ pub async fn run_collaboration_trial_with_state(
         "Waiting for collaboration to settle so Pisci can assess project state...",
     );
 
-    let chain_timeout = std::time::Duration::from_secs(900);
-    let poll_interval = std::time::Duration::from_secs(5);
-    let quiet_polls_needed = 2u32;
+    let chain_timeout = std::time::Duration::from_secs(scenario.chain_timeout_secs);
+    let poll_interval = std::time::Duration::from_secs(scenario.poll_interval_secs);
+    let quiet_polls_needed = scenario.quiet_polls_needed;
     let mut quiet_polls = 0u32;
     let mut last_phase_detail = String::new();
     let mut last_message_count = 0usize;
-    let mut seen_completion_event_ids: HashSet<i64> = HashSet::new();
-    let mut completion_counts: HashMap<String, usize> = HashMap::new();
+    let mut seen_observation_event_ids: HashSet<i64> = HashSet::new();
     let mut final_assessment = TrialAssessment {
         decision: TrialDecision::Continue,
         active_todo_count: 0,
@@ -409,30 +585,33 @@ pub async fn run_collaboration_trial_with_state(
             .into_iter()
             .filter(|t| t.pool_session_id.as_deref() == Some(&pool.id))
             .collect();
-        let architect_koi = db.get_koi(&architect.id).ok().flatten();
-        let coder_koi = db.get_koi(&coder.id).ok().flatten();
-        let reviewer_koi = db.get_koi(&reviewer.id).ok().flatten();
+        let lead_koi = db.get_koi(&lead.id).ok().flatten();
+        let second_koi = db.get_koi(&second.id).ok().flatten();
+        let third_koi = db.get_koi(&third.id).ok().flatten();
         drop(db);
 
-        let architect_status = architect_koi
+        let lead_status = lead_koi
             .as_ref()
             .map(|k| k.status.as_str())
             .unwrap_or("unknown");
-        let coder_status = coder_koi
+        let second_status = second_koi
             .as_ref()
             .map(|k| k.status.as_str())
             .unwrap_or("unknown");
-        let reviewer_status = reviewer_koi
+        let third_status = third_koi
             .as_ref()
             .map(|k| k.status.as_str())
             .unwrap_or("unknown");
 
         final_assessment = assess_trial_project_state(&msgs, &pool_todos, &status.koi_ids);
         let phase_detail = format!(
-            "Architect: {} | Coder: {} | Reviewer: {} | active_todos: {} | blocked: {} | follow_up: {} | ready: {} | handoff_to_pisci: {}",
-            architect_status,
-            coder_status,
-            reviewer_status,
+            "{}: {} | {}: {} | {}: {} | active_todos: {} | blocked: {} | follow_up: {} | ready: {} | handoff_to_pisci: {}",
+            lead.name,
+            lead_status,
+            second.name,
+            second_status,
+            third.name,
+            third_status,
             final_assessment.active_todo_count,
             final_assessment.blocked_todo_count,
             final_assessment.follow_up_signal_count,
@@ -452,60 +631,50 @@ pub async fn run_collaboration_trial_with_state(
         }
 
         for msg in msgs.iter().filter(|m| {
-            m.event_type.as_deref() == Some("task_completed")
-                || m.event_type.as_deref() == Some("task_failed")
-        }) {
-            if !status.koi_ids.iter().any(|id| id == &msg.sender_id)
-                || !seen_completion_event_ids.insert(msg.id)
-            {
-                continue;
-            }
-
-            let count = completion_counts.entry(msg.sender_id.clone()).or_insert(0);
-            *count += 1;
-
-            let (base_name, koi_name, task_label) = if msg.sender_id == architect.id {
-                (
-                    "design_spec",
-                    "Architect",
-                    "Design string utility module spec",
+            matches!(
+                m.event_type.as_deref(),
+                Some(
+                    "task_assigned"
+                        | "task_claimed"
+                        | "task_completed"
+                        | "task_failed"
+                        | "task_progress"
+                        | "protocol_warning"
                 )
-            } else if msg.sender_id == coder.id {
-                ("implement", "Coder", "Implement string utility module")
-            } else if msg.sender_id == reviewer.id {
-                ("review", "Reviewer", "Review the implementation")
-            } else {
-                ("task", "Koi", "Trial task")
-            };
-
-            // The architect's first pass is already represented by arch_step above.
-            if msg.sender_id == architect.id
-                && *count == 1
-                && status.steps.iter().any(|s| s.name == "design_spec")
+            )
+        }) {
+            let sender_is_koi = status.koi_ids.iter().any(|id| id == &msg.sender_id);
+            let is_protocol_warning = msg.event_type.as_deref() == Some("protocol_warning");
+            if (!sender_is_koi && !is_protocol_warning) || !seen_observation_event_ids.insert(msg.id)
             {
                 continue;
             }
 
-            let step_name = if *count == 1 {
-                base_name.to_string()
+            let koi_name = if is_protocol_warning {
+                "system"
             } else {
-                format!("{}_round_{}", base_name, count)
+                trial_koi_name(&msg.sender_id, &lead, &second, &third)
             };
-            let success = msg.event_type.as_deref() == Some("task_completed");
-            status.steps.push(TrialStep {
-                name: step_name,
-                koi_name: koi_name.into(),
-                task: task_label.into(),
+            let event_name = msg
+                .event_type
+                .clone()
+                .unwrap_or_else(|| "pool_event".to_string());
+            let success = !matches!(
+                msg.event_type.as_deref(),
+                Some("task_failed" | "protocol_warning")
+            );
+            push_trial_observation(
+                &mut status,
+                event_name,
+                koi_name,
+                event_task_label(msg.event_type.as_deref()),
                 success,
-                reply_preview: msg.content.chars().take(200).collect(),
-                reply_preview_key: None,
-                reply_preview_params: None,
-                duration_ms: chain_start.elapsed().as_millis() as u64,
-            });
+                msg.content.chars().take(200).collect::<String>(),
+                chain_start.elapsed().as_millis() as u64,
+            );
         }
 
-        let all_idle =
-            architect_status == "idle" && coder_status == "idle" && reviewer_status == "idle";
+        let all_idle = lead_status == "idle" && second_status == "idle" && third_status == "idle";
         if all_idle && quiet_polls >= quiet_polls_needed {
             match final_assessment.decision {
                 TrialDecision::ReadyForPisciReview => {
@@ -529,83 +698,49 @@ pub async fn run_collaboration_trial_with_state(
         }
     }
 
-    // Fill in any missing primary steps as failures so the trial remains debuggable.
-    if !status
-        .steps
-        .iter()
-        .any(|s| s.name == "implement" || s.name.starts_with("implement_round_"))
-    {
-        status.steps.push(TrialStep {
-            name: "implement".into(),
-            koi_name: "Coder".into(),
-            task: "Implement string utility module".into(),
-            success: false,
-            reply_preview: "Coder never produced a completed implementation step".into(),
-            reply_preview_key: Some("debug.multiAgentErrWithDetail".into()),
-            reply_preview_params: Some(json!({ "detail": "implement_missing" })),
-            duration_ms: chain_start.elapsed().as_millis() as u64,
-        });
-    }
-    if !status
-        .steps
-        .iter()
-        .any(|s| s.name == "review" || s.name.starts_with("review_round_"))
-    {
-        status.steps.push(TrialStep {
-            name: "review".into(),
-            koi_name: "Reviewer".into(),
-            task: "Review the implementation".into(),
-            success: false,
-            reply_preview: "Reviewer never produced a completed review step".into(),
-            reply_preview_key: Some("debug.multiAgentErrWithDetail".into()),
-            reply_preview_params: Some(json!({ "detail": "review_missing" })),
-            duration_ms: chain_start.elapsed().as_millis() as u64,
-        });
-    }
-
-    status.steps.push(TrialStep {
-        name: "pisci_assess".into(),
-        koi_name: "Pisci".into(),
-        task: "Assess whether the project is ready to conclude".into(),
-        success: final_assessment.decision == TrialDecision::ReadyForPisciReview,
-        reply_preview: final_assessment.summary.clone(),
-        reply_preview_key: None,
-        reply_preview_params: None,
-        duration_ms: chain_start.elapsed().as_millis() as u64,
-    });
+    push_trial_observation(
+        &mut status,
+        "pisci_assess",
+        "Pisci",
+        "Assess whether the project is ready to conclude",
+        final_assessment.decision == TrialDecision::ReadyForPisciReview,
+        final_assessment.summary.clone(),
+        chain_start.elapsed().as_millis() as u64,
+    );
 
     // ─── Phase 5: Summary ───────────────────────────────────────
     status.phase = "completed".into();
-    status.completed = status.steps.iter().all(|s| s.success);
+    status.completed =
+        final_assessment.decision == TrialDecision::ReadyForPisciReview && status.error.is_none();
 
     // Post summary to pool
     {
         let db = state.db.lock().await;
         let emoji = if status.completed { "✅" } else { "⚠️" };
-        let step_lines: Vec<String> = status
+        let observation_lines: Vec<String> = status
             .steps
             .iter()
             .map(|s| {
                 format!(
-                    "- {} **{}** ({}): {} ({}ms)",
+                    "- {} **{}** [{}]: {} ({}ms)",
                     if s.success { "✅" } else { "❌" },
                     s.koi_name,
                     s.name,
-                    if s.success { "completed" } else { "failed" },
+                    s.task,
                     s.duration_ms,
                 )
             })
             .collect();
         let total_ms: u64 = status.steps.iter().map(|s| s.duration_ms).sum();
         let summary = format!(
-            "{} **Collaboration Trial {}**\n\n{}\n\nPisci assessment: {}\n\nTotal time: {}ms",
+            "{} **Collaboration Trial {}**\n\nObserved events:\n{}\n\nPisci assessment: {}\n\nTotal time: {}ms",
             emoji,
             if status.completed {
                 "PASSED"
             } else {
                 "INCOMPLETE"
             },
-            step_lines.join("\n"),
+            observation_lines.join("\n"),
             final_assessment.summary,
             total_ms,
         );
@@ -622,7 +757,7 @@ pub async fn run_collaboration_trial_with_state(
     );
 
     tracing::info!(
-        "=== Collaboration Trial {} ({}/{} steps) ===",
+        "=== Collaboration Trial {} ({}/{} observations marked ok) ===",
         if status.completed {
             "PASSED"
         } else {
@@ -632,8 +767,17 @@ pub async fn run_collaboration_trial_with_state(
         status.steps.len(),
     );
 
-    // Clean up trial artifacts: delete todos and pool session
-    {
+    // Clean up trial artifacts unless the developer asked to keep them for inspection.
+    if keep_trial_artifacts() {
+        {
+            let db = state.db.lock().await;
+            let _ = db.update_pool_session_status(&pool.id, "paused");
+        }
+        tracing::info!(
+            "[Trial] Keeping artifacts for inspection: pool={} paused; todos remain available",
+            pool.id
+        );
+    } else {
         let db = state.db.lock().await;
         let deleted = db.delete_todos_by_pool(&pool.id).unwrap_or(0);
         if deleted > 0 {

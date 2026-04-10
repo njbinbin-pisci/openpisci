@@ -70,11 +70,17 @@ pub fn assess_project_state(
 
     let koi_id_set: HashSet<&str> = koi_ids.iter().map(|s| s.as_str()).collect();
     let mut latest_signals: HashMap<String, SenderState> = HashMap::new();
-
-    for msg in messages
+    let mut ordered_messages: Vec<&PoolMessage> = messages
         .iter()
         .filter(|m| koi_id_set.contains(m.sender_id.as_str()))
-    {
+        .collect();
+    ordered_messages.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    for msg in ordered_messages {
         if let Some(signal) = extract_project_status_signal(&msg.content) {
             latest_signals.insert(
                 msg.sender_id.clone(),
