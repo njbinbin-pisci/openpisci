@@ -349,6 +349,10 @@ OpenPisci
 
 ## 📋 更新日志
 
+### v0.5.23
+- **Release 资产上传修复**：修正 GitHub Actions 中 Windows 可执行文件与 NSIS 安装包的上传路径，避免 tag 构建成功后 Release 里只剩源码包。
+- **发布校验收紧**：将 artifact 上传和 GitHub Release 挂载步骤改为“缺少安装包即失败”，防止再次出现表面全绿但 Release 为空的情况。
+
 ### v0.5.22
 - **Windows 启动崩溃修复**：修复部分已安装版本在启动阶段因后台任务过早访问 `AppState` 而触发 Windows 应用错误并被系统终止的问题；异步巡检、恢复与开发启动钩子现在只会在状态注册完成后运行。
 - **Windows CI / 发布链稳定化**：为 Rust 单测二进制补充 Windows manifest，修复 GitHub Actions 上的 `STATUS_ENTRYPOINT_NOT_FOUND`；同时修复 `replace_todo` 相关测试死锁，确保 tag 构建可以继续产出安装包。

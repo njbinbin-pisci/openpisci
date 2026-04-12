@@ -4284,7 +4284,7 @@ dependencies = [
 
 [[package]]
 name = "pisci-desktop"
-version = "0.5.22"
+version = "0.5.23"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -1,4 +1,13 @@
-## v0.5.22 - Windows startup crash fix and release pipeline stabilisation
+## v0.5.23 - Release asset upload fix
+
+### Bug Fixes
+
+- **GitHub Actions / release upload**: Fix Windows binary and installer upload paths so tagged builds publish actual downloadable assets to GitHub Release
+- **GitHub Actions / release validation**: Make artifact upload and release attachment fail when installer files are missing, instead of silently succeeding
+
+### Previous releases
+
+#### v0.5.22 - Windows startup crash fix and release pipeline stabilisation
 
 ### Bug Fixes
 

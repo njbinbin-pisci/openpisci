@@ -346,6 +346,10 @@ OpenPisci
 
 ## 📋 Changelog
 
+### v0.5.23
+- **Release asset upload fix**: corrected the GitHub Actions upload paths for the Windows binary and NSIS installer so tagged builds publish downloadable assets instead of ending with source archives only.
+- **Stricter release validation**: changed the artifact upload and GitHub Release steps to fail when installer files are missing, preventing silent "green but empty" releases.
+
 ### v0.5.22
 - **Windows startup crash fix**: fixed an installed-build startup failure where background tasks could touch `AppState` too early and trigger a Windows application crash; patrol, recovery, and developer startup hooks now run only after state registration is complete.
 - **Windows CI / release pipeline stabilisation**: embedded a Windows manifest into the Rust test binary to fix `STATUS_ENTRYPOINT_NOT_FOUND` on GitHub Actions, and fixed a `replace_todo` test deadlock so tagged builds can continue producing installers.
