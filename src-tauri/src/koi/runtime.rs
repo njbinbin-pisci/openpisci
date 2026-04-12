@@ -116,7 +116,10 @@ impl KoiRuntime {
 
     async fn queue_pending_notification(&self, session_key: &str, notification: String) {
         let mut pending = PENDING_KOI_NOTIFICATIONS.lock().await;
-        pending.entry(session_key.to_string()).or_default().push(notification);
+        pending
+            .entry(session_key.to_string())
+            .or_default()
+            .push(notification);
     }
 
     async fn release_koi_run_slot(&self, koi_id: &str, pool_session_id: Option<&str>) {
@@ -316,21 +319,16 @@ impl KoiRuntime {
         };
         let koi_id = koi_def.id.as_str();
         let task = todo.title.clone();
-        let _run_guard = KoiRunSlotGuard::acquire(
-            self,
-            koi_id,
-            canonical_pool_session_id.as_deref(),
-        )
-        .await
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Koi '{}' already has an active run in pool '{}'",
-                koi_def.name,
-                canonical_pool_session_id
-                    .as_deref()
-                    .unwrap_or("default")
-            )
-        })?;
+        let _run_guard =
+            KoiRunSlotGuard::acquire(self, koi_id, canonical_pool_session_id.as_deref())
+                .await
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Koi '{}' already has an active run in pool '{}'",
+                        koi_def.name,
+                        canonical_pool_session_id.as_deref().unwrap_or("default")
+                    )
+                })?;
 
         // Claim the todo
         {
@@ -743,10 +741,8 @@ impl KoiRuntime {
             (original, new_owner, pool_session_id)
         };
 
-        let replacement_description = format!(
-            "Replacement for '{}' because: {}",
-            original.title, reason
-        );
+        let replacement_description =
+            format!("Replacement for '{}' because: {}", original.title, reason);
         let replacement = {
             let db = self.db().lock().await;
             db.replace_koi_todo(
@@ -805,8 +801,10 @@ impl KoiRuntime {
                     serde_json::to_value(&msg).unwrap_or_default(),
                 );
 
-                let mention_content =
-                    format!("@{} [Priority: {}] {}", new_owner.name, replacement.priority, task);
+                let mention_content = format!(
+                    "@{} [Priority: {}] {}",
+                    new_owner.name, replacement.priority, task
+                );
                 let mention = db.insert_pool_message(
                     psid,
                     triggered_by,
@@ -829,8 +827,10 @@ impl KoiRuntime {
 
             let runtime = self.clone();
             let psid = psid.to_string();
-            let mention_content =
-                format!("@{} [Priority: {}] {}", new_owner.name, replacement.priority, task);
+            let mention_content = format!(
+                "@{} [Priority: {}] {}",
+                new_owner.name, replacement.priority, task
+            );
             let triggered_by = triggered_by.to_string();
             tokio::spawn(async move {
                 if let Err(error) = runtime
@@ -889,20 +889,17 @@ impl KoiRuntime {
             (koi_def, pool_session.id)
         };
         let koi_id = koi_def.id.as_str();
-        let _run_guard =
-            match KoiRunSlotGuard::acquire(self, koi_id, Some(&pool_session_id)).await {
-                Some(guard) => guard,
-                None => {
-                    return Ok(KoiExecResult {
-                        success: true,
-                        reply: format!(
-                            "{} is already processing work in this pool",
-                            koi_def.name
-                        ),
-                        result_message_id: None,
-                    });
-                }
-            };
+        let _run_guard = match KoiRunSlotGuard::acquire(self, koi_id, Some(&pool_session_id)).await
+        {
+            Some(guard) => guard,
+            None => {
+                return Ok(KoiExecResult {
+                    success: true,
+                    reply: format!("{} is already processing work in this pool", koi_def.name),
+                    result_message_id: None,
+                });
+            }
+        };
 
         let task = include_str!("../../prompts/koi_activate_for_messages.txt")
             .replace("{name}", &koi_def.name)
@@ -1190,10 +1187,11 @@ impl KoiRuntime {
             Ok(todos) => todos,
             Err(_) => return 0,
         };
-        todos.into_iter()
+        todos
+            .into_iter()
             .filter(|todo| {
-            todo.pool_session_id.as_deref() == Some(pool_session_id)
-                && matches!(todo.status.as_str(), "todo" | "in_progress")
+                todo.pool_session_id.as_deref() == Some(pool_session_id)
+                    && matches!(todo.status.as_str(), "todo" | "in_progress")
             })
             .count()
     }
@@ -1309,10 +1307,7 @@ impl KoiRuntime {
                     reply: format!("Notification sent to busy Koi '{}'", koi.name),
                     result_message_id: None,
                 });
-            } else if self
-                .is_koi_run_active(&koi.id, Some(pool_session_id))
-                .await
-            {
+            } else if self.is_koi_run_active(&koi.id, Some(pool_session_id)).await {
                 self.queue_pending_notification(&koi_session_key, notification)
                     .await;
                 results.push(KoiExecResult {

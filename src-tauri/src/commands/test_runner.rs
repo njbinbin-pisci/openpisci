@@ -1028,7 +1028,9 @@ async fn test_at_all_mention() -> TestResult {
                     0,
                 )
                 .map_err(backend_err)?;
-            let pool = db.create_pool_session("AtAllTest", 0).map_err(backend_err)?;
+            let pool = db
+                .create_pool_session("AtAllTest", 0)
+                .map_err(backend_err)?;
             db.update_koi_status(&qa.id, "offline")
                 .map_err(backend_err)?;
             (fe, be, qa, pool)
@@ -1404,7 +1406,9 @@ async fn test_vacation_cancels_todos() -> TestResult {
             )
             .map_err(backend_err)?;
         let t2 = db
-            .create_koi_todo(&koi.id, "Task B", "", "high", "pisci", None, "pisci", None, 0)
+            .create_koi_todo(
+                &koi.id, "Task B", "", "high", "pisci", None, "pisci", None, 0,
+            )
             .map_err(backend_err)?;
         db.claim_koi_todo(&t2.id, &koi.id).map_err(backend_err)?;
 
@@ -1991,7 +1995,14 @@ mod pause_resume_runtime_tests {
         };
 
         let (todo, _) = runtime
-            .assign_task(&koi.id, "Resume this task", "pisci", Some(&pool.id), "medium", None)
+            .assign_task(
+                &koi.id,
+                "Resume this task",
+                "pisci",
+                Some(&pool.id),
+                "medium",
+                None,
+            )
             .await
             .unwrap();
         {
@@ -2005,12 +2016,17 @@ mod pause_resume_runtime_tests {
         let db = db.lock().await;
         let refreshed = db.get_koi_todo(&todo.id).unwrap().unwrap();
         assert!(
-            matches!(refreshed.status.as_str(), "done" | "needs_review" | "blocked"),
+            matches!(
+                refreshed.status.as_str(),
+                "done" | "needs_review" | "blocked"
+            ),
             "unexpected resumed status: {}",
             refreshed.status
         );
         let msgs = db.get_pool_messages(&pool.id, 100, 0).unwrap();
-        assert!(msgs.iter().any(|msg| msg.event_type.as_deref() == Some("task_resumed")));
+        assert!(msgs
+            .iter()
+            .any(|msg| msg.event_type.as_deref() == Some("task_resumed")));
     }
 
     #[tokio::test]
@@ -2088,6 +2104,8 @@ mod pause_resume_runtime_tests {
         assert_eq!(new_todo.depends_on.as_deref(), Some(todo.id.as_str()));
         assert!(runtime.resume_todo(&todo.id, "pisci").await.is_err());
         let msgs = db.get_pool_messages(&pool.id, 100, 0).unwrap();
-        assert!(msgs.iter().any(|msg| msg.event_type.as_deref() == Some("task_replaced")));
+        assert!(msgs
+            .iter()
+            .any(|msg| msg.event_type.as_deref() == Some("task_replaced")));
     }
 }

@@ -737,7 +737,10 @@ impl PoolOrgTool {
             }
         };
         let priority = input["priority"].as_str().unwrap_or("medium").to_string();
-        let timeout_secs = input["timeout_secs"].as_u64().map(|v| v as u32).unwrap_or(0);
+        let timeout_secs = input["timeout_secs"]
+            .as_u64()
+            .map(|v| v as u32)
+            .unwrap_or(0);
 
         let koi_name = {
             let db = self.db.lock().await;
@@ -935,7 +938,10 @@ impl PoolOrgTool {
         };
         let description = input["description"].as_str().unwrap_or("").to_string();
         let priority = input["priority"].as_str().unwrap_or("medium").to_string();
-        let timeout_secs = input["timeout_secs"].as_u64().map(|v| v as u32).unwrap_or(0);
+        let timeout_secs = input["timeout_secs"]
+            .as_u64()
+            .map(|v| v as u32)
+            .unwrap_or(0);
         let owner_id = ctx.memory_owner_id.clone();
 
         let session = match self.resolve_pool_session(input, ctx, "create_todo").await {
@@ -1214,7 +1220,8 @@ impl PoolOrgTool {
             None => return Ok(ToolResult::err(format!("Todo '{}' not found", todo_id))),
         };
 
-        let runtime = crate::koi::runtime::KoiRuntime::from_tauri(self.app.clone(), self.db.clone());
+        let runtime =
+            crate::koi::runtime::KoiRuntime::from_tauri(self.app.clone(), self.db.clone());
         runtime
             .resume_todo(&todo.id, &ctx.memory_owner_id)
             .await
@@ -1242,7 +1249,10 @@ impl PoolOrgTool {
                 ))
             }
         };
-        let new_owner_id = match input["new_owner_id"].as_str().filter(|s| !s.trim().is_empty()) {
+        let new_owner_id = match input["new_owner_id"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+        {
             Some(id) => id.trim(),
             None => {
                 return Ok(ToolResult::err(

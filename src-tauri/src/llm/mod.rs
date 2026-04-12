@@ -265,8 +265,8 @@ pub fn compute_context_budget(context_window: u32, max_tokens: u32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_context_budget, compute_total_input_budget, estimate_request_input_tokens, ContentBlock,
-        LlmMessage, MessageContent, ToolDef,
+        compute_context_budget, compute_total_input_budget, estimate_request_input_tokens,
+        ContentBlock, LlmMessage, MessageContent, ToolDef,
     };
     use serde_json::json;
 
@@ -304,8 +304,7 @@ mod tests {
             }),
         }];
 
-        let with_overhead =
-            estimate_request_input_tokens(&messages, Some("你是一个助手"), &tools);
+        let with_overhead = estimate_request_input_tokens(&messages, Some("你是一个助手"), &tools);
         let messages_only: usize = messages.iter().map(super::estimate_message_tokens).sum();
         assert!(with_overhead > messages_only);
     }
@@ -329,11 +328,20 @@ pub fn build_client_with_timeout(
             base_url.unwrap_or("https://api.openai.com/v1"),
             read_timeout_secs,
         )),
-        "deepseek" => Box::new(deepseek::DeepSeekClient::with_timeout(api_key, read_timeout_secs)),
+        "deepseek" => Box::new(deepseek::DeepSeekClient::with_timeout(
+            api_key,
+            read_timeout_secs,
+        )),
         "qwen" | "tongyi" => Box::new(qwen::QwenClient::with_timeout(api_key, read_timeout_secs)),
-        "minimax" => Box::new(minimax::MiniMaxClient::with_timeout(api_key, read_timeout_secs)),
+        "minimax" => Box::new(minimax::MiniMaxClient::with_timeout(
+            api_key,
+            read_timeout_secs,
+        )),
         "zhipu" => Box::new(zhipu::ZhipuClient::with_timeout(api_key, read_timeout_secs)),
         "kimi" | "moonshot" => Box::new(kimi::KimiClient::with_timeout(api_key, read_timeout_secs)),
-        _ => Box::new(claude::ClaudeClient::with_timeout(api_key, read_timeout_secs)),
+        _ => Box::new(claude::ClaudeClient::with_timeout(
+            api_key,
+            read_timeout_secs,
+        )),
     }
 }

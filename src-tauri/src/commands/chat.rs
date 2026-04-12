@@ -242,6 +242,7 @@ async fn build_session_message_context(
     build_session_message_context_from_db(&state.db, session_id, budget).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_chat_prompt_artifacts(
     app: &AppHandle,
     state: &State<'_, AppState>,

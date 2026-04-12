@@ -90,8 +90,7 @@ pub(crate) fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAt
         }
         ProjectDecision::ReadyForPisciReview => {
             lines.push(
-                "All todos are done or cancelled. The project may be ready to wrap up."
-                    .to_string(),
+                "All todos are done or cancelled. The project may be ready to wrap up.".to_string(),
             );
             lines.push(
                 "Suggested actions: read pool_chat to confirm completion, merge branches if applicable, \

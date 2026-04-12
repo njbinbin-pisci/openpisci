@@ -1187,9 +1187,8 @@ impl AgentLoop {
                                 iter, ctx.session_id
                             );
                             restored_loop_history = Some(payload.loop_history.clone());
-                            restored_seen_notifications = Some(
-                                payload.seen_notifications.into_iter().collect(),
-                            );
+                            restored_seen_notifications =
+                                Some(payload.seen_notifications.into_iter().collect());
                             messages = payload.messages;
                             info!("Checkpoint restored: {} messages", messages.len());
                             let _ = db.finish_checkpoint(&ctx.session_id, "resumed");
@@ -2604,7 +2603,8 @@ mod tests {
         msgs[0] = make_text_msg("user", &format!("用户请求: {}", "x".repeat(500)));
 
         // keep_chars=2000 forces compaction of older messages
-        let result = compact_summarise(msgs.clone(), 2_000, &client, "test-model", 1024, None).await;
+        let result =
+            compact_summarise(msgs.clone(), 2_000, &client, "test-model", 1024, None).await;
         assert!(
             result.is_some(),
             "should compact when messages exceed keep_chars"
@@ -2704,7 +2704,10 @@ mod tests {
         .expect("merged compaction");
 
         assert!(result.summary.contains("合并旧摘要与新历史"));
-        assert!(result.messages[0].content.as_text().contains("[会话滚动摘要]"));
+        assert!(result.messages[0]
+            .content
+            .as_text()
+            .contains("[会话滚动摘要]"));
     }
 
     // ── T10: estimate_message_tokens handles all content types ───────────────
@@ -2789,7 +2792,10 @@ mod tests {
 
         // Summary should be first
         assert!(
-            compacted.messages[0].content.as_text().contains("[会话滚动摘要]"),
+            compacted.messages[0]
+                .content
+                .as_text()
+                .contains("[会话滚动摘要]"),
             "first message should be summary"
         );
     }

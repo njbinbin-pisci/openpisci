@@ -175,7 +175,9 @@ pub struct Database {
 }
 
 fn parse_datetime(value: String) -> DateTime<Utc> {
-    value.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now())
+    value
+        .parse::<DateTime<Utc>>()
+        .unwrap_or_else(|_| Utc::now())
 }
 
 fn parse_optional_datetime(value: Option<String>) -> Option<DateTime<Utc>> {
@@ -2457,6 +2459,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn replace_koi_todo(
         &self,
         original: &crate::koi::KoiTodo,

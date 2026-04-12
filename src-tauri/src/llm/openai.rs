@@ -43,6 +43,7 @@ pub fn model_supports_vision(model: &str) -> bool {
 }
 
 impl OpenAiClient {
+    #[allow(dead_code)]
     pub fn new(api_key: &str, base_url: &str) -> Self {
         Self::with_timeout(api_key, base_url, 120)
     }

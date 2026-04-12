@@ -643,7 +643,8 @@ pub async fn run_collaboration_trial_with_state(
         }) {
             let sender_is_koi = status.koi_ids.iter().any(|id| id == &msg.sender_id);
             let is_protocol_warning = msg.event_type.as_deref() == Some("protocol_warning");
-            if (!sender_is_koi && !is_protocol_warning) || !seen_observation_event_ids.insert(msg.id)
+            if (!sender_is_koi && !is_protocol_warning)
+                || !seen_observation_event_ids.insert(msg.id)
             {
                 continue;
             }

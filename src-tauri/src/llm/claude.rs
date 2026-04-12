@@ -17,6 +17,7 @@ pub struct ClaudeClient {
 }
 
 impl ClaudeClient {
+    #[allow(dead_code)]
     pub fn new(api_key: &str) -> Self {
         Self::with_timeout(api_key, 120)
     }

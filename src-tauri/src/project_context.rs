@@ -28,7 +28,10 @@ pub fn discover_project_instruction_files(
         return Ok(Vec::new());
     }
 
-    let mut dirs = base_dir.ancestors().map(Path::to_path_buf).collect::<Vec<_>>();
+    let mut dirs = base_dir
+        .ancestors()
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
     dirs.reverse();
 
     let mut files = Vec::new();
@@ -64,7 +67,9 @@ pub fn render_project_instruction_context(
 
     for file in files {
         if remaining == 0 {
-            sections.push("_Additional project instructions omitted after reaching the budget._".to_string());
+            sections.push(
+                "_Additional project instructions omitted after reaching the budget._".to_string(),
+            );
             break;
         }
 
@@ -168,16 +173,16 @@ mod tests {
         fs::create_dir_all(root.join(".pisci")).expect("root .pisci");
         fs::create_dir_all(nested.join(".pisci")).expect("nested .pisci");
         fs::write(root.join("PISCI.md"), "root rules").expect("root rules");
-        fs::write(
-            root.join(".pisci").join("instructions.md"),
-            "shared rules",
-        )
-        .expect("shared rules");
+        fs::write(root.join(".pisci").join("instructions.md"), "shared rules")
+            .expect("shared rules");
         fs::write(nested.join(".pisci").join("instructions.md"), "local rules")
             .expect("local rules");
 
         let files = discover_project_instruction_files(&nested).expect("discover");
-        let contents = files.iter().map(|file| file.content.as_str()).collect::<Vec<_>>();
+        let contents = files
+            .iter()
+            .map(|file| file.content.as_str())
+            .collect::<Vec<_>>();
         assert_eq!(contents, vec!["root rules", "shared rules", "local rules"]);
 
         fs::remove_dir_all(root).expect("cleanup");

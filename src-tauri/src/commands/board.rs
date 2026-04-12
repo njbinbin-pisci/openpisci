@@ -120,7 +120,10 @@ pub async fn resume_koi_todo(
     id: String,
 ) -> Result<(), String> {
     let runtime = KoiRuntime::from_tauri(app, state.db.clone());
-    runtime.resume_todo(&id, "user").await.map_err(|e| e.to_string())
+    runtime
+        .resume_todo(&id, "user")
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

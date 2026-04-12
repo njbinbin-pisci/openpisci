@@ -233,7 +233,9 @@ async fn ensure_memory_consolidation_task_inner(
                 .map_err(|e| e.to_string())?;
                 db.get_task(&task.id)
                     .map_err(|e| e.to_string())?
-                    .ok_or_else(|| "Memory consolidation task disappeared after update".to_string())?
+                    .ok_or_else(|| {
+                        "Memory consolidation task disappeared after update".to_string()
+                    })?
             }
             None => db
                 .create_task(
