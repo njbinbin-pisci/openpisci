@@ -2089,20 +2089,25 @@ mod pause_resume_runtime_tests {
             .unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let db = db.lock().await;
-        let original = db.get_koi_todo(&todo.id).unwrap().unwrap();
-        let new_todo = db.get_koi_todo(&replacement.id).unwrap().unwrap();
-        assert_eq!(original.status, "cancelled");
-        assert!(
-            original
-                .blocked_reason
-                .as_deref()
-                .unwrap_or_default()
-                .starts_with("[Replaced by "),
-            "original task should record replacement linkage"
-        );
-        assert_eq!(new_todo.depends_on.as_deref(), Some(todo.id.as_str()));
+        {
+            let db = db.lock().await;
+            let original = db.get_koi_todo(&todo.id).unwrap().unwrap();
+            let new_todo = db.get_koi_todo(&replacement.id).unwrap().unwrap();
+            assert_eq!(original.status, "cancelled");
+            assert!(
+                original
+                    .blocked_reason
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with("[Replaced by "),
+                "original task should record replacement linkage"
+            );
+            assert_eq!(new_todo.depends_on.as_deref(), Some(todo.id.as_str()));
+        }
+
         assert!(runtime.resume_todo(&todo.id, "pisci").await.is_err());
+
+        let db = db.lock().await;
         let msgs = db.get_pool_messages(&pool.id, 100, 0).unwrap();
         assert!(msgs
             .iter()

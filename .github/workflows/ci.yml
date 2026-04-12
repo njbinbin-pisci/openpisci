@@ -65,6 +65,8 @@ jobs:
         run: cargo clippy --lib -- -D warnings
 
       - name: Rust unit tests
+        env:
+          RUSTFLAGS: -C link-arg=/MANIFEST:EMBED -C link-arg=/MANIFESTINPUT:${{ github.workspace }}/.github/windows-test.manifest
         run: cargo test --lib
 
       - name: Rust release build

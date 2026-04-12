@@ -501,14 +501,12 @@ pub fn run() {
                 });
             }
 
-            let startup_hooks_active = std::env::var("PISCI_RUN_COLLAB_TRIAL")
-                .ok()
-                .as_deref()
-                == Some("1")
-                || std::env::var("PISCI_HEADLESS_PROMPT")
-                    .ok()
-                    .map(|s| !s.trim().is_empty())
-                    .unwrap_or(false);
+            let startup_hooks_active = cfg!(debug_assertions)
+                && (std::env::var("PISCI_RUN_COLLAB_TRIAL").ok().as_deref() == Some("1")
+                    || std::env::var("PISCI_HEADLESS_PROMPT")
+                        .ok()
+                        .map(|s| !s.trim().is_empty())
+                        .unwrap_or(false));
 
             // Spawn heartbeat runner if enabled
             if !startup_hooks_active {
@@ -752,33 +750,6 @@ pub fn run() {
                 });
             }
 
-            let startup_headless_state = store::AppState {
-                db: state.db.clone(),
-                settings: state.settings.clone(),
-                plan_state: state.plan_state.clone(),
-                browser: state.browser.clone(),
-                cancel_flags: state.cancel_flags.clone(),
-                confirmation_responses: state.confirmation_responses.clone(),
-                interactive_responses: state.interactive_responses.clone(),
-                app_handle: app_handle.clone(),
-                scheduler: state.scheduler.clone(),
-                gateway: state.gateway.clone(),
-                pisci_heartbeat_cursor: state.pisci_heartbeat_cursor.clone(),
-            };
-            let startup_trial_state = store::AppState {
-                db: state.db.clone(),
-                settings: state.settings.clone(),
-                plan_state: state.plan_state.clone(),
-                browser: state.browser.clone(),
-                cancel_flags: state.cancel_flags.clone(),
-                confirmation_responses: state.confirmation_responses.clone(),
-                interactive_responses: state.interactive_responses.clone(),
-                app_handle: app_handle.clone(),
-                scheduler: state.scheduler.clone(),
-                gateway: state.gateway.clone(),
-                pisci_heartbeat_cursor: state.pisci_heartbeat_cursor.clone(),
-            };
-
             // Attach tray menu (Show / Quit) — tray is created from config with id "main"
             if let Some(tray) = app.tray_by_id("main") {
                 use tauri::menu::{Menu, MenuItem};
@@ -797,83 +768,123 @@ pub fn run() {
 
             info!("OpenPisci started");
 
-            // Optional developer hook: run one headless Pisci task on startup and optionally exit.
-            if let Ok(prompt) = std::env::var("PISCI_HEADLESS_PROMPT") {
-                if !prompt.trim().is_empty() {
-                    let state_ref = startup_headless_state;
-                    let app_for_headless = app_handle.clone();
-                    let exit_after =
-                        std::env::var("PISCI_EXIT_AFTER_HEADLESS_PROMPT").ok().as_deref()
+            #[cfg(debug_assertions)]
+            {
+                let startup_headless_state = store::AppState {
+                    db: state.db.clone(),
+                    settings: state.settings.clone(),
+                    plan_state: state.plan_state.clone(),
+                    browser: state.browser.clone(),
+                    cancel_flags: state.cancel_flags.clone(),
+                    confirmation_responses: state.confirmation_responses.clone(),
+                    interactive_responses: state.interactive_responses.clone(),
+                    app_handle: app_handle.clone(),
+                    scheduler: state.scheduler.clone(),
+                    gateway: state.gateway.clone(),
+                    pisci_heartbeat_cursor: state.pisci_heartbeat_cursor.clone(),
+                };
+                let startup_trial_state = store::AppState {
+                    db: state.db.clone(),
+                    settings: state.settings.clone(),
+                    plan_state: state.plan_state.clone(),
+                    browser: state.browser.clone(),
+                    cancel_flags: state.cancel_flags.clone(),
+                    confirmation_responses: state.confirmation_responses.clone(),
+                    interactive_responses: state.interactive_responses.clone(),
+                    app_handle: app_handle.clone(),
+                    scheduler: state.scheduler.clone(),
+                    gateway: state.gateway.clone(),
+                    pisci_heartbeat_cursor: state.pisci_heartbeat_cursor.clone(),
+                };
+
+                // Optional developer hook: run one headless Pisci task on startup and optionally exit.
+                if let Ok(prompt) = std::env::var("PISCI_HEADLESS_PROMPT") {
+                    if !prompt.trim().is_empty() {
+                        let state_ref = startup_headless_state;
+                        let app_for_headless = app_handle.clone();
+                        let exit_after =
+                            std::env::var("PISCI_EXIT_AFTER_HEADLESS_PROMPT").ok().as_deref()
+                                == Some("1");
+                        let session_id = std::env::var("PISCI_HEADLESS_SESSION_ID")
+                            .unwrap_or_else(|_| "startup_headless".to_string());
+                        let session_title = std::env::var("PISCI_HEADLESS_SESSION_TITLE")
+                            .unwrap_or_else(|_| "Startup Headless Task".to_string());
+                        let channel = std::env::var("PISCI_HEADLESS_CHANNEL")
+                            .unwrap_or_else(|_| "startup".to_string());
+                        let extra_system_context =
+                            std::env::var("PISCI_HEADLESS_EXTRA_SYSTEM_CONTEXT").ok();
+                        tauri::async_runtime::spawn(async move {
+                            tracing::info!(
+                                "Startup hook: running headless Pisci task session_id={}",
+                                session_id
+                            );
+                            match commands::chat::run_agent_headless(
+                                &state_ref,
+                                &session_id,
+                                &prompt,
+                                None,
+                                &channel,
+                                Some(commands::chat::HeadlessRunOptions {
+                                    pool_session_id: None,
+                                    extra_system_context,
+                                    session_title: Some(session_title),
+                                    session_source: Some("startup_hook".to_string()),
+                                }),
+                            )
+                            .await
+                            {
+                                Ok((text, _, _)) => tracing::info!(
+                                    "Startup hook: headless Pisci task completed, chars={}, preview={}",
+                                    text.chars().count(),
+                                    text.chars().take(400).collect::<String>()
+                                ),
+                                Err(e) => tracing::error!(
+                                    "Startup hook: headless Pisci task failed: {}",
+                                    e
+                                ),
+                            }
+                            if exit_after {
+                                tracing::info!("Startup hook: exiting after headless Pisci task");
+                                app_for_headless.exit(0);
+                            }
+                        });
+                    }
+                }
+
+                // Optional developer hook: auto-run a real collaboration trial on startup.
+                if std::env::var("PISCI_RUN_COLLAB_TRIAL").ok().as_deref() == Some("1") {
+                    let state_ref = startup_trial_state;
+                    let app_for_trial = app_handle.clone();
+                    let exit_after_trial =
+                        std::env::var("PISCI_EXIT_AFTER_COLLAB_TRIAL").ok().as_deref()
                             == Some("1");
-                    let session_id = std::env::var("PISCI_HEADLESS_SESSION_ID")
-                        .unwrap_or_else(|_| "startup_headless".to_string());
-                    let session_title = std::env::var("PISCI_HEADLESS_SESSION_TITLE")
-                        .unwrap_or_else(|_| "Startup Headless Task".to_string());
-                    let channel = std::env::var("PISCI_HEADLESS_CHANNEL")
-                        .unwrap_or_else(|_| "startup".to_string());
-                    let extra_system_context =
-                        std::env::var("PISCI_HEADLESS_EXTRA_SYSTEM_CONTEXT").ok();
                     tauri::async_runtime::spawn(async move {
-                        tracing::info!(
-                            "Startup hook: running headless Pisci task session_id={}",
-                            session_id
-                        );
-                        match commands::chat::run_agent_headless(
+                        tracing::info!("Startup hook: running real collaboration trial");
+                        match crate::commands::collab_trial::run_collaboration_trial_with_state(
+                            app_for_trial.clone(),
                             &state_ref,
-                            &session_id,
-                            &prompt,
-                            None,
-                            &channel,
-                            Some(commands::chat::HeadlessRunOptions {
-                                pool_session_id: None,
-                                extra_system_context,
-                                session_title: Some(session_title),
-                                session_source: Some("startup_hook".to_string()),
-                            }),
                         )
                         .await
                         {
-                            Ok((text, _, _)) => tracing::info!(
-                                "Startup hook: headless Pisci task completed, chars={}, preview={}",
-                                text.chars().count(),
-                                text.chars().take(400).collect::<String>()
-                            ),
+                            Ok(status) => {
+                                tracing::info!(
+                                    "Startup hook: collaboration trial completed, completed={}, pool_id={}, steps={}",
+                                    status.completed,
+                                    status.pool_id,
+                                    status.steps.len()
+                                );
+                            }
                             Err(e) => tracing::error!(
-                                "Startup hook: headless Pisci task failed: {}",
+                                "Startup hook: collaboration trial failed: {}",
                                 e
                             ),
                         }
-                        if exit_after {
-                            tracing::info!("Startup hook: exiting after headless Pisci task");
-                            app_for_headless.exit(0);
+                        if exit_after_trial {
+                            tracing::info!("Startup hook: exiting after collaboration trial");
+                            app_for_trial.exit(0);
                         }
                     });
                 }
-            }
-
-            // Optional developer hook: auto-run a real collaboration trial on startup.
-            if std::env::var("PISCI_RUN_COLLAB_TRIAL").ok().as_deref() == Some("1") {
-                let state_ref = startup_trial_state;
-                let app_for_trial = app_handle.clone();
-                let exit_after_trial = std::env::var("PISCI_EXIT_AFTER_COLLAB_TRIAL").ok().as_deref() == Some("1");
-                tauri::async_runtime::spawn(async move {
-                    tracing::info!("Startup hook: running real collaboration trial");
-                    match crate::commands::collab_trial::run_collaboration_trial_with_state(app_for_trial.clone(), &state_ref).await {
-                        Ok(status) => {
-                            tracing::info!(
-                                "Startup hook: collaboration trial completed, completed={}, pool_id={}, steps={}",
-                                status.completed,
-                                status.pool_id,
-                                status.steps.len()
-                            );
-                        }
-                        Err(e) => tracing::error!("Startup hook: collaboration trial failed: {}", e),
-                    }
-                    if exit_after_trial {
-                        tracing::info!("Startup hook: exiting after collaboration trial");
-                        app_for_trial.exit(0);
-                    }
-                });
             }
 
             // Auto-run multi-agent tests in dev mode
