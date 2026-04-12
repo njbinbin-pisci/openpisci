@@ -346,6 +346,20 @@ OpenPisci
 
 ## 📋 Changelog
 
+### v0.5.22
+- **Windows startup crash fix**: fixed an installed-build startup failure where background tasks could touch `AppState` too early and trigger a Windows application crash; patrol, recovery, and developer startup hooks now run only after state registration is complete.
+- **Windows CI / release pipeline stabilisation**: embedded a Windows manifest into the Rust test binary to fix `STATUS_ENTRYPOINT_NOT_FOUND` on GitHub Actions, and fixed a `replace_todo` test deadlock so tagged builds can continue producing installers.
+- **Documentation entrypoint cleanup**: swapped the root and `src-tauri` README language entrypoints so English is now the default landing page, and backfilled the missing version history.
+
+### v0.5.21
+- **Layered task timeout configuration**: added a `task > project(pool) > koi > system` timeout inheritance chain so execution timeouts can be configured per task, per project, and per Koi, with matching Pond UI controls.
+- **Context and collaboration runtime improvements**: unified the chat context assembly path, added rolling-summary compaction controls and minimal task-spine persistence, and hardened multi-agent completion handling for long-running work.
+
+### v0.5.20
+- **Custom LLM provider fix**: fixed custom providers disappearing after saving settings.
+- **Documentation and licensing refresh**: added product screenshots, the star prompt, and BSL 1.1 commercial-use guidance.
+- **Known issue**: some Windows installers from this version could crash during startup because background startup work could run before `AppState` registration; this is fixed in `v0.5.22`.
+
 ### v0.5.19
 - **Excel chart fix**: fixed a logic inversion in sheet_check that caused named-sheet selection to always fall through to ActiveSheet; dd_chart now re-applies ChartType after SetSourceData to prevent Excel from silently resetting it to the default type; strengthened tool description to require explicit chart_type (line/column/bar/pie/scatter/area) so the AI no longer defaults to pie charts
 

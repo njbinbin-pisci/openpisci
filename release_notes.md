@@ -1,4 +1,28 @@
-## v0.5.19 - Koi/Pool fixes, parity matrix, backend README
+## v0.5.22 - Windows startup crash fix and release pipeline stabilisation
+
+### Bug Fixes
+
+- **startup/runtime**: Fix installed Windows builds crashing during startup when background tasks touch `AppState` before registration completes
+- **commands/test_runner**: Fix the `replace_todo` resume-path deadlock in Rust tests
+- **GitHub Actions / Windows tests**: Embed the required Windows manifest so Rust test binaries no longer fail with `STATUS_ENTRYPOINT_NOT_FOUND`
+
+### Documentation
+
+- **README.md / README_CN.md**: Backfill `v0.5.20` / `v0.5.21` / `v0.5.22` changelog entries and switch the repository default landing page to English
+- **src-tauri/README.md / src-tauri/README_CN.md**: Split backend docs into English and Chinese entrypoints with corrected cross-links
+
+### Previous releases
+
+#### v0.5.21 - Layered timeouts and context runtime consolidation
+- Added layered task timeout inheritance across task, pool, Koi, and system defaults
+- Unified context assembly, rolling-summary compaction controls, and minimal task-spine persistence
+
+#### v0.5.20 - Settings fix and documentation refresh
+- Fixed custom LLM providers disappearing after saving settings
+- Added screenshots, star prompt, and updated licensing notes
+- Known issue: some Windows installers could crash on startup; fixed in `v0.5.22`
+
+#### v0.5.19 - Koi/Pool fixes, parity matrix, backend README
 
 ### Bug Fixes
 
