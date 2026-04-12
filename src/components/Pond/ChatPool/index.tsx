@@ -17,6 +17,7 @@ function PoolMessageContent({ content }: { content: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
+      urlTransform={(url) => url.startsWith("file://") ? url : (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("mailto:") || url.startsWith("#") || url.startsWith("/") || !url.includes(":")) ? url : ""}
       components={{
         a: ({ href, children }) => {
           if (isLocalPath(href)) {
@@ -166,8 +167,10 @@ export default function ChatPool() {
   const [orgSpecSaving, setOrgSpecSaving] = useState(false);
   // Session action menu (⋯)
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [menuPlacement, setMenuPlacement] = useState<"down" | "up">("down");
   const [actionTarget, setActionTarget] = useState<{ id: string; name: string; action: "pause" | "resume" | "archive" } | null>(null);
   const [actioning, setActioning] = useState(false);
+  const sessionListRef = useRef<HTMLDivElement>(null);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -474,7 +477,7 @@ export default function ChatPool() {
           </div>
         )}
 
-        <div className="chatpool-session-list">
+        <div className="chatpool-session-list" ref={sessionListRef}>
           {loading && sessions.length === 0 && (
             <div className="chatpool-empty-hint">{t("common.loading")}</div>
           )}
@@ -487,7 +490,7 @@ export default function ChatPool() {
             return (
               <div
                 key={s.id}
-                className={`chatpool-session-item ${s.id === activeSessionId ? "active" : ""}${s.status === "archived" ? " chatpool-session-archived" : ""}`}
+                className={`chatpool-session-item ${s.id === activeSessionId ? "active" : ""}${s.status === "archived" ? " chatpool-session-archived" : ""}${isMenuOpen ? " chatpool-session-item--menu-open" : ""}`}
                 onClick={() => dispatch(poolActions.setActivePoolSession(s.id))}
               >
                 <div className="chatpool-session-name">
@@ -499,12 +502,29 @@ export default function ChatPool() {
                   <button
                     className="chatpool-session-menu-btn"
                     title={t("pool.sessionActions")}
-                    onClick={(e) => { e.stopPropagation(); setMenuOpenId(isMenuOpen ? null : s.id); }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (isMenuOpen) {
+                        setMenuOpenId(null);
+                        return;
+                      }
+                      const listRect = sessionListRef.current?.getBoundingClientRect();
+                      const buttonRect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                      if (listRect) {
+                        const estimatedMenuHeight = s.status === "archived" ? 86 : 120;
+                        const spaceBelow = listRect.bottom - buttonRect.bottom;
+                        const spaceAbove = buttonRect.top - listRect.top;
+                        setMenuPlacement(spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow ? "up" : "down");
+                      } else {
+                        setMenuPlacement("down");
+                      }
+                      setMenuOpenId(s.id);
+                    }}
                   >
                     ⋯
                   </button>
                   {isMenuOpen && (
-                    <div className="chatpool-session-menu">
+                    <div className={`chatpool-session-menu ${menuPlacement === "up" ? "chatpool-session-menu--up" : ""}`}>
                       {s.status === "active" && (
                         <button className="chatpool-menu-item chatpool-menu-item--warn"
                           onClick={() => { setMenuOpenId(null); setActionTarget({ id: s.id, name: s.name, action: "pause" }); }}>

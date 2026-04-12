@@ -123,6 +123,7 @@
   border-radius: var(--radius);
   cursor: pointer;
   transition: background 0.15s;
+  z-index: 0;
 }
 
 .chatpool-session-item:hover {
@@ -131,6 +132,10 @@
 
 .chatpool-session-item.active {
   background: var(--accent);
+}
+
+.chatpool-session-item--menu-open {
+  z-index: 20;
 }
 
 .chatpool-session-item.active .chatpool-session-name {
@@ -173,6 +178,7 @@
   position: absolute;
   top: 6px;
   right: 6px;
+  z-index: 1;
 }
 
 .chatpool-session-menu-btn {
@@ -210,6 +216,12 @@
   padding: 4px 0;
   display: flex;
   flex-direction: column;
+}
+
+.chatpool-session-menu--up {
+  top: auto;
+  bottom: 100%;
+  margin-bottom: 4px;
 }
 
 .chatpool-menu-item {
