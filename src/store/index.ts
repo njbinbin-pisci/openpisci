@@ -391,6 +391,25 @@ const chatSlice = createSlice({
         }
       }
     },
+    /** Restore the most recent persisted task UI state for a session. */
+    restoreTaskPanels: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        toolSteps: ToolStep[];
+        planItems: PlanTodoItem[];
+        turnDone: boolean;
+      }>
+    ) => {
+      const { sessionId, toolSteps, planItems, turnDone } = action.payload;
+      state.toolSteps[sessionId] = toolSteps;
+      state.toolStepsTurnDone[sessionId] = turnDone;
+      if (planItems.length > 0) {
+        state.planBySession[sessionId] = planItems;
+      } else {
+        delete state.planBySession[sessionId];
+      }
+    },
     setPlan: (state, action: PayloadAction<{ sessionId: string; items: PlanTodoItem[] }>) => {
       state.planBySession[action.payload.sessionId] = action.payload.items;
     },

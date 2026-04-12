@@ -1024,6 +1024,7 @@ pub fn run() {
             commands::pool::send_pool_message,
             commands::pool::get_pool_org_spec,
             commands::pool::update_pool_org_spec,
+            commands::pool::update_pool_session_config,
             commands::pool::dispatch_koi_task,
             commands::pool::cancel_koi_task,
             commands::pool::handle_pool_mention,
@@ -1036,6 +1037,7 @@ pub fn run() {
             commands::board::update_koi_todo,
             commands::board::claim_koi_todo,
             commands::board::complete_koi_todo,
+            commands::board::resume_koi_todo,
             commands::board::delete_koi_todo,
             // MCP servers
             commands::mcp::list_mcp_servers,

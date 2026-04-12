@@ -84,76 +84,6 @@ pub struct KoiExecResult {
 }
 
 impl KoiRuntime {
-    fn has_meaningful_task_text(text: &str) -> bool {
-        text.chars()
-            .any(|ch| !ch.is_whitespace() && !matches!(ch, '。' | '.' | ',' | '，' | ':' | '：' | ';' | '；' | '!' | '！' | '?' | '？' | '-' | '—' | '(' | ')' | '（' | '）' | '[' | ']' | '【' | '】'))
-    }
-
-    fn strip_all_mentions(text: &str) -> String {
-        let mut result = String::with_capacity(text.len());
-        let mut chars = text.chars().peekable();
-        let mut skipping_mention = false;
-        while let Some(ch) = chars.next() {
-            if skipping_mention {
-                if ch.is_whitespace()
-                    || matches!(ch, '。' | '.' | ',' | '，' | ':' | '：' | ';' | '；' | '!' | '！' | '?' | '？' | '(' | ')' | '（' | '）' | '[' | ']' | '【' | '】')
-                {
-                    skipping_mention = false;
-                    result.push(ch);
-                }
-                continue;
-            }
-
-            if ch == '@' {
-                skipping_mention = true;
-                continue;
-            }
-
-            result.push(ch);
-        }
-        result
-    }
-
-    fn extract_direct_assignment_task(content: &str, mention: &str) -> String {
-        let after_mention = content
-            .split(mention)
-            .nth(1)
-            .map(str::trim)
-            .unwrap_or_default();
-        if Self::has_meaningful_task_text(after_mention) {
-            return after_mention.to_string();
-        }
-
-        let normalized = Self::strip_all_mentions(&content.replace("@all", " "));
-        let without_mentions = normalized
-            .trim()
-            .trim_matches(|ch: char| {
-                ch.is_whitespace()
-                    || matches!(
-                        ch,
-                        '。' | '.'
-                            | ','
-                            | '，'
-                            | ':'
-                            | '：'
-                            | ';'
-                            | '；'
-                            | '!'
-                            | '！'
-                            | '?'
-                            | '？'
-                            | '-'
-                            | '—'
-                    )
-            })
-            .trim();
-        if Self::has_meaningful_task_text(without_mentions) {
-            without_mentions.to_string()
-        } else {
-            content.trim().to_string()
-        }
-    }
-
     fn koi_pool_session_key(koi_id: &str, pool_session_id: &str) -> String {
         format!("{}:{}", koi_id, pool_session_id)
     }
@@ -166,8 +96,8 @@ impl KoiRuntime {
         format!(
             "[Pool Notification] @{} from {} (in pool chat):\n{}\n\n\
              You can use pool_chat to respond. \
-             If you want to take on this request, create a todo for yourself. \
-             You may also continue your current work and respond later.",
+             If this is actionable work, create a todo for yourself via pool_org so it is tracked. \
+             If you cannot handle it right now, still create the todo — it will be picked up on your next activation.",
             koi_name, sender_name, content
         )
     }
@@ -237,6 +167,42 @@ impl KoiRuntime {
         ))
     }
 
+    async fn system_default_timeout_secs(&self) -> u64 {
+        if let Some(app) = self.try_get_app_handle() {
+            let state = app.state::<crate::store::AppState>();
+            let secs = state.settings.lock().await.koi_timeout_secs as u64;
+            secs
+        } else {
+            600
+        }
+    }
+
+    async fn resolve_task_timeout_secs(
+        &self,
+        koi_def: &KoiDefinition,
+        pool_session_id: Option<&str>,
+        todo_timeout_secs: Option<u32>,
+    ) -> u64 {
+        if let Some(timeout_secs) = todo_timeout_secs.filter(|value| *value > 0) {
+            return timeout_secs as u64;
+        }
+
+        if let Some(psid) = pool_session_id {
+            let db = self.db().lock().await;
+            if let Ok(Some(pool)) = db.get_pool_session(psid) {
+                if pool.task_timeout_secs > 0 {
+                    return pool.task_timeout_secs as u64;
+                }
+            }
+        }
+
+        if koi_def.task_timeout_secs > 0 {
+            return koi_def.task_timeout_secs as u64;
+        }
+
+        self.system_default_timeout_secs().await
+    }
+
     /// Load the org spec for a pool session (if any).
     pub async fn load_org_spec(&self, pool_session_id: Option<&str>) -> String {
         if let Some(psid) = pool_session_id {
@@ -260,6 +226,7 @@ impl KoiRuntime {
         assigned_by: &str,
         pool_session_id: Option<&str>,
         priority: &str,
+        task_timeout_secs: Option<u32>,
     ) -> anyhow::Result<(crate::koi::KoiTodo, Option<i64>)> {
         let (koi_def, pool_session_id) = {
             let db = self.db().lock().await;
@@ -290,6 +257,7 @@ impl KoiRuntime {
                 pool_session_id.as_deref(),
                 assigned_by,
                 None,
+                task_timeout_secs.unwrap_or(0),
             )?
         };
 
@@ -300,7 +268,7 @@ impl KoiRuntime {
                 assigned_by,
                 &format!("@{} {}", koi_def.name, task),
                 "task_assign",
-                &json!({ "koi_id": &koi_def.id, "priority": priority }).to_string(),
+                &json!({ "koi_id": &koi_def.id, "priority": priority, "timeout_secs": task_timeout_secs }).to_string(),
                 Some(&todo.id),
                 None,
                 Some("task_assigned"),
@@ -401,44 +369,19 @@ impl KoiRuntime {
             None
         };
 
-        // Append todo_id and identity reminder to task
-        let task_with_meta = format!(
-            "{}\n\n[System: You are {name}. Your todo ID for this task is `{id}`. \
-             Before starting work, call pool_chat(action=\"read\") to check if a teammate has already done related work or left relevant context. \
-             When reading pool chat, focus on what is addressed to you ({name}) specifically — \
-             do not confuse other team members' statuses or roles with your own. \
-             Treat the assigned task text and relevant pool_chat context as your primary working context. Do NOT browse the workspace, kb, or the web unless you need a specific missing fact or artifact for the deliverable you are producing right now. \
-             If this is mainly an analysis, specification, review, handoff, or status task, stay inside pool_chat/pool_org unless the task explicitly names a file or artifact. \
-             If you cannot name the exact file, path, or artifact you need, do NOT start with file_list/file_search/file_read. \
-             Never invent placeholder paths such as `C:\\workspace\\...` or guessed project locations. \
-             Do not end by merely describing your next intended action. If you decide a tool call is needed, make the tool call in the same turn; if you still cannot complete the task, mark it blocked or waiting instead of pretending the work is finished. \
-             IMPORTANT: Your workspace is a Git worktree — always use RELATIVE paths (e.g. src/auth/auth.service.ts) for all file_write and file_edit operations. \
-             NEVER use absolute paths pointing to the main project directory — doing so bypasses your worktree and corrupts the shared codebase. \
-             Mark this todo done ONLY after the actual deliverable is complete and verifiable \
-             (code written, file created, review posted, etc.). \
-             Writing a plan or having a discussion does NOT count as done. \
-             Coordination protocol: if your output should be handed to another teammate for the next step, explicitly post `[ProjectStatus] follow_up_needed` and @mention that teammate in pool_chat. \
-             If the task text already names the next teammate, that handoff is part of the task itself — do not stop after `complete_todo` without posting the follow-up handoff unless you are blocked or the work is actually ready for Pisci review. \
-             Peer auto-activation depends on that explicit `[ProjectStatus] follow_up_needed` marker; a plain conversational @mention may be treated as discussion only. \
-             Only use `[ProjectStatus] ready_for_pisci_review` when your branch no longer needs another teammate and the work is ready for Pisci to assess. \
-             Call pool_org(action=\"complete_todo\", todo_id=\"{id}\", summary=\"<what you accomplished>\") when the real output exists. \
-             The summary is REQUIRED and must describe what was actually done (e.g. \"Implemented auth module in src/auth/, 3 files created, all tests pass\"). \
-             After completing, follow the coordination protocol above in pool_chat so the next actor is obvious. \
-             Always end with a concise summary of what was accomplished — never end mid-sentence or with a phrase like \"now I will...\". \
-             If your result is longer than ~500 words, write it to a file (e.g. kb/reports/<date>-<topic>.md) and post only the file path + a 3-5 sentence summary to pool_chat.]",
-            task,
-            name = koi_def.name,
-            id = &todo.id[..8.min(todo.id.len())]
-        );
+        let todo_id_short = &todo.id[..8.min(todo.id.len())];
+        let task_with_meta = include_str!("../../prompts/koi_execute_todo.txt")
+            .replace("{task}", &task)
+            .replace("{name}", &koi_def.name)
+            .replace("{todo_id}", todo_id_short);
 
-        // Execute via CallKoiTool with configurable timeout (default 10 min)
-        let koi_timeout_secs: u64 = if let Some(app) = self.try_get_app_handle() {
-            let state = app.state::<crate::store::AppState>();
-            let secs = state.settings.lock().await.koi_timeout_secs as u64;
-            secs
-        } else {
-            600
-        };
+        let koi_timeout_secs = self
+            .resolve_task_timeout_secs(
+                &koi_def,
+                canonical_pool_session_id.as_deref(),
+                Some(todo.task_timeout_secs),
+            )
+            .await;
         let exec_result = match tokio::time::timeout(
             std::time::Duration::from_secs(koi_timeout_secs),
             self.execute_koi_agent(
@@ -459,20 +402,42 @@ impl KoiRuntime {
             )),
         };
 
-        // Post result and update todo. A todo only counts as complete when the
-        // agent explicitly produces a linkable deliverable (typically via
-        // complete_todo writing a result message). A normal text return without
-        // explicit completion is treated as protocol failure, not success.
-        let (run_success, mut raw_reply) = match &exec_result {
+        let (run_success, raw_reply) = match &exec_result {
             Ok(reply) => (true, reply.clone()),
             Err(e) => (false, format!("Execution error: {}", e)),
         };
-        let mut success = run_success;
+
+        // Determine completion status.
+        //  - Agent explicitly called complete_todo → already marked "done" in DB
+        //  - Agent returned without error but didn't call complete_todo → needs_review
+        //  - Agent returned with error → blocked
+        let explicitly_completed = if let Some(psid) = canonical_pool_session_id.as_deref() {
+            let db = self.db().lock().await;
+            if run_success && raw_reply.trim().is_empty() {
+                db.get_latest_unlinked_result_message_id(psid, koi_id)
+                    .unwrap_or_default()
+                    .is_some()
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        // Check if todo was already marked done by the agent via complete_todo tool
+        let todo_already_done = {
+            let db = self.db().lock().await;
+            db.get_koi_todo(&todo.id)
+                .ok()
+                .flatten()
+                .map(|t| t.status == "done")
+                .unwrap_or(false)
+        };
 
         let result_msg_id = if let Some(psid) = canonical_pool_session_id.as_deref() {
             let db = self.db().lock().await;
 
-            if run_success && raw_reply.trim().is_empty() {
+            if run_success && raw_reply.trim().is_empty() && explicitly_completed {
                 let existing_id = db
                     .get_latest_unlinked_result_message_id(psid, koi_id)
                     .unwrap_or_default();
@@ -489,60 +454,28 @@ impl KoiRuntime {
                     }
                     Some(msg_id)
                 } else {
-                    success = false;
-                    raw_reply = format!(
-                        "Task ended without an explicit deliverable. The agent did not call complete_todo and no linked result message was produced for '{}'.",
-                        todo.title
-                    );
-                    let msg = db.insert_pool_message_ext(
-                        psid,
-                        koi_id,
-                        &raw_reply,
-                        "status_update",
-                        &json!({
-                            "todo_id": todo.id,
-                            "success": false,
-                            "protocol_error": "missing_explicit_completion"
-                        })
-                        .to_string(),
-                        Some(&todo.id),
-                        assign_msg_id,
-                        Some("task_failed"),
-                    )?;
                     drop(db);
-                    self.bus.emit_event(
-                        &format!("pool_message_{}", psid),
-                        serde_json::to_value(&msg).unwrap_or_default(),
-                    );
-                    Some(msg.id)
+                    None
                 }
-            } else {
+            } else if !run_success {
                 let summary = if raw_reply.chars().count() > 5000 {
                     raw_reply.chars().take(5000).collect::<String>()
                 } else {
                     raw_reply.clone()
                 };
-                if run_success {
-                    success = false;
-                    raw_reply = format!(
-                        "Task ended without explicit completion for '{}'. Last agent reply: {}",
-                        todo.title, summary
-                    );
-                }
                 let msg = db.insert_pool_message_ext(
                     psid,
                     koi_id,
-                    if success { &summary } else { &raw_reply },
-                    if success { "result" } else { "status_update" },
+                    &summary,
+                    "status_update",
                     &json!({
                         "todo_id": todo.id,
-                        "success": success,
-                        "protocol_error": if run_success { Some("missing_complete_todo") } else { None::<&str> }
+                        "success": false,
                     })
                     .to_string(),
                     Some(&todo.id),
                     assign_msg_id,
-                    Some(if success { "task_completed" } else { "task_failed" }),
+                    Some("task_failed"),
                 )?;
                 self.bus.emit_event(
                     &format!("pool_message_{}", psid),
@@ -550,24 +483,94 @@ impl KoiRuntime {
                 );
                 drop(db);
                 Some(msg.id)
+            } else if !todo_already_done {
+                // Agent finished without error but didn't call complete_todo.
+                // 1) Post the Koi's actual output so its work is visible in the pool.
+                let koi_output = if raw_reply.chars().count() > 5000 {
+                    format!("{}...", raw_reply.chars().take(5000).collect::<String>())
+                } else {
+                    raw_reply.clone()
+                };
+                if !koi_output.trim().is_empty() {
+                    let output_msg = db.insert_pool_message_ext(
+                        psid,
+                        koi_id,
+                        &koi_output,
+                        "status_update",
+                        &json!({
+                            "todo_id": todo.id,
+                            "auto_captured": true
+                        })
+                        .to_string(),
+                        Some(&todo.id),
+                        assign_msg_id,
+                        Some("task_progress"),
+                    )?;
+                    self.bus.emit_event(
+                        &format!("pool_message_{}", psid),
+                        serde_json::to_value(&output_msg).unwrap_or_default(),
+                    );
+                }
+                // 2) Post a system protocol reminder so Pisci knows to review.
+                let reminder = format!(
+                    "[ProtocolReminder] {} finished executing on '{}' without calling complete_todo. \
+                     The task output has been captured above. Todo status set to needs_review.",
+                    koi_def.name,
+                    todo.title,
+                );
+                let msg = db.insert_pool_message_ext(
+                    psid,
+                    "system",
+                    &reminder,
+                    "status_update",
+                    &json!({
+                        "todo_id": todo.id,
+                        "protocol_reminder": "missing_complete_todo"
+                    })
+                    .to_string(),
+                    Some(&todo.id),
+                    assign_msg_id,
+                    Some("protocol_reminder"),
+                )?;
+                self.bus.emit_event(
+                    &format!("pool_message_{}", psid),
+                    serde_json::to_value(&msg).unwrap_or_default(),
+                );
+                drop(db);
+                Some(msg.id)
+            } else {
+                drop(db);
+                None
             }
         } else {
             None
         };
 
-        // Complete or block the todo
-        {
+        let success = run_success;
+
+        // Update todo status based on outcome
+        if !todo_already_done {
             let db = self.db().lock().await;
-            if success {
-                db.complete_koi_todo(&todo.id, result_msg_id)?;
-            } else {
+            if !run_success {
                 db.block_koi_todo(&todo.id, &raw_reply)?;
+            } else if !explicitly_completed {
+                db.mark_koi_todo_needs_review(
+                    &todo.id,
+                    "Agent finished without calling complete_todo",
+                )?;
             }
         }
+        let todo_action = if todo_already_done || explicitly_completed {
+            "completed"
+        } else if !run_success {
+            "blocked"
+        } else {
+            "needs_review"
+        };
         self.bus.emit_event(
             "koi_todo_updated",
             json!({
-                "id": todo.id, "action": if success { "completed" } else { "blocked" }
+                "id": todo.id, "action": todo_action
             }),
         );
 
@@ -582,6 +585,266 @@ impl KoiRuntime {
         })
     }
 
+    fn todo_source_type(actor_id: &str) -> &'static str {
+        match actor_id {
+            "pisci" => "pisci",
+            "user" => "user",
+            "system" => "system",
+            _ => "koi",
+        }
+    }
+
+    pub async fn resume_todo(&self, todo_id: &str, triggered_by: &str) -> anyhow::Result<()> {
+        let (todo, owner, pool_session_id) = {
+            let db = self.db().lock().await;
+            let todo = db
+                .get_koi_todo(todo_id)?
+                .ok_or_else(|| anyhow::anyhow!("Todo '{}' not found", todo_id))?;
+            if !matches!(todo.status.as_str(), "blocked" | "needs_review") {
+                return Err(anyhow::anyhow!(
+                    "Todo '{}' is '{}' and cannot be resumed. Only blocked/needs_review todos are resumable.",
+                    todo.id,
+                    todo.status
+                ));
+            }
+            let owner = db
+                .resolve_koi_identifier(&todo.owner_id)?
+                .ok_or_else(|| anyhow::anyhow!("Owner '{}' not found", todo.owner_id))?;
+            let pool_session_id = match todo.pool_session_id.as_deref() {
+                Some(value) => Some({
+                    let pool = db
+                        .resolve_pool_session_identifier(value)?
+                        .ok_or_else(|| anyhow::anyhow!("Pool '{}' not found", value))?;
+                    Self::ensure_pool_allows_runtime_work(&pool, "resume Koi work")?;
+                    pool.id
+                }),
+                None => None,
+            };
+            (todo, owner, pool_session_id)
+        };
+
+        if self
+            .is_koi_run_active(&owner.id, pool_session_id.as_deref())
+            .await
+        {
+            return Err(anyhow::anyhow!(
+                "Koi '{}' already has an active run for this task context.",
+                owner.name
+            ));
+        }
+
+        {
+            let db = self.db().lock().await;
+            db.resume_koi_todo(&todo.id, &owner.id)?;
+            if let Some(psid) = pool_session_id.as_deref() {
+                let msg = db.insert_pool_message_ext(
+                    psid,
+                    triggered_by,
+                    &format!(
+                        "[Task Resumed] {} resumed '{}' for {}.",
+                        triggered_by, todo.title, owner.name
+                    ),
+                    "status_update",
+                    &json!({
+                        "todo_id": todo.id,
+                        "resumed_by": triggered_by,
+                        "owner_id": owner.id,
+                    })
+                    .to_string(),
+                    Some(&todo.id),
+                    None,
+                    Some("task_resumed"),
+                )?;
+                self.bus.emit_event(
+                    &format!("pool_message_{}", psid),
+                    serde_json::to_value(&msg).unwrap_or_default(),
+                );
+            }
+        }
+
+        self.bus.emit_event(
+            "koi_todo_updated",
+            json!({
+                "id": todo.id,
+                "action": "resumed",
+                "by": triggered_by,
+            }),
+        );
+
+        let mut todo_for_run = todo.clone();
+        todo_for_run.status = "in_progress".into();
+        todo_for_run.claimed_by = Some(owner.id.clone());
+        todo_for_run.claimed_at = Some(Utc::now());
+        todo_for_run.blocked_reason = None;
+        todo_for_run.updated_at = Utc::now();
+
+        let runtime = self.clone();
+        let owner_id = owner.id.clone();
+        let todo_id_owned = todo.id.clone();
+        tokio::spawn(async move {
+            if let Err(error) = runtime
+                .execute_todo(&owner_id, &todo_for_run, None, pool_session_id.as_deref())
+                .await
+            {
+                tracing::warn!(
+                    "resume_todo execution failed for '{}': {}",
+                    todo_id_owned,
+                    error
+                );
+            }
+        });
+
+        Ok(())
+    }
+
+    pub async fn replace_todo(
+        &self,
+        todo_id: &str,
+        new_owner_id: &str,
+        task: &str,
+        reason: &str,
+        triggered_by: &str,
+        task_timeout_secs: Option<u32>,
+    ) -> anyhow::Result<KoiTodo> {
+        let task = task.trim();
+        let reason = reason.trim();
+        if task.is_empty() {
+            return Err(anyhow::anyhow!("Replacement task cannot be empty."));
+        }
+        if reason.is_empty() {
+            return Err(anyhow::anyhow!("Replacement reason cannot be empty."));
+        }
+
+        let (original, new_owner, pool_session_id) = {
+            let db = self.db().lock().await;
+            let original = db
+                .get_koi_todo(todo_id)?
+                .ok_or_else(|| anyhow::anyhow!("Todo '{}' not found", todo_id))?;
+            if matches!(original.status.as_str(), "done" | "cancelled") {
+                return Err(anyhow::anyhow!(
+                    "Todo '{}' is '{}' and cannot be replaced.",
+                    original.id,
+                    original.status
+                ));
+            }
+            let new_owner = db
+                .resolve_koi_identifier(new_owner_id)?
+                .ok_or_else(|| anyhow::anyhow!("Koi '{}' not found", new_owner_id))?;
+            let pool_session_id = match original.pool_session_id.as_deref() {
+                Some(value) => Some({
+                    let pool = db
+                        .resolve_pool_session_identifier(value)?
+                        .ok_or_else(|| anyhow::anyhow!("Pool '{}' not found", value))?;
+                    Self::ensure_pool_allows_runtime_work(&pool, "replace Koi todo")?;
+                    pool.id
+                }),
+                None => None,
+            };
+            (original, new_owner, pool_session_id)
+        };
+
+        let replacement_description = format!(
+            "Replacement for '{}' because: {}",
+            original.title, reason
+        );
+        let replacement = {
+            let db = self.db().lock().await;
+            db.replace_koi_todo(
+                &original,
+                &new_owner.id,
+                task,
+                &replacement_description,
+                triggered_by,
+                Self::todo_source_type(triggered_by),
+                reason,
+                task_timeout_secs,
+            )?
+        };
+
+        self.bus.emit_event(
+            "koi_todo_updated",
+            json!({
+                "id": original.id,
+                "action": "replaced",
+                "by": triggered_by,
+                "replacement_todo_id": replacement.id,
+            }),
+        );
+        self.bus.emit_event(
+            "koi_todo_updated",
+            json!({
+                "id": replacement.id,
+                "action": "created",
+                "by": triggered_by,
+            }),
+        );
+
+        if let Some(psid) = pool_session_id.as_deref() {
+            {
+                let db = self.db().lock().await;
+                let msg = db.insert_pool_message_ext(
+                    psid,
+                    triggered_by,
+                    &format!(
+                        "[Task Replaced] '{}' was replaced by '{}' for {}. Reason: {}",
+                        original.title, replacement.title, new_owner.name, reason
+                    ),
+                    "status_update",
+                    &json!({
+                        "todo_id": original.id,
+                        "replacement_todo_id": replacement.id,
+                        "new_owner_id": new_owner.id,
+                    })
+                    .to_string(),
+                    Some(&replacement.id),
+                    None,
+                    Some("task_replaced"),
+                )?;
+                self.bus.emit_event(
+                    &format!("pool_message_{}", psid),
+                    serde_json::to_value(&msg).unwrap_or_default(),
+                );
+
+                let mention_content =
+                    format!("@{} [Priority: {}] {}", new_owner.name, replacement.priority, task);
+                let mention = db.insert_pool_message(
+                    psid,
+                    triggered_by,
+                    &mention_content,
+                    "mention",
+                    &json!({
+                        "target_koi": new_owner.id,
+                        "priority": replacement.priority,
+                        "replacement_for": original.id,
+                        "todo_id": replacement.id,
+                        "timeout_secs": replacement.task_timeout_secs,
+                    })
+                    .to_string(),
+                )?;
+                self.bus.emit_event(
+                    &format!("pool_message_{}", psid),
+                    serde_json::to_value(&mention).unwrap_or_default(),
+                );
+            }
+
+            let runtime = self.clone();
+            let psid = psid.to_string();
+            let mention_content =
+                format!("@{} [Priority: {}] {}", new_owner.name, replacement.priority, task);
+            let triggered_by = triggered_by.to_string();
+            tokio::spawn(async move {
+                if let Err(error) = runtime
+                    .handle_mention(&triggered_by, &psid, &mention_content)
+                    .await
+                {
+                    tracing::warn!("replace_todo mention dispatch failed: {}", error);
+                }
+            });
+        }
+
+        Ok(replacement)
+    }
+
     /// Combined assign + execute (backward compat for heartbeat patrol and tests).
     pub async fn assign_and_execute(
         &self,
@@ -590,9 +853,17 @@ impl KoiRuntime {
         assigned_by: &str,
         pool_session_id: Option<&str>,
         priority: &str,
+        task_timeout_secs: Option<u32>,
     ) -> anyhow::Result<KoiExecResult> {
         let (todo, assign_msg_id) = self
-            .assign_task(koi_id, task, assigned_by, pool_session_id, priority)
+            .assign_task(
+                koi_id,
+                task,
+                assigned_by,
+                pool_session_id,
+                priority,
+                task_timeout_secs,
+            )
             .await?;
         self.execute_todo(koi_id, &todo, assign_msg_id, pool_session_id)
             .await
@@ -633,44 +904,13 @@ impl KoiRuntime {
                 }
             };
 
-        let task = format!(
-            "You have been mentioned in the pool chat (pool_id: \"{pool_id}\"). \
-            IMPORTANT: You are {name} — keep your own identity in mind while reading messages from others. \
-            Use pool_chat(action=\"read\") to see the latest messages, then decide how to respond. \
-            When reading the chat, focus on what is addressed TO YOU specifically (your name or @{name}). \
-            Do not confuse descriptions of other team members' roles or statuses with your own. \
-            Treat the mention and relevant pool_chat context as your primary working context. Do NOT browse the workspace, kb, or the web unless you need a specific missing fact or artifact for the response or deliverable you are producing right now. \
-            If this mention is asking for analysis, review, handoff, or a status-bearing response rather than concrete file work, stay inside pool_chat/pool_org unless the mention explicitly references a file or artifact. \
-            If you cannot name the exact file, path, or artifact you need, do NOT start with file_list/file_search/file_read. \
-            Never invent placeholder paths such as `C:\\workspace\\...` or guessed project locations. \
-            Do not stop with a message that only describes your next intended action. If you need a tool, call it now; if you cannot proceed yet, state that explicitly via blocked/waiting or an actionable pool_chat update. \
-            Coordination protocol: if your output should be handed to another teammate, explicitly post `[ProjectStatus] follow_up_needed` and @mention that teammate. Peer auto-activation depends on that explicit status marker; a plain conversational @mention may be treated as discussion only. \
-            If the mention or task context already names the next teammate, that handoff is part of finishing the task — do not stop after `complete_todo` without posting the follow-up handoff unless you are blocked or the work is actually ready for Pisci review. \
-            Only use `[ProjectStatus] ready_for_pisci_review` when your branch no longer needs another teammate and the work is ready for Pisci to assess. \
-            Use your judgment: \
-            - If someone handed off concrete work to you ({name}): \
-              (1) First call pool_org(action=\"get_todos\", pool_id=\"{pool_id}\") to check if a similar unclaimed todo already exists for this work. \
-              (2) If no matching todo exists, create one: pool_org(action=\"create_todo\", pool_id=\"{pool_id}\", title=\"...\"). \
-              (3) Claim it: pool_org(action=\"claim_todo\", todo_id=\"...\"). \
-              (4) Do the work, then mark it complete: pool_org(action=\"complete_todo\", todo_id=\"...\"). \
-              (5) After completing, follow the coordination protocol above so the next actor is obvious. \
-            - If you need to ask a clarifying question, do so via pool_chat. \
-            - If the messages are status updates, acknowledgements, or peers saying the project is done, \
-              you do not need to reply and you do NOT need to create a todo — simply finish. \
-            Only send a message if you have something genuinely new or actionable to contribute. \
-            Always end with a concise summary of what was accomplished — never end mid-sentence or with a phrase like \"now I will...\". \
-            If your response is longer than ~500 words, write the full content to a file (e.g. kb/reports/<date>-<topic>.md) and post only the file path + a 3-5 sentence summary to pool_chat.",
-            name = koi_def.name,
-            pool_id = pool_session_id
-        );
+        let task = include_str!("../../prompts/koi_activate_for_messages.txt")
+            .replace("{name}", &koi_def.name)
+            .replace("{pool_id}", &pool_session_id);
 
-        let koi_timeout_secs: u64 = if let Some(app) = self.try_get_app_handle() {
-            let state = app.state::<crate::store::AppState>();
-            let secs = state.settings.lock().await.koi_timeout_secs as u64;
-            secs
-        } else {
-            600
-        };
+        let koi_timeout_secs = self
+            .resolve_task_timeout_secs(&koi_def, Some(&pool_session_id), None)
+            .await;
         let exec_result = match tokio::time::timeout(
             std::time::Duration::from_secs(koi_timeout_secs),
             self.execute_koi_agent(&koi_def, &task, Some(&pool_session_id), None),
@@ -714,7 +954,11 @@ impl KoiRuntime {
                 && !summary.trim().is_empty()
                 && latest_result
                     .as_deref()
-                    .map(|msg| msg.trim() == summary.trim())
+                    .map(|msg| {
+                        let msg = msg.trim();
+                        let sum = summary.trim();
+                        !msg.is_empty() && (sum.contains(msg) || msg.contains(sum))
+                    })
                     .unwrap_or(false);
             let event_type = if !success {
                 Some("task_failed")
@@ -936,13 +1180,6 @@ impl KoiRuntime {
         self.bus.app_handle()
     }
 
-    fn peer_handoff_is_actionable(content: &str) -> bool {
-        matches!(
-            crate::pisci::project_state::extract_project_status_signal(content),
-            Some(crate::pisci::project_state::STATUS_FOLLOW_UP)
-        )
-    }
-
     async fn peer_handoff_open_todo_count(
         &self,
         sender_koi_id: &str,
@@ -968,7 +1205,11 @@ impl KoiRuntime {
         pool_session_id: &str,
         content: &str,
     ) {
-        if !Self::peer_handoff_is_actionable(content) {
+        let is_handoff = matches!(
+            crate::pisci::project_state::extract_project_status_signal(content),
+            Some(crate::pisci::project_state::STATUS_FOLLOW_UP)
+        );
+        if !is_handoff {
             return;
         }
         let open_todo_count = self
@@ -1005,9 +1246,12 @@ impl KoiRuntime {
     }
 
     /// Handle an @mention or @all in the chat pool.
-    /// Behavior depends on who is mentioning:
-    /// - Pisci/user: direct task assignment (creates todo + executes)
-    /// - Another Koi: peer request — no todo, just notification/activation
+    ///
+    /// Unified wake-up semantics: every mentioned Koi is activated via
+    /// `activate_for_messages` (or notified if already busy). The activated
+    /// agent reads pool context and autonomously decides whether to create
+    /// a todo, respond, or ignore the message. The runtime never creates
+    /// todos or assigns tasks on behalf of agents.
     ///
     /// @all targets every non-offline Koi (excluding sender).
     pub async fn handle_mention(
@@ -1025,23 +1269,21 @@ impl KoiRuntime {
 
         let sender_is_koi = kois.iter().any(|k| k.id == sender_id);
         let mention_all = content.contains("@all");
-        let first_direct_target = if sender_is_koi || mention_all {
-            None
-        } else {
-            kois.iter()
-                .filter(|k| k.status != "offline" && k.id != sender_id)
-                .filter_map(|k| {
-                    let mention = format!("@{}", k.name);
-                    content.find(&mention).map(|idx| (idx, k.id.as_str()))
-                })
-                .min_by_key(|(idx, _)| *idx)
-                .map(|(_, koi_id)| koi_id.to_string())
-        };
         let sender_name = kois
             .iter()
             .find(|k| k.id == sender_id)
             .map(|k| k.name.as_str())
             .unwrap_or(sender_id);
+
+        if sender_is_koi {
+            self.emit_peer_handoff_warning_if_needed(
+                sender_id,
+                sender_name,
+                pool_session_id,
+                content,
+            )
+            .await;
+        }
 
         for koi in &kois {
             if koi.status == "offline" || koi.id == sender_id {
@@ -1051,66 +1293,38 @@ impl KoiRuntime {
             if !mention_all && !content.contains(&mention) {
                 continue;
             }
-            if !sender_is_koi
-                && !mention_all
-                && first_direct_target.as_deref() != Some(koi.id.as_str())
+
+            let koi_session_key = Self::koi_pool_session_key(&koi.id, pool_session_id);
+            let notification = Self::build_pool_notification(&koi.name, sender_name, content);
+
+            let existing_tx = {
+                let sessions = KOI_SESSIONS.lock().await;
+                sessions.get(&koi_session_key).cloned()
+            };
+            if let Some(tx) = existing_tx {
+                let _ = tx.send(notification).await;
+                tracing::info!("Injected @mention notification to busy Koi '{}'", koi.name);
+                results.push(KoiExecResult {
+                    success: true,
+                    reply: format!("Notification sent to busy Koi '{}'", koi.name),
+                    result_message_id: None,
+                });
+            } else if self
+                .is_koi_run_active(&koi.id, Some(pool_session_id))
+                .await
             {
-                continue;
-            }
-
-            if sender_is_koi {
-                if !Self::peer_handoff_is_actionable(content) {
-                    continue;
-                }
-                self.emit_peer_handoff_warning_if_needed(
-                    sender_id,
-                    sender_name,
-                    pool_session_id,
-                    content,
-                )
-                .await;
-                let koi_session_key = Self::koi_pool_session_key(&koi.id, pool_session_id);
-                let notification =
-                    Self::build_pool_notification(&koi.name, sender_name, content);
-                let existing_tx = {
-                    let sessions = KOI_SESSIONS.lock().await;
-                    sessions.get(&koi_session_key).cloned()
-                };
-                if let Some(tx) = existing_tx {
-                    let _ = tx.send(notification).await;
-                    tracing::info!("Injected @mention notification to busy Koi '{}'", koi.name);
-                    results.push(KoiExecResult {
-                        success: true,
-                        reply: format!("Notification sent to busy Koi '{}'", koi.name),
-                        result_message_id: None,
-                    });
-                } else {
-                    if self
-                        .is_koi_run_active(&koi.id, Some(pool_session_id))
-                        .await
-                    {
-                        self.queue_pending_notification(&koi_session_key, notification)
-                            .await;
-                        results.push(KoiExecResult {
-                            success: true,
-                            reply: format!(
-                                "Queued notification for Koi '{}' while its pool run is starting",
-                                koi.name
-                            ),
-                            result_message_id: None,
-                        });
-                    } else {
-                        let result = self.activate_for_messages(&koi.id, pool_session_id).await?;
-                        results.push(result);
-                    }
-                }
+                self.queue_pending_notification(&koi_session_key, notification)
+                    .await;
+                results.push(KoiExecResult {
+                    success: true,
+                    reply: format!(
+                        "Queued notification for Koi '{}' while its pool run is starting",
+                        koi.name
+                    ),
+                    result_message_id: None,
+                });
             } else {
-                // Pisci/user @mention: direct task assignment
-                let task = Self::extract_direct_assignment_task(content, &mention);
-
-                let result = self
-                    .assign_and_execute(&koi.id, &task, sender_id, Some(pool_session_id), "medium")
-                    .await?;
+                let result = self.activate_for_messages(&koi.id, pool_session_id).await?;
                 results.push(result);
             }
         }

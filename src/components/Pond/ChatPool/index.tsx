@@ -156,11 +156,13 @@ export default function ChatPool() {
 
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newTaskTimeoutSecs, setNewTaskTimeoutSecs] = useState(0);
   const [creating, setCreating] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [orgSpecOpen, setOrgSpecOpen] = useState(false);
   const [orgSpecDraft, setOrgSpecDraft] = useState("");
+  const [sessionTaskTimeoutSecs, setSessionTaskTimeoutSecs] = useState(0);
   const [orgSpecSaving, setOrgSpecSaving] = useState(false);
   // Session action menu (⋯)
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
@@ -327,10 +329,11 @@ export default function ChatPool() {
     if (!name) return;
     try {
       setCreating(true);
-      const session = await poolApi.createSession(name);
+      const session = await poolApi.createSession(name, newTaskTimeoutSecs);
       dispatch(poolActions.addPoolSession(session));
       dispatch(poolActions.setActivePoolSession(session.id));
       setNewName("");
+      setNewTaskTimeoutSecs(0);
       setShowNewDialog(false);
     } catch (e) {
     } finally {
@@ -341,7 +344,10 @@ export default function ChatPool() {
   const activeSession = useMemo(() => sessions.find((s) => s.id === activeSessionId), [sessions, activeSessionId]);
 
   useEffect(() => {
-    if (activeSession) setOrgSpecDraft(activeSession.org_spec || "");
+    if (activeSession) {
+      setOrgSpecDraft(activeSession.org_spec || "");
+      setSessionTaskTimeoutSecs(activeSession.task_timeout_secs ?? 0);
+    }
   }, [activeSession]);
 
   const handleSaveOrgSpec = async () => {
@@ -349,6 +355,7 @@ export default function ChatPool() {
     setOrgSpecSaving(true);
     try {
       await poolApi.updateOrgSpec(activeSessionId, orgSpecDraft);
+      await poolApi.updateConfig(activeSessionId, sessionTaskTimeoutSecs);
       loadSessions();
     } catch (e) {
       console.error("[ChatPool] save org_spec error:", e);
@@ -436,6 +443,19 @@ export default function ChatPool() {
               autoFocus
               onKeyDown={(e) => e.key === "Enter" && handleCreateSession()}
             />
+            <input
+              className="chatpool-input"
+              type="number"
+              min={0}
+              max={7200}
+              value={newTaskTimeoutSecs}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setNewTaskTimeoutSecs(Number.isFinite(v) ? Math.max(0, Math.min(7200, v)) : 0);
+              }}
+              placeholder={t("pool.taskTimeoutPlaceholder")}
+            />
+            <div className="chatpool-empty-hint">{t("pool.taskTimeoutHelp")}</div>
             <div className="chatpool-new-actions">
               <button
                 className="chatpool-btn chatpool-btn-secondary"
@@ -551,6 +571,19 @@ export default function ChatPool() {
             </div>
             {orgSpecOpen && (
               <div className="chatpool-orgspec-body">
+                <label className="koi-form-label">{t("pool.taskTimeoutField")}</label>
+                <input
+                  className="chatpool-input"
+                  type="number"
+                  min={0}
+                  max={7200}
+                  value={sessionTaskTimeoutSecs}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setSessionTaskTimeoutSecs(Number.isFinite(v) ? Math.max(0, Math.min(7200, v)) : 0);
+                  }}
+                />
+                <div className="chatpool-empty-hint">{t("pool.taskTimeoutHelp")}</div>
                 <textarea
                   className="chatpool-orgspec-editor"
                   value={orgSpecDraft}
@@ -561,7 +594,13 @@ export default function ChatPool() {
                 <button
                   className="chatpool-btn chatpool-btn-primary"
                   onClick={handleSaveOrgSpec}
-                  disabled={orgSpecSaving || orgSpecDraft === (activeSession?.org_spec || "")}
+                  disabled={
+                    orgSpecSaving
+                    || (
+                      orgSpecDraft === (activeSession?.org_spec || "")
+                      && sessionTaskTimeoutSecs === (activeSession?.task_timeout_secs ?? 0)
+                    )
+                  }
                   style={{ alignSelf: "flex-end", marginTop: 6 }}
                 >
                   {orgSpecSaving ? "Saving..." : (t("common.save") || "Save")}

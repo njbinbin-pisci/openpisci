@@ -171,6 +171,7 @@ async fn test_koi_crud() -> TestResult {
                 "System architect",
                 None,
                 0,
+                0,
             )
             .map_err(backend_err)?;
         if koi.name != "Architect" {
@@ -354,6 +355,7 @@ async fn test_project_completion_assessment() -> TestResult {
             blocked_reason: None,
             result_message_id: None,
             source_type: "pisci".into(),
+            task_timeout_secs: 0,
             created_at: now,
             updated_at: now,
         }];
@@ -502,9 +504,9 @@ async fn test_pisci_heartbeat_attention_scan() -> TestResult {
         let now = Utc::now();
         let (pool, reviewer) = {
             let db = db.lock().await;
-            let reviewer = db.create_koi("Reviewer", "代码审查员", "🔍", "#26de81", "Review.", "Reviewer", None, 0)
+            let reviewer = db.create_koi("Reviewer", "代码审查员", "🔍", "#26de81", "Review.", "Reviewer", None, 0, 0)
                 .map_err(backend_err)?;
-            let pool = db.create_pool_session("HeartbeatPool").map_err(backend_err)?;
+            let pool = db.create_pool_session("HeartbeatPool", 0).map_err(backend_err)?;
             (pool, reviewer)
         };
         let koi_ids = vec![reviewer.id.clone()];
@@ -602,10 +604,11 @@ async fn test_pisci_heartbeat_prompt_guardrails() -> TestResult {
                     "Reviewer",
                     None,
                     0,
+                    0,
                 )
                 .map_err(backend_err)?;
             let pool = db
-                .create_pool_session("PromptGuardPool")
+                .create_pool_session("PromptGuardPool", 0)
                 .map_err(backend_err)?;
             (pool, reviewer)
         };
@@ -695,9 +698,10 @@ async fn test_todo_lifecycle() -> TestResult {
                 "Worker",
                 None,
                 0,
+                0,
             )
             .map_err(backend_err)?;
-        let pool = db.create_pool_session("WorkPool").map_err(backend_err)?;
+        let pool = db.create_pool_session("WorkPool", 0).map_err(backend_err)?;
         let todo = db
             .create_koi_todo(
                 &koi.id,
@@ -708,6 +712,7 @@ async fn test_todo_lifecycle() -> TestResult {
                 Some(&pool.id),
                 "pisci",
                 None,
+                0,
             )
             .map_err(backend_err)?;
         if todo.status != "todo" {
@@ -746,6 +751,7 @@ async fn test_todo_lifecycle() -> TestResult {
                 Some(&pool.id),
                 "pisci",
                 Some(&todo.id),
+                0,
             )
             .map_err(backend_err)?;
         db.claim_koi_todo(&t2.id, &koi.id).map_err(backend_err)?;
@@ -769,9 +775,9 @@ async fn test_pool_messages() -> TestResult {
     let r: Result<(), LocalizedError> = async {
         let (db, _, _) = setup();
         let db = db.lock().await;
-        let pool = db.create_pool_session("Test").map_err(backend_err)?;
-        let koi = db.create_koi("W", "通用助理", "⚡", "#45b7d1", "Work", "W", None, 0).map_err(backend_err)?;
-        let todo = db.create_koi_todo(&koi.id, "Build", "", "medium", "pisci", Some(&pool.id), "pisci", None).map_err(backend_err)?;
+        let pool = db.create_pool_session("Test", 0).map_err(backend_err)?;
+        let koi = db.create_koi("W", "通用助理", "⚡", "#45b7d1", "Work", "W", None, 0, 0).map_err(backend_err)?;
+        let todo = db.create_koi_todo(&koi.id, "Build", "", "medium", "pisci", Some(&pool.id), "pisci", None, 0).map_err(backend_err)?;
         let m1 = db.insert_pool_message(&pool.id, "pisci", "@W Build", "task_assign", "{}").map_err(backend_err)?;
         let _m2 = db.insert_pool_message_ext(&pool.id, &koi.id, "OK", "task_claimed", "{}", Some(&todo.id), Some(m1.id), Some("task_claimed")).map_err(backend_err)?;
         let msgs = db.get_pool_messages(&pool.id, 100, 0).map_err(backend_err)?;
@@ -808,13 +814,14 @@ async fn test_runtime_assign_execute() -> TestResult {
                     "Builder",
                     None,
                     0,
+                    0,
                 )
                 .map_err(backend_err)?;
-            let pool = db.create_pool_session("Build").map_err(backend_err)?;
+            let pool = db.create_pool_session("Build", 0).map_err(backend_err)?;
             (koi, pool)
         };
         let result = runtime
-            .assign_and_execute(&koi.id, "Implement auth", "pisci", Some(&pool.id), "high")
+            .assign_and_execute(&koi.id, "Implement auth", "pisci", Some(&pool.id), "high", None)
             .await
             .map_err(backend_err)?;
         if !result.success {
@@ -841,10 +848,10 @@ async fn test_runtime_assign_execute() -> TestResult {
                     format!("todos: {}", todos.len()),
                 ));
             }
-            if todos[0].status != "done" {
+            if !matches!(todos[0].status.as_str(), "done" | "needs_review") {
                 return Err(fail_with_params(
                     "debug.multiAgentErrExpectedActual",
-                    json!({"subject":"todo status","expected":"done","actual":todos[0].status}),
+                    json!({"subject":"todo status","expected":"done or needs_review","actual":todos[0].status}),
                     format!("todo status: {}", todos[0].status),
                 ));
             }
@@ -881,11 +888,13 @@ async fn test_runtime_assign_execute() -> TestResult {
                     "no task_claimed",
                 ));
             }
-            if !evts.contains(&"task_completed".into()) {
+            if !evts.contains(&"task_completed".into())
+                && !evts.contains(&"protocol_reminder".into())
+            {
                 return Err(fail_with_params(
                     "debug.multiAgentErrMissing",
-                    json!({"subject":"task_completed event"}),
-                    "no task_completed",
+                    json!({"subject":"task_completed or protocol_reminder event"}),
+                    "no task_completed or protocol_reminder",
                 ));
             }
         }
@@ -919,9 +928,10 @@ async fn test_runtime_mention() -> TestResult {
                     "Reviewer",
                     None,
                     0,
+                    0,
                 )
                 .map_err(backend_err)?;
-            let pool = db.create_pool_session("Review").map_err(backend_err)?;
+            let pool = db.create_pool_session("Review", 0).map_err(backend_err)?;
             (koi, pool)
         };
         let r = runtime
@@ -989,6 +999,7 @@ async fn test_at_all_mention() -> TestResult {
                     "FE_All",
                     None,
                     0,
+                    0,
                 )
                 .map_err(backend_err)?;
             let be = db
@@ -1000,6 +1011,7 @@ async fn test_at_all_mention() -> TestResult {
                     "Backend.",
                     "BE_All",
                     None,
+                    0,
                     0,
                 )
                 .map_err(backend_err)?;
@@ -1013,9 +1025,10 @@ async fn test_at_all_mention() -> TestResult {
                     "QA_All",
                     None,
                     0,
+                    0,
                 )
                 .map_err(backend_err)?;
-            let pool = db.create_pool_session("AtAllTest").map_err(backend_err)?;
+            let pool = db.create_pool_session("AtAllTest", 0).map_err(backend_err)?;
             db.update_koi_status(&qa.id, "offline")
                 .map_err(backend_err)?;
             (fe, be, qa, pool)
@@ -1081,11 +1094,11 @@ async fn test_pool_chat_conversation() -> TestResult {
         let (db, bus, runtime) = setup();
         let (_pisci_koi, arch, dev, pool) = {
             let db = db.lock().await;
-            let arch = db.create_koi("Architect", "架构师", "🏛️", "#f7b731", "Architecture design.", "Architect", None, 0)
+            let arch = db.create_koi("Architect", "架构师", "🏛️", "#f7b731", "Architecture design.", "Architect", None, 0, 0)
                 .map_err(backend_err)?;
-            let dev = db.create_koi("Developer", "开发者", "💻", "#45b7d1", "Full-stack development.", "Developer", None, 0)
+            let dev = db.create_koi("Developer", "开发者", "💻", "#45b7d1", "Full-stack development.", "Developer", None, 0, 0)
                 .map_err(backend_err)?;
-            let pool = db.create_pool_session("OpenClawLobster").map_err(backend_err)?;
+            let pool = db.create_pool_session("OpenClawLobster", 0).map_err(backend_err)?;
             ((), arch, dev, pool)
         };
 
@@ -1260,19 +1273,19 @@ async fn test_full_e2e() -> TestResult {
         let (db, bus, runtime) = setup();
         let (fe, be, qa, pool) = {
             let db = db.lock().await;
-            let fe = db.create_koi("FE", "前端工程师", "🎨", "#45b7d1", "Frontend React.", "FE", None, 0).map_err(backend_err)?;
-            let be = db.create_koi("BE", "后端工程师", "⚡", "#7c6af7", "Backend Rust API.", "BE", None, 0).map_err(backend_err)?;
-            let qa = db.create_koi("QA", "测试工程师", "🔍", "#26de81", "Testing QA.", "QA", None, 0).map_err(backend_err)?;
-            let pool = db.create_pool_session("E-Commerce").map_err(backend_err)?;
+        let fe = db.create_koi("FE", "前端工程师", "🎨", "#45b7d1", "Frontend React.", "FE", None, 0, 0).map_err(backend_err)?;
+        let be = db.create_koi("BE", "后端工程师", "⚡", "#7c6af7", "Backend Rust API.", "BE", None, 0, 0).map_err(backend_err)?;
+        let qa = db.create_koi("QA", "测试工程师", "🔍", "#26de81", "Testing QA.", "QA", None, 0, 0).map_err(backend_err)?;
+        let pool = db.create_pool_session("E-Commerce", 0).map_err(backend_err)?;
             db.update_pool_org_spec(&pool.id, "## Goal\nBuild e-commerce MVP").map_err(backend_err)?;
             (fe, be, qa, pool)
         };
-        let r1 = runtime.assign_and_execute(&be.id, "Build Product API", "pisci", Some(&pool.id), "high")
+        let r1 = runtime.assign_and_execute(&be.id, "Build Product API", "pisci", Some(&pool.id), "high", None)
             .await.map_err(backend_err)?;
         if !r1.success {
             return Err(fail_with_params("debug.multiAgentErrTaskFailed", json!({"subject":"BE","detail":r1.reply}), format!("BE failed: {}", r1.reply)));
         }
-        let r2 = runtime.assign_and_execute(&fe.id, "Build product listing", "pisci", Some(&pool.id), "medium")
+        let r2 = runtime.assign_and_execute(&fe.id, "Build product listing", "pisci", Some(&pool.id), "medium", None)
             .await.map_err(backend_err)?;
         if !r2.success {
             return Err(fail_with_params("debug.multiAgentErrTaskFailed", json!({"subject":"FE","detail":r2.reply}), format!("FE failed: {}", r2.reply)));
@@ -1298,8 +1311,8 @@ async fn test_full_e2e() -> TestResult {
                 return Err(fail_with_params("debug.multiAgentErrExpectedActual", json!({"subject":"all todos","expected":2,"actual":todos.len()}), format!("todos: {}", todos.len())));
             }
             for t in &todos {
-                if t.status != "done" {
-                    return Err(fail_with_params("debug.multiAgentErrTodoStatus", json!({"subject":t.title,"actual":t.status,"expected":"done"}), format!("'{}' status: {}", t.title, t.status)));
+                if !matches!(t.status.as_str(), "done" | "needs_review") {
+                    return Err(fail_with_params("debug.multiAgentErrTodoStatus", json!({"subject":t.title,"actual":t.status,"expected":"done or needs_review"}), format!("'{}' status: {}", t.title, t.status)));
                 }
             }
             let msgs = db.get_pool_messages(&pool.id, 100, 0).map_err(backend_err)?;
@@ -1349,6 +1362,7 @@ async fn test_koi_limit() -> TestResult {
                 &format!("K{}", i),
                 None,
                 0,
+                0,
             )
             .map_err(backend_err)?;
         }
@@ -1381,15 +1395,16 @@ async fn test_vacation_cancels_todos() -> TestResult {
                 "Vacationer",
                 None,
                 0,
+                0,
             )
             .map_err(backend_err)?;
         let _t1 = db
             .create_koi_todo(
-                &koi.id, "Task A", "", "medium", "pisci", None, "pisci", None,
+                &koi.id, "Task A", "", "medium", "pisci", None, "pisci", None, 0,
             )
             .map_err(backend_err)?;
         let t2 = db
-            .create_koi_todo(&koi.id, "Task B", "", "high", "pisci", None, "pisci", None)
+            .create_koi_todo(&koi.id, "Task B", "", "high", "pisci", None, "pisci", None, 0)
             .map_err(backend_err)?;
         db.claim_koi_todo(&t2.id, &koi.id).map_err(backend_err)?;
 
@@ -1436,7 +1451,7 @@ async fn test_watchdog_recover() -> TestResult {
             let db = db.lock().await;
             let koi = db
                 .create_koi(
-                    "StaleKoi", "worker", "⏰", "#fc5c65", "Work.", "StaleKoi", None, 0,
+                    "StaleKoi", "worker", "⏰", "#fc5c65", "Work.", "StaleKoi", None, 0, 0,
                 )
                 .map_err(backend_err)?;
             db.update_koi_status(&koi.id, "busy").map_err(backend_err)?;
@@ -1458,6 +1473,7 @@ async fn test_watchdog_recover() -> TestResult {
                     None,
                     "pisci",
                     None,
+                    0,
                 )
                 .map_err(backend_err)?;
             db.claim_koi_todo(&todo.id, &koi.id).map_err(backend_err)?;
@@ -1519,10 +1535,10 @@ async fn test_activate_pending_todos_no_duplicates() -> TestResult {
         let koi_id;
         {
             let db = db.lock().await;
-            let koi = db.create_koi("PatrolKoi", "worker", "🧭", "#5b8def", "Work.", "PatrolKoi", None, 0)
+            let koi = db.create_koi("PatrolKoi", "worker", "🧭", "#5b8def", "Work.", "PatrolKoi", None, 0, 0)
                 .map_err(backend_err)?;
             koi_id = koi.id.clone();
-            let _todo = db.create_koi_todo(&koi.id, "Resume existing todo", "", "medium", "pisci", None, "pisci", None)
+            let _todo = db.create_koi_todo(&koi.id, "Resume existing todo", "", "medium", "pisci", None, "pisci", None, 0)
                 .map_err(backend_err)?;
         }
 
@@ -1615,11 +1631,11 @@ async fn test_watchdog_recover_zero_threshold() -> TestResult {
         let todo_id;
         {
             let db = db.lock().await;
-            let koi = db.create_koi("ZeroWatchdog", "worker", "⏱", "#7c4dff", "Recover immediately.", "ZeroWatchdog", None, 0)
+            let koi = db.create_koi("ZeroWatchdog", "worker", "⏱", "#7c4dff", "Recover immediately.", "ZeroWatchdog", None, 0, 0)
                 .map_err(backend_err)?;
             koi_id = koi.id.clone();
             db.update_koi_status(&koi_id, "busy").map_err(backend_err)?;
-            let todo = db.create_koi_todo(&koi_id, "Immediate recover", "", "medium", "pisci", None, "pisci", None)
+            let todo = db.create_koi_todo(&koi_id, "Immediate recover", "", "medium", "pisci", None, "pisci", None, 0)
                 .map_err(backend_err)?;
             todo_id = todo.id.clone();
             db.claim_koi_todo(&todo_id, &koi_id).map_err(backend_err)?;
@@ -1664,7 +1680,7 @@ async fn test_pool_project_dir() -> TestResult {
     let r: Result<(), LocalizedError> = async {
         let (db, _, _) = setup();
         let db = db.lock().await;
-        let pool = db.create_pool_session_with_dir("DirProject", Some("C:\\Projects\\test-proj"))
+        let pool = db.create_pool_session_with_dir("DirProject", Some("C:\\Projects\\test-proj"), 0)
             .map_err(backend_err)?;
         if pool.project_dir.as_deref() != Some("C:\\Projects\\test-proj") {
             return Err(fail_with_params(
@@ -1692,7 +1708,7 @@ async fn test_pool_project_dir() -> TestResult {
             ));
         }
 
-        let pool_no_dir = db.create_pool_session("NoDirProject").map_err(backend_err)?;
+        let pool_no_dir = db.create_pool_session("NoDirProject", 0).map_err(backend_err)?;
         if pool_no_dir.project_dir.is_some() {
             return Err(fail_with_params(
                 "debug.multiAgentErrProjectDir",
@@ -1711,7 +1727,7 @@ async fn test_pool_session_prefix_lookup() -> TestResult {
         let (db, _, _) = setup();
         let db = db.lock().await;
         let pool = db
-            .create_pool_session("PrefixProject")
+            .create_pool_session("PrefixProject", 0)
             .map_err(backend_err)?;
         let prefix = &pool.id[..8.min(pool.id.len())];
         let resolved = db
@@ -1798,9 +1814,9 @@ async fn test_runtime_identifier_canonicalization() -> TestResult {
         let (db, _, runtime) = setup();
         let (koi, pool, prefix) = {
             let db = db.lock().await;
-            let koi = db.create_koi("CanonicalWorker", "worker", "🧪", "#4b7bec", "Work.", "CanonicalWorker", None, 0)
+            let koi = db.create_koi("CanonicalWorker", "worker", "🧪", "#4b7bec", "Work.", "CanonicalWorker", None, 0, 0)
                 .map_err(backend_err)?;
-            let pool = db.create_pool_session("Canonical Project").map_err(backend_err)?;
+            let pool = db.create_pool_session("Canonical Project", 0).map_err(backend_err)?;
             let prefix = koi.id[..8.min(koi.id.len())].to_string();
             (koi, pool, prefix)
         };
@@ -1811,6 +1827,7 @@ async fn test_runtime_identifier_canonicalization() -> TestResult {
             "pisci",
             Some(&pool.name),
             "medium",
+            None,
         ).await.map_err(backend_err)?;
 
         if todo.owner_id != koi.id {
@@ -1842,11 +1859,11 @@ async fn test_runtime_identifier_canonicalization() -> TestResult {
                 "runtime.execute_todo should claim with the canonical koi id",
             ));
         }
-        if refreshed.status != "done" {
+        if !matches!(refreshed.status.as_str(), "done" | "needs_review") {
             return Err(fail_with_params(
                 "debug.multiAgentErrExpectedActual",
-                json!({"subject":"todo status after canonical execution","expected":"done","actual":refreshed.status}),
-                "canonicalized execution should still complete the todo",
+                json!({"subject":"todo status after canonical execution","expected":"done or needs_review","actual":refreshed.status}),
+                "canonicalized execution should complete or flag the todo for review",
             ));
         }
         ok()
@@ -1893,9 +1910,9 @@ async fn test_archived_pool_blocks_runtime_work() -> TestResult {
 
         let (koi, pool) = {
             let db = db.lock().await;
-            let koi = db.create_koi("Archivist", "Archive guard", "🗄️", "#888888", "Protect archived pools.", "Archive guard", None, 0)
+            let koi = db.create_koi("Archivist", "Archive guard", "🗄️", "#888888", "Protect archived pools.", "Archive guard", None, 0, 0)
                 .map_err(backend_err)?;
-            let pool = db.create_pool_session("Archive Guard Pool").map_err(backend_err)?;
+            let pool = db.create_pool_session("Archive Guard Pool", 0).map_err(backend_err)?;
             db.update_pool_session_status(&pool.id, "archived").map_err(backend_err)?;
             (koi, pool)
         };
@@ -1906,6 +1923,7 @@ async fn test_archived_pool_blocks_runtime_work() -> TestResult {
             "pisci",
             Some(&pool.id),
             "medium",
+            None,
         ).await {
             Ok(_) => {
                 return Err(fail(
@@ -1943,4 +1961,133 @@ async fn test_archived_pool_blocks_runtime_work() -> TestResult {
         ok()
     }.await;
     finish_test("archived_pool_blocks_runtime_work", r, start)
+}
+
+#[cfg(test)]
+mod pause_resume_runtime_tests {
+    use super::setup;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn resume_todo_restarts_existing_work() {
+        let (db, _, runtime) = setup();
+        let (koi, pool) = {
+            let db = db.lock().await;
+            let koi = db
+                .create_koi(
+                    "ResumeWorker",
+                    "worker",
+                    "🧪",
+                    "#4b7bec",
+                    "Resume blocked work.",
+                    "Resume worker",
+                    None,
+                    0,
+                    0,
+                )
+                .unwrap();
+            let pool = db.create_pool_session("Resume Pool", 0).unwrap();
+            (koi, pool)
+        };
+
+        let (todo, _) = runtime
+            .assign_task(&koi.id, "Resume this task", "pisci", Some(&pool.id), "medium", None)
+            .await
+            .unwrap();
+        {
+            let db = db.lock().await;
+            db.block_koi_todo(&todo.id, "timeout").unwrap();
+        }
+
+        runtime.resume_todo(&todo.id, "pisci").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let db = db.lock().await;
+        let refreshed = db.get_koi_todo(&todo.id).unwrap().unwrap();
+        assert!(
+            matches!(refreshed.status.as_str(), "done" | "needs_review" | "blocked"),
+            "unexpected resumed status: {}",
+            refreshed.status
+        );
+        let msgs = db.get_pool_messages(&pool.id, 100, 0).unwrap();
+        assert!(msgs.iter().any(|msg| msg.event_type.as_deref() == Some("task_resumed")));
+    }
+
+    #[tokio::test]
+    async fn replace_todo_locks_original_resume_path() {
+        let (db, _, runtime) = setup();
+        let (owner, replacement_owner, pool) = {
+            let db = db.lock().await;
+            let owner = db
+                .create_koi(
+                    "OriginalWorker",
+                    "worker",
+                    "🧪",
+                    "#4b7bec",
+                    "Owns the original task.",
+                    "Original worker",
+                    None,
+                    0,
+                    0,
+                )
+                .unwrap();
+            let replacement_owner = db
+                .create_koi(
+                    "ReplacementWorker",
+                    "worker",
+                    "🧪",
+                    "#20bf6b",
+                    "Owns the replacement task.",
+                    "Replacement worker",
+                    None,
+                    0,
+                    0,
+                )
+                .unwrap();
+            let pool = db.create_pool_session("Replace Pool", 0).unwrap();
+            (owner, replacement_owner, pool)
+        };
+
+        let (todo, _) = runtime
+            .assign_task(
+                &owner.id,
+                "Original task",
+                "pisci",
+                Some(&pool.id),
+                "medium",
+                None,
+            )
+            .await
+            .unwrap();
+
+        let replacement = runtime
+            .replace_todo(
+                &todo.id,
+                &replacement_owner.id,
+                "Replacement task",
+                "original worker stalled",
+                "pisci",
+                None,
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let db = db.lock().await;
+        let original = db.get_koi_todo(&todo.id).unwrap().unwrap();
+        let new_todo = db.get_koi_todo(&replacement.id).unwrap().unwrap();
+        assert_eq!(original.status, "cancelled");
+        assert!(
+            original
+                .blocked_reason
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("[Replaced by "),
+            "original task should record replacement linkage"
+        );
+        assert_eq!(new_todo.depends_on.as_deref(), Some(todo.id.as_str()));
+        assert!(runtime.resume_todo(&todo.id, "pisci").await.is_err());
+        let msgs = db.get_pool_messages(&pool.id, 100, 0).unwrap();
+        assert!(msgs.iter().any(|msg| msg.event_type.as_deref() == Some("task_replaced")));
+    }
 }

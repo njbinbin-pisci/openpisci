@@ -51,6 +51,8 @@ impl Tool for PoolOrgTool {
          - 'claim_todo': Claim an existing unclaimed todo (requires todo_id). Marks it in_progress and assigns it to you. \
          - 'complete_todo': Mark a todo as done (requires todo_id, summary). The summary is a concise description of what was accomplished — it becomes the visible result in the pool chat. Pisci can complete any todo; Koi can only complete their own. \
          - 'cancel_todo': Cancel a todo (requires todo_id, optional reason). Pisci can cancel any todo; Koi can only cancel their own — to cancel someone else's, @pisci in pool_chat. \
+         - 'resume_todo': Resume a blocked or needs_review todo (requires todo_id). This restarts execution for the existing task from its current project context. Pisci should decide when to use this. \
+         - 'replace_todo': Replace an existing todo with a new owner/task (requires todo_id, new_owner_id, task, reason). This cancels the original todo so it cannot be resumed, creates a replacement todo, and notifies the new owner. Pisci should decide when to use this. \
          - 'update_todo_status': Update a todo's status (requires todo_id, status). Pisci can change any; Koi can only change their own. Valid statuses: todo, in_progress, blocked. \
          - 'merge_branches': Merge all Koi worktree branches back into main (requires pool_id with project_dir). \
          \
@@ -68,12 +70,16 @@ impl Tool for PoolOrgTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["create", "read", "update", "list", "assign_koi", "pause", "resume", "archive", "find_related", "get_messages", "get_todos", "create_todo", "claim_todo", "complete_todo", "cancel_todo", "update_todo_status", "merge_branches"],
+                    "enum": ["create", "read", "update", "list", "assign_koi", "pause", "resume", "archive", "find_related", "get_messages", "get_todos", "create_todo", "claim_todo", "complete_todo", "cancel_todo", "resume_todo", "replace_todo", "update_todo_status", "merge_branches"],
                     "description": "Action to perform"
                 },
                 "project_dir": {
                     "type": "string",
                     "description": "For create: optional filesystem directory for the project. A Git repo will be auto-initialized there."
+                },
+                "task_timeout_secs": {
+                    "type": "integer",
+                    "description": "For create/update: optional default execution timeout in seconds for todos in this project. 0 or omitted means inherit the global system default."
                 },
                 "keywords": {
                     "type": "string",
@@ -109,6 +115,10 @@ impl Tool for PoolOrgTool {
                     "enum": ["low", "medium", "high", "urgent"],
                     "description": "For assign_koi: task priority (default: medium)"
                 },
+                "timeout_secs": {
+                    "type": "integer",
+                    "description": "For assign_koi/create_todo/replace_todo: optional single-task timeout in seconds. 0 or omitted means inherit from project/Koi/system defaults."
+                },
                 "title": {
                     "type": "string",
                     "description": "For create_todo: the todo title"
@@ -128,11 +138,15 @@ impl Tool for PoolOrgTool {
                 },
                 "reason": {
                     "type": "string",
-                    "description": "For cancel_todo: optional reason for cancellation"
+                    "description": "For cancel_todo/replace_todo: optional reason for cancellation, or the required reason explaining why a task is being replaced"
                 },
                 "summary": {
                     "type": "string",
                     "description": "For complete_todo: REQUIRED. A concise description of what was accomplished. This becomes the visible result message in the pool chat."
+                },
+                "new_owner_id": {
+                    "type": "string",
+                    "description": "For replace_todo: the replacement Koi who should take over the task"
                 }
             },
             "required": ["action"]
@@ -161,9 +175,11 @@ impl Tool for PoolOrgTool {
             "claim_todo" => self.claim_todo(&input, ctx).await,
             "complete_todo" => self.complete_todo(&input, ctx).await,
             "cancel_todo" => self.cancel_todo(&input, ctx).await,
+            "resume_todo" => self.resume_todo(&input, ctx).await,
+            "replace_todo" => self.replace_todo(&input, ctx).await,
             "update_todo_status" => self.update_todo_status(&input, ctx).await,
             "merge_branches" => self.merge_branches(&input, ctx).await,
-            _ => Ok(ToolResult::err(format!("Unknown action '{}'. Use: create, read, update, list, assign_koi, pause, resume, archive, find_related, get_messages, get_todos, create_todo, claim_todo, complete_todo, cancel_todo, update_todo_status, merge_branches", action))),
+            _ => Ok(ToolResult::err(format!("Unknown action '{}'. Use: create, read, update, list, assign_koi, pause, resume, archive, find_related, get_messages, get_todos, create_todo, claim_todo, complete_todo, cancel_todo, resume_todo, replace_todo, update_todo_status, merge_branches", action))),
         }
     }
 }
@@ -303,6 +319,10 @@ impl PoolOrgTool {
             .as_str()
             .map(|s| s.trim())
             .filter(|s| !s.is_empty());
+        let task_timeout_secs = input["task_timeout_secs"]
+            .as_u64()
+            .map(|v| v as u32)
+            .unwrap_or(0);
 
         // If project_dir is specified, create directory and initialize Git repo
         let mut git_info = String::new();
@@ -353,7 +373,7 @@ impl PoolOrgTool {
         }
 
         let db = self.db.lock().await;
-        let session = db.create_pool_session_with_dir(name, project_dir)?;
+        let session = db.create_pool_session_with_dir(name, project_dir, task_timeout_secs)?;
 
         if !org_spec.is_empty() {
             db.update_pool_org_spec(&session.id, org_spec)?;
@@ -432,14 +452,13 @@ impl PoolOrgTool {
         input: &Value,
         ctx: &ToolContext,
     ) -> anyhow::Result<ToolResult> {
-        let org_spec = match input["org_spec"].as_str() {
-            Some(s) if !s.trim().is_empty() => s.trim(),
-            _ => {
-                return Ok(ToolResult::err(
-                    "'org_spec' is required for action 'update'",
-                ))
-            }
-        };
+        let org_spec = input["org_spec"].as_str().map(str::trim);
+        let task_timeout_secs = input["task_timeout_secs"].as_u64().map(|v| v as u32);
+        if org_spec.unwrap_or("").is_empty() && task_timeout_secs.is_none() {
+            return Ok(ToolResult::err(
+                "Provide at least one field to update: 'org_spec' and/or 'task_timeout_secs'.",
+            ));
+        }
 
         let session = match self.resolve_pool_session(input, ctx, "update").await {
             Ok(session) => session,
@@ -447,7 +466,12 @@ impl PoolOrgTool {
         };
 
         let db = self.db.lock().await;
-        db.update_pool_org_spec(&session.id, org_spec)?;
+        if let Some(spec) = org_spec.filter(|s| !s.is_empty()) {
+            db.update_pool_org_spec(&session.id, spec)?;
+        }
+        if task_timeout_secs.is_some() {
+            db.update_pool_session_config(&session.id, task_timeout_secs)?;
+        }
 
         let _ = db.insert_pool_message_ext(
             &session.id,
@@ -461,8 +485,8 @@ impl PoolOrgTool {
         );
 
         Ok(ToolResult::ok(format!(
-            "Org spec updated for pool '{}' ({}).\n\
-             The spec will be loaded as context when Koi agents are activated in this pool.",
+            "Pool '{}' ({}) updated.\n\
+             Org spec and project timeout settings will be applied when Koi agents work in this pool.",
             session.name, session.id
         )))
     }
@@ -496,15 +520,21 @@ impl PoolOrgTool {
                 .as_deref()
                 .map(|d| format!(" | dir: {}", d))
                 .unwrap_or_default();
+            let timeout_info = if s.task_timeout_secs > 0 {
+                format!(" | timeout: {}s", s.task_timeout_secs)
+            } else {
+                String::new()
+            };
             lines.push(format!(
-                "- {} (id: {}) [{}] status: {} | last active: {} | updated: {}{}",
+                "- {} (id: {}) [{}] status: {} | last active: {} | updated: {}{}{}",
                 s.name,
                 &s.id[..8.min(s.id.len())],
                 has_spec,
                 s.status,
                 last_active,
                 s.updated_at.format("%Y-%m-%d %H:%M"),
-                dir_info
+                dir_info,
+                timeout_info
             ));
         }
 
@@ -707,56 +737,61 @@ impl PoolOrgTool {
             }
         };
         let priority = input["priority"].as_str().unwrap_or("medium").to_string();
+        let timeout_secs = input["timeout_secs"].as_u64().map(|v| v as u32).unwrap_or(0);
 
-        let state = self.app.state::<crate::store::AppState>();
-        let runtime =
-            crate::koi::runtime::KoiRuntime::from_tauri(self.app.clone(), state.db.clone());
+        let koi_name = {
+            let db = self.db.lock().await;
+            db.resolve_koi_identifier(&koi_id)
+                .ok()
+                .flatten()
+                .map(|k| k.name.clone())
+                .unwrap_or_else(|| koi_id.clone())
+        };
 
-        // Create the todo (non-blocking)
-        let (todo, assign_msg_id) = runtime
-            .assign_task(&koi_id, &task, "pisci", Some(&pool_id), &priority)
-            .await?;
+        let mention_content = if timeout_secs > 0 {
+            format!(
+                "@{} [Priority: {}] [Execution timeout: {}s] {}",
+                koi_name, priority, timeout_secs, task
+            )
+        } else {
+            format!("@{} [Priority: {}] {}", koi_name, priority, task)
+        };
 
-        let todo_id_short = todo.id[..8.min(todo.id.len())].to_string();
+        {
+            let db = self.db.lock().await;
+            let msg = db.insert_pool_message(
+                &pool_id,
+                "pisci",
+                &mention_content,
+                "mention",
+                &serde_json::json!({ "target_koi": &koi_id, "priority": &priority, "timeout_secs": timeout_secs }).to_string(),
+            )?;
+            let _ = self.app.emit(
+                &format!("pool_message_{}", pool_id),
+                serde_json::to_value(&msg).unwrap_or_default(),
+            );
+        }
 
-        // Spawn async execution — Pisci doesn't wait for the Koi to finish
         let app_clone = self.app.clone();
         let db_clone = self.db.clone();
-        let koi_id_clone = koi_id.clone();
         let pool_id_clone = pool_id.clone();
+        let mention_content_clone = mention_content.clone();
         tokio::spawn(async move {
             let runtime = crate::koi::runtime::KoiRuntime::from_tauri(app_clone, db_clone);
-            match runtime
-                .execute_todo(&koi_id_clone, &todo, assign_msg_id, Some(&pool_id_clone))
+            if let Err(e) = runtime
+                .handle_mention("pisci", &pool_id_clone, &mention_content_clone)
                 .await
             {
-                Ok(r) => {
-                    tracing::info!(
-                        "Koi '{}' task completed (success={})",
-                        koi_id_clone,
-                        r.success
-                    );
-                    if r.success && r.reply.contains('@') {
-                        if let Err(e) = runtime
-                            .handle_mention(&koi_id_clone, &pool_id_clone, &r.reply)
-                            .await
-                        {
-                            tracing::warn!("@mention dispatch from result failed: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Koi '{}' task execution failed: {}", koi_id_clone, e);
-                }
+                tracing::warn!("assign_koi mention dispatch failed: {}", e);
             }
         });
 
         Ok(ToolResult::ok(format!(
-            "Task assigned to Koi '{}' (todo: {}).\n\
-             The Koi is now working on it asynchronously. \
+            "Task posted to pool and @{} has been notified. \
+             The Koi will read the pool context and decide how to proceed autonomously. \
              Use pool_org(action=\"get_messages\", pool_id=\"{}\") to check progress, \
              or pool_org(action=\"get_todos\", pool_id=\"{}\") to see task status.",
-            koi_id, todo_id_short, pool_id, pool_id
+            koi_name, pool_id, pool_id
         )))
     }
 
@@ -900,6 +935,7 @@ impl PoolOrgTool {
         };
         let description = input["description"].as_str().unwrap_or("").to_string();
         let priority = input["priority"].as_str().unwrap_or("medium").to_string();
+        let timeout_secs = input["timeout_secs"].as_u64().map(|v| v as u32).unwrap_or(0);
         let owner_id = ctx.memory_owner_id.clone();
 
         let session = match self.resolve_pool_session(input, ctx, "create_todo").await {
@@ -921,6 +957,7 @@ impl PoolOrgTool {
                 Some(&pool_id),
                 "koi",
                 None,
+                timeout_secs,
             )
             .map_err(|e| anyhow::anyhow!(e))?
         };
@@ -1122,7 +1159,7 @@ impl PoolOrgTool {
         }
 
         let db = self.db.lock().await;
-        db.update_koi_todo(&todo.id, None, None, Some("cancelled"), None)?;
+        db.cancel_koi_todo(&todo.id, reason)?;
         drop(db);
 
         let _ = self.app.emit(
@@ -1153,6 +1190,111 @@ impl PoolOrgTool {
             &todo.id[..8.min(todo.id.len())],
             todo.title,
             reason
+        )))
+    }
+
+    async fn resume_todo(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        if !Self::is_pisci(ctx) {
+            return Ok(ToolResult::err(
+                "Only Pisci may decide whether a blocked task should be resumed. If you need this, ask @pisci in pool_chat.",
+            ));
+        }
+
+        let todo_id = match Self::resolve_todo_id(input) {
+            Some(id) => id,
+            None => {
+                return Ok(ToolResult::err(
+                    "'todo_id' is required for action 'resume_todo'",
+                ))
+            }
+        };
+
+        let todo = match self.find_todo_by_prefix(todo_id).await? {
+            Some(t) => t,
+            None => return Ok(ToolResult::err(format!("Todo '{}' not found", todo_id))),
+        };
+
+        let runtime = crate::koi::runtime::KoiRuntime::from_tauri(self.app.clone(), self.db.clone());
+        runtime
+            .resume_todo(&todo.id, &ctx.memory_owner_id)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        Ok(ToolResult::ok(format!(
+            "Resume requested for todo '{}' ({}). The existing task context was kept and the owner Koi has been reactivated.",
+            &todo.id[..8.min(todo.id.len())],
+            todo.title,
+        )))
+    }
+
+    async fn replace_todo(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        if !Self::is_pisci(ctx) {
+            return Ok(ToolResult::err(
+                "Only Pisci may replace a task owner. If a task should be reassigned, request it via @pisci in pool_chat.",
+            ));
+        }
+
+        let todo_id = match Self::resolve_todo_id(input) {
+            Some(id) => id,
+            None => {
+                return Ok(ToolResult::err(
+                    "'todo_id' is required for action 'replace_todo'",
+                ))
+            }
+        };
+        let new_owner_id = match input["new_owner_id"].as_str().filter(|s| !s.trim().is_empty()) {
+            Some(id) => id.trim(),
+            None => {
+                return Ok(ToolResult::err(
+                    "'new_owner_id' is required for action 'replace_todo'",
+                ))
+            }
+        };
+        let task = match input["task"].as_str().filter(|s| !s.trim().is_empty()) {
+            Some(task) => task.trim(),
+            None => {
+                return Ok(ToolResult::err(
+                    "'task' is required for action 'replace_todo'",
+                ))
+            }
+        };
+        let reason = match input["reason"].as_str().filter(|s| !s.trim().is_empty()) {
+            Some(reason) => reason.trim(),
+            None => {
+                return Ok(ToolResult::err(
+                    "'reason' is required for action 'replace_todo'",
+                ))
+            }
+        };
+        let timeout_secs = input["timeout_secs"].as_u64().map(|v| v as u32);
+
+        let todo = match self.find_todo_by_prefix(todo_id).await? {
+            Some(t) => t,
+            None => return Ok(ToolResult::err(format!("Todo '{}' not found", todo_id))),
+        };
+
+        let replacement = {
+            let runtime =
+                crate::koi::runtime::KoiRuntime::from_tauri(self.app.clone(), self.db.clone());
+            runtime
+                .replace_todo(
+                    &todo.id,
+                    new_owner_id,
+                    task,
+                    reason,
+                    &ctx.memory_owner_id,
+                    timeout_secs,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?
+        };
+
+        Ok(ToolResult::ok(format!(
+            "Todo '{}' ({}) was replaced by '{}' ({}). The original task is no longer resumable, and the replacement owner has been notified.",
+            &todo.id[..8.min(todo.id.len())],
+            todo.title,
+            &replacement.id[..8.min(replacement.id.len())],
+            replacement.title,
         )))
     }
 

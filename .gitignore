@@ -47,3 +47,6 @@ docs/tribon/
 # Local skills development (machine-specific, deployed via Junction to AppData)
 skills/
 
+# Local reference repos / docs
+references/
+

@@ -54,7 +54,7 @@ impl Tool for ChatUiTool {
                                 "properties": {
                                     "type": {
                                         "type": "string",
-                                        "enum": ["text", "radio", "checkbox", "text_input", "select", "koi_picker", "project_picker", "confirm", "actions", "divider"],
+                                        "enum": ["text", "radio", "checkbox", "text_input", "number_input", "select", "koi_picker", "project_picker", "confirm", "actions", "divider"],
                                         "description": "Block type."
                                     },
                                     "id": {
@@ -86,7 +86,7 @@ impl Tool for ChatUiTool {
                                     },
                                     "placeholder": {
                                         "type": "string",
-                                        "description": "Placeholder for text_input."
+                                        "description": "Placeholder for text_input/number_input."
                                     },
                                     "show_when": {
                                         "type": "object",
@@ -107,7 +107,15 @@ impl Tool for ChatUiTool {
                                     },
                                     "min": {
                                         "type": "integer",
-                                        "description": "Minimum selections for koi_picker/checkbox."
+                                        "description": "Minimum value for number_input, or minimum selections for koi_picker/checkbox."
+                                    },
+                                    "max": {
+                                        "type": "integer",
+                                        "description": "Maximum value for number_input."
+                                    },
+                                    "step": {
+                                        "type": "integer",
+                                        "description": "Step size for number_input."
                                     },
                                     "buttons": {
                                         "type": "array",

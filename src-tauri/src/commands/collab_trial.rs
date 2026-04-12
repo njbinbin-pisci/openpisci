@@ -202,6 +202,7 @@ fn ensure_trial_koi(
             Some(spec.description.as_str()),
             None,
             Some(spec.max_iterations),
+            Some(0),
         )
         .map_err(|e| e.to_string())?;
         let mut updated = existing.clone();
@@ -229,6 +230,7 @@ fn ensure_trial_koi(
             Some(spec.description.as_str()),
             None,
             Some(spec.max_iterations),
+            Some(0),
         )
         .map_err(|e| e.to_string())?;
         let mut updated = existing.clone();
@@ -255,6 +257,7 @@ fn ensure_trial_koi(
             spec.description.as_str(),
             None,
             spec.max_iterations,
+            0,
         )
         .map_err(|e| e.to_string())?;
     all_kois.push(created.clone());
@@ -388,7 +391,7 @@ pub async fn run_collaboration_trial_with_state(
         let third = ensure_trial_koi(&db, &mut all_kois, &scenario.third)?;
 
         let pool = db
-            .create_pool_session(&scenario.pool_name)
+            .create_pool_session(&scenario.pool_name, 0)
             .map_err(|e| e.to_string())?;
 
         let workflow = scenario
@@ -496,7 +499,7 @@ pub async fn run_collaboration_trial_with_state(
         );
     }
 
-    // The first @mention dispatch activates the lead specialist and blocks until done.
+    // Wake the lead specialist via @mention — the agent reads the pool and decides autonomously.
     let chain_start = std::time::Instant::now();
     let lead_results = runtime
         .handle_mention("pisci", &pool.id, &task_message)
@@ -551,31 +554,33 @@ pub async fn run_collaboration_trial_with_state(
 
     let chain_timeout = std::time::Duration::from_secs(scenario.chain_timeout_secs);
     let poll_interval = std::time::Duration::from_secs(scenario.poll_interval_secs);
-    let quiet_polls_needed = scenario.quiet_polls_needed;
-    let mut quiet_polls = 0u32;
     let mut last_phase_detail = String::new();
-    let mut last_message_count = 0usize;
     let mut seen_observation_event_ids: HashSet<i64> = HashSet::new();
     let mut final_assessment = TrialAssessment {
         decision: TrialDecision::Continue,
         active_todo_count: 0,
         blocked_todo_count: 0,
+        needs_review_count: 0,
         follow_up_signal_count: 0,
         ready_signal_count: 0,
         explicit_pisci_handoff_count: 0,
         summary: "No assessment yet.".into(),
     };
 
-    loop {
+    let (stop_reason, stop_detail) = loop {
         tokio::time::sleep(poll_interval).await;
 
         if chain_start.elapsed() > chain_timeout {
             tracing::warn!("[Trial] Chain timed out after {}s", chain_timeout.as_secs());
             emit(
                 "timeout",
-                "Collaboration timed out before Pisci could conclude",
+                "Trial reached the configured timeout boundary. Review the pool snapshot for current project state.",
             );
-            break;
+            break (
+                "timeout".to_string(),
+                "Collaboration reached the configured timeout boundary before a final snapshot."
+                    .to_string(),
+            );
         }
 
         let db = state.db.lock().await;
@@ -623,13 +628,6 @@ pub async fn run_collaboration_trial_with_state(
             last_phase_detail = phase_detail;
         }
 
-        if msgs.len() == last_message_count {
-            quiet_polls += 1;
-        } else {
-            last_message_count = msgs.len();
-            quiet_polls = 0;
-        }
-
         for msg in msgs.iter().filter(|m| {
             matches!(
                 m.event_type.as_deref(),
@@ -675,28 +673,15 @@ pub async fn run_collaboration_trial_with_state(
         }
 
         let all_idle = lead_status == "idle" && second_status == "idle" && third_status == "idle";
-        if all_idle && quiet_polls >= quiet_polls_needed {
-            match final_assessment.decision {
-                TrialDecision::ReadyForPisciReview => {
-                    status.phase = "pisci_review".into();
-                    emit("pisci_review", &final_assessment.summary);
-                    break;
-                }
-                TrialDecision::Continue => {
-                    if chain_start.elapsed().as_secs() > 30 {
-                        emit(
-                            "chain",
-                            &format!(
-                                "Project is not ready to conclude yet: {}",
-                                final_assessment.summary
-                            ),
-                        );
-                        break;
-                    }
-                }
-            }
+        if all_idle && final_assessment.decision == TrialDecision::ReadyForPisciReview {
+            status.phase = "pisci_review".into();
+            emit("pisci_review", &final_assessment.summary);
+            break (
+                "ready_for_pisci_review".to_string(),
+                final_assessment.summary.clone(),
+            );
         }
-    }
+    };
 
     push_trial_observation(
         &mut status,
@@ -716,7 +701,7 @@ pub async fn run_collaboration_trial_with_state(
     // Post summary to pool
     {
         let db = state.db.lock().await;
-        let emoji = if status.completed { "✅" } else { "⚠️" };
+        let emoji = if status.completed { "✅" } else { "⏸️" };
         let observation_lines: Vec<String> = status
             .steps
             .iter()
@@ -733,15 +718,15 @@ pub async fn run_collaboration_trial_with_state(
             .collect();
         let total_ms: u64 = status.steps.iter().map(|s| s.duration_ms).sum();
         let summary = format!(
-            "{} **Collaboration Trial {}**\n\nObserved events:\n{}\n\nPisci assessment: {}\n\nTotal time: {}ms",
+            "{} **Collaboration Trial Snapshot**\n\nStop reason: `{}`\n{}\n\nObserved events:\n{}\n\nCurrent assessment: {}\n\nRecoverable todos: active={}, blocked={}, needs_review={}\n\nTotal time: {}ms",
             emoji,
-            if status.completed {
-                "PASSED"
-            } else {
-                "INCOMPLETE"
-            },
+            stop_reason,
+            stop_detail,
             observation_lines.join("\n"),
             final_assessment.summary,
+            final_assessment.active_todo_count,
+            final_assessment.blocked_todo_count,
+            final_assessment.needs_review_count,
             total_ms,
         );
         let _ = db.insert_pool_message(&pool.id, "pisci", &summary, "text", "{}");
@@ -750,19 +735,15 @@ pub async fn run_collaboration_trial_with_state(
     emit(
         "done",
         if status.completed {
-            "All agents completed successfully!"
+            "Project reached a ready-for-review snapshot."
         } else {
-            "Trial incomplete"
+            "Trial stopped at a recoverable snapshot. Review the pool for current state."
         },
     );
 
     tracing::info!(
-        "=== Collaboration Trial {} ({}/{} observations marked ok) ===",
-        if status.completed {
-            "PASSED"
-        } else {
-            "INCOMPLETE"
-        },
+        "=== Collaboration Trial snapshot stop_reason={} ({}/{} observations marked ok) ===",
+        stop_reason,
         status.steps.iter().filter(|s| s.success).count(),
         status.steps.len(),
     );

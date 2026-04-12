@@ -23,13 +23,6 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 const PRIORITIES = ["low", "medium", "high", "urgent"] as const;
 
-const SOURCE_ICONS: Record<string, string> = {
-  pisci: "🐋",
-  koi: "🐟",
-  user: "👤",
-  system: "⚙️",
-};
-
 /** Resolve assigned_by (UUID, "pisci", "user", "system") to a display label */
 function resolveAssignedBy(assignedBy: string, kois: KoiWithStats[]): string {
   if (!assignedBy) return "—";
@@ -39,6 +32,18 @@ function resolveAssignedBy(assignedBy: string, kois: KoiWithStats[]): string {
   const koi = kois.find((k) => k.id === assignedBy);
   if (koi) return `${koi.icon} ${koi.name}`;
   return assignedBy;
+}
+
+function getBoardStatus(todo: KoiTodo): string {
+  return todo.status === "needs_review" ? "blocked" : todo.status;
+}
+
+function isBlockedLike(todo: KoiTodo): boolean {
+  return todo.status === "blocked" || todo.status === "needs_review";
+}
+
+function isSuperseded(todo: KoiTodo): boolean {
+  return todo.status === "cancelled" && !!todo.blocked_reason?.startsWith("[Replaced by ");
 }
 
 function TaskCard({
@@ -60,12 +65,13 @@ function TaskCard({
   const menuRef = useRef<HTMLDivElement>(null);
   const owner = kois.find((k) => k.id === todo.owner_id);
   const claimer = todo.claimed_by ? kois.find((k) => k.id === todo.claimed_by) : null;
-  const barColor = todo.status === "blocked" ? "#eb3b5a" : (owner?.color ?? "#6b7280");
-  const color = owner?.color ?? "#6b7280";
+  const visibleStatus = getBoardStatus(todo);
+  const blockedLike = isBlockedLike(todo);
+  const superseded = isSuperseded(todo);
+  const barColor = visibleStatus === "blocked" ? "#eb3b5a" : (owner?.color ?? "#6b7280");
   const icon = owner?.icon ?? "🐟";
   const priorityColor = PRIORITY_COLORS[todo.priority] ?? PRIORITY_COLORS.low;
   const priorityKey = `board.priority${todo.priority.charAt(0).toUpperCase() + todo.priority.slice(1)}`;
-  const sourceIcon = SOURCE_ICONS[todo.source_type] ?? "?";
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -86,7 +92,7 @@ function TaskCard({
 
   return (
     <div
-      className={`board-card ${todo.blocked_reason ? "board-card--blocked" : ""}${menuOpen ? " menu-open" : ""}`}
+      className={`board-card ${visibleStatus === "blocked" ? "board-card--blocked" : ""}${menuOpen ? " menu-open" : ""}`}
       onClick={() => onDetail(todo)}
     >
       <div className="board-card-bar" style={{ background: barColor }} />
@@ -121,8 +127,8 @@ function TaskCard({
               style={{ top: menuPos.top, left: menuPos.left }}
               onClick={(e) => e.stopPropagation()}
             >
-              {todo.status === "blocked" && (
-                <button onClick={(e) => { e.stopPropagation(); handleAction("unblock"); }}>{t("board.unblock")}</button>
+              {blockedLike && (
+                <button onClick={(e) => { e.stopPropagation(); handleAction("continue"); }}>▶ {t("board.continue")}</button>
               )}
               {todo.status !== "done" && (
                 <button onClick={(e) => { e.stopPropagation(); handleAction("complete"); }}>{t("board.markDone")}</button>
@@ -130,7 +136,7 @@ function TaskCard({
               {todo.status !== "cancelled" && (
                 <button onClick={(e) => { e.stopPropagation(); handleAction("cancel"); }}>{t("board.markCancelled")}</button>
               )}
-              {(todo.status === "done" || todo.status === "cancelled") && (
+              {!superseded && (todo.status === "done" || todo.status === "cancelled") && (
                 <button onClick={(e) => { e.stopPropagation(); handleAction("reopen"); }}>{t("board.reopen")}</button>
               )}
               <button className="board-card-menu-danger" onClick={(e) => { e.stopPropagation(); handleAction("delete"); }}>{t("board.delete")}</button>
@@ -147,6 +153,17 @@ function TaskCard({
           )}
         </div>
         <div className="board-card-footer">
+          {blockedLike && (
+            <button
+              className="board-card-continue-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleAction("continue");
+              }}
+            >
+              ▶ {t("board.continue")}
+            </button>
+          )}
           <span className="board-card-assigned">
             {t("board.assignedBy")}: {resolveAssignedBy(todo.assigned_by, kois)}
           </span>
@@ -178,7 +195,10 @@ function TaskDetailModal({
   const claimer = todo.claimed_by ? kois.find((k) => k.id === todo.claimed_by) : null;
   const priorityColor = PRIORITY_COLORS[todo.priority] ?? PRIORITY_COLORS.low;
   const priorityKey = `board.priority${todo.priority.charAt(0).toUpperCase() + todo.priority.slice(1)}`;
-  const colMeta = COLUMNS.find((c) => c.id === todo.status);
+  const visibleStatus = getBoardStatus(todo);
+  const blockedLike = isBlockedLike(todo);
+  const superseded = isSuperseded(todo);
+  const colMeta = COLUMNS.find((c) => c.id === visibleStatus);
 
   return (
     <div className="board-modal-overlay" onClick={onClose}>
@@ -215,6 +235,14 @@ function TaskDetailModal({
             <span className="board-detail-label">{t("board.assignedBy")}:</span>
             <span>{resolveAssignedBy(todo.assigned_by, kois)}</span>
           </div>
+          <div className="board-detail-row">
+            <span className="board-detail-label">{t("board.taskTimeoutField")}:</span>
+            <span>
+              {todo.task_timeout_secs > 0
+                ? `${todo.task_timeout_secs}s`
+                : t("board.taskTimeoutInherited")}
+            </span>
+          </div>
           {todo.created_at && (
             <div className="board-detail-row">
               <span className="board-detail-label">{t("board.createdAt")}:</span>
@@ -237,10 +265,19 @@ function TaskDetailModal({
           </div>
         )}
 
+        {(blockedLike || superseded) && (
+          <div className="board-detail-section">
+            <div className="board-detail-section-title">{t("board.status")}</div>
+            <div className="board-detail-blocked">
+              {superseded ? t("board.supersededHint") : t("board.resumeHint")}
+            </div>
+          </div>
+        )}
+
         <div className="board-modal-actions">
-          {todo.status === "blocked" && (
-            <button className="board-btn board-btn-secondary" onClick={() => { onAction("unblock", todo.id); onClose(); }}>
-              {t("board.unblock")}
+          {blockedLike && (
+            <button className="board-btn board-btn-secondary" onClick={() => { onAction("continue", todo.id); onClose(); }}>
+              ▶ {t("board.continue")}
             </button>
           )}
           {todo.status !== "done" && (
@@ -253,7 +290,7 @@ function TaskDetailModal({
               {t("board.markCancelled")}
             </button>
           )}
-          {(todo.status === "done" || todo.status === "cancelled") && (
+          {!superseded && (todo.status === "done" || todo.status === "cancelled") && (
             <button className="board-btn board-btn-secondary" onClick={() => { onAction("reopen", todo.id); onClose(); }}>
               {t("board.reopen")}
             </button>
@@ -269,6 +306,7 @@ interface CreateFormData {
   description: string;
   owner_id: string;
   priority: string;
+  task_timeout_secs: number;
 }
 
 const EMPTY_FORM: CreateFormData = {
@@ -276,6 +314,7 @@ const EMPTY_FORM: CreateFormData = {
   description: "",
   owner_id: "",
   priority: "medium",
+  task_timeout_secs: 0,
 };
 
 function CreateTaskDialog({
@@ -370,6 +409,23 @@ function CreateTaskDialog({
           </div>
         </div>
 
+        <div className="board-form-field">
+          <label className="board-form-label">{t("board.taskTimeoutField")}</label>
+          <input
+            className="board-input"
+            type="number"
+            min={0}
+            max={7200}
+            value={form.task_timeout_secs}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              set("task_timeout_secs", isNaN(v) ? 0 : Math.max(0, Math.min(7200, v)));
+            }}
+            placeholder={t("board.taskTimeoutPlaceholder")}
+          />
+          <p className="board-form-help">{t("board.taskTimeoutHelp")}</p>
+        </div>
+
         <div className="board-modal-actions">
           <button
             className="board-btn board-btn-secondary"
@@ -448,7 +504,7 @@ export default function Board() {
   });
 
   const columnTodos = (colId: string): KoiTodo[] =>
-    filtered.filter((t) => t.status === colId);
+    filtered.filter((t) => getBoardStatus(t) === colId);
 
   const handleCardAction = useCallback(async (action: string, todoId: string) => {
     try {
@@ -462,8 +518,8 @@ export default function Board() {
         case "reopen":
           await boardApi.updateTodo({ id: todoId, status: "todo" });
           break;
-        case "unblock":
-          await boardApi.updateTodo({ id: todoId, status: "in_progress" });
+        case "continue":
+          await boardApi.resumeTodo(todoId);
           break;
         case "delete":
           await boardApi.deleteTodo(todoId);
@@ -484,6 +540,7 @@ export default function Board() {
         description: data.description || undefined,
         priority: data.priority,
         assigned_by: "user",
+        task_timeout_secs: data.task_timeout_secs,
       });
       dispatch(boardActions.addTodo(created));
       setShowCreate(false);

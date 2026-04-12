@@ -225,6 +225,22 @@
   min-width: 0;
 }
 
+.board-card-continue-btn {
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  background: rgba(239, 68, 68, 0.08);
+  color: #d14343;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.board-card-continue-btn:hover {
+  background: rgba(239, 68, 68, 0.14);
+}
+
 /* ── Empty state ── */
 
 .board-empty {
@@ -335,6 +351,13 @@
   font-weight: 500;
   color: var(--text-secondary);
   margin-bottom: 6px;
+}
+
+.board-form-help {
+  margin: 6px 2px 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
 }
 
 .board-input {

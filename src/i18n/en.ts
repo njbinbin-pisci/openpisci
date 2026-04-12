@@ -143,6 +143,10 @@ const en = {
     maxIterationsKoiHelp:
       "0 = use the system default (30); set 1–200 for a custom per-Koi cap.",
     maxIterationsStatTooltip: "Max iterations",
+    taskTimeoutField: "⏱ Default task timeout (seconds)",
+    taskTimeoutKoiHelp:
+      "0 = keep inheriting the project or system default; useful for slower specialist roles.",
+    taskTimeoutStatTooltip: "Default task timeout",
   },
 
   // Chat Pool
@@ -158,6 +162,10 @@ const en = {
     noMessages: "No messages yet",
     deleteSession: "Delete Project",
     sessionActions: "Project Actions",
+    taskTimeoutField: "⏱ Project default task timeout (seconds)",
+    taskTimeoutPlaceholder: "0 = inherit the system default",
+    taskTimeoutHelp:
+      "0 keeps using the global system default. Values above 0 become the default timeout for tasks in this project.",
     pauseSession: "Pause Project",
     resumeSession: "Resume Project",
     archiveSession: "Archive Project",
@@ -197,6 +205,7 @@ const en = {
     markCancelled: "Cancel Task",
     reopen: "Reopen",
     unblock: "Resume In Progress",
+    continue: "Continue",
     delete: "Delete",
     detail: "Task Detail",
     description: "Description",
@@ -204,7 +213,14 @@ const en = {
     owner: "Owner",
     claimer: "Claimed by",
     createdAt: "Created",
+    taskTimeoutField: "Task timeout (seconds)",
+    taskTimeoutPlaceholder: "0 = keep inheriting project / Koi / system defaults",
+    taskTimeoutHelp: "Overrides the single-run timeout only for this task. Set 0 to keep using inherited defaults.",
+    taskTimeoutInherited: "Inherited default",
+    taskTimeoutOverride: "{{seconds}} seconds",
     blockedReason: "Blocked Reason",
+    resumeHint: "This task stopped, but it can still be resumed after review.",
+    supersededHint: "This task has been replaced, so its original resume path is locked to avoid conflicts.",
   },
 
   // Tools (builtin + user-defined)
@@ -387,8 +403,8 @@ const en = {
     multiAgentRunTrial: "Run Collaboration Trial",
     multiAgentRunningTrial: "Running Collaboration Trial...",
     multiAgentPhaseLabel: "Phase:",
-    multiAgentAllPassed: "ALL PASSED",
-    multiAgentIncomplete: "INCOMPLETE",
+    multiAgentAllPassed: "Ready Snapshot",
+    multiAgentIncomplete: "Stopped For Review",
     multiAgentPass: "PASS",
     multiAgentFail: "FAIL",
     multiAgentPhase_setup: "Setup",

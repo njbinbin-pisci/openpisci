@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { RootState, chatActions, sessionsActions, ToolStep, StreamingState, PlanTodoItem } from "../../store";
-import { chatApi, sessionsApi, gatewayApi, AgentEventType, ChannelInfo, ChatAttachment, type Session } from "../../services/tauri";
+import { chatApi, sessionsApi, gatewayApi, AgentEventType, ChannelInfo, ChatAttachment, type Session, type ChatMessage } from "../../services/tauri";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openPath } from "../../services/tauri";
@@ -45,6 +45,97 @@ class RenderErrorBoundary extends Component<
     if (this.state.hasError) return this.props.fallback;
     return this.props.children;
   }
+}
+
+function parsePersistedBlocks(raw?: string | null): Array<Record<string, unknown>> {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function mergePlanItems(existing: PlanTodoItem[], updates: PlanTodoItem[]): PlanTodoItem[] {
+  const merged = [...existing];
+  for (const update of updates) {
+    const idx = merged.findIndex((item) => item.id === update.id);
+    if (idx >= 0) merged[idx] = update;
+    else merged.push(update);
+  }
+  return merged;
+}
+
+function reconstructPersistedTaskPanels(messages: ChatMessage[]): {
+  toolSteps: ToolStep[];
+  planItems: PlanTodoItem[];
+} {
+  let lastRealUserIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role === "user" && !msg.tool_results_json && !msg.id.startsWith("optimistic_")) {
+      lastRealUserIdx = i;
+      break;
+    }
+  }
+  const turnMessages = messages.slice(lastRealUserIdx + 1);
+  const resultByToolUseId = new Map<string, { content: string; isError: boolean }>();
+  for (const msg of turnMessages) {
+    for (const result of parsePersistedBlocks(msg.tool_results_json)) {
+      const toolUseId = typeof result.tool_use_id === "string" ? result.tool_use_id : null;
+      if (!toolUseId) continue;
+      resultByToolUseId.set(toolUseId, {
+        content: typeof result.content === "string" ? result.content : JSON.stringify(result.content ?? ""),
+        isError: Boolean(result.is_error),
+      });
+    }
+  }
+
+  const toolSteps: ToolStep[] = [];
+  let planItems: PlanTodoItem[] = [];
+
+  for (const msg of turnMessages) {
+    for (const call of parsePersistedBlocks(msg.tool_calls_json)) {
+      const name = typeof call.name === "string" ? call.name : "";
+      if (!name || name === "chat_ui") continue;
+      const id =
+        typeof call.id === "string" && call.id.trim()
+          ? call.id
+          : `${msg.id}_${toolSteps.length}`;
+      const result = resultByToolUseId.get(id);
+      toolSteps.push({
+        id,
+        name,
+        input: call.input ?? null,
+        completed: Boolean(result),
+        expanded: false,
+        result: result?.content,
+        isError: result?.isError,
+      });
+
+      if (name !== "plan_todo" || result?.isError) continue;
+      const input = (call.input ?? {}) as { merge?: unknown; todos?: unknown };
+      const todos = Array.isArray(input.todos) ? input.todos : [];
+      const updates: PlanTodoItem[] = todos
+        .map((item) => ({
+          id: typeof item?.id === "string" ? item.id : "",
+          content: typeof item?.content === "string" ? item.content : "",
+          status:
+            item?.status === "pending" ||
+            item?.status === "in_progress" ||
+            item?.status === "completed" ||
+            item?.status === "cancelled"
+              ? item.status
+              : "pending",
+        }))
+        .filter((item) => item.id && item.content);
+      if (updates.length === 0) continue;
+      planItems = input.merge ? mergePlanItems(planItems, updates) : updates;
+    }
+  }
+
+  return { toolSteps, planItems };
 }
 
 function MermaidBlock({ code }: { code: string }) {
@@ -341,9 +432,9 @@ export default function Chat() {
   const activePlan = activeSessionId ? planBySession[activeSessionId] ?? [] : [];
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
-  // Tool steps panel: open while running, auto-close when agent finishes
-  const [stepsOpen, setStepsOpen] = useState(false);
-  const [planOpen, setPlanOpen] = useState(true);
+  const hasTaskPanel = activePlan.length > 0 || steps.length > 0;
+  const [taskPanelOpen, setTaskPanelOpen] = useState(true);
+  const [taskPanelTab, setTaskPanelTab] = useState<"todo" | "tools">("todo");
 
   // Plan resume dialog: shown when user sends a message while unfinished todos exist
   const [planResumeDialog, setPlanResumeDialog] = useState<{
@@ -353,15 +444,21 @@ export default function Chat() {
   const prevRunningRef = useRef(false);
   useEffect(() => {
     if (running && !prevRunningRef.current) {
-      // Agent just started — open the steps panel
-      setStepsOpen(true);
-      setPlanOpen(true);
-    } else if (!running && prevRunningRef.current) {
-      // Agent just finished — hide the steps panel
-      setStepsOpen(false);
+      setTaskPanelOpen(true);
+      if (activePlan.length === 0 && steps.length > 0) {
+        setTaskPanelTab("tools");
+      }
     }
     prevRunningRef.current = running;
-  }, [running]);
+  }, [running, activePlan.length, steps.length]);
+  useEffect(() => {
+    if (!hasTaskPanel) return;
+    if (taskPanelTab === "todo" && activePlan.length === 0 && steps.length > 0) {
+      setTaskPanelTab("tools");
+    } else if (taskPanelTab === "tools" && steps.length === 0 && activePlan.length > 0) {
+      setTaskPanelTab("todo");
+    }
+  }, [taskPanelTab, activePlan.length, steps.length, hasTaskPanel]);
   const activeSessionKind = classifySession(activeSession);
   const isImSession = activeSessionKind === "im";
   isImSessionRef.current = isImSession;
@@ -386,9 +483,16 @@ export default function Chat() {
         // with no frozenBubble (old history, other sessions), it falls back to plain setMessages.
         // Do NOT auto-reconstruct frozenBubble from DB here — that would collapse all history.
         dispatch(chatActions.setMessagesWithFrozen({ sessionId: activeSessionId, messages }));
+        const s = fresh.find((x) => x.id === activeSessionId);
+        const restored = reconstructPersistedTaskPanels(messages);
+        dispatch(chatActions.restoreTaskPanels({
+          sessionId: activeSessionId,
+          toolSteps: restored.toolSteps,
+          planItems: restored.planItems,
+          turnDone: s?.status !== "running",
+        }));
         setHasMoreHistory(messages.length >= CHAT_INITIAL_SIZE);
         // Correct stale running state from DB
-        const s = fresh.find((x) => x.id === activeSessionId);
         if (s && s.status !== "running") {
           dispatch(chatActions.setRunning({ sessionId: activeSessionId, running: false }));
           dispatch(chatActions.clearStreaming(activeSessionId));
@@ -535,6 +639,13 @@ export default function Chat() {
           sessionsApi.getMessages(boundSessionId, CHAT_INITIAL_SIZE).then((messages) => {
             console.log('[Chat] done: reloaded', messages.length, 'messages for', boundSessionId);
             dispatch(chatActions.setMessagesWithFrozen({ sessionId: boundSessionId, messages }));
+            const restored = reconstructPersistedTaskPanels(messages);
+            dispatch(chatActions.restoreTaskPanels({
+              sessionId: boundSessionId,
+              toolSteps: restored.toolSteps,
+              planItems: restored.planItems,
+              turnDone: true,
+            }));
           }).catch(() => {});
           break;
         case "fish_progress":
@@ -1112,6 +1223,91 @@ export default function Chat() {
               </div>
             )}
 
+            {hasTaskPanel && (
+              <div className="session-task-panel">
+                <button
+                  className="session-task-panel-header"
+                  onClick={() => setTaskPanelOpen((open) => !open)}
+                  aria-expanded={taskPanelOpen}
+                >
+                  <div className="session-task-panel-title">
+                    <span className="session-task-panel-label">Task Panel</span>
+                    {activePlan.length > 0 && (
+                      <span className="session-task-panel-badge">
+                        Todo {running ? t("chat.planWorking", { count: activePlan.length }) : t("chat.planSummary", { count: activePlan.length })}
+                      </span>
+                    )}
+                    {steps.length > 0 && (
+                      <span className="session-task-panel-badge">
+                        Tools {running ? t("chat.agentWorking") : t("chat.agentSteps", { count: steps.length })}
+                      </span>
+                    )}
+                  </div>
+                  <span className="session-task-panel-chevron">{taskPanelOpen ? "▲" : "▼"}</span>
+                </button>
+
+                {taskPanelOpen && (
+                  <div className="session-task-panel-body">
+                    <div className="session-task-tabs" role="tablist" aria-label="Task panel tabs">
+                      <button
+                        className={`session-task-tab ${taskPanelTab === "todo" ? "active" : ""}`}
+                        onClick={() => setTaskPanelTab("todo")}
+                        disabled={activePlan.length === 0}
+                        role="tab"
+                        aria-selected={taskPanelTab === "todo"}
+                      >
+                        Todo
+                        {activePlan.length > 0 && <span className="session-task-tab-count">{activePlan.length}</span>}
+                      </button>
+                      <button
+                        className={`session-task-tab ${taskPanelTab === "tools" ? "active" : ""}`}
+                        onClick={() => setTaskPanelTab("tools")}
+                        disabled={steps.length === 0}
+                        role="tab"
+                        aria-selected={taskPanelTab === "tools"}
+                      >
+                        Tools
+                        {steps.length > 0 && <span className="session-task-tab-count">{steps.length}</span>}
+                      </button>
+                    </div>
+
+                    <div className="session-task-panel-content">
+                      {taskPanelTab === "todo" && activePlan.length > 0 && (
+                        <div className="tool-steps-scroll">
+                          <PlanPanel items={activePlan} />
+                        </div>
+                      )}
+                      {taskPanelTab === "tools" && steps.length > 0 && (
+                        <div className="tool-steps-scroll" ref={toolStepsScrollRef}>
+                          {steps.map((step) => (
+                            <ToolStepCard
+                              key={step.id}
+                              step={step}
+                              onToggle={() => {
+                                dispatch(chatActions.toggleToolStep({ sessionId: activeSessionId!, id: step.id }));
+                                if (!step.expanded) {
+                                  requestAnimationFrame(() => {
+                                    const el = toolStepsScrollRef.current;
+                                    if (el) {
+                                      const cards = el.querySelectorAll<HTMLElement>(".tool-step-card");
+                                      const idx = steps.findIndex((s) => s.id === step.id);
+                                      if (idx >= 0 && cards[idx]) {
+                                        cards[idx].scrollIntoView({ block: "nearest", behavior: "smooth" });
+                                      }
+                                    }
+                                  });
+                                }
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="messages-area" ref={messagesAreaRef}>
               {hasMoreHistory && (
                 <div style={{ textAlign: "center", padding: "8px 0", fontSize: 11, color: "var(--text-muted)" }}>
@@ -1149,74 +1345,6 @@ export default function Chat() {
                   </div>
                 );
               })}
-
-              {activePlan.length > 0 && (
-                <div className="tool-steps-container plan-steps-container">
-                  <div
-                    className={`tool-steps-header${!running ? " tool-steps-header-clickable" : ""}`}
-                    onClick={!running ? () => setPlanOpen((o) => !o) : undefined}
-                  >
-                    <span className="tool-steps-label">
-                      {running
-                        ? t("chat.planWorking", { count: activePlan.length })
-                        : t("chat.planSummary", { count: activePlan.length })}
-                    </span>
-                    {!running && (
-                      <span className="tool-steps-chevron">{planOpen ? "▲" : "▼"}</span>
-                    )}
-                  </div>
-                  {(running || planOpen) && (
-                    <div className="tool-steps-scroll">
-                      <PlanPanel items={activePlan} />
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Tool steps — visible while running; collapses to a single summary line when done */}
-              {steps.length > 0 && (
-                <div className="tool-steps-container">
-                  <div
-                    className={`tool-steps-header${!running ? " tool-steps-header-clickable" : ""}`}
-                    onClick={!running ? () => setStepsOpen((o) => !o) : undefined}
-                  >
-                    <span className="tool-steps-label">
-                      {running
-                        ? t("chat.agentWorking")
-                        : t("chat.agentSteps", { count: steps.length })}
-                    </span>
-                    {!running && (
-                      <span className="tool-steps-chevron">{stepsOpen ? "▲" : "▼"}</span>
-                    )}
-                  </div>
-                  {/* Steps body: always visible while running, hidden when done unless user opens */}
-                  {(running || stepsOpen) && (
-                    <div className="tool-steps-scroll" ref={toolStepsScrollRef}>
-                      {steps.map((step) => (
-                        <ToolStepCard
-                          key={step.id}
-                          step={step}
-                          onToggle={() => {
-                            dispatch(chatActions.toggleToolStep({ sessionId: activeSessionId!, id: step.id }));
-                            if (!step.expanded) {
-                              requestAnimationFrame(() => {
-                                const el = toolStepsScrollRef.current;
-                                if (el) {
-                                  const cards = el.querySelectorAll<HTMLElement>(".tool-step-card");
-                                  const idx = steps.findIndex((s) => s.id === step.id);
-                                  if (idx >= 0 && cards[idx]) {
-                                    cards[idx].scrollIntoView({ block: "nearest", behavior: "smooth" });
-                                  }
-                                }
-                              });
-                            }
-                          }}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
 
               {/* Single streaming bubble — shows thinking dots until first text arrives,
                   then displays the latest streamed text. Disappears when running stops.

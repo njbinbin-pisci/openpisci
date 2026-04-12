@@ -143,6 +143,10 @@ const zh = {
     maxIterationsKoiHelp:
       "0 = 使用系统默认值（30）；可设置 1–200 自定义上限。",
     maxIterationsStatTooltip: "最大迭代次数",
+    taskTimeoutField: "⏱ 默认任务超时（秒）",
+    taskTimeoutKoiHelp:
+      "0 = 继续继承项目或系统默认值；适合为慢角色单独放宽执行时间。",
+    taskTimeoutStatTooltip: "默认任务超时",
   },
 
   // 聊天室
@@ -158,6 +162,10 @@ const zh = {
     noMessages: "暂无消息",
     deleteSession: "删除项目",
     sessionActions: "项目操作",
+    taskTimeoutField: "⏱ 项目默认任务超时（秒）",
+    taskTimeoutPlaceholder: "0 = 继承系统默认值",
+    taskTimeoutHelp:
+      "0 表示继续使用系统默认值；大于 0 时，本项目中的任务默认采用该超时。",
     pauseSession: "暂停项目",
     resumeSession: "恢复项目",
     archiveSession: "归档项目",
@@ -197,6 +205,7 @@ const zh = {
     markCancelled: "取消任务",
     reopen: "重新打开",
     unblock: "恢复进行中",
+    continue: "继续",
     delete: "删除",
     detail: "任务详情",
     description: "描述",
@@ -204,7 +213,14 @@ const zh = {
     owner: "负责人",
     claimer: "执行者",
     createdAt: "创建时间",
+    taskTimeoutField: "任务超时（秒）",
+    taskTimeoutPlaceholder: "0 = 继续继承项目 / Koi / 系统默认值",
+    taskTimeoutHelp: "仅覆盖当前任务的单次执行超时。0 表示不覆盖，继续按继承链解析。",
+    taskTimeoutInherited: "继承默认值",
+    taskTimeoutOverride: "{{seconds}} 秒",
     blockedReason: "阻塞原因",
+    resumeHint: "该任务已停止，但仍可在审查后继续恢复执行。",
+    supersededHint: "该任务已被替代，原任务恢复入口已关闭以避免冲突。",
   },
 
   // 工具（系统内置 + 用户自定义）
@@ -387,8 +403,8 @@ const zh = {
     multiAgentRunTrial: "运行协作试验",
     multiAgentRunningTrial: "协作试验运行中...",
     multiAgentPhaseLabel: "阶段：",
-    multiAgentAllPassed: "全部通过",
-    multiAgentIncomplete: "未完成",
+    multiAgentAllPassed: "已到复核快照",
+    multiAgentIncomplete: "已停止，待审查",
     multiAgentPass: "通过",
     multiAgentFail: "失败",
     multiAgentPhase_setup: "准备中",

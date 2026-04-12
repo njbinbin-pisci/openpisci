@@ -585,6 +585,8 @@ export interface KoiDefinition {
   llm_provider_id?: string;
   /** Maximum AgentLoop iterations. 0 = use system default (30). */
   max_iterations: number;
+  /** Default single-task timeout in seconds. 0 = inherit from project/system. */
+  task_timeout_secs: number;
 }
 
 export interface KoiWithStats {
@@ -604,6 +606,8 @@ export interface KoiWithStats {
   llm_provider_id?: string;
   /** Maximum AgentLoop iterations. 0 = use system default (30). */
   max_iterations: number;
+  /** Default single-task timeout in seconds. 0 = inherit from project/system. */
+  task_timeout_secs: number;
 }
 
 export interface KoiTodo {
@@ -621,6 +625,7 @@ export interface KoiTodo {
   blocked_reason?: string;
   result_message_id?: number;
   source_type: string;
+  task_timeout_secs: number;
   created_at: string;
   updated_at: string;
 }
@@ -630,6 +635,8 @@ export interface PoolSession {
   name: string;
   org_spec: string;
   status: string;
+  project_dir?: string;
+  task_timeout_secs: number;
   last_active_at?: string;
   created_at: string;
   updated_at: string;
@@ -667,6 +674,8 @@ export const koiApi = {
     llm_provider_id?: string;
     /** Maximum AgentLoop iterations. 0 = use system default (30). */
     max_iterations?: number;
+    /** Default single-task timeout in seconds. 0 = inherit from project/system. */
+    task_timeout_secs?: number;
   }) => invoke<KoiDefinition>("create_koi", { input }),
   update: (input: {
     id: string;
@@ -680,6 +689,8 @@ export const koiApi = {
     llm_provider_id?: string;
     /** undefined = don't change; 0 = use system default; n = set to n */
     max_iterations?: number;
+    /** undefined = don't change; 0 = inherit; n = set task timeout seconds */
+    task_timeout_secs?: number;
   }) => invoke<void>("update_koi", { input }),
   delete: (id: string) => invoke<void>("delete_koi", { id }),
   getDeleteInfo: (id: string) =>
@@ -697,7 +708,8 @@ export const koiApi = {
 
 export const poolApi = {
   listSessions: () => invoke<PoolSession[]>("list_pool_sessions"),
-  createSession: (name: string) => invoke<PoolSession>("create_pool_session", { name }),
+  createSession: (name: string, taskTimeoutSecs?: number) =>
+    invoke<PoolSession>("create_pool_session", { name, taskTimeoutSecs }),
   deleteSession: (id: string) => invoke<void>("delete_pool_session", { id }),
   pauseSession: (id: string) => invoke<void>("pause_pool_session", { id }),
   resumeSession: (id: string) => invoke<void>("resume_pool_session", { id }),
@@ -714,9 +726,11 @@ export const poolApi = {
   getOrgSpec: (id: string) => invoke<string>("get_pool_org_spec", { id }),
   updateOrgSpec: (id: string, orgSpec: string) =>
     invoke<void>("update_pool_org_spec", { id, orgSpec }),
-  dispatchTask: (koiId: string, task: string, poolSessionId?: string, priority?: string) =>
+  updateConfig: (id: string, taskTimeoutSecs?: number) =>
+    invoke<void>("update_pool_session_config", { id, taskTimeoutSecs }),
+  dispatchTask: (koiId: string, task: string, poolSessionId?: string, priority?: string, timeoutSecs?: number) =>
     invoke<{ success: boolean; reply: string; result_message_id?: number }>(
-      "dispatch_koi_task", { koiId, task, poolSessionId, priority }
+      "dispatch_koi_task", { koiId, task, poolSessionId, priority, timeoutSecs }
     ),
   cancelKoiTask: (koiId: string, poolSessionId?: string) =>
     invoke<void>("cancel_koi_task", { koiId, poolSessionId: poolSessionId ?? null }),
@@ -739,6 +753,7 @@ export const boardApi = {
     pool_session_id?: string;
     source_type?: string;
     depends_on?: string;
+    task_timeout_secs?: number;
   }) => invoke<KoiTodo>("create_koi_todo", { input }),
   updateTodo: (input: {
     id: string;
@@ -751,6 +766,7 @@ export const boardApi = {
     invoke<void>("claim_koi_todo", { id, claimedBy }),
   completeTodo: (id: string, resultMessageId?: number) =>
     invoke<void>("complete_koi_todo", { id, resultMessageId }),
+  resumeTodo: (id: string) => invoke<void>("resume_koi_todo", { id }),
   deleteTodo: (id: string) => invoke<void>("delete_koi_todo", { id }),
   onTodoUpdated: (handler: (data: unknown) => void): Promise<UnlistenFn> =>
     listen("koi_todo_updated", (e) => handler(e.payload)),

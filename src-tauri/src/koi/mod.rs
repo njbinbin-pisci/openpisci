@@ -45,6 +45,10 @@ pub struct KoiDefinition {
     /// 0 means use the system default (30).
     #[serde(default)]
     pub max_iterations: u32,
+    /// Per-Koi default execution timeout for a single todo, in seconds.
+    /// 0 means inherit the project or system default.
+    #[serde(default)]
+    pub task_timeout_secs: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +74,10 @@ pub struct KoiTodo {
     pub result_message_id: Option<i64>,
     /// "pisci" | "koi" | "user" | "system"
     pub source_type: String,
+    /// Per-task execution timeout in seconds.
+    /// 0 means inherit from project, Koi, or system defaults.
+    #[serde(default)]
+    pub task_timeout_secs: u32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -87,6 +95,10 @@ pub struct PoolSession {
     /// Optional filesystem directory for this project.
     /// When set, a Git repo is initialized and Koi get isolated worktrees.
     pub project_dir: Option<String>,
+    /// Default execution timeout for todos in this project, in seconds.
+    /// 0 means inherit the global system default.
+    #[serde(default)]
+    pub task_timeout_secs: u32,
     pub last_active_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

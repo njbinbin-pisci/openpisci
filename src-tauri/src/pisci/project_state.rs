@@ -16,6 +16,7 @@ pub struct ProjectAssessment {
     pub decision: ProjectDecision,
     pub active_todo_count: usize,
     pub blocked_todo_count: usize,
+    pub needs_review_count: usize,
     pub follow_up_signal_count: usize,
     pub ready_signal_count: usize,
     pub explicit_pisci_handoff_count: usize,
@@ -52,11 +53,20 @@ pub fn assess_project_state(
 ) -> ProjectAssessment {
     let active_todos: Vec<_> = todos
         .iter()
-        .filter(|t| matches!(t.status.as_str(), "todo" | "in_progress" | "blocked"))
+        .filter(|t| {
+            matches!(
+                t.status.as_str(),
+                "todo" | "in_progress" | "blocked" | "needs_review"
+            )
+        })
         .collect();
     let blocked_todo_count = active_todos
         .iter()
         .filter(|t| t.status == "blocked")
+        .count();
+    let needs_review_count = active_todos
+        .iter()
+        .filter(|t| t.status == "needs_review")
         .count();
     let active_todo_count = active_todos.len();
 
@@ -105,29 +115,36 @@ pub fn assess_project_state(
     let explicit_pisci_handoff_count = ready_states.iter().filter(|s| s.mentions_pisci).count();
 
     if active_todo_count > 0 {
-        let summary = if blocked_todo_count > 0 {
-            let failure_hint = if recent_task_failed_count > 0 {
-                format!(
-                    " ({} task_failed event(s) detected — a Koi may have timed out or crashed)",
-                    recent_task_failed_count
-                )
-            } else {
-                String::new()
-            };
-            format!(
-                "Project still has {} active todo(s), including {} blocked todo(s){}. Pisci must intervene to unblock or reassign.",
-                active_todo_count, blocked_todo_count, failure_hint
-            )
-        } else {
+        let mut hints = Vec::new();
+        if blocked_todo_count > 0 {
+            hints.push(format!("{} blocked", blocked_todo_count));
+        }
+        if needs_review_count > 0 {
+            hints.push(format!("{} needs_review", needs_review_count));
+        }
+        if recent_task_failed_count > 0 {
+            hints.push(format!(
+                "{} task_failed event(s) — a Koi may have timed out or crashed",
+                recent_task_failed_count
+            ));
+        }
+        let summary = if hints.is_empty() {
             format!(
                 "Project still has {} active todo(s). More work is in progress before Pisci should conclude.",
                 active_todo_count
+            )
+        } else {
+            format!(
+                "Project still has {} active todo(s) ({}). Pisci should intervene.",
+                active_todo_count,
+                hints.join(", ")
             )
         };
         return ProjectAssessment {
             decision: ProjectDecision::Continue,
             active_todo_count,
             blocked_todo_count,
+            needs_review_count,
             follow_up_signal_count,
             ready_signal_count,
             explicit_pisci_handoff_count,
@@ -140,6 +157,7 @@ pub fn assess_project_state(
             decision: ProjectDecision::Continue,
             active_todo_count,
             blocked_todo_count,
+            needs_review_count,
             follow_up_signal_count,
             ready_signal_count,
             explicit_pisci_handoff_count,
@@ -155,6 +173,7 @@ pub fn assess_project_state(
             decision: ProjectDecision::ReadyForPisciReview,
             active_todo_count,
             blocked_todo_count,
+            needs_review_count,
             follow_up_signal_count,
             ready_signal_count,
             explicit_pisci_handoff_count,
@@ -171,6 +190,7 @@ pub fn assess_project_state(
             decision: ProjectDecision::ReadyForPisciReview,
             active_todo_count,
             blocked_todo_count,
+            needs_review_count,
             follow_up_signal_count,
             ready_signal_count,
             explicit_pisci_handoff_count,
@@ -192,6 +212,7 @@ pub fn assess_project_state(
         decision: ProjectDecision::Continue,
         active_todo_count,
         blocked_todo_count,
+        needs_review_count,
         follow_up_signal_count,
         ready_signal_count,
         explicit_pisci_handoff_count,

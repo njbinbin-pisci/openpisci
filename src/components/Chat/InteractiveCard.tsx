@@ -20,6 +20,8 @@ interface UiBlock {
   suggestions?: string[];
   allow_new?: boolean;
   min?: number;
+  max?: number;
+  step?: number;
   buttons?: { id: string; label: string; style?: string }[];
 }
 
@@ -133,6 +135,38 @@ function TextInputBlock({
         value={value}
         placeholder={block.placeholder || ""}
         onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+      />
+    </div>
+  );
+}
+
+function NumberInputBlock({
+  block,
+  value,
+  onChange,
+  disabled,
+}: {
+  block: UiBlock;
+  value: number;
+  onChange: (v: number) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="ic-field">
+      {block.label && <label className="ic-label">{block.label}</label>}
+      <input
+        type="number"
+        className="ic-input"
+        value={Number.isFinite(value) ? value : 0}
+        min={block.min}
+        max={block.max}
+        step={block.step ?? 1}
+        placeholder={block.placeholder || ""}
+        onChange={(e) => {
+          const next = Number(e.target.value);
+          onChange(Number.isFinite(next) ? next : 0);
+        }}
         disabled={disabled}
       />
     </div>
@@ -393,6 +427,16 @@ export default function InteractiveCard({ requestId, uiDefinition, submittedValu
                   key={key}
                   block={block}
                   value={(values[block.id!] as string) ?? ""}
+                  onChange={(v) => updateValue(block.id!, v)}
+                  disabled={disabled}
+                />
+              );
+            case "number_input":
+              return (
+                <NumberInputBlock
+                  key={key}
+                  block={block}
+                  value={Number(values[block.id!]) || 0}
                   onChange={(v) => updateValue(block.id!, v)}
                   disabled={disabled}
                 />

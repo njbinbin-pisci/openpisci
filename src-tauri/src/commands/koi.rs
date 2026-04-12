@@ -73,6 +73,9 @@ pub struct CreateKoiInput {
     /// Maximum AgentLoop iterations. 0 = use system default (30).
     #[serde(default)]
     pub max_iterations: u32,
+    /// Per-Koi default task timeout in seconds. 0 = inherit from project/system.
+    #[serde(default)]
+    pub task_timeout_secs: u32,
 }
 
 #[tauri::command]
@@ -100,6 +103,7 @@ pub async fn create_koi(
         &input.description,
         provider_id,
         input.max_iterations,
+        input.task_timeout_secs,
     )
     .map_err(|e| e.to_string())
 }
@@ -119,6 +123,9 @@ pub struct UpdateKoiInput {
     /// `None` = don't touch; `Some(0)` = use system default; `Some(n)` = set to n
     #[serde(default)]
     pub max_iterations: Option<u32>,
+    /// `None` = don't touch; `Some(0)` = inherit; `Some(n)` = set task timeout seconds
+    #[serde(default)]
+    pub task_timeout_secs: Option<u32>,
 }
 
 #[tauri::command]
@@ -152,6 +159,7 @@ pub async fn update_koi(
             input.description.as_deref(),
             provider_update,
             input.max_iterations,
+            input.task_timeout_secs,
         )
         .map_err(|e| e.to_string())?;
     }

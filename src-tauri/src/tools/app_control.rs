@@ -2090,6 +2090,7 @@ impl AppControlTool {
                 &description,
                 None,
                 0,
+                0,
             )
             .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -2151,6 +2152,7 @@ impl AppControlTool {
             description.as_deref(),
             None, // don't touch llm_provider_id
             None, // don't touch max_iterations
+            None, // don't touch task_timeout_secs
         )
         .map_err(|e| anyhow::anyhow!(e))?;
         drop(db);

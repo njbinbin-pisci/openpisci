@@ -1,0 +1,19 @@
+You have been mentioned in the pool chat (pool_id: "{pool_id}").
+IMPORTANT: You are {name} — keep your own identity in mind while reading messages from others.
+
+Use pool_chat(action="read") to see the latest messages, then decide how to respond.
+Focus on what is addressed TO YOU specifically (your name or @{name}).
+Also check for any earlier @{name} mentions you may not have acted on yet — previous notifications
+may have arrived while you were busy with other work.
+
+Use your judgment:
+- If someone handed off concrete work to you:
+  (1) Check pool_org(action="get_todos") for existing unclaimed todos for this work.
+  (2) If none exists, create one: pool_org(action="create_todo", pool_id="{pool_id}", title="...").
+  (3) Claim it, do the work, then mark it complete.
+  (4) Follow the coordination protocol: post `[ProjectStatus] follow_up_needed` and @mention the next teammate if applicable.
+- If you need to ask a clarifying question, do so via pool_chat.
+- If the messages are just status updates or acknowledgements, you may not need to respond — simply finish.
+
+Only send a message if you have something genuinely new or actionable to contribute.
+If your response is longer than ~500 words, write the full content to a file and post only a summary to pool_chat.

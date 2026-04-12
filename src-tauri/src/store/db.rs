@@ -443,7 +443,8 @@ impl Database {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 llm_provider_id TEXT,
-                max_iterations INTEGER NOT NULL DEFAULT 0
+                max_iterations INTEGER NOT NULL DEFAULT 0,
+                task_timeout_secs INTEGER NOT NULL DEFAULT 0
             );
         ",
         );
@@ -453,6 +454,10 @@ impl Database {
             .execute("ALTER TABLE kois ADD COLUMN llm_provider_id TEXT", []);
         let _ = self.conn.execute(
             "ALTER TABLE kois ADD COLUMN max_iterations INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE kois ADD COLUMN task_timeout_secs INTEGER NOT NULL DEFAULT 0",
             [],
         );
 
@@ -474,6 +479,7 @@ impl Database {
                 blocked_reason TEXT,
                 result_message_id INTEGER,
                 source_type TEXT NOT NULL DEFAULT 'user',
+                task_timeout_secs INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(owner_id) REFERENCES kois(id) ON DELETE CASCADE,
@@ -492,6 +498,7 @@ impl Database {
             "ALTER TABLE koi_todos ADD COLUMN blocked_reason TEXT",
             "ALTER TABLE koi_todos ADD COLUMN result_message_id INTEGER",
             "ALTER TABLE koi_todos ADD COLUMN source_type TEXT NOT NULL DEFAULT 'user'",
+            "ALTER TABLE koi_todos ADD COLUMN task_timeout_secs INTEGER NOT NULL DEFAULT 0",
         ] {
             let _ = self.conn.execute(col, []);
         }
@@ -502,6 +509,7 @@ impl Database {
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 org_spec TEXT NOT NULL DEFAULT '',
+                task_timeout_secs INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -542,6 +550,7 @@ impl Database {
             "ALTER TABLE pool_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
             "ALTER TABLE pool_sessions ADD COLUMN last_active_at TEXT",
             "ALTER TABLE pool_sessions ADD COLUMN project_dir TEXT DEFAULT NULL",
+            "ALTER TABLE pool_sessions ADD COLUMN task_timeout_secs INTEGER NOT NULL DEFAULT 0",
         ] {
             let _ = self.conn.execute(col, []);
         }
@@ -1952,14 +1961,15 @@ impl Database {
         description: &str,
         llm_provider_id: Option<&str>,
         max_iterations: u32,
+        task_timeout_secs: u32,
     ) -> Result<crate::koi::KoiDefinition> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO kois (id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'idle', ?8, ?8, ?9, ?10)",
-            params![id, name, role, icon, color, system_prompt, description, now_str, llm_provider_id, max_iterations],
+            "INSERT INTO kois (id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations, task_timeout_secs) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'idle', ?8, ?8, ?9, ?10, ?11)",
+            params![id, name, role, icon, color, system_prompt, description, now_str, llm_provider_id, max_iterations, task_timeout_secs],
         )?;
         Ok(crate::koi::KoiDefinition {
             id,
@@ -1974,6 +1984,7 @@ impl Database {
             updated_at: now,
             llm_provider_id: llm_provider_id.map(String::from),
             max_iterations,
+            task_timeout_secs,
         })
     }
 
@@ -1993,6 +2004,7 @@ impl Database {
                 spec.description,
                 None,
                 0,
+                0,
             )?);
         }
         Ok(created)
@@ -2000,7 +2012,7 @@ impl Database {
 
     pub fn list_kois(&self) -> Result<Vec<crate::koi::KoiDefinition>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations \
+            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations, task_timeout_secs \
              FROM kois ORDER BY created_at ASC"
         )?;
         let rows = stmt.query_map([], |r| {
@@ -2023,6 +2035,7 @@ impl Database {
                     .unwrap_or_else(|_| Utc::now()),
                 llm_provider_id: r.get(10)?,
                 max_iterations: r.get::<_, u32>(11).unwrap_or(0),
+                task_timeout_secs: r.get::<_, u32>(12).unwrap_or(0),
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -2050,12 +2063,13 @@ impl Database {
                     .unwrap_or_else(|_| Utc::now()),
                 llm_provider_id: r.get(10)?,
                 max_iterations: r.get::<_, u32>(11).unwrap_or(0),
+                task_timeout_secs: r.get::<_, u32>(12).unwrap_or(0),
             })
         };
 
         // Exact match first
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations \
+            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations, task_timeout_secs \
              FROM kois WHERE id = ?1"
         )?;
         let mut rows = stmt.query_map(params![id], koi_row)?;
@@ -2067,7 +2081,7 @@ impl Database {
         if id.len() >= 6 {
             let pattern = format!("{}%", id);
             let mut stmt2 = self.conn.prepare(
-                "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations \
+                "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations, task_timeout_secs \
                  FROM kois WHERE id LIKE ?1"
             )?;
             let matches: Vec<crate::koi::KoiDefinition> = stmt2
@@ -2094,6 +2108,7 @@ impl Database {
         description: Option<&str>,
         llm_provider_id: Option<Option<&str>>,
         max_iterations: Option<u32>,
+        task_timeout_secs: Option<u32>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         // llm_provider_id: None = don't change, Some(None) = clear, Some(Some(v)) = set
@@ -2108,6 +2123,7 @@ impl Database {
                      system_prompt = COALESCE(?6, system_prompt), \
                      description = COALESCE(?7, description), \
                      max_iterations = COALESCE(?9, max_iterations), \
+                     task_timeout_secs = COALESCE(?10, task_timeout_secs), \
                      updated_at = ?8 \
                      WHERE id = ?1",
                     params![
@@ -2119,7 +2135,8 @@ impl Database {
                         system_prompt,
                         description,
                         now,
-                        max_iterations
+                        max_iterations,
+                        task_timeout_secs
                     ],
                 )?;
             }
@@ -2134,6 +2151,7 @@ impl Database {
                      description = COALESCE(?7, description), \
                      llm_provider_id = ?9, \
                      max_iterations = COALESCE(?10, max_iterations), \
+                     task_timeout_secs = COALESCE(?11, task_timeout_secs), \
                      updated_at = ?8 \
                      WHERE id = ?1",
                     params![
@@ -2146,7 +2164,8 @@ impl Database {
                         description,
                         now,
                         provider_id,
-                        max_iterations
+                        max_iterations,
+                        task_timeout_secs
                     ],
                 )?;
             }
@@ -2165,7 +2184,7 @@ impl Database {
 
     pub fn find_koi_by_name(&self, name: &str) -> Result<Option<crate::koi::KoiDefinition>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations \
+            "SELECT id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, llm_provider_id, max_iterations, task_timeout_secs \
              FROM kois WHERE name = ?1 ORDER BY created_at ASC LIMIT 1"
         )?;
         let mut rows = stmt.query_map(params![name], |r| {
@@ -2188,6 +2207,7 @@ impl Database {
                     .unwrap_or_else(|_| Utc::now()),
                 llm_provider_id: r.get(10)?,
                 max_iterations: r.get::<_, u32>(11).unwrap_or(0),
+                task_timeout_secs: r.get::<_, u32>(12).unwrap_or(0),
             })
         })?;
         Ok(rows.next().transpose()?)
@@ -2265,14 +2285,15 @@ impl Database {
         pool_session_id: Option<&str>,
         source_type: &str,
         depends_on: Option<&str>,
+        task_timeout_secs: u32,
     ) -> Result<crate::koi::KoiTodo> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO koi_todos (id, owner_id, title, description, status, priority, assigned_by, pool_session_id, source_type, depends_on, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, 'todo', ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
-            params![id, owner_id, title, description, priority, assigned_by, pool_session_id, source_type, depends_on, now_str],
+            "INSERT INTO koi_todos (id, owner_id, title, description, status, priority, assigned_by, pool_session_id, source_type, depends_on, task_timeout_secs, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, 'todo', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+            params![id, owner_id, title, description, priority, assigned_by, pool_session_id, source_type, depends_on, task_timeout_secs, now_str],
         )?;
         Ok(crate::koi::KoiTodo {
             id,
@@ -2289,6 +2310,7 @@ impl Database {
             blocked_reason: None,
             result_message_id: None,
             source_type: source_type.to_string(),
+            task_timeout_secs,
             created_at: now,
             updated_at: now,
         })
@@ -2296,7 +2318,7 @@ impl Database {
 
     const KOI_TODO_COLS: &'static str = "id, owner_id, title, description, status, priority, assigned_by, \
         pool_session_id, claimed_by, claimed_at, depends_on, blocked_reason, result_message_id, source_type, \
-        created_at, updated_at";
+        task_timeout_secs, created_at, updated_at";
 
     pub fn list_koi_todos(&self, owner_id: Option<&str>) -> Result<Vec<crate::koi::KoiTodo>> {
         let sql = if owner_id.is_some() {
@@ -2350,12 +2372,13 @@ impl Database {
             source_type: r
                 .get::<_, String>(13)
                 .unwrap_or_else(|_| "user".to_string()),
+            task_timeout_secs: r.get::<_, u32>(14).unwrap_or(0),
             created_at: r
-                .get::<_, String>(14)?
+                .get::<_, String>(15)?
                 .parse::<DateTime<Utc>>()
                 .unwrap_or_else(|_| Utc::now()),
             updated_at: r
-                .get::<_, String>(15)?
+                .get::<_, String>(16)?
                 .parse::<DateTime<Utc>>()
                 .unwrap_or_else(|_| Utc::now()),
         })
@@ -2375,6 +2398,10 @@ impl Database {
              title = COALESCE(?2, title), \
              description = COALESCE(?3, description), \
              status = COALESCE(?4, status), \
+             blocked_reason = CASE \
+                WHEN COALESCE(?4, status) IN ('blocked', 'needs_review') THEN blocked_reason \
+                ELSE NULL \
+             END, \
              priority = COALESCE(?5, priority), \
              updated_at = ?6 \
              WHERE id = ?1",
@@ -2387,7 +2414,7 @@ impl Database {
     pub fn claim_koi_todo(&self, id: &str, claimed_by: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE koi_todos SET claimed_by = ?2, claimed_at = ?3, status = 'in_progress', updated_at = ?3 WHERE id = ?1",
+            "UPDATE koi_todos SET claimed_by = ?2, claimed_at = ?3, status = 'in_progress', blocked_reason = NULL, updated_at = ?3 WHERE id = ?1",
             params![id, claimed_by, now],
         )?;
         Ok(())
@@ -2403,11 +2430,111 @@ impl Database {
         Ok(())
     }
 
+    pub fn mark_koi_todo_needs_review(&self, id: &str, reason: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE koi_todos SET status = 'needs_review', blocked_reason = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, reason, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn cancel_koi_todo(&self, id: &str, reason: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE koi_todos SET status = 'cancelled', blocked_reason = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, reason, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn resume_koi_todo(&self, id: &str, claimed_by: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE koi_todos SET status = 'in_progress', claimed_by = ?2, claimed_at = ?3, blocked_reason = NULL, updated_at = ?3 WHERE id = ?1",
+            params![id, claimed_by, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn replace_koi_todo(
+        &self,
+        original: &crate::koi::KoiTodo,
+        new_owner_id: &str,
+        title: &str,
+        description: &str,
+        assigned_by: &str,
+        source_type: &str,
+        reason: &str,
+        task_timeout_secs: Option<u32>,
+    ) -> Result<crate::koi::KoiTodo> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+        let replacement_reason = format!("[Replaced by {}] {}", id, reason.trim());
+        let task_timeout_secs = task_timeout_secs.unwrap_or(original.task_timeout_secs);
+
+        self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+        let result = (|| -> Result<()> {
+            self.conn.execute(
+                "INSERT INTO koi_todos (id, owner_id, title, description, status, priority, assigned_by, pool_session_id, source_type, depends_on, task_timeout_secs, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, 'todo', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                params![
+                    &id,
+                    new_owner_id,
+                    title,
+                    description,
+                    &original.priority,
+                    assigned_by,
+                    original.pool_session_id.as_deref(),
+                    source_type,
+                    Some(original.id.as_str()),
+                    task_timeout_secs,
+                    &now_str,
+                ],
+            )?;
+            self.conn.execute(
+                "UPDATE koi_todos SET status = 'cancelled', blocked_reason = ?2, updated_at = ?3 WHERE id = ?1",
+                params![&original.id, replacement_reason, &now_str],
+            )?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(crate::koi::KoiTodo {
+                    id,
+                    owner_id: new_owner_id.to_string(),
+                    title: title.to_string(),
+                    description: description.to_string(),
+                    status: "todo".to_string(),
+                    priority: original.priority.clone(),
+                    assigned_by: assigned_by.to_string(),
+                    pool_session_id: original.pool_session_id.clone(),
+                    claimed_by: None,
+                    claimed_at: None,
+                    depends_on: Some(original.id.clone()),
+                    blocked_reason: None,
+                    result_message_id: None,
+                    source_type: source_type.to_string(),
+                    task_timeout_secs,
+                    created_at: now,
+                    updated_at: now,
+                })
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     /// Complete a todo with a link to the result message
     pub fn complete_koi_todo(&self, id: &str, result_message_id: Option<i64>) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE koi_todos SET status = 'done', result_message_id = COALESCE(?2, result_message_id), updated_at = ?3 WHERE id = ?1",
+            "UPDATE koi_todos SET status = 'done', blocked_reason = NULL, result_message_id = COALESCE(?2, result_message_id), updated_at = ?3 WHERE id = ?1",
             params![id, result_message_id, now],
         )?;
         Ok(())
@@ -2431,22 +2558,27 @@ impl Database {
     // Pool Sessions & Messages (Chat Pool)
     // ------------------------------------------------------------------
 
-    pub fn create_pool_session(&self, name: &str) -> Result<crate::koi::PoolSession> {
-        self.create_pool_session_with_dir(name, None)
+    pub fn create_pool_session(
+        &self,
+        name: &str,
+        task_timeout_secs: u32,
+    ) -> Result<crate::koi::PoolSession> {
+        self.create_pool_session_with_dir(name, None, task_timeout_secs)
     }
 
     pub fn create_pool_session_with_dir(
         &self,
         name: &str,
         project_dir: Option<&str>,
+        task_timeout_secs: u32,
     ) -> Result<crate::koi::PoolSession> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO pool_sessions (id, name, org_spec, status, project_dir, last_active_at, created_at, updated_at) \
-             VALUES (?1, ?2, '', 'active', ?3, ?4, ?4, ?4)",
-            params![id, name, project_dir, now_str],
+            "INSERT INTO pool_sessions (id, name, org_spec, status, project_dir, task_timeout_secs, last_active_at, created_at, updated_at) \
+             VALUES (?1, ?2, '', 'active', ?3, ?4, ?5, ?5, ?5)",
+            params![id, name, project_dir, task_timeout_secs, now_str],
         )?;
         Ok(crate::koi::PoolSession {
             id,
@@ -2454,6 +2586,7 @@ impl Database {
             org_spec: String::new(),
             status: "active".to_string(),
             project_dir: project_dir.map(String::from),
+            task_timeout_secs,
             last_active_at: Some(now),
             created_at: now,
             updated_at: now,
@@ -2469,15 +2602,16 @@ impl Database {
                 .get::<_, String>(3)
                 .unwrap_or_else(|_| "active".to_string()),
             project_dir: r.get::<_, Option<String>>(4)?,
+            task_timeout_secs: r.get::<_, u32>(5).unwrap_or(0),
             last_active_at: r
-                .get::<_, Option<String>>(5)?
+                .get::<_, Option<String>>(6)?
                 .and_then(|s| s.parse::<DateTime<Utc>>().ok()),
             created_at: r
-                .get::<_, String>(6)?
+                .get::<_, String>(7)?
                 .parse::<DateTime<Utc>>()
                 .unwrap_or_else(|_| Utc::now()),
             updated_at: r
-                .get::<_, String>(7)?
+                .get::<_, String>(8)?
                 .parse::<DateTime<Utc>>()
                 .unwrap_or_else(|_| Utc::now()),
         })
@@ -2485,7 +2619,7 @@ impl Database {
 
     pub fn list_pool_sessions(&self) -> Result<Vec<crate::koi::PoolSession>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, org_spec, status, project_dir, last_active_at, created_at, updated_at \
+            "SELECT id, name, org_spec, status, project_dir, task_timeout_secs, last_active_at, created_at, updated_at \
              FROM pool_sessions ORDER BY updated_at DESC"
         )?;
         let rows = stmt.query_map([], Self::map_pool_session)?;
@@ -2495,7 +2629,7 @@ impl Database {
 
     pub fn get_pool_session(&self, id: &str) -> Result<Option<crate::koi::PoolSession>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, org_spec, status, project_dir, last_active_at, created_at, updated_at \
+            "SELECT id, name, org_spec, status, project_dir, task_timeout_secs, last_active_at, created_at, updated_at \
              FROM pool_sessions WHERE id = ?1"
         )?;
         let mut rows = stmt.query_map(params![id], Self::map_pool_session)?;
@@ -2514,7 +2648,7 @@ impl Database {
         }
         let like = format!("{}%", prefix);
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, org_spec, status, project_dir, last_active_at, created_at, updated_at \
+            "SELECT id, name, org_spec, status, project_dir, task_timeout_secs, last_active_at, created_at, updated_at \
              FROM pool_sessions WHERE id LIKE ?1 ORDER BY updated_at DESC"
         )?;
         let rows = stmt.query_map(params![like], Self::map_pool_session)?;
@@ -2737,6 +2871,19 @@ impl Database {
         self.conn.execute(
             "UPDATE pool_sessions SET org_spec = ?2, updated_at = ?3 WHERE id = ?1",
             params![id, org_spec, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_pool_session_config(
+        &self,
+        id: &str,
+        task_timeout_secs: Option<u32>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE pool_sessions SET task_timeout_secs = COALESCE(?2, task_timeout_secs), updated_at = ?3 WHERE id = ?1",
+            params![id, task_timeout_secs, now],
         )?;
         Ok(())
     }

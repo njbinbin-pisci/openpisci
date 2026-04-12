@@ -131,6 +131,8 @@ interface KoiFormData {
   llm_provider_id: string;
   /** 0 = use system default (30) */
   max_iterations: number;
+  /** 0 = inherit from project/system */
+  task_timeout_secs: number;
 }
 
 const EMPTY_FORM: KoiFormData = {
@@ -142,6 +144,7 @@ const EMPTY_FORM: KoiFormData = {
   system_prompt: "",
   llm_provider_id: "",
   max_iterations: 0,
+  task_timeout_secs: 0,
 };
 
 function KoiCard({
@@ -240,6 +243,11 @@ function KoiCard({
         {koi.max_iterations > 0 && (
           <span className="koi-stat" title={t("koi.maxIterationsStatTooltip")}>
             🔁 {koi.max_iterations}
+          </span>
+        )}
+        {koi.task_timeout_secs > 0 && (
+          <span className="koi-stat" title={t("koi.taskTimeoutStatTooltip")}>
+            ⏱ {koi.task_timeout_secs}s
           </span>
         )}
       </div>
@@ -461,6 +469,22 @@ function KoiDialog({
           <p className="koi-form-help">{t("koi.maxIterationsKoiHelp")}</p>
         </div>
 
+        <div className="koi-form-field">
+          <label className="koi-form-label">{t("koi.taskTimeoutField")}</label>
+          <input
+            className="koi-input"
+            type="number"
+            min={0}
+            max={7200}
+            value={form.task_timeout_secs}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              set("task_timeout_secs", isNaN(v) ? 0 : Math.max(0, Math.min(7200, v)));
+            }}
+          />
+          <p className="koi-form-help">{t("koi.taskTimeoutKoiHelp")}</p>
+        </div>
+
         <div className="koi-modal-actions">
           <button
             className="koi-btn koi-btn-secondary"
@@ -568,6 +592,7 @@ export default function KoiManager() {
       system_prompt: koi.system_prompt,
       llm_provider_id: koi.llm_provider_id ?? "",
       max_iterations: koi.max_iterations ?? 0,
+      task_timeout_secs: koi.task_timeout_secs ?? 0,
     });
     setEditingId(koi.id);
     setEditingKoi(koi);

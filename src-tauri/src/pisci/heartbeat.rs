@@ -40,7 +40,15 @@ fn is_attention_event(msg: &PoolMessage, koi_ids: &[String]) -> bool {
     }
     matches!(
         msg.event_type.as_deref(),
-        Some("task_completed" | "task_failed" | "task_claimed" | "task_blocked" | "task_cancelled")
+        Some(
+            "task_completed"
+                | "task_failed"
+                | "task_claimed"
+                | "task_blocked"
+                | "task_cancelled"
+                | "protocol_reminder"
+                | "task_progress"
+        )
     )
 }
 
@@ -52,61 +60,54 @@ pub(crate) fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAt
         "## Heartbeat Inbox".to_string(),
         attention.summary.clone(),
         String::new(),
-        "## Heartbeat Rules".to_string(),
+        "## Current Project State".to_string(),
+        format!("- Decision: {:?}", assessment.decision),
+        format!("- Active todos: {}", assessment.active_todo_count),
+        format!("- Blocked todos: {}", assessment.blocked_todo_count),
+        format!("- Needs-review todos: {}", assessment.needs_review_count),
+        format!("- Follow-up signals: {}", assessment.follow_up_signal_count),
+        format!("- Assessment: {}", assessment.summary),
+        String::new(),
+        "## Guidance".to_string(),
     ];
 
     match assessment.decision {
         ProjectDecision::Continue => {
             lines.push(
-                "- The project is NOT ready for HEARTBEAT_OK. Do not summarize it as finished."
+                "The project is still in progress. Read pool_chat and inspect todos to understand the current situation."
                     .to_string(),
             );
             if assessment.active_todo_count == 0 && assessment.follow_up_signal_count > 0 {
                 lines.push(
-                    "- Follow-up work was explicitly signalled, but no active todo remains. Treat this as a coordination stall and re-open the project instead of concluding it."
-                        .to_string(),
-                );
-                lines.push(
-                    "- Read the latest pool chat, identify the unresolved work, then use pool_chat / pool_org to assign the next owner or ask the blocking question."
-                        .to_string(),
-                );
-            } else if assessment.active_todo_count > 0 {
-                lines.push(
-                    "- Active todos still exist. Inspect whether Pisci should unblock, reprioritize, or simply acknowledge progress in pool_chat."
-                        .to_string(),
-                );
-            } else {
-                lines.push(
-                    "- There is still no clear handoff back to Pisci. Review the latest pool context and keep the project moving rather than closing it."
+                    "Note: Follow-up work was signalled but no active todo remains — this may indicate a coordination gap."
                         .to_string(),
                 );
             }
+            lines.push(
+                "Decide based on context: should Pisci unblock something, post a clarifying message, or wait?"
+                    .to_string(),
+            );
         }
         ProjectDecision::ReadyForPisciReview => {
             lines.push(
-                "- All todos are done or cancelled. The project appears complete. HEARTBEAT_OK is still not automatic."
+                "All todos are done or cancelled. The project may be ready to wrap up."
                     .to_string(),
             );
             lines.push(
-                "- Required sequence: \
-                 (1) Read pool_chat to confirm no outstanding work exists. \
-                 (2) If the project has a project_dir, call pool_org(action=\"merge_branches\", pool_id=...) to integrate all Koi branches into master. \
-                 (3) Call pool_org(action=\"archive\", pool_id=...) to archive the project. \
-                 (4) Post a wrap-up summary in pool_chat including the merge result. \
-                 (5) Only THEN reply HEARTBEAT_OK. \
-                 Do NOT emit HEARTBEAT_OK before merging and archiving."
+                "Suggested actions: read pool_chat to confirm completion, merge branches if applicable, \
+                 archive the project if appropriate, and post a summary. Reply HEARTBEAT_OK when satisfied."
                     .to_string(),
             );
             lines.push(
-                "- Only skip archiving if you find clear evidence of unresolved work not captured in todos. \
-                 In that case, treat the project as Continue and assign the missing work."
+                "If you discover unresolved work, keep the project open and address it instead of concluding."
                     .to_string(),
             );
         }
     }
 
+    lines.push(String::new());
     lines.push(
-        "Respond in the pool context. Read the pool chat, inspect todos, decide whether Pisci should intervene, and reply in pool_chat when appropriate."
+        "Use your judgment. Read the pool context, then take whatever action best serves the project."
             .to_string(),
     );
     lines.join("\n")
@@ -133,15 +134,16 @@ pub fn collect_pool_attention(
     // Wake Pisci when:
     // 1. There are new attention events since last heartbeat, OR
     // 2. All todos are done (ReadyForPisciReview) — even if no new events, OR
-    // 3. There are blocked todos — these are persistent state, not events, so they
-    //    will never appear as "new" messages after the cursor advances. Without this
-    //    check a Koi timeout would permanently stall the project: the task_failed
-    //    event gets consumed by the cursor, the blocked todo stays forever, but
-    //    Pisci is never woken again.
+    // 3. There are blocked todos — persistent state that won't appear as new
+    //    messages after the cursor advances, OR
+    // 4. There are needs_review todos — an agent finished without calling
+    //    complete_todo, so Pisci should intervene to review and re-assign or close.
     let has_blocked_todos = assessment.blocked_todo_count > 0;
+    let has_needs_review_todos = assessment.needs_review_count > 0;
     if new_attention_messages.is_empty()
         && assessment.decision != ProjectDecision::ReadyForPisciReview
         && !has_blocked_todos
+        && !has_needs_review_todos
     {
         return None;
     }
@@ -294,25 +296,14 @@ pub async fn dispatch_heartbeat(
                 Some(HeadlessRunOptions {
                     pool_session_id: Some(attention.pool_id.clone()),
                     extra_system_context: Some(format!(
-                        "You are reviewing the project pool '{}' ({}) during a heartbeat-triggered inbox scan.\n\
-                         Current assessment: {}\nDecision: {:?}\n\
+                        "You are reviewing pool '{}' ({}) during a heartbeat scan.\n\
+                         Assessment: {} | Decision: {:?}\n\
                          \n\
-                         ## Git Branch Integration Check\n\
-                         If this pool has a project_dir, check whether any Koi have signalled their branch is ready to merge \
-                         (look for messages like 'branch koi/xxx is ready', 'ready to merge', or task_completed events). \
-                         If so, call pool_org(action=\"merge_branches\", pool_id=\"{}\") BEFORE assigning any new tasks that depend on that code. \
-                         After merging, post the merge result summary in pool_chat so all Koi know the integrated state.\n\
-                         \n\
-                         HEARTBEAT_OK rules: \
-                         If decision is Continue — do NOT emit HEARTBEAT_OK or describe the project as complete. \
-                         If decision is ReadyForPisciReview — you MUST: \
-                         (1) call pool_org(action=\"merge_branches\", pool_id=\"{}\") to integrate all remaining branches, \
-                         (2) archive the project with pool_org(action=\"archive\", pool_id=\"{}\"), \
-                         (3) post a wrap-up summary in pool_chat, \
-                         (4) only THEN emit HEARTBEAT_OK.",
-                        attention.pool_name, attention.pool_id, attention.assessment.summary, attention.assessment.decision,
-                        attention.pool_id,
-                        attention.pool_id, attention.pool_id
+                         Available tools: pool_chat (read/send), pool_org (get_todos, merge_branches, archive, etc.).\n\
+                         If the pool has a project_dir and branches need merging, consider using merge_branches.\n\
+                         Reply HEARTBEAT_OK only when you're satisfied the project is genuinely complete.",
+                        attention.pool_name, attention.pool_id,
+                        attention.assessment.summary, attention.assessment.decision,
                     )),
                     session_title: Some(format!("Pisci · {}", attention.pool_name)),
                     session_source: Some(HEARTBEAT_POOL_SOURCE.into()),

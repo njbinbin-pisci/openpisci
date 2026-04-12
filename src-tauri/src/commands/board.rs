@@ -1,4 +1,5 @@
 /// Board commands — Kanban board for Koi todo management.
+use crate::koi::runtime::KoiRuntime;
 use crate::koi::KoiTodo;
 use crate::store::AppState;
 use serde::Deserialize;
@@ -25,6 +26,7 @@ pub struct CreateKoiTodoInput {
     pub pool_session_id: Option<String>,
     pub source_type: Option<String>,
     pub depends_on: Option<String>,
+    pub task_timeout_secs: Option<u32>,
 }
 
 #[tauri::command]
@@ -43,6 +45,7 @@ pub async fn create_koi_todo(
             input.pool_session_id.as_deref(),
             input.source_type.as_deref().unwrap_or("user"),
             input.depends_on.as_deref(),
+            input.task_timeout_secs.unwrap_or(0),
         )
         .map_err(|e| e.to_string())?;
 
@@ -108,6 +111,16 @@ pub async fn complete_koi_todo(
         json!({ "id": id, "action": "completed" }),
     );
     Ok(())
+}
+
+#[tauri::command]
+pub async fn resume_koi_todo(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let runtime = KoiRuntime::from_tauri(app, state.db.clone());
+    runtime.resume_todo(&id, "user").await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

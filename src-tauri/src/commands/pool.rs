@@ -16,9 +16,11 @@ pub async fn list_pool_sessions(state: State<'_, AppState>) -> Result<Vec<PoolSe
 pub async fn create_pool_session(
     state: State<'_, AppState>,
     name: String,
+    task_timeout_secs: Option<u32>,
 ) -> Result<PoolSession, String> {
     let db = state.db.lock().await;
-    db.create_pool_session(&name).map_err(|e| e.to_string())
+    db.create_pool_session(&name, task_timeout_secs.unwrap_or(0))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -120,8 +122,24 @@ pub async fn update_pool_org_spec(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn update_pool_session_config(
+    state: State<'_, AppState>,
+    id: String,
+    task_timeout_secs: Option<u32>,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.update_pool_session_config(&id, task_timeout_secs)
+        .map_err(|e| e.to_string())
+}
+
 /// Dispatch a task to a Koi agent via the KoiRuntime.
 /// This is the unified entry point for programmatic task assignment from the UI.
+///
+/// When a pool_session_id is provided, posts the task as a @mention message
+/// in the pool and wakes the Koi to read and decide autonomously.
+/// Without a pool, falls back to direct assign_and_execute (no pool context
+/// for the agent to read).
 #[tauri::command]
 pub async fn dispatch_koi_task(
     app: tauri::AppHandle,
@@ -130,24 +148,74 @@ pub async fn dispatch_koi_task(
     task: String,
     pool_session_id: Option<String>,
     priority: Option<String>,
+    timeout_secs: Option<u32>,
 ) -> Result<serde_json::Value, String> {
-    let runtime = KoiRuntime::from_tauri(app, state.db.clone());
-    let result = runtime
-        .assign_and_execute(
-            &koi_id,
-            &task,
-            "user",
-            pool_session_id.as_deref(),
-            priority.as_deref().unwrap_or("medium"),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    let runtime = KoiRuntime::from_tauri(app.clone(), state.db.clone());
+    let priority = priority.as_deref().unwrap_or("medium");
 
-    Ok(json!({
-        "success": result.success,
-        "reply": result.reply,
-        "result_message_id": result.result_message_id,
-    }))
+    if let Some(ref psid) = pool_session_id {
+        let koi_name = {
+            let db = state.db.lock().await;
+            db.resolve_koi_identifier(&koi_id)
+                .ok()
+                .flatten()
+                .map(|k| k.name.clone())
+                .unwrap_or_else(|| koi_id.clone())
+        };
+
+        let mention_content = if let Some(timeout_secs) = timeout_secs.filter(|v| *v > 0) {
+            format!(
+                "@{} [Priority: {}] [Execution timeout: {}s] {}",
+                koi_name, priority, timeout_secs, task
+            )
+        } else {
+            format!("@{} [Priority: {}] {}", koi_name, priority, task)
+        };
+        {
+            let db = state.db.lock().await;
+            let msg = db
+                .insert_pool_message(
+                    psid,
+                    "user",
+                    &mention_content,
+                    "mention",
+                    &json!({ "target_koi": &koi_id, "priority": priority, "timeout_secs": timeout_secs }).to_string(),
+                )
+                .map_err(|e| e.to_string())?;
+            let _ = app.emit(
+                &format!("pool_message_{}", psid),
+                serde_json::to_value(&msg).unwrap_or_default(),
+            );
+        }
+
+        let results = runtime
+            .handle_mention("user", psid, &mention_content)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let reply = if results.is_empty() {
+            format!("Task posted to pool. @{} has been notified.", koi_name)
+        } else {
+            results[0].reply.clone()
+        };
+
+        Ok(json!({
+            "success": true,
+            "reply": reply,
+            "result_message_id": null,
+        }))
+    } else {
+        let result = runtime
+            .assign_and_execute(&koi_id, &task, "user", None, priority, timeout_secs)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(json!({
+            "success": result.success,
+            "reply": result.reply,
+            "result_message_id": result.result_message_id,
+        }))
+    }
 }
 
 /// Cancel a running Koi task by setting its cancel flag.
