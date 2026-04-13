@@ -151,6 +151,13 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
         if (status.connected) {
           setWechatBindState("success");
           setWechatQr(null);
+          // Auto-connect gateway so the WeChat listener starts immediately after binding.
+          try {
+            const r = await gatewayApi.connect();
+            setGatewayStatus(r.channels);
+          } catch {
+            // Non-fatal: user can still click "Connect" manually.
+          }
           return;
         }
         if (status.message === "scaned") {
