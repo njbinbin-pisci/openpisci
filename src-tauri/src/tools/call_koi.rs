@@ -44,10 +44,14 @@ impl Tool for CallKoiTool {
          Koi agents have their own identity, memory, and full tool access. \
          Unlike Fish (ephemeral), Koi agents remember past interactions. \
          \
+         IMPORTANT: call_koi is NON-BLOCKING. The Koi runs in the background independently. \
+         You do NOT wait for the Koi to finish — return to the user immediately after assigning tasks. \
+         The Koi will post results to the pool chat when done. \
+         \
          Actions: \
          - 'list': List all available Koi agents. \
-         - 'call': Send a task to a specific Koi and wait for the result. \
-         Provide a complete task description. The Koi will use its own memory and tools."
+         - 'call': Assign a task to a Koi. The Koi starts immediately in the background. \
+         Provide a complete, self-contained task description. The Koi will use its own memory and tools."
     }
 
     fn input_schema(&self) -> Value {
@@ -682,118 +686,129 @@ impl CallKoiTool {
             }
         });
 
-        let run_result = match tokio::time::timeout(
-            std::time::Duration::from_secs(600),
-            agent.run(llm_messages, event_tx, cancel, koi_ctx),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(anyhow::anyhow!(
-                "Koi '{}' timed out after 10 minutes on task: {}",
-                koi_def.name,
-                task
-            )),
-        };
-        let _ = forward_handle.await;
+        // Spawn Koi in the background so Pisci is not blocked.
+        // The user can stop Pisci's conversation without interrupting the Koi.
+        let managed_externally = self.managed_externally;
+        let app_bg = state.app_handle.clone();
+        let db_bg = state.db.clone();
+        let cancel_flags_bg = state.cancel_flags.clone();
+        let koi_name_bg = koi_def.name.clone();
+        let _koi_icon_bg = koi_def.icon.clone();
+        let koi_id_bg = koi_id.clone();
+        let pool_session_id_bg = pool_session_id.clone();
+        let cancel_key_bg = cancel_key.clone();
+        let task_bg = task.clone();
 
-        // Clean up cancel flag
-        {
-            let mut flags = state.cancel_flags.lock().await;
-            flags.remove(&cancel_key);
-        }
-
-        // Mark Koi as idle
-        if !self.managed_externally {
+        tokio::spawn(async move {
+            let run_result = match tokio::time::timeout(
+                std::time::Duration::from_secs(600),
+                agent.run(llm_messages, event_tx, cancel, koi_ctx),
+            )
+            .await
             {
-                let db = state.db.lock().await;
-                let _ = db.update_koi_status(&koi_id, "idle");
+                Ok(result) => result,
+                Err(_) => Err(anyhow::anyhow!(
+                    "Koi '{}' timed out after 10 minutes on task: {}",
+                    koi_name_bg,
+                    task_bg
+                )),
+            };
+            let _ = forward_handle.await;
+
+            // Clean up cancel flag
+            {
+                let mut flags = cancel_flags_bg.lock().await;
+                flags.remove(&cancel_key_bg);
             }
-            let _ = state.app_handle.emit(
-                "koi_status_changed",
-                json!({ "id": koi_id, "status": "idle" }),
-            );
-        }
 
-        match run_result {
-            Ok((final_msgs, _, _)) => {
-                // Primary: use the last assistant text from the agent loop.
-                let llm_reply = final_msgs
-                    .iter()
-                    .rev()
-                    .find(|m| m.role == "assistant")
-                    .map(|m| m.content.as_text())
-                    .unwrap_or_default();
+            // Mark Koi as idle
+            if !managed_externally {
+                {
+                    let db = db_bg.lock().await;
+                    let _ = db.update_koi_status(&koi_id_bg, "idle");
+                }
+                let _ = app_bg.emit(
+                    "koi_status_changed",
+                    json!({ "id": koi_id_bg, "status": "idle" }),
+                );
+            }
 
-                // Fallback: if the LLM reply is empty (Koi ended with a tool call such as
-                // complete_todo), look up the result message that complete_todo wrote to the
-                // pool chat for this Koi. This ensures the summary is always visible.
-                let reply = if llm_reply.trim().is_empty() {
-                    if let Some(ref pool_sid) = pool_session_id {
-                        let db = state.db.lock().await;
-                        // Get the most recent "result" message sent by this Koi in this pool
-                        db.get_latest_result_message(pool_sid, &koi_id)
-                            .unwrap_or_default()
-                            .unwrap_or_default()
+            match run_result {
+                Ok((final_msgs, _, _)) => {
+                    let llm_reply = final_msgs
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == "assistant")
+                        .map(|m| m.content.as_text())
+                        .unwrap_or_default();
+
+                    let reply = if llm_reply.trim().is_empty() {
+                        if let Some(ref pool_sid) = pool_session_id_bg {
+                            let db = db_bg.lock().await;
+                            db.get_latest_result_message(pool_sid, &koi_id_bg)
+                                .unwrap_or_default()
+                                .unwrap_or_default()
+                        } else {
+                            llm_reply
+                        }
                     } else {
                         llm_reply
-                    }
-                } else {
-                    llm_reply
-                };
+                    };
 
-                // Record result in Chat Pool only if complete_todo hasn't already done so
-                // (i.e. reply came from LLM text, not from the pool message written by complete_todo)
-                if !self.managed_externally && !reply.trim().is_empty() {
-                    if let Some(ref pool_sid) = pool_session_id {
-                        // Only write if the reply isn't already the latest pool message
-                        let db = state.db.lock().await;
-                        let already_recorded = db
-                            .get_latest_result_message(pool_sid, &koi_id)
-                            .ok()
-                            .flatten()
-                            .map(|m| m == reply)
-                            .unwrap_or(false);
-                        if !already_recorded {
-                            let _ =
-                                db.insert_pool_message(pool_sid, &koi_id, &reply, "result", "{}");
+                    if !managed_externally && !reply.trim().is_empty() {
+                        if let Some(ref pool_sid) = pool_session_id_bg {
+                            let db = db_bg.lock().await;
+                            let already_recorded = db
+                                .get_latest_result_message(pool_sid, &koi_id_bg)
+                                .ok()
+                                .flatten()
+                                .map(|m| m == reply)
+                                .unwrap_or(false);
+                            if !already_recorded {
+                                let _ = db.insert_pool_message(
+                                    pool_sid,
+                                    &koi_id_bg,
+                                    &reply,
+                                    "result",
+                                    "{}",
+                                );
+                            }
+                        }
+                    }
+
+                    tracing::info!(
+                        "call_koi background: Koi '{}' completed task",
+                        koi_name_bg
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("call_koi background: Koi '{}' failed: {}", koi_name_bg, e);
+                    if !managed_externally {
+                        if let Some(ref pool_sid) = pool_session_id_bg {
+                            let db = db_bg.lock().await;
+                            let _ = db.insert_pool_message(
+                                pool_sid,
+                                &koi_id_bg,
+                                &format!("Task failed: {}", e),
+                                "status_update",
+                                "{}",
+                            );
                         }
                     }
                 }
+            }
+        });
 
-                let summary = if reply.chars().count() > 2000 {
-                    format!(
-                        "{}...\n[truncated, {} chars total]",
-                        reply.chars().take(2000).collect::<String>(),
-                        reply.chars().count()
-                    )
-                } else {
-                    reply
-                };
-                Ok(ToolResult::ok(format!(
-                    "Koi '{}' {} completed the task.\n\nResult:\n{}",
-                    koi_def.name, koi_def.icon, summary
-                )))
-            }
-            Err(e) => {
-                // Record error in Chat Pool
-                if !self.managed_externally {
-                    if let Some(ref pool_sid) = pool_session_id {
-                        let db = state.db.lock().await;
-                        let _ = db.insert_pool_message(
-                            pool_sid,
-                            &koi_id,
-                            &format!("Task failed: {}", e),
-                            "status_update",
-                            "{}",
-                        );
-                    }
-                }
-                Ok(ToolResult::err(format!(
-                    "Koi '{}' failed: {}",
-                    koi_def.name, e
-                )))
-            }
-        }
+        // Return immediately — Koi is running in the background.
+        // Results will appear in the pool chat when the Koi completes.
+        let pool_hint = if pool_session_id.is_some() {
+            " Results will appear in the pool chat when done."
+        } else {
+            ""
+        };
+        Ok(ToolResult::ok(format!(
+            "Koi '{}' {} has been assigned the task and is now working in the background.{}\n\nTask: {}",
+            koi_def.name, koi_def.icon, pool_hint, task
+        )))
     }
 }
