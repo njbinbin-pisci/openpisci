@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Snapshot of Settings fields that tools may need at runtime.
@@ -56,6 +57,14 @@ pub struct ToolContext {
     pub memory_owner_id: String,
     /// Optional pool session ID for Chat Pool integration.
     pub pool_session_id: Option<String>,
+    /// Cooperative cancellation flag for long-running tools.
+    pub cancel: Arc<AtomicBool>,
+}
+
+impl ToolContext {
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
 }
 
 /// Image data attached to a tool result (for Vision AI)

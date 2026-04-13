@@ -167,7 +167,7 @@ impl Tool for UiaTool {
             "check" => self.set_check(&input, true),
             "uncheck" => self.set_check(&input, false),
             // Wait
-            "wait_for_element" => self.wait_for_element(&input),
+            "wait_for_element" => self.wait_for_element(&input, ctx).await,
             // Window management
             "activate_window" => self.activate_window(&input),
             "minimize" => self.window_state(&input, "minimize"),
@@ -1163,44 +1163,47 @@ impl UiaTool {
 
     // ─── Wait ─────────────────────────────────────────────────────────────────
 
-    fn wait_for_element(&self, input: &Value) -> Result<ToolResult> {
+    async fn wait_for_element(&self, input: &Value, ctx: &ToolContext) -> Result<ToolResult> {
         use uiautomation::UIAutomation;
         let timeout_ms = input["timeout_ms"].as_u64().unwrap_or(10000);
         let poll_ms = 500u64;
         let start = std::time::Instant::now();
 
         loop {
-            let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
-            let root = match self.get_search_root(&automation, input) {
-                Ok(r) => r,
-                Err(_) => {
-                    if start.elapsed().as_millis() as u64 >= timeout_ms {
-                        return Ok(ToolResult::err("Timeout: element not found"));
+            if ctx.is_cancelled() {
+                return Ok(ToolResult::err("已被用户取消"));
+            }
+
+            let found_name = {
+                let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
+                match self.get_search_root(&automation, input) {
+                    Ok(root) => {
+                        let matcher = self.build_matcher(&automation, root, input, 1000);
+                        matcher
+                            .find_first()
+                            .ok()
+                            .map(|element| element.get_name().unwrap_or_default())
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(poll_ms));
-                    continue;
+                    Err(_) => None,
                 }
             };
-            let matcher = self.build_matcher(&automation, root, input, 1000);
-            match matcher.find_first() {
-                Ok(element) => {
-                    let name = element.get_name().unwrap_or_default();
-                    let elapsed = start.elapsed().as_millis();
-                    return Ok(ToolResult::ok(format!(
-                        "Element found after {}ms: Name='{}'",
-                        elapsed, name
-                    )));
-                }
-                Err(_) => {
-                    if start.elapsed().as_millis() as u64 >= timeout_ms {
-                        return Ok(ToolResult::err(format!(
-                            "Timeout after {}ms: element not found",
-                            timeout_ms
-                        )));
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(poll_ms));
-                }
+
+            if let Some(name) = found_name {
+                let elapsed = start.elapsed().as_millis();
+                return Ok(ToolResult::ok(format!(
+                    "Element found after {}ms: Name='{}'",
+                    elapsed, name
+                )));
             }
+
+            if start.elapsed().as_millis() as u64 >= timeout_ms {
+                return Ok(ToolResult::err(format!(
+                    "Timeout after {}ms: element not found",
+                    timeout_ms
+                )));
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
         }
     }
 

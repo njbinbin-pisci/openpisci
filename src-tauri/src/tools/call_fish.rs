@@ -266,6 +266,7 @@ impl CallFishTool {
             max_iterations: Some(fish_def.agent.max_iterations),
             memory_owner_id: ctx.memory_owner_id.clone(),
             pool_session_id: ctx.pool_session_id.clone(),
+            cancel: ctx.cancel.clone(),
         };
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);

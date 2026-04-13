@@ -20,6 +20,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
+use tokio::time::Duration;
 
 pub struct PoolOrgTool {
     pub app: AppHandle,
@@ -160,7 +161,7 @@ impl Tool for PoolOrgTool {
     async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let action = input["action"].as_str().unwrap_or("list");
         match action {
-            "create" => self.create_pool(&input).await,
+            "create" => self.create_pool(&input, ctx).await,
             "read" => self.read_org_spec(&input, ctx).await,
             "update" => self.update_org_spec(&input, ctx).await,
             "list" => self.list_pools().await,
@@ -185,6 +186,35 @@ impl Tool for PoolOrgTool {
 }
 
 impl PoolOrgTool {
+    async fn run_git_command(
+        &self,
+        dir: &std::path::Path,
+        ctx: &ToolContext,
+        args: &[&str],
+    ) -> anyhow::Result<std::process::Output> {
+        if ctx.is_cancelled() {
+            anyhow::bail!("Operation cancelled by user");
+        }
+
+        let mut cmd = tokio::process::Command::new("git");
+        cmd.args(args).current_dir(dir).kill_on_drop(true);
+
+        let cancel = ctx.cancel.clone();
+        let output = tokio::select! {
+            biased;
+            _ = async move {
+                while !cancel.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            } => {
+                anyhow::bail!("Operation cancelled by user");
+            }
+            result = cmd.output() => result?,
+        };
+
+        Ok(output)
+    }
+
     fn ensure_pool_accepts_new_work(
         session: &crate::koi::PoolSession,
         action: &str,
@@ -309,7 +339,7 @@ impl PoolOrgTool {
         }
     }
 
-    async fn create_pool(&self, input: &Value) -> anyhow::Result<ToolResult> {
+    async fn create_pool(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let name = match input["name"].as_str() {
             Some(n) if !n.trim().is_empty() => n.trim(),
             _ => return Ok(ToolResult::err("'name' is required for action 'create'")),
@@ -336,24 +366,21 @@ impl PoolOrgTool {
             }
             let git_dir = dir_path.join(".git");
             if !git_dir.exists() {
-                let output = std::process::Command::new("git")
-                    .args(["init"])
-                    .current_dir(dir_path)
-                    .output();
+                let output = self.run_git_command(dir_path, ctx, &["init"]).await;
                 match output {
                     Ok(o) if o.status.success() => {
                         let gitignore = dir_path.join(".gitignore");
                         if !gitignore.exists() {
                             let _ = std::fs::write(&gitignore, ".koi-worktrees/\n");
                         }
-                        let _ = std::process::Command::new("git")
-                            .args(["add", ".gitignore"])
-                            .current_dir(dir_path)
-                            .output();
-                        let _ = std::process::Command::new("git")
-                            .args(["commit", "-m", "Initial commit", "--allow-empty"])
-                            .current_dir(dir_path)
-                            .output();
+                        let _ = self.run_git_command(dir_path, ctx, &["add", ".gitignore"]).await;
+                        let _ = self
+                            .run_git_command(
+                                dir_path,
+                                ctx,
+                                &["commit", "-m", "Initial commit", "--allow-empty"],
+                            )
+                            .await;
                         git_info = format!("\nGit: initialized at {}", dir);
                     }
                     Ok(o) => {
@@ -361,6 +388,9 @@ impl PoolOrgTool {
                         return Ok(ToolResult::err(format!("git init failed: {}", stderr)));
                     }
                     Err(e) => {
+                        if e.to_string().contains("Operation cancelled by user") {
+                            return Ok(ToolResult::err("已被用户取消"));
+                        }
                         return Ok(ToolResult::err(format!(
                             "Failed to run git: {}. Is Git installed?",
                             e
@@ -1420,10 +1450,9 @@ impl PoolOrgTool {
             )));
         }
 
-        let branch_output = std::process::Command::new("git")
-            .args(["branch", "--list", "koi/*"])
-            .current_dir(dir)
-            .output();
+        let branch_output = self
+            .run_git_command(dir, ctx, &["branch", "--list", "koi/*"])
+            .await;
 
         let branches: Vec<String> = match branch_output {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
@@ -1431,7 +1460,16 @@ impl PoolOrgTool {
                 .map(|l| l.trim().trim_start_matches("* ").to_string())
                 .filter(|l| !l.is_empty())
                 .collect(),
-            _ => return Ok(ToolResult::err("Failed to list git branches")),
+            Ok(o) => {
+                return Ok(ToolResult::err(format!(
+                    "Failed to list git branches: {}",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                )))
+            }
+            Err(e) if e.to_string().contains("Operation cancelled by user") => {
+                return Ok(ToolResult::err("已被用户取消"))
+            }
+            Err(e) => return Ok(ToolResult::err(format!("Failed to list git branches: {}", e))),
         };
 
         if branches.is_empty() {
@@ -1439,37 +1477,28 @@ impl PoolOrgTool {
         }
 
         let mut results: Vec<String> = Vec::new();
-        let _ = std::process::Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(dir)
-            .output()
-            .or_else(|_| {
-                std::process::Command::new("git")
-                    .args(["checkout", "master"])
-                    .current_dir(dir)
-                    .output()
-            });
+        let checkout_main = self.run_git_command(dir, ctx, &["checkout", "main"]).await;
+        if checkout_main.is_err() && !ctx.is_cancelled() {
+            let _ = self.run_git_command(dir, ctx, &["checkout", "master"]).await;
+        }
 
         for branch in &branches {
-            let merge = std::process::Command::new("git")
-                .args([
-                    "merge",
-                    "--no-ff",
-                    branch,
-                    "-m",
-                    &format!("Merge {}", branch),
-                ])
-                .current_dir(dir)
-                .output();
+            if ctx.is_cancelled() {
+                return Ok(ToolResult::err("已被用户取消"));
+            }
+            let merge = self
+                .run_git_command(
+                    dir,
+                    ctx,
+                    &["merge", "--no-ff", branch, "-m", &format!("Merge {}", branch)],
+                )
+                .await;
             match merge {
                 Ok(o) if o.status.success() => {
                     results.push(format!("  {} — merged OK", branch));
                 }
                 Ok(o) => {
-                    let _ = std::process::Command::new("git")
-                        .args(["merge", "--abort"])
-                        .current_dir(dir)
-                        .output();
+                    let _ = self.run_git_command(dir, ctx, &["merge", "--abort"]).await;
                     let stderr = String::from_utf8_lossy(&o.stderr);
                     results.push(format!(
                         "  {} — CONFLICT (aborted): {}",
@@ -1478,6 +1507,9 @@ impl PoolOrgTool {
                     ));
                 }
                 Err(e) => {
+                    if e.to_string().contains("Operation cancelled by user") {
+                        return Ok(ToolResult::err("已被用户取消"));
+                    }
                     results.push(format!("  {} — error: {}", branch, e));
                 }
             }

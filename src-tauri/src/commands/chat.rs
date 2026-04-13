@@ -282,7 +282,7 @@ async fn build_chat_prompt_artifacts(
         (dir, arc)
     };
 
-    let registry = Arc::new(tools::build_registry(
+    let mut registry = tools::build_registry(
         state.browser.clone(),
         user_tools_dir.as_deref(),
         Some(state.db.clone()),
@@ -291,7 +291,10 @@ async fn build_chat_prompt_artifacts(
         Some(state.settings.clone()),
         app_data_dir,
         Some(skill_loader_arc),
-    ));
+    );
+    // Main Pisci chat must coordinate Koi through the pool, not call Koi directly.
+    registry.unregister("call_koi");
+    let registry = Arc::new(registry);
     let tool_defs = registry.to_tool_defs();
 
     let memory_context = {
@@ -784,6 +787,7 @@ pub async fn chat_send(
         max_iterations: Some(max_iterations),
         memory_owner_id: "pisci".to_string(),
         pool_session_id: None,
+        cancel: cancel.clone(),
     };
 
     // Create event channel
@@ -1221,7 +1225,7 @@ pub async fn run_agent_headless(
         .map(|d| d.join("user-tools"))
         .ok();
     let app_data_dir_h = state.app_handle.path().app_data_dir().ok();
-    let registry = Arc::new(tools::build_registry(
+    let mut registry = tools::build_registry(
         state.browser.clone(),
         user_tools_dir_h.as_deref(),
         Some(state.db.clone()),
@@ -1230,7 +1234,10 @@ pub async fn run_agent_headless(
         Some(state.settings.clone()),
         app_data_dir_h,
         None, // skill_search not used in IM headless sessions
-    ));
+    );
+    // Headless Pisci chat should also coordinate Koi through the pool only.
+    registry.unregister("call_koi");
+    let registry = Arc::new(registry);
     let policy = Arc::new(PolicyGate::with_profile_and_flags(
         &workspace_root,
         &policy_mode,
@@ -1393,15 +1400,6 @@ pub async fn run_agent_headless(
         notification_rx: None,
         auto_compact_input_tokens_threshold,
     };
-    let ctx = ToolContext {
-        session_id: session_id.to_string(),
-        workspace_root: std::path::PathBuf::from(&workspace_root),
-        bypass_permissions: false,
-        settings: tool_settings,
-        max_iterations: Some(max_iterations),
-        memory_owner_id: "pisci".to_string(),
-        pool_session_id: pool_session_id.clone(),
-    };
     // Load full conversation history for context.
     // After building LLM messages, sanitize any orphaned tool_use blocks (tool calls without
     // a matching tool_result) that can occur when a previous agent run was cancelled mid-turn.
@@ -1455,6 +1453,17 @@ pub async fn run_agent_headless(
         let mut flags = state.cancel_flags.lock().await;
         flags.insert(session_id.to_string(), cancel.clone());
     }
+
+    let ctx = ToolContext {
+        session_id: session_id.to_string(),
+        workspace_root: std::path::PathBuf::from(&workspace_root),
+        bypass_permissions: false,
+        settings: tool_settings,
+        max_iterations: Some(max_iterations),
+        memory_owner_id: "pisci".to_string(),
+        pool_session_id: pool_session_id.clone(),
+        cancel: cancel.clone(),
+    };
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
 
@@ -1588,6 +1597,16 @@ pub async fn chat_cancel(state: State<'_, AppState>, session_id: String) -> Resu
     if let Some(flag) = flags.get(&session_id) {
         flag.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    drop(flags);
+    {
+        let db = state.db.lock().await;
+        let _ = db.update_session_status(&session_id, "idle");
+    }
+    let payload = serde_json::to_value(&AgentEvent::Cancelled).unwrap_or_default();
+    let _ = state
+        .app_handle
+        .emit(&format!("agent_event_{}", session_id), payload.clone());
+    let _ = state.app_handle.emit("agent_broadcast", payload);
     Ok(())
 }
 
@@ -1862,9 +1881,14 @@ You have access to specialized Fish sub-agents via the `call_fish` tool. Fish ag
 - Good: `call_fish(action="call", fish_id="file-management", task="扫描 C:\\Projects 下所有包含 requirements.txt 或 pyproject.toml 的目录，列出每个项目名称及其依赖列表")`
 - The Fish will do all the scanning, reading, and aggregation internally, and return only the final summary
 
-## Multi-Agent Collaboration (call_koi + pool_org)
+## Multi-Agent Collaboration (pool_org + pool_chat)
 
 You are the project manager. When a user asks you to "organize a team", "set up a project", "let multiple agents collaborate", or describes work that requires multiple roles or parallel effort, you MUST immediately use `pool_org` and `pool_chat` — do NOT handle it yourself with `plan_todo`.
+
+**CRITICAL boundary for the main Pisci chat:**
+- In the main user<->Pisci conversation, you must NOT call `call_koi` directly.
+- Main-chat collaboration must happen through `pool_org` + `pool_chat` only.
+- `call_koi` is a lower-level delegation primitive for Koi/internal runtime flows, not for the main user conversation.
 
 **MANDATORY trigger conditions — you MUST start a project pool when:**
 - The user explicitly says "organize a team", "let agents collaborate", "set up a project", "team development", or similar

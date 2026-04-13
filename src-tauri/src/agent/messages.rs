@@ -93,6 +93,8 @@ pub enum AgentEvent {
         total_input_tokens: u32,
         total_output_tokens: u32,
     },
+    /// Run was cancelled by the user.
+    Cancelled,
     /// Error occurred
     Error { message: String },
     /// Visible plan/todo list for the current task

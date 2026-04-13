@@ -648,6 +648,11 @@ export default function Chat() {
             }));
           }).catch(() => {});
           break;
+        case "cancelled":
+          dispatch(chatActions.setRunning({ sessionId: boundSessionId, running: false }));
+          dispatch(chatActions.clearStreaming(boundSessionId));
+          dispatch(chatActions.removeOptimisticMessages(boundSessionId));
+          break;
         case "fish_progress":
           dispatch(chatActions.updateFishProgress({
             sessionId: sid,

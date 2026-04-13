@@ -1144,6 +1144,8 @@ pub async fn run_debug_scenario(
         auto_compact_input_tokens_threshold: 100_000,
     };
 
+    let cancel = Arc::new(AtomicBool::new(false));
+
     let ctx = ToolContext {
         session_id: session_id.clone(),
         workspace_root: effective_workspace.clone(),
@@ -1152,6 +1154,7 @@ pub async fn run_debug_scenario(
         max_iterations: Some(max_iterations.min(10)),
         memory_owner_id: "pisci".to_string(),
         pool_session_id: None,
+        cancel: cancel.clone(),
     };
 
     // Inject the effective workspace path into the prompt so the agent knows where to write files.
@@ -1165,8 +1168,6 @@ pub async fn run_debug_scenario(
         role: "user".into(),
         content: MessageContent::text(&prompt_with_workspace),
     }];
-
-    let cancel = Arc::new(AtomicBool::new(false));
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
 
     // Collect tool call records from events
@@ -1679,6 +1680,8 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
         auto_compact_input_tokens_threshold: 100_000,
     };
 
+    let cancel = Arc::new(AtomicBool::new(false));
+
     let ctx = ToolContext {
         session_id: session_id.clone(),
         workspace_root: effective_workspace.clone(),
@@ -1687,14 +1690,13 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
         max_iterations: Some(max_iterations.min(12)),
         memory_owner_id: "pisci".to_string(),
         pool_session_id: None,
+        cancel: cancel.clone(),
     };
 
     let messages = vec![LlmMessage {
         role: "user".into(),
         content: MessageContent::text(&prompt),
     }];
-
-    let cancel = Arc::new(AtomicBool::new(false));
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
 
     let tool_records: Arc<tokio::sync::Mutex<Vec<ToolCallRecord>>> =

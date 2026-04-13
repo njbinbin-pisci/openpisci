@@ -16,6 +16,7 @@ use chrono::Utc;
 use once_cell::sync::Lazy;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::{mpsc, Mutex};
@@ -1105,13 +1106,21 @@ impl KoiRuntime {
                 notification_rx: std::sync::Mutex::new(Some(notif_rx)),
             };
 
+            let cancel_key = format!(
+                "koi_runtime_{}_{}",
+                koi_def.id,
+                pool_session_id.unwrap_or("default")
+            );
+            let cancel = Arc::new(AtomicBool::new(false));
+            {
+                let state = app.state::<crate::store::AppState>();
+                let mut flags = state.cancel_flags.lock().await;
+                flags.insert(cancel_key.clone(), cancel.clone());
+            }
+
             let ctx = ToolContext {
                 // Include pool_session_id in session_id so each project gets an isolated AgentLoop context
-                session_id: format!(
-                    "koi_runtime_{}_{}",
-                    koi_def.id,
-                    pool_session_id.unwrap_or("default")
-                ),
+                session_id: cancel_key.clone(),
                 workspace_root: std::path::PathBuf::from(&workspace_root),
                 bypass_permissions: false,
                 settings: tool_settings_data,
@@ -1123,6 +1132,7 @@ impl KoiRuntime {
                 }),
                 memory_owner_id: koi_def.id.clone(),
                 pool_session_id: pool_session_id.map(String::from),
+                cancel: cancel.clone(),
             };
 
             // Prepend workspace environment info so Koi knows where to work
@@ -1148,6 +1158,12 @@ impl KoiRuntime {
             });
 
             let result = koi_tool.call(input, &ctx).await;
+
+            {
+                let state = app.state::<crate::store::AppState>();
+                let mut flags = state.cancel_flags.lock().await;
+                flags.remove(&cancel_key);
+            }
 
             // Always unregister from session registry
             {

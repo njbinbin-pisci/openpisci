@@ -234,6 +234,7 @@ export type AgentEventType =
   | { type: "permission_request"; request_id: string; tool_name: string; tool_input: unknown; description: string }
   | { type: "interactive_ui"; request_id: string; ui_definition: unknown }
   | { type: "done"; total_input_tokens: number; total_output_tokens: number }
+  | { type: "cancelled" }
   | { type: "error"; message: string }
   | {
       type: "plan_update";
