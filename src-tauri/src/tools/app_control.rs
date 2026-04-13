@@ -131,6 +131,7 @@ impl Tool for AppControlTool {
          \n- 'koi_list': List all Koi agents with their id, name, role, icon, status, and description.\
          \n- 'koi_create': Create a new Koi agent. Required: name, role, system_prompt. Optional: icon (emoji), color (hex), description.\
          \n  Only create a Koi when the user explicitly requests it. Do NOT create Koi proactively.\
+         \n  IMPORTANT: The 'name' field must be plain text only — do NOT include any emoji in the name. Emoji belongs in the 'icon' field only.\
          \n- 'koi_update': Update an existing Koi agent. Required: koi_id. Optional: name, role, icon, color, system_prompt, description. Only the provided fields are changed.\
          \n- 'koi_delete': Delete a Koi agent by id. Required: koi_id. Use with caution — this permanently removes the Koi and all its memories.\
          \
@@ -159,7 +160,7 @@ impl Tool for AppControlTool {
                 },
                 // Koi fields
                 "koi_id": { "type": "string", "description": "Koi agent ID (for koi_update / koi_delete)" },
-                "icon": { "type": "string", "description": "Emoji icon for the Koi (e.g. '🐬'). Defaults to '🐟' if omitted." },
+                "icon": { "type": "string", "description": "Emoji icon for the Koi (e.g. '🐬'). Defaults to '🐟' if omitted. Put emoji here, NOT in the name field." },
                 "color": { "type": "string", "description": "Hex color for the Koi (e.g. '#22c55e'). Defaults to a random color if omitted." },
                 "role": { "type": "string", "description": "Short role label for the Koi (e.g. 'Backend Engineer')" },
                 "system_prompt": { "type": "string", "description": "System prompt defining the Koi's behavior and expertise" },
