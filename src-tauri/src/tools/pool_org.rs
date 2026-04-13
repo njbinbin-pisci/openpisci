@@ -760,14 +760,49 @@ impl PoolOrgTool {
             format!("@{} [Priority: {}] {}", koi_name, priority, task)
         };
 
+        // Create a koi_todo on the kanban board immediately so the task is visible
+        // without waiting for the Koi to self-register it.
+        let todo_id = {
+            let db = self.db.lock().await;
+            match db.create_koi_todo(
+                &koi_id,
+                &task.chars().take(120).collect::<String>(),
+                &task,
+                &priority,
+                "pisci",
+                Some(&pool_id),
+                "koi",
+                None,
+                timeout_secs,
+            ) {
+                Ok(todo) => {
+                    let _ = self.app.emit(
+                        "koi_todo_updated",
+                        serde_json::json!({ "id": todo.id, "action": "created", "by": "pisci" }),
+                    );
+                    Some(todo.id)
+                }
+                Err(e) => {
+                    tracing::warn!("assign_koi: failed to pre-create koi_todo: {}", e);
+                    None
+                }
+            }
+        };
+
         {
             let db = self.db.lock().await;
+            let meta = serde_json::json!({
+                "target_koi": &koi_id,
+                "priority": &priority,
+                "timeout_secs": timeout_secs,
+                "todo_id": todo_id,
+            });
             let msg = db.insert_pool_message(
                 &pool_id,
                 "pisci",
                 &mention_content,
                 "mention",
-                &serde_json::json!({ "target_koi": &koi_id, "priority": &priority, "timeout_secs": timeout_secs }).to_string(),
+                &meta.to_string(),
             )?;
             let _ = self.app.emit(
                 &format!("pool_message_{}", pool_id),
@@ -790,7 +825,7 @@ impl PoolOrgTool {
         });
 
         Ok(ToolResult::ok(format!(
-            "Task posted to pool and @{} has been notified. \
+            "Task posted to pool, kanban todo created, and @{} has been notified. \
              The Koi will read the pool context and decide how to proceed autonomously. \
              Use pool_org(action=\"get_messages\", pool_id=\"{}\") to check progress, \
              or pool_org(action=\"get_todos\", pool_id=\"{}\") to see task status.",

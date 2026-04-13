@@ -322,9 +322,58 @@ async fn build_chat_prompt_artifacts(
         }
     };
 
+    // Inject Koi roster and active pool summary so the model knows what agents and
+    // projects are available when the user asks for team collaboration in the main chat.
+    let koi_pool_context = {
+        let db = state.db.lock().await;
+        let mut ctx = String::new();
+
+        // List available Koi agents
+        if let Ok(kois) = db.list_kois() {
+            if !kois.is_empty() {
+                ctx.push_str("\n\n## Available Koi Agents\n");
+                for k in &kois {
+                    let role_part = if k.role.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", k.role)
+                    };
+                    let desc_part = if k.description.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {}", k.description.chars().take(80).collect::<String>())
+                    };
+                    ctx.push_str(&format!(
+                        "- **{}**{}{} [status: {}]\n",
+                        k.name, role_part, desc_part, k.status
+                    ));
+                }
+            }
+        }
+
+        // List active/paused project pools
+        if let Ok(pools) = db.list_pool_sessions() {
+            let visible: Vec<_> = pools
+                .iter()
+                .filter(|p| p.status == "active" || p.status == "paused")
+                .collect();
+            if !visible.is_empty() {
+                ctx.push_str("\n\n## Existing Project Pools\n");
+                for p in &visible {
+                    ctx.push_str(&format!(
+                        "- **{}** (id: `{}`, status: {}) — call `pool_org(action=\"list\")` to see details\n",
+                        p.name, p.id, p.status
+                    ));
+                }
+            }
+        }
+
+        ctx
+    };
+
     let injection_budget = compute_injection_budget(context_window);
     let full_memory_context = budget_truncate(
-        &format!("{}{}", memory_context, task_state_context),
+        &format!("{}{}{}", memory_context, task_state_context, koi_pool_context),
         injection_budget,
     );
     let project_instruction_context = if enable_project_instructions {
@@ -1749,6 +1798,10 @@ For complex, multi-step tasks, keep a short visible plan using the `plan_todo` t
 - You expect to use several tools or spend more than a trivial amount of time
 - The user would benefit from seeing what is pending, active, or completed
 
+**CRITICAL — When NOT to use `plan_todo`:**
+- **NEVER use `plan_todo` as a substitute for multi-agent collaboration.** If the task involves multiple roles, parallel work streams, or sustained team effort, you MUST use `pool_org` + `pool_chat` to set up a project pool and assign work to Koi agents. Using `plan_todo` to linearly track team tasks yourself defeats the entire purpose of multi-agent collaboration and blocks the user from seeing real progress in the pool/kanban view.
+- Do NOT use `plan_todo` for tasks that should be delegated to Koi agents — those tasks belong in `pool_org(create_todo)` on the kanban board, not in your local plan.
+
 **How to use it well:**
 1. Create a concise plan early, usually 2-7 items
 2. Keep exactly one item as `in_progress` at a time
@@ -1811,18 +1864,29 @@ You have access to specialized Fish sub-agents via the `call_fish` tool. Fish ag
 
 ## Multi-Agent Collaboration (call_koi + pool_org)
 
-You are the project manager. When a user discusses a project that requires sustained, multi-role effort, you should proactively organize a collaborative project:
+You are the project manager. When a user asks you to "organize a team", "set up a project", "let multiple agents collaborate", or describes work that requires multiple roles or parallel effort, you MUST immediately use `pool_org` and `pool_chat` — do NOT handle it yourself with `plan_todo`.
+
+**MANDATORY trigger conditions — you MUST start a project pool when:**
+- The user explicitly says "organize a team", "let agents collaborate", "set up a project", "team development", or similar
+- The work has 2+ distinct roles (e.g., frontend + backend, coder + tester, architect + implementer)
+- The work is expected to take sustained effort across multiple sessions
+- The user asks you to "assign tasks to Koi" or "use the kanban board"
+
+**When these conditions are met, do NOT:**
+- Use `plan_todo` to track the work yourself
+- Execute the work linearly in the current conversation
+- Ask the user to "come back later" — set up the pool NOW in this turn
 
 **1. Understand the project through conversation**
 - Ask clarifying questions about goals, scope, timeline, and constraints
 - Identify distinct roles/responsibilities needed (e.g., frontend dev, backend dev, tester, doc writer)
 
-**2. Set up the project pool using `pool_org`**
+**2. Set up the project pool using `pool_org` — do this in the SAME turn**
 - `pool_org(action="list")` — see existing pools and available Koi agents
 - `pool_org(action="create", name="<project name>", org_spec="<markdown>")` — create a new project pool with a comprehensive organization spec
 - The org_spec should define: project goals, Koi role assignments, collaboration rules, activation conditions, and success metrics
 
-**3. Communicate with Koi agents via @mention**
+**3. Communicate with Koi agents via @mention — also in the SAME turn**
 - Use `pool_chat(action="send", pool_id=..., content="@KoiName your task description...")` to assign work. The @mention system automatically activates the Koi and assigns the task.
 - You can @mention multiple Koi in one message, or use `@all` to broadcast to all agents.
 - Example: `pool_chat(action="send", pool_id="abc", sender_id="pisci", content="@Architect Design the database schema for user authentication. When done, hand off to @Coder for implementation.")`
