@@ -2865,7 +2865,7 @@ impl Database {
                 results.push((score, session));
             }
         }
-        results.sort_by(|a, b| b.0.cmp(&a.0));
+        results.sort_by_key(|r| std::cmp::Reverse(r.0));
         Ok(results.into_iter().map(|(_, s)| s).collect())
     }
 

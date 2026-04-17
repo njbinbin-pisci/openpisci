@@ -303,7 +303,7 @@ impl Tool for FileEditTool {
                 offsets.push((pos, idx, old.len()));
             }
         }
-        offsets.sort_by(|a, b| b.0.cmp(&a.0)); // descending by position
+        offsets.sort_by_key(|o| std::cmp::Reverse(o.0)); // descending by position
 
         let mut result = content.clone();
         for (pos, pair_idx, old_len) in offsets {

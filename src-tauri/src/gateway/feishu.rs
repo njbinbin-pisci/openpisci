@@ -811,17 +811,14 @@ async fn handle_feishu_frame<S>(
         .unwrap_or_default();
 
     match method {
-        0 => {
-            // Control frame
-            if msg_type == "ping" {
-                // Server-initiated ping — send pong
-                let pong = build_pong_frame(&frame);
-                let _ = ws_sink
-                    .send(tokio_tungstenite::tungstenite::Message::Binary(pong))
-                    .await;
-            }
-            // pong from our ping — nothing to do
+        // Control frame: only "ping" needs a pong; "pong" replies to our own ping, nothing to do.
+        0 if msg_type == "ping" => {
+            let pong = build_pong_frame(&frame);
+            let _ = ws_sink
+                .send(tokio_tungstenite::tungstenite::Message::Binary(pong))
+                .await;
         }
+        0 => {}
         1 => {
             // Data frame — ACK first
             let ack = build_ack_frame(&frame);
