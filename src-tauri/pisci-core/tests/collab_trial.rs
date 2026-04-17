@@ -1,14 +1,14 @@
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use pisci_core::heartbeat::{PoolAttention, build_pool_heartbeat_message, collect_pool_attention};
+use pisci_core::heartbeat::{build_pool_heartbeat_message, collect_pool_attention, PoolAttention};
 use pisci_core::models::{KoiTodo, PoolMessage, PoolSession};
 use pisci_core::project_state::{
-    CoordinationSignalKind, ProjectAssessment, ProjectDecision, STATUS_READY,
-    assess_project_state, build_coordination_event_digest,
-    coordination_event_type_for_content, enrich_pool_message_metadata,
+    assess_project_state, build_coordination_event_digest, coordination_event_type_for_content,
+    enrich_pool_message_metadata, CoordinationSignalKind, ProjectAssessment, ProjectDecision,
+    STATUS_READY,
 };
 use pisci_core::scene::{
-    CollaborationContextMode, EventDigestMode, HistorySliceMode, MemorySliceMode,
-    PoolSnapshotMode, RegistryProfile, SceneKind, ScenePolicy,
+    CollaborationContextMode, EventDigestMode, HistorySliceMode, MemorySliceMode, PoolSnapshotMode,
+    RegistryProfile, SceneKind, ScenePolicy,
 };
 use pisci_core::trial::effective_trial_koi_status;
 use serde_json::json;
@@ -238,7 +238,10 @@ fn collab_trial_coordination_event_digest_prioritizes_structured_events_and_targ
         120,
     );
     assert_eq!(digest.lines.len(), 3);
-    assert!(digest.lines.iter().any(|line| line.contains("coordination_signal")));
+    assert!(digest
+        .lines
+        .iter()
+        .any(|line| line.contains("coordination_signal")));
     assert!(digest.lines.iter().any(|line| line.contains("task_failed")));
     assert!(digest.lines.iter().any(|line| line.contains("target")));
 }
@@ -292,7 +295,10 @@ fn collab_trial_build_pool_heartbeat_message_keeps_no_archive_instruction() {
 #[test]
 fn collab_trial_heartbeat_scene_policy_is_lightweight_and_disables_proactive_compaction() {
     let policy = ScenePolicy::for_kind(SceneKind::HeartbeatSupervisor);
-    assert_eq!(policy.registry_profile, RegistryProfile::HeartbeatSupervisor);
+    assert_eq!(
+        policy.registry_profile,
+        RegistryProfile::HeartbeatSupervisor
+    );
     assert!(!policy.allow_skill_loader);
     assert!(!policy.include_memory);
     assert!(!policy.include_task_state);
@@ -616,8 +622,11 @@ fn convergence_blocked_todo_without_signals_raises_attention_reason() {
     // A blocked todo with no coordination signals is still a convergence
     // risk: the pool has no active owner for that work item.
     let base = Utc.with_ymd_and_hms(2026, 4, 17, 10, 0, 0).unwrap();
-    let assessment =
-        assess_project_state(&[], &[todo_at("blocked", at_ms(base, 0))], &["koi-1".into()]);
+    let assessment = assess_project_state(
+        &[],
+        &[todo_at("blocked", at_ms(base, 0))],
+        &["koi-1".into()],
+    );
     assert_eq!(assessment.decision, ProjectDecision::Continue);
     assert_eq!(assessment.blocked_todo_count, 1);
     assert!(

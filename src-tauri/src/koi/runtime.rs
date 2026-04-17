@@ -47,11 +47,7 @@ fn managed_run_slot_key(koi_id: &str, pool_session_id: Option<&str>) -> String {
     format!("{}:{}", koi_id, pool_session_id.unwrap_or("default"))
 }
 
-async fn refresh_managed_koi_status(
-    app: &AppHandle,
-    db_arc: &Arc<Mutex<Database>>,
-    koi_id: &str,
-) {
+async fn refresh_managed_koi_status(app: &AppHandle, db_arc: &Arc<Mutex<Database>>, koi_id: &str) {
     let prefix = format!("{}:", koi_id);
     let is_busy = {
         let active = ACTIVE_KOI_RUNS.lock().await;
@@ -367,7 +363,10 @@ pub(crate) async fn reconcile_managed_pool_completion(
                 "needs_review"
             } else {
                 let failure_summary = if reply_preview.is_empty() {
-                    format!("Koi '{}' failed without a structured error message.", koi_name)
+                    format!(
+                        "Koi '{}' failed without a structured error message.",
+                        koi_name
+                    )
                 } else {
                     reply_preview.clone()
                 };
@@ -1315,11 +1314,7 @@ impl KoiRuntime {
             } else {
                 Some("task_progress")
             };
-            let msg_type = if !success {
-                "status_update"
-            } else {
-                "status_update"
-            };
+            let msg_type = "status_update";
 
             match event_type {
                 Some(event_type) => match db.insert_pool_message_ext(

@@ -562,6 +562,7 @@ impl SkillLoader {
     /// Each entry includes name, description, and the SKILL.md path so the LLM
     /// can load it directly with file_read after calling skill_list.
     /// Format: `- **name** (path/to/SKILL.md): description`
+    #[allow(dead_code)]
     pub fn generate_skill_directory(&self, enabled_skills: &[String]) -> String {
         let mut lines = Vec::new();
         for name in enabled_skills {

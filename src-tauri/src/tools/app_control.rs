@@ -1155,13 +1155,13 @@ impl AppControlTool {
     // ── User Notifications ────────────────────────────────────────────────────
 
     async fn notify_user(&self, input: &Value) -> anyhow::Result<ToolResult> {
-        let message = match input["message"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        let message = match input["message"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             Some(m) => m.to_string(),
-            None => {
-                return Ok(ToolResult::err(
-                    "'message' is required for notify_user",
-                ))
-            }
+            None => return Ok(ToolResult::err("'message' is required for notify_user")),
         };
         let title = input["title"]
             .as_str()

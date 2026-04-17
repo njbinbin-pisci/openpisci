@@ -1,14 +1,12 @@
-use crate::commands::chat::{
-    HeadlessRunOptions, SESSION_SOURCE_PISCI_POOL, run_agent_headless,
-};
+use crate::commands::chat::{run_agent_headless, HeadlessRunOptions, SESSION_SOURCE_PISCI_POOL};
 use crate::commands::scene::SceneKind;
 use crate::koi::runtime::KoiRuntime;
 use crate::koi::KoiTodo;
-use pisci_core::project_state::ProjectDecision;
-pub use pisci_core::heartbeat::{
-    PoolAttention, build_pool_heartbeat_message, collect_pool_attention,
-};
 use crate::store::AppState;
+pub use pisci_core::heartbeat::{
+    build_pool_heartbeat_message, collect_pool_attention, PoolAttention,
+};
+use pisci_core::project_state::ProjectDecision;
 use serde_json::json;
 use tauri::Emitter;
 use tracing::warn;
@@ -166,7 +164,10 @@ pub async fn dispatch_heartbeat(
 
             // Safety-net: surface critical human-escalation states to the user via a
             // toast in the main UI even if Pisci's own turn fails or is delayed.
-            if matches!(attention.assessment.decision, ProjectDecision::EscalateToHuman) {
+            if matches!(
+                attention.assessment.decision,
+                ProjectDecision::EscalateToHuman
+            ) {
                 emit_auto_escalation_toast(state, &attention);
             }
 

@@ -5,8 +5,8 @@ use crate::store::{Database, Settings};
 use crate::tools;
 #[allow(unused_imports)]
 pub use pisci_core::scene::{
-    CollaborationContextMode, EventDigestMode, HistorySliceMode, MemorySliceMode,
-    PoolSnapshotMode, RegistryProfile, SceneKind, ScenePolicy,
+    CollaborationContextMode, EventDigestMode, HistorySliceMode, MemorySliceMode, PoolSnapshotMode,
+    RegistryProfile, SceneKind, ScenePolicy,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

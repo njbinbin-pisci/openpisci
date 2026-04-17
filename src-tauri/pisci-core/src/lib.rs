@@ -1,4 +1,4 @@
-﻿pub mod heartbeat {
+pub mod heartbeat {
     use crate::models::{KoiTodo, PoolMessage, PoolSession};
     use crate::project_state::{
         assess_project_state, contains_pisci_mention, extract_project_status_signal,
@@ -610,7 +610,10 @@ pub mod project_state {
             .iter()
             .filter(|t| matches!(t.status.as_str(), "todo" | "in_progress" | "blocked"))
             .count();
-        let blocked_todo_count = active_todos.iter().filter(|t| t.status == "blocked").count();
+        let blocked_todo_count = active_todos
+            .iter()
+            .filter(|t| t.status == "blocked")
+            .count();
         let needs_review_count = active_todos
             .iter()
             .filter(|t| t.status == "needs_review")
@@ -1168,7 +1171,11 @@ pub mod scene {
 
 pub mod trial {
     pub fn effective_trial_koi_status(db_status: &str, run_slot_active: bool) -> &str {
-        if run_slot_active { "busy" } else { db_status }
+        if run_slot_active {
+            "busy"
+        } else {
+            db_status
+        }
     }
 }
 
@@ -1444,7 +1451,11 @@ Anti-pattern reminder: passing tests, writing files, drafting a spec, or believi
                 "Coordination Protocol must explicitly require handoff to propagate protocol semantics"
             );
             // It must spell out the three required pieces a handoff carries.
-            for piece in ["WHAT to do", "WHERE the inputs are", "HOW to report completion"] {
+            for piece in [
+                "WHAT to do",
+                "WHERE the inputs are",
+                "HOW to report completion",
+            ] {
                 assert!(
                     coord.contains(piece),
                     "Handoff propagation rule must enumerate '{}' as a required piece",
