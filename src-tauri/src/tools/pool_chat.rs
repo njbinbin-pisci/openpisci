@@ -10,6 +10,9 @@
 /// - Idle Koi: spawned to check messages and respond autonomously
 use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use crate::koi::runtime::KoiRuntime;
+use crate::pisci::project_state::{
+    coordination_event_type_for_content, enrich_pool_message_metadata,
+};
 use crate::store::Database;
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -33,9 +36,10 @@ impl Tool for PoolChatTool {
         "Communicate in the project pool chat with your team members. \
          \
          Actions: \
-         - 'send': Post a message to pool chat as yourself. Use @KoiName to get someone's attention, or @all to notify everyone. \
+         - 'send': Post a message to pool chat as yourself. Use @KoiName to get someone's attention, or @all to notify everyone. When the project needs explicit coordination, include a concrete handoff and a `[ProjectStatus] ...` signal. \
          - 'read': Read recent messages from the pool chat to see what's happening. \
-         - 'reply': Reply to a specific message by ID."
+         - 'reply': Reply to a specific message by ID. \
+         Pool chat is the visible coordination channel for the team. If another agent must act next, a board update alone is not enough — say it explicitly here."
     }
 
     fn input_schema(&self) -> Value {
@@ -140,10 +144,21 @@ impl PoolChatTool {
             return Ok(ToolResult::err(err.to_string()));
         }
         let pool_id = pool.id;
+        let metadata = enrich_pool_message_metadata(json!({}), content);
+        let event_type = coordination_event_type_for_content(content);
 
         let msg = {
             let db = self.db.lock().await;
-            db.insert_pool_message(&pool_id, &self.sender_id, content, "text", "{}")?
+            db.insert_pool_message_ext(
+                &pool_id,
+                &self.sender_id,
+                content,
+                "text",
+                &metadata.to_string(),
+                None,
+                None,
+                event_type,
+            )?
         };
 
         let event_name = format!("pool_message_{}", pool_id);
@@ -229,6 +244,8 @@ impl PoolChatTool {
             return Ok(ToolResult::err(err.to_string()));
         }
         let pool_id = pool.id;
+        let metadata = enrich_pool_message_metadata(json!({}), content);
+        let event_type = coordination_event_type_for_content(content);
 
         let msg = {
             let db = self.db.lock().await;
@@ -237,10 +254,10 @@ impl PoolChatTool {
                 &self.sender_id,
                 content,
                 "text",
-                "{}",
+                &metadata.to_string(),
                 None,
                 Some(message_id),
-                None,
+                event_type,
             )?
         };
 

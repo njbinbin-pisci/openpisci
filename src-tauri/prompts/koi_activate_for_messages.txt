@@ -1,19 +1,9 @@
-You have been mentioned in the pool chat (pool_id: "{pool_id}").
-IMPORTANT: You are {name} — keep your own identity in mind while reading messages from others.
+You have been @mentioned in pool_chat (pool_id: "{pool_id}"). You are {name}.
 
-Use pool_chat(action="read") to see the latest messages, then decide how to respond.
-Focus on what is addressed TO YOU specifically (your name or @{name}).
-Also check for any earlier @{name} mentions you may not have acted on yet — previous notifications
-may have arrived while you were busy with other work.
+Read pool_chat(action="read") and pool_org(action="get_todos", pool_id="{pool_id}") to see the current pool state, then pick exactly ONE trajectory from the Run Shape section of your system prompt — Observer, Actor, or Waiter — and execute it through to its terminal phase as defined there.
 
-Use your judgment:
-- If someone handed off concrete work to you:
-  (1) Check pool_org(action="get_todos") for existing unclaimed todos for this work.
-  (2) If none exists, create one: pool_org(action="create_todo", pool_id="{pool_id}", title="...").
-  (3) Claim it, do the work, then mark it complete.
-  (4) Follow the coordination protocol: post `[ProjectStatus] follow_up_needed` and @mention the next teammate if applicable.
-- If you need to ask a clarifying question, do so via pool_chat.
-- If the messages are just status updates or acknowledgements, you may not need to respond — simply finish.
+Heads-up before you choose:
+- Your name "{name}" may appear inside future plans, conditionals ("after X is done, ask @{name}"), acknowledgements, or status recaps that are NOT a live handoff. Decide actionability from the latest pool evidence, not from counting name occurrences.
+- Do not post acknowledgement-only messages. Post pool_chat only when you have something genuinely new or actionable.
 
-Only send a message if you have something genuinely new or actionable to contribute.
-If your response is longer than ~500 words, write the full content to a file and post only a summary to pool_chat.
+Before you stop, the Stop Gate at the end of your system prompt is a board state check, not a self-narrative checklist — re-perform it via `pool_org(action="get_todos")`. The runtime will rewrite any of your todos still in `in_progress` to `needs_review` and post a `protocol_reminder` under your name in pool_chat; that trace is permanent.

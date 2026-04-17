@@ -1238,6 +1238,12 @@ impl AgentLoop {
                 Err(error) => warn!("Failed to load session context state: {}", error),
             }
         }
+        let threshold_step = i64::from(self.auto_compact_input_tokens_threshold);
+        let mut next_auto_compact_threshold = if threshold_step > 0 {
+            ((cumulative_input_tokens / threshold_step) + 1) * threshold_step
+        } else {
+            i64::MAX
+        };
 
         for _iteration in 0..max_iterations {
             if cancel.load(Ordering::Relaxed) {
@@ -1307,17 +1313,18 @@ impl AgentLoop {
                 // Up to 2 compaction passes: first at 60% keep, then at 30% keep
                 let keep_ratios: &[f64] =
                     &[SUMMARY_KEEP_RECENT_RATIO, SUMMARY_KEEP_RECENT_RATIO * 0.5];
+                let min_threshold_estimate = (total_budget as f64 * 0.35) as usize;
                 for (pass, &ratio) in keep_ratios.iter().enumerate() {
-                    let threshold_reached = self.auto_compact_input_tokens_threshold > 0
-                        && cumulative_input_tokens
-                            >= i64::from(self.auto_compact_input_tokens_threshold);
+                    let threshold_reached = threshold_step > 0
+                        && cumulative_input_tokens >= next_auto_compact_threshold
+                        && estimated >= min_threshold_estimate;
                     if estimated <= (total_budget as f64 * 0.60) as usize && !threshold_reached {
                         break;
                     }
                     let keep_chars = (message_budget as f64 * ratio * 4.0) as usize;
                     warn!(
-                        "proactive compaction pass={} estimated_tokens={} total_budget={} message_budget={} keep_chars={} cumulative_input_tokens={} threshold_reached={}",
-                        pass + 1, estimated, total_budget, message_budget, keep_chars, cumulative_input_tokens, threshold_reached
+                        "proactive compaction pass={} estimated_tokens={} total_budget={} message_budget={} keep_chars={} cumulative_input_tokens={} threshold_reached={} min_threshold_estimate={}",
+                        pass + 1, estimated, total_budget, message_budget, keep_chars, cumulative_input_tokens, threshold_reached, min_threshold_estimate
                     );
                     if let Some(compacted) = compact_summarise(
                         messages.clone(),
@@ -1349,6 +1356,10 @@ impl AgentLoop {
                         rolling_summary_version += 1;
                         messages = compacted.messages;
                         estimated = new_estimated;
+                        if threshold_reached {
+                            next_auto_compact_threshold =
+                                next_auto_compact_threshold.saturating_add(threshold_step.max(1));
+                        }
                         if let Some(ref db_arc) = self.db {
                             let db = db_arc.lock().await;
                             if let Err(error) = db.update_session_rolling_summary(

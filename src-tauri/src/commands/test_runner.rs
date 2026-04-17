@@ -3,11 +3,13 @@
 /// Uses in-memory SQLite + LogEventBus to validate the full
 /// collaboration pipeline without calling real LLMs.
 use crate::commands::collab_trial::assess_trial_project_state;
+use crate::commands::pool::ensure_pool_can_archive;
 use crate::koi::event_bus::LogEventBus;
 use crate::koi::runtime::KoiRuntime;
 use crate::koi::{KoiTodo, PoolMessage};
 use crate::pisci::heartbeat::{build_pool_heartbeat_message, collect_pool_attention};
 use crate::pisci::project_state::ProjectDecision as TrialDecision;
+use crate::store::settings::default_heartbeat_prompt;
 use crate::store::Database;
 use chrono::Utc;
 use rusqlite;
@@ -114,6 +116,7 @@ pub async fn run_multi_agent_tests() -> Result<TestSuiteResult, String> {
     results.push(test_project_completion_assessment().await);
     results.push(test_pisci_heartbeat_attention_scan().await);
     results.push(test_pisci_heartbeat_prompt_guardrails().await);
+    results.push(test_archive_requires_explicit_user_step().await);
     results.push(test_todo_lifecycle().await);
     results.push(test_pool_messages().await);
     results.push(test_runtime_assign_execute().await);
@@ -676,11 +679,86 @@ async fn test_pisci_heartbeat_prompt_guardrails() -> TestResult {
                 "review-ready heartbeat prompt should still warn against automatic completion",
             ));
         }
+        if !ready_prompt.contains("Do NOT archive the project during heartbeat") {
+            return Err(fail_with_params(
+                "debug.multiAgentErrMissing",
+                json!({"subject":"heartbeat no-auto-archive guard"}),
+                "review-ready heartbeat prompt should forbid automatic archiving during heartbeat",
+            ));
+        }
+        let default_prompt = default_heartbeat_prompt();
+        if default_prompt.contains("立即执行 pool_org(action=\"archive\", pool_id=...)") {
+            return Err(fail_with_params(
+                "debug.multiAgentErrUnexpected",
+                json!({"subject":"default heartbeat prompt auto archive"}),
+                "default heartbeat prompt should not auto-archive projects",
+            ));
+        }
+        if !default_prompt.contains("只有用户明确要求归档时") {
+            return Err(fail_with_params(
+                "debug.multiAgentErrMissing",
+                json!({"subject":"default heartbeat prompt explicit archive gate"}),
+                "default heartbeat prompt should require explicit user confirmation before archiving",
+            ));
+        }
 
         ok()
     }
     .await;
     finish_test("pisci_heartbeat_prompt_guardrails", r, start)
+}
+
+async fn test_archive_requires_explicit_user_step() -> TestResult {
+    let start = std::time::Instant::now();
+    let r: Result<(), LocalizedError> = async {
+        let (db, _, _) = setup();
+        let db = db.lock().await;
+        let koi = db
+            .create_koi(
+                "Worker",
+                "执行者",
+                "⚙️",
+                "#3498db",
+                "Work.",
+                "Worker",
+                None,
+                0,
+                0,
+            )
+            .map_err(backend_err)?;
+        let pool = db
+            .create_pool_session("ArchiveSafetyPool", 0)
+            .map_err(backend_err)?;
+        let todo = db
+            .create_koi_todo(
+                &koi.id,
+                "Finish docs",
+                "Write API docs",
+                "high",
+                "pisci",
+                Some(&pool.id),
+                "pisci",
+                None,
+                0,
+            )
+            .map_err(backend_err)?;
+
+        let archive_err = ensure_pool_can_archive(&db, &pool.id).unwrap_err();
+        if !archive_err.contains("active todo") {
+            return Err(fail_with_params(
+                "debug.multiAgentErrMissing",
+                json!({"subject":"archive precondition message","actual":archive_err}),
+                "archive guard should reject pools that still have active todos",
+            ));
+        }
+
+        db.cancel_koi_todo(&todo.id, "done elsewhere")
+            .map_err(backend_err)?;
+        ensure_pool_can_archive(&db, &pool.id).map_err(backend_err)?;
+        ok()
+    }
+    .await;
+    finish_test("archive_requires_explicit_user_step", r, start)
 }
 
 async fn test_todo_lifecycle() -> TestResult {
@@ -1778,14 +1856,14 @@ async fn test_headless_session_scope_isolation() -> TestResult {
     let start = std::time::Instant::now();
     let r: Result<(), LocalizedError> = async {
         crate::commands::chat::validate_headless_session_scope(
-            crate::commands::chat::SESSION_SOURCE_PISCI_INBOX_POOL,
-            crate::commands::chat::SESSION_SOURCE_PISCI_INBOX_POOL,
+            crate::commands::chat::SESSION_SOURCE_PISCI_POOL,
+            crate::commands::chat::SESSION_SOURCE_PISCI_POOL,
             Some("pool-1"),
         ).map_err(backend_err)?;
 
         if crate::commands::chat::validate_headless_session_scope(
             "im_feishu",
-            crate::commands::chat::SESSION_SOURCE_PISCI_INBOX_POOL,
+            crate::commands::chat::SESSION_SOURCE_PISCI_POOL,
             Some("pool-1"),
         ).is_ok() {
             return Err(fail_with_params(
@@ -1796,7 +1874,7 @@ async fn test_headless_session_scope_isolation() -> TestResult {
         }
 
         if crate::commands::chat::validate_headless_session_scope(
-            crate::commands::chat::SESSION_SOURCE_PISCI_INBOX_POOL,
+            crate::commands::chat::SESSION_SOURCE_PISCI_POOL,
             crate::commands::chat::SESSION_SOURCE_PISCI_INTERNAL,
             None,
         ).is_ok() {

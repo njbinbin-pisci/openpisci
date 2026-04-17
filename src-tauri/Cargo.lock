@@ -4283,8 +4283,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pisci-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pisci-desktop"
-version = "0.5.25"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4305,6 +4314,7 @@ dependencies = [
  "native-tls",
  "once_cell",
  "pdf-extract",
+ "pisci-core",
  "qrcode",
  "regex",
  "reqwest 0.12.28",

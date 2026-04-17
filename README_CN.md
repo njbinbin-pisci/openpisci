@@ -349,6 +349,15 @@ OpenPisci
 
 ## 📋 更新日志
 
+### v0.6.0
+- **Koi 协作提示词 6 层重构**：Koi 系统提示词现按固定顺序 `Identity → Run Shape → Coordination Protocol → Context & Tools → Capabilities → Stop Gate` 组装；`Run Shape` 显式写入 claim / progress / complete 副作用闭环，`Stop Gate` 禁止 todo 未收尾即停；交接消息强制包含"做什么 / 输入在哪 / 如何汇报完成"。结构性单测锁死这些承诺。
+- **新增 `pisci-core` 基础库**：将项目状态评估、鱼池关注收集、心跳消息生成、Koi 提示词章节抽离到纯 Rust 库 `src-tauri/pisci-core/`，配套 36 个单测 / 集成测试，与 Tauri 运行时解耦。
+- **运行时协调软栅栏（Soft Fence）**：Koi 本轮结束但仍有未收尾的 `in_progress` 待办时，运行时会在鱼池发布 `[SoftFence]` 通知并立刻再唤起 Koi 一轮，专门用于调用 `complete_todo` / `block_todo` / `fail_todo`；若仍未收尾再交由原有 `protocol_reminder` 硬栅栏兜底，避免项目在"已完成但未标记完成"处静默卡死。
+- **max_iterations 分层配置**：按 "Koi 个体 → 系统设置 → 内置默认" 顺序继承。Collab trial 与 `call_koi` 委派不再使用硬编码的 8 次上限，直接走用户可见的全局迭代预算。
+- **Pisci 全局监督状态机**：`ProjectDecision` 新增 `SupervisorDecisionRequired`（worker 局部完成但无全局结论）与 `EscalateToHuman`（不可恢复失败 / 超时）。心跳扫描即便没有新消息也会为这两种状态抛出 attention，心跳提示词要求 Pisci 做出明确的全局决策或显式上抛人工，而不是"静默继续"。
+- **主界面 Toast 通知（新 `app_control.notify_user`）**：Pisci 可调用 `app_control(action="notify_user", level=info|warning|error|critical, pool_id, message, ...)` 向主界面推送 toast。前端新增 `Toaster` 组件，按严重度区分样式（`critical` 级持久显示并带脉冲），直到用户关闭。兜底机制：心跳在识别到 `EscalateToHuman` 时会自动 emit 一条 `critical` 级 toast，即便 Pisci 自身延迟也能第一时间通知用户。
+- **协作 Trial 报告优化**：开发用的 `collab_trial` 现会显式报告 `supervisor_decision_required` 与 `escalate_to_human` 停止原因（不再笼统为 `idle_quiet_snapshot`），并在多轮调试之间清理历史 trial 鱼池。
+
 ### v0.5.23
 - **Release 资产上传修复**：修正 GitHub Actions 中 Windows 可执行文件与 NSIS 安装包的上传路径，避免 tag 构建成功后 Release 里只剩源码包。
 - **发布校验收紧**：将 artifact 上传和 GitHub Release 挂载步骤改为“缺少安装包即失败”，防止再次出现表面全绿但 Release 为空的情况。
@@ -368,11 +377,11 @@ OpenPisci
 - **已知问题**：该版本的部分 Windows 安装包存在启动期崩溃，根因是后台启动任务可能先于 `AppState` 注册运行；该问题已在 `v0.5.22` 修复。
 
 ### v0.5.19
-- **Excel 图表修复**：修复 sheet_check 逻辑错误导致指定工作表时条件判断反转的 bug；dd_chart 在 SetSourceData 之后再次强制设置图表类型，防止 Excel 自动重置为默认类型；强化工具描述，要求 AI 必须显式传 chart_type（折线图=line，柱状图=column，饼图=pie 等），避免误生成饼图
+- **Excel 图表修复**：修复 sheet_check 逻辑错误导致指定工作表时条件判断反转的 bug；add_chart 在 SetSourceData 之后再次强制设置图表类型，防止 Excel 自动重置为默认类型；强化工具描述，要求 AI 必须显式传 chart_type（折线图=line，柱状图=column，饼图=pie 等），避免误生成饼图
 
 ### v0.5.18
 - **Koi 超时修复**：Koi 超时后自动将其 in_progress 任务改为 blocked 状态，并向鱼池发送 @pisci 通知；心跳扫描新增对 blocked todo 的持久唤醒逻辑，确保项目不会因 Koi 超时而永久卡死
-- **文件编码增强**：ile_read 自动识别并透明处理 UTF-8 BOM、UTF-16 LE/BE、GBK/GB18030；ile_write/ile_edit 写回时自动保留原文件 BOM；工具描述和系统提示词新增文件编码操作指南
+- **文件编码增强**：file_read 自动识别并透明处理 UTF-8 BOM、UTF-16 LE/BE、GBK/GB18030；file_write/file_edit 写回时自动保留原文件 BOM；工具描述和系统提示词新增文件编码操作指南
 
 ### v0.5.17
 - **微信接入**：直接对接腾讯 iLink Bot HTTP API，无需安装 Node.js 或任何 CLI；在设置页启用微信通道后点击「绑定微信」，扫描二维码即可完成绑定；Agent 回复通过 iLink sendmessage 接口实时送达微信用户

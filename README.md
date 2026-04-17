@@ -346,6 +346,15 @@ OpenPisci
 
 ## 📋 Changelog
 
+### v0.6.0
+- **Koi collaboration prompt redesigned (6-layer structure)**: Koi system prompts are now built from a fixed `Identity → Run Shape → Coordination Protocol → Context & Tools → Capabilities → Stop Gate` layering; `Run Shape` carries explicit side-effect invariants (claim / progress / complete), `Stop Gate` forbids stopping mid-todo, and handoff messages must state "what to do / where inputs are / how to report completion". Structural tests lock these guarantees in place.
+- **New `pisci-core` crate**: extracted project-state assessment, pool-attention collection, heartbeat message composition, and Koi prompt sections into a pure-Rust library (`src-tauri/pisci-core/`) with 36 unit/integration tests, decoupling collaboration logic from the Tauri runtime.
+- **Runtime reconciliation soft fence**: if a Koi finishes its turn with `in_progress` todos still unreconciled, the runtime posts a `[SoftFence]` notice and re-engages the Koi for exactly one extra turn to call `complete_todo` / `block_todo` / `fail_todo`, before falling back to the existing `protocol_reminder` hard fence. Prevents projects from silently stalling on "done but not marked done".
+- **Configurable `max_iterations` hierarchy**: per-Koi → system settings → built-in default. Collaboration trials and `call_koi` delegations now inherit the user-visible global iteration budget instead of a hardcoded 8-iteration cap.
+- **Pisci global-supervision state machine**: `ProjectDecision` gains `SupervisorDecisionRequired` (workers locally finished but no global sign-off) and `EscalateToHuman` (unrecoverable failures / timeouts). Heartbeat now raises attention for both states even without new messages, and the heartbeat prompt tells Pisci to make the explicit global decision or surface human escalation instead of silently continuing.
+- **User-facing toast notifications (new `app_control.notify_user`)**: Pisci can now call `app_control(action="notify_user", level=info|warning|error|critical, pool_id, message, ...)` to push a toast into the main UI. A new `Toaster` component stacks toasts with severity-based styling (`critical` toasts persist and pulse until dismissed). As a safety net, heartbeat automatically emits a `critical` toast when `EscalateToHuman` is detected, so the user is alerted even if Pisci itself is delayed.
+- **Collaboration trial reporting**: the dev `collab_trial` runner now reports `supervisor_decision_required` and `escalate_to_human` as explicit stop reasons (instead of a generic `idle_quiet_snapshot`) and cleans up historical trial pools between runs.
+
 ### v0.5.23
 - **Release asset upload fix**: corrected the GitHub Actions upload paths for the Windows binary and NSIS installer so tagged builds publish downloadable assets instead of ending with source archives only.
 - **Stricter release validation**: changed the artifact upload and GitHub Release steps to fail when installer files are missing, preventing silent "green but empty" releases.

@@ -19,6 +19,7 @@ import About from "./components/About";
 import Onboarding from "./components/Onboarding";
 import OverlayApp from "./components/Overlay";
 import DebugPanel from "./components/Debug";
+import Toaster from "./components/Toaster";
 import "./theme.css";
 import "./App.css";
 
@@ -166,15 +167,23 @@ function AppContent() {
 
   if (!initialized) {
     return (
-      <div className="loading-screen">
-        <div className="loading-spinner" />
-        <p>Loading Pisci...</p>
-      </div>
+      <>
+        <div className="loading-screen">
+          <div className="loading-spinner" />
+          <p>Loading Pisci...</p>
+        </div>
+        <Toaster />
+      </>
     );
   }
 
   if (showOnboarding) {
-    return <Onboarding onComplete={() => dispatch(settingsActions.setShowOnboarding(false))} />;
+    return (
+      <>
+        <Onboarding onComplete={() => dispatch(settingsActions.setShowOnboarding(false))} />
+        <Toaster />
+      </>
+    );
   }
 
   const tabs: { id: Tab; label: string; icon: string }[] = [
@@ -242,6 +251,7 @@ function AppContent() {
         {activeTab === "about" && <About />}
         {activeTab === "debug" && <DebugPanel />}
       </main>
+      <Toaster />
     </div>
   );
 }

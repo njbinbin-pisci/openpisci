@@ -1,7 +1,8 @@
 /// Koi (锦鲤) commands — CRUD for persistent independent Agents.
 use crate::commands::chat::{
-    run_agent_headless, HeadlessRunOptions, SESSION_SOURCE_PISCI_INBOX_POOL,
+    pool_pisci_session_id, run_agent_headless, HeadlessRunOptions, SESSION_SOURCE_PISCI_POOL,
 };
+use crate::commands::scene::SceneKind;
 use crate::koi::{KoiDefinition, KOI_COLORS, KOI_ICONS};
 use crate::pisci::heartbeat::ensure_heartbeat_session;
 use crate::store::AppState;
@@ -286,7 +287,7 @@ pub async fn update_koi(
 
         // Trigger Pisci in the first affected pool's inbox session
         let (first_pool_id, first_pool_name) = &affected_pools[0];
-        let session_id = format!("pisci_pool_{}", first_pool_id);
+        let session_id = pool_pisci_session_id(first_pool_id);
         let app_clone = app.clone();
         let session_id_clone = session_id.clone();
         let pool_name_clone = first_pool_name.clone();
@@ -298,7 +299,7 @@ pub async fn update_koi(
                 &st,
                 &session_id_clone,
                 &format!("Pisci · {}", pool_name_clone),
-                SESSION_SOURCE_PISCI_INBOX_POOL,
+                SESSION_SOURCE_PISCI_POOL,
             )
             .await;
             let _ = run_agent_headless(
@@ -314,7 +315,8 @@ pub async fn update_koi(
                             .to_string(),
                     ),
                     session_title: Some(format!("Pisci · {}", pool_name_clone)),
-                    session_source: Some(SESSION_SOURCE_PISCI_INBOX_POOL.to_string()),
+                    session_source: Some(SESSION_SOURCE_PISCI_POOL.to_string()),
+                    scene_kind: Some(SceneKind::PoolCoordinator),
                 }),
             )
             .await;
@@ -427,7 +429,7 @@ pub async fn delete_koi(
         );
 
         let (first_pool_id, first_pool_name) = &affected_pools[0];
-        let session_id = format!("pisci_pool_{}", first_pool_id);
+        let session_id = pool_pisci_session_id(first_pool_id);
         let app_clone = app.clone();
         let session_id_clone = session_id.clone();
         let pool_name_clone = first_pool_name.clone();
@@ -438,7 +440,7 @@ pub async fn delete_koi(
                 &st,
                 &session_id_clone,
                 &format!("Pisci · {}", pool_name_clone),
-                SESSION_SOURCE_PISCI_INBOX_POOL,
+                SESSION_SOURCE_PISCI_POOL,
             )
             .await;
             let _ = run_agent_headless(
@@ -454,7 +456,8 @@ pub async fn delete_koi(
                             .to_string(),
                     ),
                     session_title: Some(format!("Pisci · {}", pool_name_clone)),
-                    session_source: Some(SESSION_SOURCE_PISCI_INBOX_POOL.to_string()),
+                    session_source: Some(SESSION_SOURCE_PISCI_POOL.to_string()),
+                    scene_kind: Some(SceneKind::PoolCoordinator),
                 }),
             )
             .await;
@@ -552,7 +555,7 @@ pub async fn set_koi_active(
                 koi_name
             );
             let (first_pool_id, first_pool_name) = &affected_pools[0];
-            let session_id = format!("pisci_pool_{}", first_pool_id);
+            let session_id = pool_pisci_session_id(first_pool_id);
             let app_clone = app.clone();
             let session_id_clone = session_id.clone();
             let pool_name_clone = first_pool_name.clone();
@@ -563,7 +566,7 @@ pub async fn set_koi_active(
                     &st,
                     &session_id_clone,
                     &format!("Pisci · {}", pool_name_clone),
-                    SESSION_SOURCE_PISCI_INBOX_POOL,
+                    SESSION_SOURCE_PISCI_POOL,
                 )
                 .await;
                 let _ = run_agent_headless(
@@ -578,7 +581,8 @@ pub async fn set_koi_active(
                             "团队成员回归上班，请检查是否有工作需要重新安排。".to_string(),
                         ),
                         session_title: Some(format!("Pisci · {}", pool_name_clone)),
-                        session_source: Some(SESSION_SOURCE_PISCI_INBOX_POOL.to_string()),
+                        session_source: Some(SESSION_SOURCE_PISCI_POOL.to_string()),
+                        scene_kind: Some(SceneKind::PoolCoordinator),
                     }),
                 )
                 .await;
@@ -662,7 +666,7 @@ pub async fn set_koi_active(
                 pool_names.join("、")
             );
             let (first_pool_id, first_pool_name) = &affected_pools[0];
-            let session_id = format!("pisci_pool_{}", first_pool_id);
+            let session_id = pool_pisci_session_id(first_pool_id);
             let app_clone = app.clone();
             let session_id_clone = session_id.clone();
             let pool_name_clone = first_pool_name.clone();
@@ -674,7 +678,7 @@ pub async fn set_koi_active(
                     &st,
                     &session_id_clone,
                     &format!("Pisci · {}", pool_name_clone),
-                    SESSION_SOURCE_PISCI_INBOX_POOL,
+                    SESSION_SOURCE_PISCI_POOL,
                 )
                 .await;
                 let _ = run_agent_headless(
@@ -690,7 +694,8 @@ pub async fn set_koi_active(
                                 .to_string(),
                         ),
                         session_title: Some(format!("Pisci · {}", pool_name_clone)),
-                        session_source: Some(SESSION_SOURCE_PISCI_INBOX_POOL.to_string()),
+                        session_source: Some(SESSION_SOURCE_PISCI_POOL.to_string()),
+                        scene_kind: Some(SceneKind::PoolCoordinator),
                     }),
                 )
                 .await;

@@ -153,6 +153,7 @@ pub fn build_registry(
                 depth: 0,
                 managed_externally: false,
                 notification_rx: std::sync::Mutex::new(None),
+                await_completion: false,
             }));
         }
     }

@@ -11,6 +11,7 @@ pub mod runtime;
 /// Hierarchy:
 ///   Pisci (main Agent) → Koi (persistent, independent) → Fish (ephemeral)
 use chrono::{DateTime, Utc};
+pub use pisci_core::models::{KoiTodo, PoolMessage, PoolSession};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy)]
@@ -49,77 +50,6 @@ pub struct KoiDefinition {
     /// 0 means inherit the project or system default.
     #[serde(default)]
     pub task_timeout_secs: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KoiTodo {
-    pub id: String,
-    pub owner_id: String,
-    pub title: String,
-    pub description: String,
-    /// "todo" | "in_progress" | "done" | "blocked" | "cancelled"
-    pub status: String,
-    /// "low" | "medium" | "high" | "urgent"
-    pub priority: String,
-    pub assigned_by: String,
-    pub pool_session_id: Option<String>,
-    /// Who claimed/is working on this task (koi_id or empty)
-    pub claimed_by: Option<String>,
-    pub claimed_at: Option<DateTime<Utc>>,
-    /// Comma-separated todo IDs that this task depends on
-    pub depends_on: Option<String>,
-    /// Reason for blocked status
-    pub blocked_reason: Option<String>,
-    /// Pool message ID that contains the result
-    pub result_message_id: Option<i64>,
-    /// "pisci" | "koi" | "user" | "system"
-    pub source_type: String,
-    /// Per-task execution timeout in seconds.
-    /// 0 means inherit from project, Koi, or system defaults.
-    #[serde(default)]
-    pub task_timeout_secs: u32,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PoolSession {
-    pub id: String,
-    pub name: String,
-    /// Organization spec for this project pool (POOL.md equivalent).
-    /// Contains: project goals, Koi role definitions, collaboration rules,
-    /// activation conditions, evaluation metrics.
-    pub org_spec: String,
-    /// "active" | "paused" | "archived"
-    pub status: String,
-    /// Optional filesystem directory for this project.
-    /// When set, a Git repo is initialized and Koi get isolated worktrees.
-    pub project_dir: Option<String>,
-    /// Default execution timeout for todos in this project, in seconds.
-    /// 0 means inherit the global system default.
-    #[serde(default)]
-    pub task_timeout_secs: u32,
-    pub last_active_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PoolMessage {
-    pub id: i64,
-    pub pool_session_id: String,
-    pub sender_id: String,
-    pub content: String,
-    /// "text" | "task_assign" | "status_update" | "result" | "mention" | "task_claimed" | "task_blocked" | "task_done"
-    pub msg_type: String,
-    pub metadata: String,
-    /// Link to the related koi_todo
-    pub todo_id: Option<String>,
-    /// Reply threading
-    pub reply_to_message_id: Option<i64>,
-    /// Structured event type for timeline reconstruction
-    pub event_type: Option<String>,
-    pub created_at: DateTime<Utc>,
 }
 
 /// Preset color palette for Koi creation UI.

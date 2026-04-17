@@ -6,6 +6,41 @@ use serde::Deserialize;
 use serde_json::json;
 use tauri::{Emitter, State};
 
+pub(crate) fn ensure_pool_can_archive(db: &crate::store::Database, id: &str) -> Result<(), String> {
+    let session = db
+        .get_pool_session(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Pool '{}' not found", id))?;
+
+    let active_todos: Vec<_> = db
+        .list_koi_todos(None)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|todo| {
+            todo.pool_session_id.as_deref() == Some(id)
+                && !matches!(todo.status.as_str(), "done" | "cancelled")
+        })
+        .collect();
+
+    if active_todos.is_empty() {
+        return Ok(());
+    }
+
+    let todo_preview = active_todos
+        .iter()
+        .take(3)
+        .map(|todo| format!("{} [{}]", &todo.id[..8.min(todo.id.len())], todo.status))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Err(format!(
+        "Pool '{}' still has {} active todo(s): {}. Finish, block, or cancel them before archiving.",
+        session.name,
+        active_todos.len(),
+        todo_preview
+    ))
+}
+
 #[tauri::command]
 pub async fn list_pool_sessions(state: State<'_, AppState>) -> Result<Vec<PoolSession>, String> {
     let db = state.db.lock().await;
@@ -376,6 +411,11 @@ pub async fn resume_pool_session(
 /// - Posts a system message
 #[tauri::command]
 pub async fn archive_pool_session(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    {
+        let db = state.db.lock().await;
+        ensure_pool_can_archive(&db, &id)?;
+    }
+
     // 1. Cancel all running tasks
     {
         let flags = state.cancel_flags.lock().await;

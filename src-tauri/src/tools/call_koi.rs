@@ -9,7 +9,10 @@
 use crate::agent::loop_::{AgentLoop, ConfirmFlags};
 use crate::agent::messages::AgentEvent;
 use crate::agent::tool::{Tool, ToolContext, ToolResult, ToolSettings};
+use crate::commands::scene::{build_registry_for_scene, load_skill_loader, SceneKind, ScenePolicy};
 use crate::llm::{LlmMessage, MessageContent};
+use crate::pisci::project_state::build_coordination_event_digest;
+use crate::store::db::TaskSpine;
 use crate::store::AppState;
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -29,9 +32,94 @@ pub struct CallKoiTool {
     /// Only set when called via KoiRuntime (managed_externally = true).
     /// Wrapped in Mutex so it can be taken from &self during call().
     pub notification_rx: std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<String>>>,
+    /// When true, `call()` will run the agent inline (awaiting `agent.run()`
+    /// and the follow-up reconcile) instead of spawning a background task and
+    /// returning immediately. Used by the soft-fence retry path so the caller
+    /// can synchronously wait for the retry's outcome before deciding whether
+    /// the hard fence needs to fire.
+    pub await_completion: bool,
 }
 
 const MAX_CALL_DEPTH: u32 = 5;
+
+fn truncate_chars(content: &str, max_chars: usize) -> String {
+    if max_chars == 0 || content.chars().count() <= max_chars {
+        return content.to_string();
+    }
+    format!("{}...", content.chars().take(max_chars).collect::<String>())
+}
+
+fn koi_continuity_scope_id(koi_id: &str, pool_session_id: Option<&str>) -> String {
+    format!("{}::{}", koi_id, pool_session_id.unwrap_or("default"))
+}
+
+fn koi_continuity_context(task_state: &crate::store::db::TaskState) -> String {
+    crate::commands::chat::render_task_state_section(
+        "Your Recent Working Context",
+        "Most Recent Outcome",
+        task_state,
+    )
+}
+
+fn build_koi_continuity_spine(task: &str, outcome: &str, success: bool) -> TaskSpine {
+    let mut spine = TaskSpine {
+        goal: truncate_chars(task.trim(), 500),
+        current_step: if success {
+            "Continue from the latest validated outcome below.".to_string()
+        } else {
+            "The previous run did not complete cleanly; inspect blockers before proceeding."
+                .to_string()
+        },
+        ..TaskSpine::default()
+    };
+    let outcome_line = truncate_chars(outcome.trim(), 600);
+    if success {
+        if !outcome_line.is_empty() {
+            spine
+                .done
+                .push(format!("Last run outcome: {}", outcome_line));
+        }
+    } else if !outcome_line.is_empty() {
+        spine.blockers.push(outcome_line);
+    }
+    spine
+}
+
+fn persist_koi_continuity_state(
+    db: &crate::store::db::Database,
+    koi_id: &str,
+    pool_session_id: Option<&str>,
+    task: &str,
+    outcome: &str,
+    success: bool,
+) {
+    let scope_id = koi_continuity_scope_id(koi_id, pool_session_id);
+    if let Ok(state) = db.get_or_create_task_state("koi_session", &scope_id) {
+        let spine = build_koi_continuity_spine(task, outcome, success);
+        let summary = if success {
+            truncate_chars(outcome.trim(), 240)
+        } else {
+            format!("Last run failed: {}", truncate_chars(outcome.trim(), 220))
+        };
+        let status = if success { "active" } else { "blocked" };
+        let state_json = serde_json::to_string(&spine).unwrap_or_else(|_| "{}".into());
+        let _ = db.update_task_state(
+            &state.id,
+            Some(&spine.goal),
+            Some(&state_json),
+            Some(&summary),
+            Some(status),
+        );
+    }
+}
+
+// The Koi system prompt is assembled by `pisci_core::koi_prompt` as a fixed
+// 6-layer structure (Identity → Run Shape → Coordination → Context & Tools →
+// Capabilities → Stop Gate). The contract lives in pisci-core because it is
+// pure coordination logic and is unit-tested there. Desktop only supplies the
+// identity preamble and dynamic context slices and calls
+// `build_koi_task_system_prompt` below.
+use pisci_core::koi_prompt::build_koi_task_system_prompt;
 
 #[async_trait]
 impl Tool for CallKoiTool {
@@ -165,6 +253,7 @@ impl CallKoiTool {
             .or_else(|| ctx.pool_session_id.clone());
 
         let state = self.state();
+        let scene_policy = ScenePolicy::for_kind(SceneKind::KoiTask);
 
         let (koi_def, pool_session_id, org_spec_ctx) = {
             let db = state.db.lock().await;
@@ -190,7 +279,13 @@ impl CallKoiTool {
                     if session.org_spec.is_empty() {
                         None
                     } else {
-                        Some(format!("\n\n## Project Organization\n{}", session.org_spec))
+                        Some(format!(
+                            "\n\n## Project Organization\n{}",
+                            truncate_chars(
+                                &session.org_spec,
+                                scene_policy.org_spec_preview_chars()
+                            )
+                        ))
                     }
                 })
                 .unwrap_or_default();
@@ -218,15 +313,24 @@ impl CallKoiTool {
             pool_session_id.as_deref().unwrap_or("default")
         );
 
+        let continuity_context = {
+            let scope_id = koi_continuity_scope_id(&koi_id, pool_session_id.as_deref());
+            let db = state.db.lock().await;
+            db.load_task_state("koi_session", &scope_id)
+                .ok()
+                .flatten()
+                .map(|state| koi_continuity_context(&state))
+                .unwrap_or_default()
+        };
+
         // Load Koi's scoped memories for context injection
         let memory_context = {
             let db = state.db.lock().await;
+            let mut sections = Vec::new();
             let koi_memories = db
                 .search_memories_scoped(&task, &koi_id, pool_session_id.as_deref(), 5)
                 .unwrap_or_default();
-            if koi_memories.is_empty() {
-                String::new()
-            } else {
+            if !koi_memories.is_empty() {
                 let items: Vec<String> = koi_memories
                     .iter()
                     .map(|m| {
@@ -238,14 +342,35 @@ impl CallKoiTool {
                         format!("- [{}]{} {}", m.category, scope_tag, m.content)
                     })
                     .collect();
-                format!("\n\n## Your Memories\n{}", items.join("\n"))
+                sections.push(format!("\n\n## Your Memories\n{}", items.join("\n")));
             }
+            if matches!(
+                scene_policy.memory_slice_mode(),
+                crate::commands::scene::MemorySliceMode::ScopedPlusRecent
+            ) {
+                let recent_items = db
+                    .list_memories_for_owner(&koi_id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .take(3)
+                    .map(|m| format!("- [{}] {}", m.category, truncate_chars(&m.content, 180)))
+                    .collect::<Vec<_>>();
+                if !recent_items.is_empty() {
+                    sections.push(format!(
+                        "\n\n## Recently Saved Memory\n{}",
+                        recent_items.join("\n")
+                    ));
+                }
+            }
+            sections.join("")
         };
 
-        // Inject recent pool chat messages as context
+        // Inject structured coordination digest plus a tiny raw tail for local grounding.
         let pool_chat_ctx = if let Some(ref psid) = pool_session_id {
             let db = state.db.lock().await;
-            let messages = db.get_pool_messages(psid, 20, 0).unwrap_or_default();
+            let messages = db
+                .get_pool_messages(psid, scene_policy.recent_pool_message_limit() as i64 * 2, 0)
+                .unwrap_or_default();
             if messages.is_empty() {
                 String::new()
             } else {
@@ -254,23 +379,39 @@ impl CallKoiTool {
                     .iter()
                     .map(|k| (k.id.clone(), format!("{} {}", k.icon, k.name)))
                     .collect();
-                let lines: Vec<String> = messages
+                let digest = build_coordination_event_digest(
+                    &messages,
+                    scene_policy.event_digest_mode(),
+                    &[koi_def.name.as_str()],
+                    scene_policy.recent_pool_message_limit(),
+                    scene_policy.recent_pool_message_chars(),
+                );
+                let raw_lines: Vec<String> = messages
                     .iter()
+                    .rev()
+                    .take(3)
+                    .rev()
                     .map(|m| {
                         let sender = koi_names
                             .get(&m.sender_id)
                             .cloned()
                             .unwrap_or_else(|| m.sender_id.clone());
                         let time = m.created_at.format("%m-%d %H:%M").to_string();
-                        let content = if m.content.chars().count() > 300 {
-                            format!("{}...", m.content.chars().take(300).collect::<String>())
-                        } else {
-                            m.content.clone()
-                        };
+                        let content =
+                            truncate_chars(&m.content, scene_policy.recent_pool_message_chars());
                         format!("[{}] {} ({}): {}", time, sender, m.msg_type, content)
                     })
                     .collect();
-                format!("\n\n## Recent Pool Chat\n{}", lines.join("\n"))
+                let mut section = String::new();
+                if !digest.lines.is_empty() {
+                    section.push_str("\n\n## Coordination Event Digest\n");
+                    section.push_str(&digest.lines.join("\n"));
+                }
+                if !raw_lines.is_empty() {
+                    section.push_str("\n\n## Latest Raw Pool Messages\n");
+                    section.push_str(&raw_lines.join("\n"));
+                }
+                section
             }
         } else {
             String::new()
@@ -296,99 +437,28 @@ impl CallKoiTool {
             }
         };
 
-        let system_prompt = format!(
-            "{}\n\nYou are {} ({}). You have your own independent memory and full tool access.\
-             When you learn something important, use memory_store to save it.{}{}{}{}\
-             \n\n## Collaboration Rules\n\
-             - You are an autonomous agent participating in a project pool.\n\
-             - Use pool_chat(action=\"read\") to see what your team members have said and done.\n\
-             - Use pool_chat(action=\"send\") to share your progress, results, and discussions with the team.\n\
-             - When you complete a task, post your output to pool_chat. If another Koi should act next, @mention them — e.g. \"@Reviewer please check my implementation\".\n\
-             - If someone @mentions you with a concrete request or task handoff, use pool_chat to respond — accept, discuss, or decline.\n\
-             - If someone @mentions you only to share a status update, say the project is done, or acknowledge your work — you do NOT need to reply. Avoid sending acknowledgement-only messages like \"noted\", \"great job\", or \"I agree, project is done\". These add noise and can trigger unnecessary reply chains.\n\
-             - You may @mention other Koi in pool_chat when you need their input or want to hand off work that requires their action. Do NOT @mention someone just to inform them the project is done — simply signal @pisci instead.\n\
-             - Only Pisci or the user can directly assign tasks to you. Other Koi can request via @mention.\n\
-             - No fixed role decides when a project is finished. If more work is needed, clearly hand off with @mentions and keep the project moving. If you believe the project may be ready to wrap up, signal @pisci — do not unilaterally declare the project complete, and do not @mention peer Koi to get their agreement.\n\
-             - If you are working in a Git worktree, your [Environment] workspace path IS your worktree directory (e.g. `.../.koi-worktrees/timy-abc12345`). This is NOT the main project directory. Your file changes are isolated to your own branch and do NOT appear in the main project or other Koi's worktrees until Pisci merges them.\n\
-             - **CRITICAL — always use relative paths for file operations.** When writing or editing files, use paths relative to your workspace root (e.g. `src/auth/auth.service.ts`), NOT absolute paths like `C:\\Users\\...\\exam-system\\src\\auth\\auth.service.ts`. Using absolute paths to the main project directory will bypass your worktree and corrupt the shared codebase.\n\
-             - The system automatically commits your changes when you finish — you do NOT need to run `git add` or `git commit` yourself.\n\
-             - Your branch is named `koi/<your-name>-<short-id>`. **Branch integration is Pisci's responsibility.** When you finish coding work, explicitly signal in pool_chat: \"@pisci My work on [feature] is complete. Branch `koi/<your-name>-<short-id>` is ready to merge into master.\"\n\
-             - If your task depends on code that another Koi wrote, ask them in pool_chat which branch their work is on, so Pisci can merge it first before you proceed.\n\
-             - Do NOT use `git merge`, `git rebase`, or `git push` yourself — branch integration is coordinated by Pisci to avoid conflicts.\n\
-             - To see what other Koi are working on or have completed, use pool_org(action=\"get_todos\", pool_id=\"...\") or pool_chat(action=\"read\").\n\
-             - Focus on your assigned scope. Do not modify files outside the directories relevant to your task.\n\
-             \n\n## Task Lifecycle\n\
-             - Whenever you receive real work — whether assigned by Pisci, handed off by another Koi via @mention, or self-identified — create a todo for it FIRST: pool_org(action=\"create_todo\", pool_id=\"...\", title=\"...\", description=\"...\"). Then claim it: pool_org(action=\"claim_todo\", todo_id=\"...\"). This keeps the kanban board accurate and your work visible.\n\
-             - If you are @mentioned with only a status update, acknowledgement, or notification that the project is done — no new work is implied — you do NOT need to create a todo.\n\
-             - Mark a task complete ONLY when the actual deliverable exists and is verifiable: code is written and tested, a file is created, a review is posted, etc. Do NOT mark done just because you wrote a plan, had a discussion, or described what should be done.\n\
-             - When you finish a task, mark it complete: pool_org(action=\"complete_todo\", todo_id=\"...\", summary=\"<what you accomplished>\"). The summary is REQUIRED — describe concisely what was done (e.g. \"Implemented auth module in src/auth/, 3 files created, all tests pass\"). This summary becomes the visible result in the pool chat. Always do this — leaving tasks unmarked pollutes the kanban board.\n\
-             - Before marking done, ask yourself: \"Could another agent pick up the project right now and find the actual output of this task?\" If no, the task is not done.\n\
-             - If you realize a task is no longer needed, cancel your own: pool_org(action=\"cancel_todo\", todo_id=\"...\", reason=\"...\").\n\
-             - You can ONLY complete or cancel your own tasks. To request cancellation of another agent's task, @pisci in pool_chat and explain why.\n\
-             - If your task is blocked, you MUST update its status immediately — do NOT keep retrying indefinitely. \
-               A task is blocked when: \
-               (a) it depends on output from another agent that has not arrived yet, \
-               (b) you lack the permissions, credentials, or access needed to proceed, \
-               (c) you have tried at least twice and hit an unresolvable obstacle, \
-               (d) you are waiting for a decision that only Pisci or the user can make. \
-               Call pool_org(action=\"update_todo_status\", todo_id=\"...\", status=\"blocked\"), \
-               then immediately post to pool_chat @pisci with a one-line reason. Do NOT mark it done.\n\
-             - Use pool_org(action=\"get_todos\", pool_id=\"...\") to see the current task board before starting work.\n\
-             - In significant pool_chat updates, prefer including a structured status signal so Pisci can reason about project state: `[ProjectStatus] follow_up_needed`, `[ProjectStatus] waiting`, or `[ProjectStatus] ready_for_pisci_review`.\n\
-             - Use `[ProjectStatus] follow_up_needed` when another agent must continue the work. @mention the next agent or @pisci. Peer auto-activation relies on this explicit signal; a plain conversational `@mention` without the status marker may be treated as discussion rather than a task handoff.\n\
-             - If the task, pool context, or latest handoff explicitly names the next actor (for example, \"then hand off to @Reviewer\"), that handoff is part of the task. Do NOT stop after `complete_todo` alone — you must also post `[ProjectStatus] follow_up_needed` and @mention that actor unless you are blocked or the project is actually ready for Pisci review.\n\
-             - Use `[ProjectStatus] ready_for_pisci_review` ONLY AFTER you have called complete_todo for your task. \
-               Never send this signal while your todo is still in_progress. \
-               Required sequence: complete_todo first → then post [ProjectStatus] ready_for_pisci_review @pisci in pool_chat.\n\
-             \n\n## Context And Tool Selection\n\
-             - The task itself and the latest relevant pool_chat context are your primary working context. Start from them before reaching for broader tools.\n\
-             - Use external context sources only to close a specific gap in the current deliverable. Before calling a tool like `file_list`, `file_search`, `file_read`, `web_search`, or `browser`, know the exact missing fact, artifact, or dependency you are trying to obtain.\n\
-             - If the task is mainly a discussion, analysis, handoff, review, specification, or status update, prefer producing the answer directly from the task and pool context. Do not browse the workspace, `kb/`, or the web just to feel more thorough.\n\
-             - If the task explicitly mentions files, code, prior reports, or project artifacts, use file tools purposefully and stay close to the referenced paths. If it does not, avoid broad workspace exploration.\n\
-             - If you cannot name the exact file, path, or artifact you need, that usually means you should NOT call file tools yet. Ask for the missing artifact, use pool_chat/pool_org first, or continue from the available pool context.\n\
-             - Never invent generic paths such as `C:\\workspace\\...`, placeholder filenames, or guessed project locations. Use only paths that come from the task, the environment, prior tool output, or the pool context.\n\
-             - If the task depends on external facts, search only until the answer is grounded enough to proceed. Then synthesize, note uncertainty, and move the project forward instead of continuing to gather marginal context.\n\
-             - Do not narrate intended future actions as your result. If you decide a tool call is needed, call it in the same turn. Do not stop with messages like \"I will search/check this next\" or \"let me inspect that first\".\n\
-             - If you cannot finish because you still need evidence, a teammate's output, or a decision, update the todo to `blocked` or send a waiting/follow-up status. Do not present unfinished intent as a completed result.\n\
-             \n\n## Knowledge Base (kb/)\n\
-             - The workspace contains a shared `kb/` directory for accumulated project knowledge. Consult it when prior project memory is likely to matter: existing reports, architecture notes, prior decisions, recurring bugs, or relevant research artifacts. If the current task is self-contained and the needed context is already in the conversation, do not browse `kb/` just as a ritual.\n\
-             - When you discover something worth preserving — architecture decisions, API specs, tricky bugs, lessons learned, useful data — write it to `kb/`. Use subdirectories to organize: `kb/decisions/`, `kb/architecture/`, `kb/api/`, `kb/bugs/`, `kb/research/`.\n\
-             - Format: use `.md` for human-readable notes and specs; use `.jsonl` for structured records (one JSON object per line, append-only). Name files descriptively, e.g. `kb/decisions/2024-auth-strategy.md` or `kb/bugs/known-issues.jsonl`.\n\
-             - For `.jsonl` entries, always include `timestamp`, `author` (your name), and a `summary` field so entries are self-describing.\n\
-             - The `kb/` directory is shared across all agents and persists across sessions — treat it as institutional memory.\n\
-             \n\n## Long-Output Rule\n\
-             When your result, report, or deliverable is longer than ~500 words, do NOT paste it all into pool_chat or return it as a raw message. Instead:\n\
-             1. Write the full content to a file: use `kb/reports/<YYYY-MM-DD>-<topic>.md` for general reports, or the appropriate project subdirectory for code/specs.\n\
-             2. In pool_chat, post only a brief summary (3–5 sentences) and the exact file path so teammates can read it.\n\
-                Example: \"Full analysis written to `kb/reports/2024-03-auth-review.md`. Summary: Found 3 critical issues in the auth module...\"\n\
-             3. When delegating to another Koi via call_koi, pass the file path in the task description instead of the full content — the receiving Koi will read the file directly.\n\
-             This rule prevents message truncation and keeps pool_chat readable.\
-             \n             \n## Skills\
-             \nYou have access to a skills system. Skills are task-specific instructions that guide specialised workflows (e.g. code review, data analysis, deployment).\
-             \nThe task goal comes first. Before using any skill, identify the concrete objective, required deliverable, and current constraints from the task and environment.\
-             \nUse `skill_list` when a skill is likely to materially help with that objective, when the task maps to a known workflow, or when the task is underspecified and a skill may provide the missing procedure.\
-             \nIf a matching skill is found, use `file_read` to load its SKILL.md and follow it as a method in service of the task goal.\
-             \nDo not let skill discovery replace execution of the actual task. If no skill clearly improves the path, proceed with your own judgment.\
-             \nWhen the user or parent task does not provide a clear goal, an appropriate skill may define the initial workflow, but you must still steer it toward a concrete deliverable.\
-             \n\n## Sub-Task Delegation (call_fish)\n\
-             You have access to specialized Fish sub-agents via the `call_fish` tool. Fish agents are **stateless, ephemeral workers** — each call starts fresh with no memory of previous calls.\n\
-             \n\
-             **When to use call_fish:**\n\
-             - The task involves many intermediate steps whose details are NOT relevant to the final answer (e.g. scanning hundreds of files, batch processing, data collection)\n\
-             - The task is self-contained and can be described in a single instruction\n\
-             - You want to keep your own context clean — Fish results are summarized, so intermediate tool calls do NOT pollute your conversation history\n\
-             \n\
-             **When NOT to use call_fish:**\n\
-             - The task requires judgment, iteration, or back-and-forth that only you can provide\n\
-             - No Fish is available for the task (check first with `call_fish(action=\"list\")`)\n\
-             - The task is simple enough that one or two tool calls will suffice\n\
-             \n\
-             **Best practices:**\n\
-             1. First call `call_fish(action=\"list\")` to see which Fish are available\n\
-             2. Write a clear, complete task description — include all necessary context since the Fish has no access to your conversation history\n\
-             3. The Fish returns only its final result — all intermediate reasoning is discarded, saving your context budget",
-            koi_def.system_prompt, koi_def.name, koi_def.icon,
-            memory_context, org_spec_ctx, pool_chat_ctx, assignment_ctx
+        let system_prompt = build_koi_task_system_prompt(
+            &koi_def.system_prompt,
+            &koi_def.name,
+            &koi_def.icon,
+            &continuity_context,
+            &memory_context,
+            &org_spec_ctx,
+            &pool_chat_ctx,
+            &assignment_ctx,
+        );
+        tracing::info!(
+            "koi_context_slices koi={} pool={} history_mode={:?} memory_mode={:?} event_digest_mode={:?} continuity_chars={} memory_chars={} pool_chars={} assignment_chars={} system_prompt_chars={}",
+            koi_id,
+            pool_session_id.as_deref().unwrap_or("default"),
+            scene_policy.history_slice_mode(),
+            scene_policy.memory_slice_mode(),
+            scene_policy.event_digest_mode(),
+            continuity_context.chars().count(),
+            memory_context.chars().count(),
+            pool_chat_ctx.chars().count(),
+            assignment_ctx.chars().count(),
+            system_prompt.chars().count(),
         );
 
         let llm_messages = vec![LlmMessage {
@@ -404,12 +474,15 @@ impl CallKoiTool {
             base_url,
             workspace_root,
             max_tokens,
+            context_window,
             policy_mode,
             tool_rate_limit_per_minute,
             tool_settings,
             builtin_tool_enabled,
             allow_outside_workspace,
             vision_enabled,
+            auto_compact_input_tokens_threshold,
+            loop_max_iterations,
         ) = {
             let settings = state.settings.lock().await;
             // Resolve per-Koi LLM provider: if the koi has a provider_id and it exists in settings, use it
@@ -465,12 +538,21 @@ impl CallKoiTool {
                 base_url,
                 settings.workspace_root.clone(),
                 max_tokens,
+                settings.context_window,
                 settings.policy_mode.clone(),
                 settings.tool_rate_limit_per_minute,
                 Arc::new(ToolSettings::from_settings(&settings)),
                 settings.builtin_tool_enabled.clone(),
                 koi_allow_outside,
                 settings.vision_enabled,
+                settings.auto_compact_input_tokens_threshold,
+                if koi_def.max_iterations > 0 {
+                    Some(koi_def.max_iterations)
+                } else if settings.max_iterations > 0 {
+                    Some(settings.max_iterations)
+                } else {
+                    None
+                },
             )
         };
 
@@ -485,14 +567,19 @@ impl CallKoiTool {
 
         // Mark Koi as busy only after we know execution can actually start.
         if !self.managed_externally {
-            {
-                let db = state.db.lock().await;
-                let _ = db.update_koi_status(&koi_id, "busy");
+            let acquired = crate::koi::runtime::try_acquire_managed_run_slot(
+                &state.app_handle,
+                &state.db,
+                &koi_id,
+                pool_session_id.as_deref(),
+            )
+            .await;
+            if !acquired {
+                return Ok(ToolResult::ok(format!(
+                    "Koi '{}' is already active for this pool. Let the existing run finish before delegating more work.",
+                    koi_def.name
+                )));
             }
-            let _ = state.app_handle.emit(
-                "koi_status_changed",
-                json!({ "id": koi_id, "status": "busy" }),
-            );
         }
 
         // Record task assignment in Chat Pool
@@ -539,14 +626,9 @@ impl CallKoiTool {
             .map(|d| d.join("user-tools"))
             .ok();
         let app_data_dir = self.app.path().app_data_dir().ok();
-        // Load skill_loader so Koi can use skill_search (same as Pisci)
-        let skill_loader = app_data_dir.as_ref().map(|d| {
-            let loader = crate::skills::loader::SkillLoader::new(d.join("skills"));
-            let mut l = loader;
-            let _ = l.load_all();
-            std::sync::Arc::new(tokio::sync::Mutex::new(l))
-        });
-        let mut registry_tools = crate::tools::build_registry(
+        let skill_loader = load_skill_loader(&self.app);
+        let mut registry_tools = build_registry_for_scene(
+            SceneKind::KoiTask,
             state.browser.clone(),
             user_tools_dir.as_deref(),
             Some(state.db.clone()),
@@ -566,6 +648,7 @@ impl CallKoiTool {
                 depth: self.depth + 1,
                 managed_externally: false,
                 notification_rx: std::sync::Mutex::new(None),
+                await_completion: false,
             }));
         }
 
@@ -592,7 +675,7 @@ impl CallKoiTool {
             system_prompt,
             model,
             max_tokens,
-            context_window: 0,
+            context_window,
             fallback_models: vec![],
             db: Some(state.db.clone()),
             app_handle: Some(state.app_handle.clone()),
@@ -608,7 +691,8 @@ impl CallKoiTool {
                 .unwrap()
                 .take()
                 .map(|rx| tokio::sync::Mutex::new(rx)),
-            auto_compact_input_tokens_threshold: 100_000,
+            auto_compact_input_tokens_threshold: scene_policy
+                .effective_auto_compact_threshold(auto_compact_input_tokens_threshold),
         };
 
         let koi_ctx = ToolContext {
@@ -621,12 +705,8 @@ impl CallKoiTool {
             workspace_root: std::path::PathBuf::from(&workspace_root),
             bypass_permissions: false,
             settings: tool_settings,
-            // 0 means "use system default (30)"; non-zero values are user-configured
-            max_iterations: Some(if koi_def.max_iterations > 0 {
-                koi_def.max_iterations
-            } else {
-                30
-            }),
+            // Koi-specific max_iterations overrides the user-configurable system default.
+            max_iterations: loop_max_iterations,
             memory_owner_id: koi_id.clone(),
             pool_session_id: pool_session_id.clone(),
             cancel: cancel.clone(),
@@ -689,7 +769,11 @@ impl CallKoiTool {
 
         // Spawn Koi in the background so Pisci is not blocked.
         // The user can stop Pisci's conversation without interrupting the Koi.
+        // Exception: when `await_completion` is true, the caller explicitly
+        // wants to synchronously observe the agent's outcome (e.g., the
+        // soft-fence retry path in KoiRuntime).
         let managed_externally = self.managed_externally;
+        let await_completion = self.await_completion;
         let app_bg = state.app_handle.clone();
         let db_bg = state.db.clone();
         let cancel_flags_bg = state.cancel_flags.clone();
@@ -700,7 +784,7 @@ impl CallKoiTool {
         let cancel_key_bg = cancel_key.clone();
         let task_bg = task.clone();
 
-        tokio::spawn(async move {
+        let run_future = async move {
             let run_result = match tokio::time::timeout(
                 std::time::Duration::from_secs(600),
                 agent.run(llm_messages, event_tx, cancel, koi_ctx),
@@ -724,14 +808,13 @@ impl CallKoiTool {
 
             // Mark Koi as idle
             if !managed_externally {
-                {
-                    let db = db_bg.lock().await;
-                    let _ = db.update_koi_status(&koi_id_bg, "idle");
-                }
-                let _ = app_bg.emit(
-                    "koi_status_changed",
-                    json!({ "id": koi_id_bg, "status": "idle" }),
-                );
+                crate::koi::runtime::release_managed_run_slot(
+                    &app_bg,
+                    &db_bg,
+                    &koi_id_bg,
+                    pool_session_id_bg.as_deref(),
+                )
+                .await;
             }
 
             match run_result {
@@ -756,8 +839,31 @@ impl CallKoiTool {
                         llm_reply
                     };
 
-                    if !managed_externally && !reply.trim().is_empty() {
-                        if let Some(ref pool_sid) = pool_session_id_bg {
+                    {
+                        let db = db_bg.lock().await;
+                        persist_koi_continuity_state(
+                            &db,
+                            &koi_id_bg,
+                            pool_session_id_bg.as_deref(),
+                            &task_bg,
+                            &reply,
+                            true,
+                        );
+                    }
+
+                    if let Some(ref pool_sid) = pool_session_id_bg {
+                        if managed_externally {
+                            crate::koi::runtime::reconcile_managed_pool_completion(
+                                &app_bg,
+                                &db_bg,
+                                pool_sid,
+                                &koi_id_bg,
+                                &koi_name_bg,
+                                &reply,
+                                true,
+                            )
+                            .await;
+                        } else if !reply.trim().is_empty() {
                             let db = db_bg.lock().await;
                             let already_recorded = db
                                 .get_latest_result_message(pool_sid, &koi_id_bg)
@@ -767,25 +873,40 @@ impl CallKoiTool {
                                 .unwrap_or(false);
                             if !already_recorded {
                                 let _ = db.insert_pool_message(
-                                    pool_sid,
-                                    &koi_id_bg,
-                                    &reply,
-                                    "result",
-                                    "{}",
+                                    pool_sid, &koi_id_bg, &reply, "result", "{}",
                                 );
                             }
                         }
                     }
 
-                    tracing::info!(
-                        "call_koi background: Koi '{}' completed task",
-                        koi_name_bg
-                    );
+                    tracing::info!("call_koi background: Koi '{}' completed task", koi_name_bg);
                 }
                 Err(e) => {
                     tracing::warn!("call_koi background: Koi '{}' failed: {}", koi_name_bg, e);
-                    if !managed_externally {
-                        if let Some(ref pool_sid) = pool_session_id_bg {
+                    {
+                        let db = db_bg.lock().await;
+                        persist_koi_continuity_state(
+                            &db,
+                            &koi_id_bg,
+                            pool_session_id_bg.as_deref(),
+                            &task_bg,
+                            &e.to_string(),
+                            false,
+                        );
+                    }
+                    if let Some(ref pool_sid) = pool_session_id_bg {
+                        if managed_externally {
+                            crate::koi::runtime::reconcile_managed_pool_completion(
+                                &app_bg,
+                                &db_bg,
+                                pool_sid,
+                                &koi_id_bg,
+                                &koi_name_bg,
+                                &e.to_string(),
+                                false,
+                            )
+                            .await;
+                        } else {
                             let db = db_bg.lock().await;
                             let _ = db.insert_pool_message(
                                 pool_sid,
@@ -798,18 +919,29 @@ impl CallKoiTool {
                     }
                 }
             }
-        });
-
-        // Return immediately — Koi is running in the background.
-        // Results will appear in the pool chat when the Koi completes.
-        let pool_hint = if pool_session_id.is_some() {
-            " Results will appear in the pool chat when done."
-        } else {
-            ""
         };
-        Ok(ToolResult::ok(format!(
-            "Koi '{}' {} has been assigned the task and is now working in the background.{}\n\nTask: {}",
-            koi_def.name, koi_def.icon, pool_hint, task
-        )))
+
+        if await_completion {
+            // Inline: caller (typically the soft-fence retry) wants to await
+            // the agent's full completion AND its reconcile before returning.
+            run_future.await;
+            Ok(ToolResult::ok(format!(
+                "Koi '{}' {} has completed the task synchronously.\n\nTask: {}",
+                koi_def.name, koi_def.icon, task
+            )))
+        } else {
+            tokio::spawn(run_future);
+            // Return immediately — Koi is running in the background.
+            // Results will appear in the pool chat when the Koi completes.
+            let pool_hint = if pool_session_id.is_some() {
+                " Results will appear in the pool chat when done."
+            } else {
+                ""
+            };
+            Ok(ToolResult::ok(format!(
+                "Koi '{}' {} has been assigned the task and is now working in the background.{}\n\nTask: {}",
+                koi_def.name, koi_def.icon, pool_hint, task
+            )))
+        }
     }
 }

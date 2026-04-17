@@ -49,6 +49,7 @@ struct TrialKoiSpec {
     color: String,
     system_prompt: String,
     description: String,
+    /// 0 means inherit the user-configurable system default from settings.
     max_iterations: u32,
     step_name: String,
     task_label: String,
@@ -87,11 +88,11 @@ fn default_trial_scenario() -> TrialScenario {
              3) to_title_case(s) - converts a string to title case. \
              Write a clear, concise specification with function signatures, \
              parameter descriptions, expected behavior, and edge cases. \
-             Keep it practical. When you finish, share the spec in pool_chat, include `[ProjectStatus] follow_up_needed`, and @Coder to hand off implementation."
+             Keep it practical. When you finish, share the spec in pool_chat, include `[ProjectStatus] follow_up_needed`, and hand off implementation to the coding specialist."
             .into(),
         workflow: vec![
             "Pisci assigns the initial design task to Architect.".into(),
-            "Architect produces a specification, then hands off to @Coder.".into(),
+            "Architect produces a specification, then hands off implementation to Coder.".into(),
             "Coder implements based on the specification, then hands off to @Reviewer.".into(),
             "Reviewer requests follow-up work or signals `[ProjectStatus] ready_for_pisci_review` for Pisci to assess."
                 .into(),
@@ -101,7 +102,7 @@ fn default_trial_scenario() -> TrialScenario {
             "Communication flows through the pool chat.".into(),
             "If more work is needed, agents clearly signal `[ProjectStatus] follow_up_needed`."
                 .into(),
-            "When the project may be ready to conclude, an agent signals `[ProjectStatus] ready_for_pisci_review` and Pisci decides whether the trial can end."
+            "When the project may be ready for Pisci review, an agent signals `[ProjectStatus] ready_for_pisci_review` and the trial records that snapshot."
                 .into(),
         ],
         lead: TrialKoiSpec {
@@ -116,7 +117,7 @@ fn default_trial_scenario() -> TrialScenario {
                  Do not decide that the project is finished yourself."
                     .into(),
             description: "Architecture, system design, technical specification".into(),
-            max_iterations: 8,
+            max_iterations: 0,
             step_name: "design_spec".into(),
             task_label: "Design string utility module spec".into(),
         },
@@ -128,11 +129,12 @@ fn default_trial_scenario() -> TrialScenario {
             system_prompt:
                 "You are a software developer collaborating inside a multi-agent project. Given a specification or concrete handoff, produce a practical implementation summary or implementation-ready output that helps the project advance. \
                  Focus on correctness, actionable detail, and clear handoff notes. \
-                 If review or further work is needed, signal `[ProjectStatus] follow_up_needed` and @mention the next actor. \
-                 If the work may be ready, signal `[ProjectStatus] ready_for_pisci_review` or hand off to the reviewer as appropriate."
+                 When implementation is ready for review, hand off to Reviewer with `[ProjectStatus] follow_up_needed` and an explicit @mention. \
+                 If more work is needed first, signal `[ProjectStatus] follow_up_needed` and @mention the next actor. \
+                 Only use `[ProjectStatus] ready_for_pisci_review` after reviewer-level verification is truly complete."
                     .into(),
             description: "Implementation, coding, development".into(),
-            max_iterations: 8,
+            max_iterations: 0,
             step_name: "implement".into(),
             task_label: "Implement string utility module".into(),
         },
@@ -148,7 +150,7 @@ fn default_trial_scenario() -> TrialScenario {
                  If the work looks acceptable, signal `[ProjectStatus] ready_for_pisci_review` and @mention Pisci rather than declaring the project finished yourself."
                     .into(),
             description: "Review, quality assurance, feedback".into(),
-            max_iterations: 8,
+            max_iterations: 0,
             step_name: "review".into(),
             task_label: "Review the implementation".into(),
         },
@@ -157,6 +159,8 @@ fn default_trial_scenario() -> TrialScenario {
         quiet_polls_needed: 2,
     }
 }
+
+pub use pisci_core::trial::effective_trial_koi_status;
 
 fn load_trial_scenario() -> Result<TrialScenario, String> {
     match std::env::var("PISCI_COLLAB_TRIAL_SPEC_JSON") {
@@ -318,6 +322,14 @@ fn event_task_label(event_type: Option<&str>) -> &'static str {
         Some("task_progress") => "Reported task progress",
         _ => "Pool event observed",
     }
+}
+
+fn trial_koi_session_id(koi_id: &str, pool_id: &str) -> String {
+    format!("koi_{}_{}", koi_id, pool_id)
+}
+
+fn trial_koi_runtime_active(run_slot_active: bool, checkpoint_running: bool) -> bool {
+    run_slot_active || checkpoint_running
 }
 
 pub(crate) fn assess_trial_project_state(
@@ -556,14 +568,18 @@ pub async fn run_collaboration_trial_with_state(
     let poll_interval = std::time::Duration::from_secs(scenario.poll_interval_secs);
     let mut last_phase_detail = String::new();
     let mut seen_observation_event_ids: HashSet<i64> = HashSet::new();
+    let mut last_message_id = 0i64;
+    let mut quiet_polls = 0u32;
     let mut final_assessment = TrialAssessment {
         decision: TrialDecision::Continue,
         active_todo_count: 0,
         blocked_todo_count: 0,
         needs_review_count: 0,
+        task_failed_count: 0,
         follow_up_signal_count: 0,
         ready_signal_count: 0,
         explicit_pisci_handoff_count: 0,
+        attention_reasons: vec![],
         summary: "No assessment yet.".into(),
     };
 
@@ -593,6 +609,21 @@ pub async fn run_collaboration_trial_with_state(
         let lead_koi = db.get_koi(&lead.id).ok().flatten();
         let second_koi = db.get_koi(&second.id).ok().flatten();
         let third_koi = db.get_koi(&third.id).ok().flatten();
+        let lead_checkpoint_running = db
+            .load_checkpoint(&trial_koi_session_id(&lead.id, &pool.id))
+            .ok()
+            .flatten()
+            .is_some();
+        let second_checkpoint_running = db
+            .load_checkpoint(&trial_koi_session_id(&second.id, &pool.id))
+            .ok()
+            .flatten()
+            .is_some();
+        let third_checkpoint_running = db
+            .load_checkpoint(&trial_koi_session_id(&third.id, &pool.id))
+            .ok()
+            .flatten()
+            .is_some();
         drop(db);
 
         let lead_status = lead_koi
@@ -607,16 +638,43 @@ pub async fn run_collaboration_trial_with_state(
             .as_ref()
             .map(|k| k.status.as_str())
             .unwrap_or("unknown");
+        let lead_run_active =
+            crate::koi::runtime::is_koi_run_slot_active(&lead.id, Some(&pool.id)).await;
+        let second_run_active =
+            crate::koi::runtime::is_koi_run_slot_active(&second.id, Some(&pool.id)).await;
+        let third_run_active =
+            crate::koi::runtime::is_koi_run_slot_active(&third.id, Some(&pool.id)).await;
+        let lead_effective_status = effective_trial_koi_status(
+            lead_status,
+            trial_koi_runtime_active(lead_run_active, lead_checkpoint_running),
+        );
+        let second_effective_status = effective_trial_koi_status(
+            second_status,
+            trial_koi_runtime_active(second_run_active, second_checkpoint_running),
+        );
+        let third_effective_status = effective_trial_koi_status(
+            third_status,
+            trial_koi_runtime_active(third_run_active, third_checkpoint_running),
+        );
 
         final_assessment = assess_trial_project_state(&msgs, &pool_todos, &status.koi_ids);
+        let coordination_signal_count = msgs
+            .iter()
+            .filter(|msg| msg.event_type.as_deref() == Some("coordination_signal"))
+            .count();
         let phase_detail = format!(
-            "{}: {} | {}: {} | {}: {} | active_todos: {} | blocked: {} | follow_up: {} | ready: {} | handoff_to_pisci: {}",
+            "{}: {} | {}: {} | {}: {} | checkpoints: [{}, {}, {}] | pool_messages: {} | coordination_signals: {} | active_todos: {} | blocked: {} | follow_up: {} | ready: {} | handoff_to_pisci: {}",
             lead.name,
-            lead_status,
+            lead_effective_status,
             second.name,
-            second_status,
+            second_effective_status,
             third.name,
-            third_status,
+            third_effective_status,
+            lead_checkpoint_running,
+            second_checkpoint_running,
+            third_checkpoint_running,
+            msgs.len(),
+            coordination_signal_count,
             final_assessment.active_todo_count,
             final_assessment.blocked_todo_count,
             final_assessment.follow_up_signal_count,
@@ -626,6 +684,13 @@ pub async fn run_collaboration_trial_with_state(
         if phase_detail != last_phase_detail {
             emit("chain", &phase_detail);
             last_phase_detail = phase_detail;
+        }
+        let latest_message_id = msgs.last().map(|msg| msg.id).unwrap_or_default();
+        if latest_message_id > last_message_id {
+            last_message_id = latest_message_id;
+            quiet_polls = 0;
+        } else {
+            quiet_polls = quiet_polls.saturating_add(1);
         }
 
         for msg in msgs.iter().filter(|m| {
@@ -673,13 +738,100 @@ pub async fn run_collaboration_trial_with_state(
             );
         }
 
-        let all_idle = lead_status == "idle" && second_status == "idle" && third_status == "idle";
-        if all_idle && final_assessment.decision == TrialDecision::ReadyForPisciReview {
+        let trial_quiet = quiet_polls >= scenario.quiet_polls_needed;
+        if trial_quiet && final_assessment.decision == TrialDecision::ReadyForPisciReview {
             status.phase = "pisci_review".into();
             emit("pisci_review", &final_assessment.summary);
             break (
                 "ready_for_pisci_review".to_string(),
                 final_assessment.summary.clone(),
+            );
+        }
+        if trial_quiet && final_assessment.decision == TrialDecision::EscalateToHuman {
+            push_trial_observation(
+                &mut status,
+                "escalate_to_human",
+                "system",
+                "Record human-escalation snapshot",
+                false,
+                if final_assessment.attention_reasons.is_empty() {
+                    final_assessment.summary.clone()
+                } else {
+                    format!(
+                        "{} | attention: {}",
+                        final_assessment.summary,
+                        final_assessment.attention_reasons.join("; ")
+                    )
+                },
+                chain_start.elapsed().as_millis() as u64,
+            );
+            break (
+                "escalate_to_human".to_string(),
+                format!(
+                    "The trial reached a state that should be stopped and handed to the user for a human decision. {}",
+                    final_assessment.summary
+                ),
+            );
+        }
+        let unfinished_work_remaining =
+            final_assessment.active_todo_count > 0 || final_assessment.blocked_todo_count > 0;
+        let all_idle = lead_effective_status == "idle"
+            && second_effective_status == "idle"
+            && third_effective_status == "idle";
+        if all_idle
+            && trial_quiet
+            && !unfinished_work_remaining
+            && final_assessment.decision == TrialDecision::SupervisorDecisionRequired
+        {
+            push_trial_observation(
+                &mut status,
+                "supervisor_decision_required",
+                "system",
+                "Record supervisor-decision snapshot",
+                false,
+                if final_assessment.attention_reasons.is_empty() {
+                    final_assessment.summary.clone()
+                } else {
+                    format!(
+                        "{} | attention: {}",
+                        final_assessment.summary,
+                        final_assessment.attention_reasons.join("; ")
+                    )
+                },
+                chain_start.elapsed().as_millis() as u64,
+            );
+            break (
+                "supervisor_decision_required".to_string(),
+                format!(
+                    "Worker-visible work reached a locally terminal snapshot, but the next global decision belongs to Pisci. {}",
+                    final_assessment.summary
+                ),
+            );
+        }
+        if all_idle && trial_quiet && !unfinished_work_remaining {
+            push_trial_observation(
+                &mut status,
+                "idle_snapshot",
+                "system",
+                "Record idle trial snapshot",
+                false,
+                if final_assessment.attention_reasons.is_empty() {
+                    final_assessment.summary.clone()
+                } else {
+                    format!(
+                        "{} | attention: {}",
+                        final_assessment.summary,
+                        final_assessment.attention_reasons.join("; ")
+                    )
+                },
+                chain_start.elapsed().as_millis() as u64,
+            );
+            break (
+                "idle_quiet_snapshot".to_string(),
+                format!(
+                    "All trial agents became idle without reaching a final Pisci-review handoff. {}",
+                    final_assessment.summary
+                ),
             );
         }
     };
@@ -688,7 +840,7 @@ pub async fn run_collaboration_trial_with_state(
         &mut status,
         "pisci_assess",
         "Pisci",
-        "Assess whether the project is ready to conclude",
+        "Observe whether the project reached a ready-for-review snapshot",
         final_assessment.decision == TrialDecision::ReadyForPisciReview,
         final_assessment.summary.clone(),
         chain_start.elapsed().as_millis() as u64,
@@ -719,15 +871,28 @@ pub async fn run_collaboration_trial_with_state(
             .collect();
         let total_ms: u64 = status.steps.iter().map(|s| s.duration_ms).sum();
         let summary = format!(
-            "{} **Collaboration Trial Snapshot**\n\nStop reason: `{}`\n{}\n\nObserved events:\n{}\n\nCurrent assessment: {}\n\nRecoverable todos: active={}, blocked={}, needs_review={}\n\nTotal time: {}ms",
+            "{} **Collaboration Trial Snapshot**\n\nStop reason: `{}`\n{}\n\nObserved events:\n{}\n\nCurrent assessment: {}\nAttention reasons: {}\n\nRecoverable todos: active={}, blocked={}, needs_review={}\nContext-quality metrics: observations={}, coordination_events={}, ready_signals={}, follow_up_signals={}, task_failed_events={}\n\nTotal time: {}ms",
             emoji,
             stop_reason,
             stop_detail,
             observation_lines.join("\n"),
             final_assessment.summary,
+            if final_assessment.attention_reasons.is_empty() {
+                "(none)".to_string()
+            } else {
+                final_assessment.attention_reasons.join("; ")
+            },
             final_assessment.active_todo_count,
             final_assessment.blocked_todo_count,
             final_assessment.needs_review_count,
+            status.steps.len(),
+            status.steps
+                .iter()
+                .filter(|s| s.name == "coordination_signal")
+                .count(),
+            final_assessment.ready_signal_count,
+            final_assessment.follow_up_signal_count,
+            final_assessment.task_failed_count,
             total_ms,
         );
         let _ = db.insert_pool_message(&pool.id, "pisci", &summary, "text", "{}");
@@ -736,7 +901,7 @@ pub async fn run_collaboration_trial_with_state(
     emit(
         "done",
         if status.completed {
-            "Project reached a ready-for-review snapshot."
+            "Trial observed a ready-for-review snapshot."
         } else {
             "Trial stopped at a recoverable snapshot. Review the pool for current state."
         },
@@ -750,13 +915,10 @@ pub async fn run_collaboration_trial_with_state(
     );
 
     // Clean up trial artifacts unless the developer asked to keep them for inspection.
-    if keep_trial_artifacts() {
-        {
-            let db = state.db.lock().await;
-            let _ = db.update_pool_session_status(&pool.id, "paused");
-        }
+    let keep_artifacts = keep_trial_artifacts();
+    if keep_artifacts {
         tracing::info!(
-            "[Trial] Keeping artifacts for inspection: pool={} paused; todos remain available",
+            "[Trial] Keeping artifacts for inspection: pool={} remains active; todos remain available",
             pool.id
         );
     } else {
@@ -769,11 +931,38 @@ pub async fn run_collaboration_trial_with_state(
         tracing::info!("[Trial] Deleted trial pool {}", pool.id);
     }
 
-    // Reset trial Koi statuses back to idle
-    for koi_id in &status.koi_ids {
-        let db = state.db.lock().await;
-        let _ = db.update_koi_status(koi_id, "idle");
+    // Only force-reset trial Koi statuses when the trial artifacts are torn down.
+    // If artifacts are kept, background Koi runs may still be progressing naturally.
+    if !keep_artifacts {
+        for koi_id in &status.koi_ids {
+            let db = state.db.lock().await;
+            let _ = db.update_koi_status(koi_id, "idle");
+        }
     }
 
     Ok(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{effective_trial_koi_status, trial_koi_runtime_active};
+
+    #[test]
+    fn active_run_slot_overrides_idle_db_status() {
+        assert_eq!(effective_trial_koi_status("idle", true), "busy");
+    }
+
+    #[test]
+    fn db_status_is_preserved_without_active_run_slot() {
+        assert_eq!(effective_trial_koi_status("idle", false), "idle");
+        assert_eq!(effective_trial_koi_status("busy", false), "busy");
+    }
+
+    #[test]
+    fn checkpoint_running_counts_as_trial_runtime_activity() {
+        assert!(trial_koi_runtime_active(false, true));
+        assert!(trial_koi_runtime_active(true, false));
+        assert!(trial_koi_runtime_active(true, true));
+        assert!(!trial_koi_runtime_active(false, false));
+    }
 }

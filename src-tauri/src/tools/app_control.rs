@@ -110,6 +110,11 @@ impl Tool for AppControlTool {
          \n- 'ui_enter_minimal_mode': Hide main window and show the floating overlay.\
          \n- 'ui_exit_minimal_mode': Exit minimal mode and restore the main window.\
          \n- 'window_move': Move the main or overlay window. Required: window_target (main|overlay). Use x+y or position_preset=bottom_right.\
+         \n- 'notify_user': Show a toast notification in the main UI window to surface a situation to the human user.\
+         \n  Required: message. Optional: title (default 'Pisci'), level (info|warning|error|critical, default 'info'),\
+         \n  pool_id (to link the toast to a specific pool), duration_ms (0 = persistent until dismissed).\
+         \n  Use sparingly. Typical cases: human escalation after unrecoverable failures, Pisci needs an explicit user decision,\
+         \n  or a long-running project reached a milestone the user should know about. Do NOT use for chatty progress updates.\
          \
          \n\nACTIONS — Built-in Tools:\
          \n- 'builtin_tool_list': List built-in tools and whether each one is enabled.\
@@ -152,6 +157,7 @@ impl Tool for AppControlTool {
                         "runtime_check", "runtime_set_path",
                         "ssh_list", "ssh_upsert", "ssh_delete",
                         "ui_set_theme", "ui_set_theme_border", "ui_enter_minimal_mode", "ui_exit_minimal_mode", "window_move",
+                        "notify_user",
                         "builtin_tool_list", "builtin_tool_toggle",
                         "user_tool_list", "user_tool_config_get", "user_tool_config_set",
                         "skill_list", "skill_search", "skill_install", "skill_toggle", "skill_uninstall",
@@ -250,7 +256,12 @@ impl Tool for AppControlTool {
                 "window_target": { "type": "string", "description": "Window to move: main|overlay" },
                 "x": { "type": "integer", "description": "Absolute screen X for window_move" },
                 "y": { "type": "integer", "description": "Absolute screen Y for window_move" },
-                "position_preset": { "type": "string", "description": "Window position preset, currently supports: bottom_right" }
+                "position_preset": { "type": "string", "description": "Window position preset, currently supports: bottom_right" },
+                "title": { "type": "string", "description": "Toast title for notify_user (default 'Pisci')" },
+                "message": { "type": "string", "description": "Toast body text for notify_user" },
+                "level": { "type": "string", "enum": ["info", "warning", "error", "critical"], "description": "Toast severity for notify_user (default 'info')" },
+                "pool_id": { "type": "string", "description": "Optional pool id to associate a notify_user toast with a specific project" },
+                "duration_ms": { "type": "integer", "description": "Auto-dismiss duration in ms for notify_user. 0 = persistent until the user closes it (use for level=critical)." }
             }
         })
     }
@@ -283,6 +294,7 @@ impl Tool for AppControlTool {
             "ui_enter_minimal_mode" => self.ui_enter_minimal_mode().await,
             "ui_exit_minimal_mode" => self.ui_exit_minimal_mode().await,
             "window_move" => self.window_move(&input).await,
+            "notify_user" => self.notify_user(&input).await,
             "builtin_tool_list" => self.builtin_tool_list().await,
             "builtin_tool_toggle" => self.builtin_tool_toggle(&input).await,
             "user_tool_list" => self.user_tool_list().await,
@@ -298,7 +310,7 @@ impl Tool for AppControlTool {
             "koi_update"      => self.koi_update(&input).await,
             "koi_delete"      => self.koi_delete(&input).await,
             other => Ok(ToolResult::err(format!(
-                "Unknown action '{}'. Valid actions: task_list, task_create, task_update, task_delete, task_run_now, settings_get, settings_set, runtime_check, runtime_set_path, ssh_list, ssh_upsert, ssh_delete, ui_set_theme, ui_set_theme_border, ui_enter_minimal_mode, ui_exit_minimal_mode, window_move, builtin_tool_list, builtin_tool_toggle, user_tool_list, user_tool_config_get, user_tool_config_set, skill_list, skill_search, skill_install, skill_toggle, skill_uninstall, koi_list, koi_create, koi_update, koi_delete",
+                "Unknown action '{}'. Valid actions: task_list, task_create, task_update, task_delete, task_run_now, settings_get, settings_set, runtime_check, runtime_set_path, ssh_list, ssh_upsert, ssh_delete, ui_set_theme, ui_set_theme_border, ui_enter_minimal_mode, ui_exit_minimal_mode, window_move, notify_user, builtin_tool_list, builtin_tool_toggle, user_tool_list, user_tool_config_get, user_tool_config_set, skill_list, skill_search, skill_install, skill_toggle, skill_uninstall, koi_list, koi_create, koi_update, koi_delete",
                 other
             ))),
         }
@@ -1137,6 +1149,90 @@ impl AppControlTool {
         Ok(ToolResult::ok(format!(
             "Moved '{}' window to ({}, {}).",
             target, x, y
+        )))
+    }
+
+    // ── User Notifications ────────────────────────────────────────────────────
+
+    async fn notify_user(&self, input: &Value) -> anyhow::Result<ToolResult> {
+        let message = match input["message"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(m) => m.to_string(),
+            None => {
+                return Ok(ToolResult::err(
+                    "'message' is required for notify_user",
+                ))
+            }
+        };
+        let title = input["title"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Pisci")
+            .to_string();
+        let level = match input["level"].as_str().map(str::trim).unwrap_or("info") {
+            "" | "info" => "info",
+            "warning" | "warn" => "warning",
+            "error" => "error",
+            "critical" => "critical",
+            other => {
+                return Ok(ToolResult::err(format!(
+                    "Invalid level '{}'. Use info|warning|error|critical",
+                    other
+                )))
+            }
+        }
+        .to_string();
+        let pool_id = input["pool_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let default_duration_ms: i64 = match level.as_str() {
+            "critical" => 0,
+            "error" => 12_000,
+            "warning" => 8_000,
+            _ => 5_000,
+        };
+        let duration_ms = input["duration_ms"].as_i64().unwrap_or(default_duration_ms);
+
+        let app = match &self.app_handle {
+            Some(app) => app.clone(),
+            None => {
+                return Ok(ToolResult::err(
+                    "UI notifications are unavailable in this context",
+                ))
+            }
+        };
+
+        let id = format!(
+            "toast_{}_{}",
+            chrono::Utc::now().timestamp_millis(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let payload = json!({
+            "id": id,
+            "title": title,
+            "message": message,
+            "level": level,
+            "pool_id": pool_id,
+            "duration_ms": duration_ms,
+            "source": "pisci",
+            "ts": chrono::Utc::now().timestamp_millis(),
+        });
+
+        app.emit("pisci_toast", payload)
+            .map_err(|e| anyhow::anyhow!("Failed to emit pisci_toast: {}", e))?;
+
+        info!(
+            "notify_user: level={} title={:?} message_len={}",
+            level,
+            title,
+            message.chars().count()
+        );
+
+        Ok(ToolResult::ok(format!(
+            "Toast delivered to main UI (level='{}', duration_ms={}).",
+            level, duration_ms
         )))
     }
 

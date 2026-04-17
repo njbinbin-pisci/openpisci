@@ -130,6 +130,17 @@ impl PolicyMode {
 }
 
 impl PolicyGate {
+    fn normalize_path_for_compare(path: PathBuf) -> PathBuf {
+        #[cfg(target_os = "windows")]
+        {
+            let raw = path.to_string_lossy();
+            if let Some(stripped) = raw.strip_prefix(r"\\?\") {
+                return PathBuf::from(stripped);
+            }
+        }
+        path
+    }
+
     #[allow(dead_code)]
     pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
         Self {
@@ -192,6 +203,8 @@ impl PolicyGate {
             Ok(c) => c,
             Err(_) => self.workspace_root.clone(),
         };
+        let canonical = Self::normalize_path_for_compare(canonical);
+        let ws = Self::normalize_path_for_compare(ws);
 
         if canonical.starts_with(&ws) {
             PolicyDecision::Allow
@@ -458,6 +471,18 @@ mod tests {
             g.check_path("C:\\Windows\\System32\\cmd.exe"),
             PolicyDecision::Deny(_)
         ));
+    }
+
+    #[test]
+    fn allows_relative_path_when_workspace_has_windows_verbatim_prefix() {
+        let cwd = env::current_dir().unwrap();
+        let verbatim = PathBuf::from(format!(r"\\?\{}", cwd.display()));
+        let g = PolicyGate::new(verbatim);
+        assert_eq!(g.check_path("Cargo.toml"), PolicyDecision::Allow);
+        assert_eq!(
+            g.check_path("src/generated/new_file.txt"),
+            PolicyDecision::Allow
+        );
     }
 
     // ── check_command ──────────────────────────────────────────────────────

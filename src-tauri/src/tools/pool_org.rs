@@ -12,6 +12,7 @@
 /// a pool with an org_spec, assign Koi roles, and start execution.
 use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use crate::koi::runtime::KOI_SESSIONS;
+use crate::pisci::project_state::enrich_pool_message_metadata;
 use crate::store::Database;
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -50,11 +51,11 @@ impl Tool for PoolOrgTool {
          - 'get_todos': Read koi_todos associated with a project pool (requires pool_id). \
          - 'create_todo': Create a new todo for yourself (requires pool_id, title; optional description, priority). Use this when you receive real work via @mention or self-identify a task. \
          - 'claim_todo': Claim an existing unclaimed todo (requires todo_id). Marks it in_progress and assigns it to you. \
-         - 'complete_todo': Mark a todo as done (requires todo_id, summary). The summary is a concise description of what was accomplished — it becomes the visible result in the pool chat. Pisci can complete any todo; Koi can only complete their own. \
+         - 'complete_todo': Mark a todo as done (requires todo_id, summary). The summary is a concise description of what was accomplished — it becomes the visible result in the pool chat. Pisci can complete any todo; Koi can only complete their own. Completing a todo does NOT hand off the next step automatically. \
          - 'cancel_todo': Cancel a todo (requires todo_id, optional reason). Pisci can cancel any todo; Koi can only cancel their own — to cancel someone else's, @pisci in pool_chat. \
          - 'resume_todo': Resume a blocked or needs_review todo (requires todo_id). This restarts execution for the existing task from its current project context. Pisci should decide when to use this. \
          - 'replace_todo': Replace an existing todo with a new owner/task (requires todo_id, new_owner_id, task, reason). This cancels the original todo so it cannot be resumed, creates a replacement todo, and notifies the new owner. Pisci should decide when to use this. \
-         - 'update_todo_status': Update a todo's status (requires todo_id, status). Pisci can change any; Koi can only change their own. Valid statuses: todo, in_progress, blocked. \
+         - 'update_todo_status': Update a todo's status (requires todo_id, status). Pisci can change any; Koi can only change their own. Valid statuses: todo, in_progress, blocked. This changes task-board state, but teammates still need an explicit `pool_chat` update if they should react. \
          - 'merge_branches': Merge all Koi worktree branches back into main (requires pool_id with project_dir). \
          \
          Workflow: ALWAYS call 'list' first to see all existing pools. \
@@ -186,6 +187,22 @@ impl Tool for PoolOrgTool {
 }
 
 impl PoolOrgTool {
+    async fn archive_blocked_by_heartbeat(&self, ctx: &ToolContext) -> anyhow::Result<bool> {
+        let db = self.db.lock().await;
+        let source = db
+            .get_session(&ctx.session_id)?
+            .map(|session| session.source)
+            .unwrap_or_default();
+        Ok(matches!(
+            source.as_str(),
+            crate::commands::chat::SESSION_SOURCE_PISCI_INBOX_GLOBAL
+                | crate::commands::chat::SESSION_SOURCE_PISCI_POOL
+                | crate::commands::chat::SESSION_SOURCE_PISCI_INBOX_POOL
+                | crate::commands::chat::SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL
+                | crate::commands::chat::SESSION_SOURCE_PISCI_HEARTBEAT_POOL
+        ))
+    }
+
     async fn run_git_command(
         &self,
         dir: &std::path::Path,
@@ -373,7 +390,9 @@ impl PoolOrgTool {
                         if !gitignore.exists() {
                             let _ = std::fs::write(&gitignore, ".koi-worktrees/\n");
                         }
-                        let _ = self.run_git_command(dir_path, ctx, &["add", ".gitignore"]).await;
+                        let _ = self
+                            .run_git_command(dir_path, ctx, &["add", ".gitignore"])
+                            .await;
                         let _ = self
                             .run_git_command(
                                 dir_path,
@@ -619,6 +638,11 @@ impl PoolOrgTool {
         }
 
         if new_status == "archived" {
+            if self.archive_blocked_by_heartbeat(ctx).await? {
+                return Ok(ToolResult::err(
+                    "Heartbeat sessions may not archive projects automatically. Leave the pool active and wait for explicit user confirmation before archiving.",
+                ));
+            }
             let active_todos = self.list_active_pool_todos(&session.id).await?;
             if !active_todos.is_empty() {
                 let todo_preview = active_todos
@@ -1041,9 +1065,10 @@ impl PoolOrgTool {
         Ok(ToolResult::ok(format!(
             "Todo '{}' created with ID `{}`.\n\
              This only updates the pool task board; it does not start the work for you.\n\
-             Next: claim it if you will do it yourself, then use the real execution tools or `pool_chat` to produce the deliverable.",
+             Next: if you will do it yourself now, IMMEDIATELY call `pool_org(action=\"claim_todo\", todo_id=\"{}\")` in the same run, then use the real execution tools or `pool_chat` to produce the deliverable. Do not stop after only creating the todo.",
             todo.title,
-            &todo.id[..8.min(todo.id.len())]
+            &todo.id[..8.min(todo.id.len())],
+            todo.id
         )))
     }
 
@@ -1118,7 +1143,7 @@ impl PoolOrgTool {
         Ok(ToolResult::ok(format!(
             "Todo '{}' ({}) claimed. Status is now in_progress.\n\
              This only updates ownership/status on the board; it does not complete the task.\n\
-             Next: do the actual work and publish the deliverable via the appropriate tool (often `pool_chat`, files, code tools, or research tools depending on the task).",
+             Next: continue the actual work in this same run and publish the deliverable via the appropriate tool (often `pool_chat`, files, code tools, or research tools depending on the task). Do not stop immediately after claiming unless you also record a concrete blocked/waiting state or complete/handoff the task visibly.",
             &todo.id[..8.min(todo.id.len())],
             todo.title
         )))
@@ -1165,7 +1190,26 @@ impl PoolOrgTool {
         // Write the summary as a result message in the pool, then link it to the todo
         let result_msg_id = if let Some(ref psid) = todo.pool_session_id {
             let db = self.db.lock().await;
-            match db.insert_pool_message(psid, &ctx.memory_owner_id, &summary, "result", "{}") {
+            let metadata = enrich_pool_message_metadata(
+                json!({
+                    "todo": {
+                        "id": todo.id,
+                        "owner_id": todo.owner_id,
+                        "status": "done"
+                    }
+                }),
+                &summary,
+            );
+            match db.insert_pool_message_ext(
+                psid,
+                &ctx.memory_owner_id,
+                &summary,
+                "result",
+                &metadata.to_string(),
+                Some(&todo.id),
+                None,
+                Some("task_completed"),
+            ) {
                 Ok(msg) => {
                     let _ = self.app.emit(
                         &format!("pool_message_{}", psid),
@@ -1242,12 +1286,23 @@ impl PoolOrgTool {
 
         if let Some(ref psid) = todo.pool_session_id {
             let db = self.db.lock().await;
-            if let Ok(msg) = db.insert_pool_message(
+            let metadata = json!({
+                "todo": {
+                    "id": todo.id,
+                    "owner_id": todo.owner_id,
+                    "status": "cancelled",
+                    "reason": reason,
+                }
+            });
+            if let Ok(msg) = db.insert_pool_message_ext(
                 psid,
                 &ctx.memory_owner_id,
                 &format!("[Task Cancelled] \"{}\" — {}", todo.title, reason),
                 "system",
-                "{}",
+                &metadata.to_string(),
+                Some(&todo.id),
+                None,
+                Some("task_cancelled"),
             ) {
                 let _ = self.app.emit(
                     &format!("pool_message_{}", psid),
@@ -1409,6 +1464,35 @@ impl PoolOrgTool {
 
         let db = self.db.lock().await;
         db.update_koi_todo(&todo.id, None, None, Some(new_status), None)?;
+        if let Some(ref psid) = todo.pool_session_id {
+            let event_type = if new_status == "blocked" {
+                Some("task_blocked")
+            } else {
+                Some("task_status_changed")
+            };
+            let metadata = json!({
+                "todo": {
+                    "id": todo.id,
+                    "owner_id": todo.owner_id,
+                    "status": new_status,
+                }
+            });
+            if let Ok(msg) = db.insert_pool_message_ext(
+                psid,
+                &ctx.memory_owner_id,
+                &format!("[Task Status] '{}' is now {}.", todo.title, new_status),
+                "status_update",
+                &metadata.to_string(),
+                Some(&todo.id),
+                None,
+                event_type,
+            ) {
+                let _ = self.app.emit(
+                    &format!("pool_message_{}", psid),
+                    serde_json::to_value(&msg).unwrap_or_default(),
+                );
+            }
+        }
         drop(db);
 
         let _ = self.app.emit("koi_todo_updated", json!({
@@ -1469,7 +1553,12 @@ impl PoolOrgTool {
             Err(e) if e.to_string().contains("Operation cancelled by user") => {
                 return Ok(ToolResult::err("已被用户取消"))
             }
-            Err(e) => return Ok(ToolResult::err(format!("Failed to list git branches: {}", e))),
+            Err(e) => {
+                return Ok(ToolResult::err(format!(
+                    "Failed to list git branches: {}",
+                    e
+                )))
+            }
         };
 
         if branches.is_empty() {
@@ -1479,7 +1568,9 @@ impl PoolOrgTool {
         let mut results: Vec<String> = Vec::new();
         let checkout_main = self.run_git_command(dir, ctx, &["checkout", "main"]).await;
         if checkout_main.is_err() && !ctx.is_cancelled() {
-            let _ = self.run_git_command(dir, ctx, &["checkout", "master"]).await;
+            let _ = self
+                .run_git_command(dir, ctx, &["checkout", "master"])
+                .await;
         }
 
         for branch in &branches {
@@ -1490,7 +1581,13 @@ impl PoolOrgTool {
                 .run_git_command(
                     dir,
                     ctx,
-                    &["merge", "--no-ff", branch, "-m", &format!("Merge {}", branch)],
+                    &[
+                        "merge",
+                        "--no-ff",
+                        branch,
+                        "-m",
+                        &format!("Merge {}", branch),
+                    ],
                 )
                 .await;
             match merge {

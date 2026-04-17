@@ -2,13 +2,17 @@ use crate::agent::loop_::AgentLoop;
 use crate::agent::messages::AgentEvent;
 use crate::agent::plan::summarize_todos;
 use crate::agent::tool::ToolContext;
+use crate::commands::scene::{
+    build_registry_for_scene, load_skill_loader, CollaborationContextMode, HistorySliceMode,
+    MemorySliceMode, PoolSnapshotMode, SceneKind, ScenePolicy,
+};
 use crate::llm::{build_client_with_timeout, ContentBlock, LlmMessage, MessageContent, ToolDef};
+use crate::pisci::project_state::build_coordination_event_digest;
 use crate::policy::PolicyGate;
 use crate::project_context::render_project_instruction_context;
 use crate::store::{
     db::ChatMessage, db::Session, db::SessionContextState, db::TaskSpine, db::TaskState, AppState,
 };
-use crate::tools;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{atomic::AtomicBool, Arc};
@@ -204,6 +208,7 @@ async fn build_session_message_context_from_db(
     db_arc: &Arc<tokio::sync::Mutex<crate::store::Database>>,
     session_id: &str,
     budget: usize,
+    history_mode: HistorySliceMode,
 ) -> Result<SessionMessageContext, String> {
     let db = db_arc.lock().await;
     let history = db
@@ -222,11 +227,25 @@ async fn build_session_message_context_from_db(
         .find(|m| m.role == "user" && !m.content.trim().is_empty())
         .map(|m| m.content.clone())
         .unwrap_or_default();
-    let llm_messages = build_context_messages(
-        &history,
-        budget,
-        (!rolling_summary.trim().is_empty()).then_some(rolling_summary),
-    );
+    let llm_messages = match history_mode {
+        HistorySliceMode::FullRecent => build_context_messages(
+            &history,
+            budget,
+            (!rolling_summary.trim().is_empty()).then_some(rolling_summary),
+        ),
+        HistorySliceMode::SummaryOnly => build_context_messages_summary_only(
+            &history,
+            budget,
+            (!rolling_summary.trim().is_empty()).then_some(rolling_summary),
+        ),
+        HistorySliceMode::None => {
+            if rolling_summary.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![rolling_summary_message(rolling_summary)]
+            }
+        }
+    };
     Ok(SessionMessageContext {
         llm_messages,
         session_state,
@@ -239,7 +258,220 @@ async fn build_session_message_context(
     session_id: &str,
     budget: usize,
 ) -> Result<SessionMessageContext, String> {
-    build_session_message_context_from_db(&state.db, session_id, budget).await
+    build_session_message_context_from_db(
+        &state.db,
+        session_id,
+        budget,
+        HistorySliceMode::FullRecent,
+    )
+    .await
+}
+
+fn build_context_messages_summary_only(
+    history: &[ChatMessage],
+    budget: usize,
+    rolling_summary: Option<&str>,
+) -> Vec<LlmMessage> {
+    let mut messages = Vec::new();
+    if let Some(summary) = rolling_summary.filter(|summary| !summary.trim().is_empty()) {
+        messages.push(rolling_summary_message(summary));
+    }
+
+    let turns = split_history_into_turns(history);
+    let mut tail: Vec<LlmMessage> = Vec::new();
+    for turn in turns
+        .into_iter()
+        .rev()
+        .take(2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        let (user_summary, assistant_summary) = summarize_turn(&turn);
+        tail.push(LlmMessage {
+            role: "user".into(),
+            content: MessageContent::text(user_summary),
+        });
+        tail.push(LlmMessage {
+            role: "assistant".into(),
+            content: MessageContent::text(assistant_summary),
+        });
+    }
+    messages.extend(tail);
+
+    let mut kept = Vec::new();
+    let mut token_est = 0usize;
+    for message in messages.into_iter().rev() {
+        let message_tokens =
+            crate::llm::estimate_request_input_tokens(std::slice::from_ref(&message), None, &[]);
+        if token_est + message_tokens > budget {
+            continue;
+        }
+        token_est += message_tokens;
+        kept.push(message);
+    }
+    kept.reverse();
+    kept
+}
+
+fn truncate_chars(content: &str, max_chars: usize) -> String {
+    if max_chars == 0 || content.chars().count() <= max_chars {
+        return content.to_string();
+    }
+    format!("{}...", content.chars().take(max_chars).collect::<String>())
+}
+
+fn collaboration_context_hints(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let collaboration_hints = [
+        "koi",
+        "pool",
+        "team",
+        "kanban",
+        "协作",
+        "团队",
+        "项目池",
+        "任务分配",
+        "heartbeat",
+        "org_spec",
+        "pool_org",
+        "pool_chat",
+    ];
+    collaboration_hints.iter().any(|hint| lower.contains(hint))
+}
+
+fn should_include_main_chat_collaboration_context(
+    scene_policy: ScenePolicy,
+    query_text: &str,
+    task_state: Option<&TaskState>,
+) -> bool {
+    match scene_policy.collaboration_context_mode() {
+        CollaborationContextMode::Never => false,
+        CollaborationContextMode::Required => true,
+        CollaborationContextMode::OnDemand => {
+            if collaboration_context_hints(query_text) {
+                return true;
+            }
+            task_state.is_some_and(|task| {
+                collaboration_context_hints(&task.goal)
+                    || collaboration_context_hints(&task.summary)
+                    || collaboration_context_hints(&task.to_task_spine().current_step)
+            })
+        }
+    }
+}
+
+fn render_pool_context_snapshot(
+    scene_policy: ScenePolicy,
+    pool: Option<&crate::koi::PoolSession>,
+    pool_todos: &[crate::koi::KoiTodo],
+    recent_messages: &[crate::koi::PoolMessage],
+) -> String {
+    if !scene_policy.include_pool_context
+        || matches!(scene_policy.pool_snapshot_mode(), PoolSnapshotMode::Off)
+    {
+        return String::new();
+    }
+    let mut ctx = String::new();
+    if let Some(pool) = pool {
+        ctx.push_str("\n\n## Pool Context\n");
+        ctx.push_str(&format!(
+            "Pool: {} ({})\nStatus: {}",
+            pool.name, pool.id, pool.status
+        ));
+        if let Some(project_dir) = pool.project_dir.as_deref() {
+            ctx.push_str(&format!("\nProject dir: {}", project_dir));
+        }
+        if !pool.org_spec.trim().is_empty() {
+            ctx.push_str(&format!(
+                "\nOrg spec:\n{}",
+                truncate_chars(&pool.org_spec, scene_policy.org_spec_preview_chars())
+            ));
+        }
+    }
+
+    let todo_summary = if pool_todos.is_empty() {
+        "No pool todos.".to_string()
+    } else {
+        let mut counts = std::collections::BTreeMap::<String, usize>::new();
+        for todo in pool_todos {
+            *counts.entry(todo.status.clone()).or_insert(0) += 1;
+        }
+        let parts = counts
+            .into_iter()
+            .map(|(status, count)| format!("{}={}", status, count))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut summary = format!("Pool todos: {}", parts);
+        if matches!(scene_policy.pool_snapshot_mode(), PoolSnapshotMode::Full) {
+            let highlighted = pool_todos
+                .iter()
+                .filter(|todo| matches!(todo.status.as_str(), "todo" | "in_progress" | "blocked"))
+                .take(4)
+                .map(|todo| format!("- [{}] {} ({})", todo.status, todo.title, todo.owner_id))
+                .collect::<Vec<_>>();
+            if !highlighted.is_empty() {
+                summary.push_str("\nOpen todo highlights:\n");
+                summary.push_str(&highlighted.join("\n"));
+            }
+        }
+        summary
+    };
+    ctx.push_str(&format!("\n{}", todo_summary));
+
+    let digest = build_coordination_event_digest(
+        recent_messages,
+        scene_policy.event_digest_mode(),
+        &[],
+        scene_policy.recent_pool_message_limit(),
+        scene_policy.recent_pool_message_chars(),
+    );
+    if !digest.lines.is_empty() {
+        ctx.push_str("\nCoordination event digest:\n");
+        ctx.push_str(&digest.lines.join("\n"));
+    }
+
+    let message_limit = match scene_policy.pool_snapshot_mode() {
+        PoolSnapshotMode::Off => 0,
+        PoolSnapshotMode::Compact => scene_policy.recent_pool_message_limit().min(3),
+        PoolSnapshotMode::Full => scene_policy.recent_pool_message_limit(),
+    };
+    if message_limit == 0 {
+        return ctx;
+    }
+    let digest: Vec<String> = recent_messages
+        .iter()
+        .rev()
+        .take(message_limit)
+        .rev()
+        .map(|msg| {
+            let content = truncate_chars(
+                &msg.content.replace('\n', " "),
+                scene_policy.recent_pool_message_chars(),
+            );
+            format!(
+                "- #{} {} [{}{}]: {}",
+                msg.id,
+                msg.sender_id,
+                msg.msg_type,
+                msg.event_type
+                    .as_deref()
+                    .map(|event| format!("/{}", event))
+                    .unwrap_or_default(),
+                content
+            )
+        })
+        .collect();
+    if digest.is_empty() {
+        if ctx.contains("Coordination event digest:") {
+            return ctx;
+        }
+        ctx.push_str("\nRecent pool messages: none.");
+    } else {
+        ctx.push_str("\nRecent pool messages:\n");
+        ctx.push_str(&digest.join("\n"));
+    }
+    ctx
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -250,39 +482,19 @@ async fn build_chat_prompt_artifacts(
     query_text: &str,
     workspace_root: &str,
     context_window: u32,
+    max_tokens: u32,
     allow_outside_workspace: bool,
     builtin_tool_enabled: &std::collections::HashMap<String, bool>,
     project_instruction_budget_chars: u32,
     enable_project_instructions: bool,
 ) -> Result<ChatPromptArtifacts, String> {
+    let scene_policy = ScenePolicy::for_kind(SceneKind::MainChat);
     let user_tools_dir = app.path().app_data_dir().map(|d| d.join("user-tools")).ok();
     let app_data_dir = app.path().app_data_dir().ok();
 
-    let (skill_context, skill_loader_arc) = {
-        let app_dir = app
-            .path()
-            .app_data_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
-        let skills_dir = app_dir.join("skills");
-        let mut loader = crate::skills::loader::SkillLoader::new(skills_dir);
-        if let Err(e) = loader.load_all() {
-            tracing::warn!("Failed to load skills: {}", e);
-        }
-        let enabled_names: Vec<String> = {
-            let db = state.db.lock().await;
-            db.list_skills()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|s| s.enabled)
-                .map(|s| s.name)
-                .collect()
-        };
-        let dir = loader.generate_skill_directory(&enabled_names);
-        let arc = Arc::new(tokio::sync::Mutex::new(loader));
-        (dir, arc)
-    };
-
-    let mut registry = tools::build_registry(
+    let skill_loader_arc = load_skill_loader(app);
+    let registry = build_registry_for_scene(
+        SceneKind::MainChat,
         state.browser.clone(),
         user_tools_dir.as_deref(),
         Some(state.db.clone()),
@@ -290,10 +502,8 @@ async fn build_chat_prompt_artifacts(
         Some(app.clone()),
         Some(state.settings.clone()),
         app_data_dir,
-        Some(skill_loader_arc),
+        skill_loader_arc,
     );
-    // Main Pisci chat must coordinate Koi through the pool, not call Koi directly.
-    registry.unregister("call_koi");
     let registry = Arc::new(registry);
     let tool_defs = registry.to_tool_defs();
 
@@ -313,21 +523,29 @@ async fn build_chat_prompt_artifacts(
         }
     };
 
-    let task_state_context = {
+    let active_task_state = {
         let db = state.db.lock().await;
         match db.load_task_state("session", session_id) {
             Ok(Some(ts))
                 if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) =>
             {
-                render_task_state_section("Active Task State", "Progress", &ts)
+                Some(ts)
             }
-            _ => String::new(),
+            _ => None,
         }
     };
+    let task_state_context = active_task_state
+        .as_ref()
+        .map(|ts| render_task_state_section("Active Task State", "Progress", ts))
+        .unwrap_or_default();
 
-    // Inject Koi roster and active pool summary so the model knows what agents and
-    // projects are available when the user asks for team collaboration in the main chat.
-    let koi_pool_context = {
+    // Only load team-collaboration context when the user is actually asking about it.
+    let koi_pool_context = if scene_policy.include_pool_roster
+        && should_include_main_chat_collaboration_context(
+            scene_policy,
+            query_text,
+            active_task_state.as_ref(),
+        ) {
         let db = state.db.lock().await;
         let mut ctx = String::new();
 
@@ -364,45 +582,62 @@ async fn build_chat_prompt_artifacts(
                 ctx.push_str("\n\n## Existing Project Pools\n");
                 for p in &visible {
                     ctx.push_str(&format!(
-                        "- **{}** (id: `{}`, status: {}) — call `pool_org(action=\"list\")` to see details\n",
-                        p.name, p.id, p.status
-                    ));
+                            "- **{}** (id: `{}`, status: {}) — call `pool_org(action=\"list\")` to see details\n",
+                            p.name, p.id, p.status
+                        ));
                 }
             }
         }
 
         ctx
-    };
-
-    let injection_budget = compute_injection_budget(context_window);
-    let full_memory_context = budget_truncate(
-        &format!("{}{}{}", memory_context, task_state_context, koi_pool_context),
-        injection_budget,
-    );
-    let project_instruction_context = if enable_project_instructions {
-        match render_project_instruction_context(
-            std::path::Path::new(workspace_root),
-            project_instruction_budget_chars as usize,
-        ) {
-            Ok(content) => content,
-            Err(error) => {
-                tracing::warn!("Failed to load project instructions: {}", error);
-                String::new()
-            }
-        }
     } else {
         String::new()
     };
 
-    let mut system_prompt = build_system_prompt_with_env(
+    let injection_budget = scene_policy.compute_injection_budget(context_window, max_tokens);
+    let full_memory_context = budget_truncate(
+        &format!(
+            "{}{}{}",
+            memory_context, task_state_context, koi_pool_context
+        ),
+        injection_budget,
+    );
+    let project_instruction_context =
+        if scene_policy.project_instructions_enabled(enable_project_instructions) {
+            match render_project_instruction_context(
+                std::path::Path::new(workspace_root),
+                project_instruction_budget_chars as usize,
+            ) {
+                Ok(content) => content,
+                Err(error) => {
+                    tracing::warn!("Failed to load project instructions: {}", error);
+                    String::new()
+                }
+            }
+        } else {
+            String::new()
+        };
+
+    let mut system_prompt = build_main_chat_system_prompt(
         &full_memory_context,
-        &skill_context,
         workspace_root,
         allow_outside_workspace,
     );
     if !project_instruction_context.is_empty() {
         system_prompt.push_str(&project_instruction_context);
     }
+    tracing::info!(
+        "main_chat_context_slices session={} memory_mode={:?} pool_snapshot_mode={:?} memory_chars={} task_state_chars={} collab_chars={} injected_chars={} project_instruction_chars={} system_prompt_chars={}",
+        session_id,
+        scene_policy.memory_slice_mode(),
+        scene_policy.pool_snapshot_mode(),
+        memory_context.chars().count(),
+        task_state_context.chars().count(),
+        koi_pool_context.chars().count(),
+        full_memory_context.chars().count(),
+        project_instruction_context.chars().count(),
+        system_prompt.chars().count(),
+    );
     Ok(ChatPromptArtifacts {
         system_prompt,
         registry,
@@ -743,6 +978,7 @@ pub async fn chat_send(
         &effective_content,
         &workspace_root,
         context_window,
+        max_tokens,
         allow_outside_workspace,
         &builtin_tool_enabled,
         project_instruction_budget_chars,
@@ -987,35 +1223,80 @@ pub struct HeadlessRunOptions {
     pub extra_system_context: Option<String>,
     pub session_title: Option<String>,
     pub session_source: Option<String>,
+    pub scene_kind: Option<SceneKind>,
 }
 
 pub(crate) const SESSION_SOURCE_IM_PREFIX: &str = "im_";
 pub(crate) const SESSION_SOURCE_PISCI_INBOX_GLOBAL: &str = "pisci_inbox_global";
+pub(crate) const SESSION_SOURCE_PISCI_POOL: &str = "pisci_pool";
 pub(crate) const SESSION_SOURCE_PISCI_INBOX_POOL: &str = "pisci_inbox_pool";
+pub(crate) const SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL: &str = "pisci_heartbeat_global";
+pub(crate) const SESSION_SOURCE_PISCI_HEARTBEAT_POOL: &str = "pisci_heartbeat_pool";
 pub(crate) const SESSION_SOURCE_PISCI_INTERNAL: &str = "pisci_internal";
+
+pub(crate) fn pool_pisci_session_id(pool_id: &str) -> String {
+    format!("pisci_pool_{}", pool_id)
+}
 
 fn normalize_session_source_compat(source: &str) -> &str {
     match source {
-        "heartbeat" => SESSION_SOURCE_PISCI_INBOX_GLOBAL,
-        "heartbeat_pool" => SESSION_SOURCE_PISCI_INBOX_POOL,
+        SESSION_SOURCE_PISCI_POOL => SESSION_SOURCE_PISCI_POOL,
+        SESSION_SOURCE_PISCI_INBOX_POOL | SESSION_SOURCE_PISCI_HEARTBEAT_POOL => {
+            SESSION_SOURCE_PISCI_POOL
+        }
+        "heartbeat" => SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL,
+        "heartbeat_pool" => SESSION_SOURCE_PISCI_POOL,
         other => other,
     }
 }
 
 fn is_pool_scoped_session_source(source: &str) -> bool {
-    normalize_session_source_compat(source) == SESSION_SOURCE_PISCI_INBOX_POOL
+    matches!(
+        normalize_session_source_compat(source),
+        SESSION_SOURCE_PISCI_POOL
+    )
+}
+
+fn is_heartbeat_session_source(source: &str) -> bool {
+    matches!(
+        normalize_session_source_compat(source),
+        SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL | SESSION_SOURCE_PISCI_HEARTBEAT_POOL
+    )
 }
 
 fn derive_headless_session_source(channel: &str, pool_session_id: Option<&str>) -> String {
     if pool_session_id.is_some() {
-        return SESSION_SOURCE_PISCI_INBOX_POOL.to_string();
+        return SESSION_SOURCE_PISCI_POOL.to_string();
+    }
+    if channel == "heartbeat" {
+        return SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL.to_string();
     }
     match channel {
-        "heartbeat" => SESSION_SOURCE_PISCI_INBOX_GLOBAL.to_string(),
         "internal" => SESSION_SOURCE_PISCI_INTERNAL.to_string(),
         other if other.starts_with(SESSION_SOURCE_IM_PREFIX) => other.to_string(),
         other => format!("{}{}", SESSION_SOURCE_IM_PREFIX, other),
     }
+}
+
+fn resolve_headless_scene_kind(
+    channel: &str,
+    desired_source: &str,
+    options: Option<&HeadlessRunOptions>,
+) -> SceneKind {
+    if let Some(kind) = options.and_then(|o| o.scene_kind) {
+        return kind;
+    }
+    if is_heartbeat_session_source(desired_source) || channel == "heartbeat" {
+        return SceneKind::HeartbeatSupervisor;
+    }
+    if options
+        .and_then(|o| o.pool_session_id.as_deref())
+        .filter(|pool_id| !pool_id.is_empty())
+        .is_some()
+    {
+        return SceneKind::PoolCoordinator;
+    }
+    SceneKind::IMHeadless
 }
 
 pub(crate) fn validate_headless_session_scope(
@@ -1123,6 +1404,9 @@ pub async fn run_agent_headless(
         .as_ref()
         .and_then(|o| o.session_source.clone())
         .unwrap_or_else(|| derive_headless_session_source(channel, pool_session_id.as_deref()));
+    let scene_kind =
+        resolve_headless_scene_kind(channel, &desired_session_source, options.as_ref());
+    let scene_policy = ScenePolicy::for_kind(scene_kind);
 
     // vision_capable: user override OR auto-detection by provider/model name
     let vision_capable = vision_setting || model_supports_vision(&provider, &model);
@@ -1225,7 +1509,8 @@ pub async fn run_agent_headless(
         .map(|d| d.join("user-tools"))
         .ok();
     let app_data_dir_h = state.app_handle.path().app_data_dir().ok();
-    let mut registry = tools::build_registry(
+    let registry = build_registry_for_scene(
+        scene_kind,
         state.browser.clone(),
         user_tools_dir_h.as_deref(),
         Some(state.db.clone()),
@@ -1233,10 +1518,8 @@ pub async fn run_agent_headless(
         Some(state.app_handle.clone()),
         Some(state.settings.clone()),
         app_data_dir_h,
-        None, // skill_search not used in IM headless sessions
+        None,
     );
-    // Headless Pisci chat should also coordinate Koi through the pool only.
-    registry.unregister("call_koi");
     let registry = Arc::new(registry);
     let policy = Arc::new(PolicyGate::with_profile_and_flags(
         &workspace_root,
@@ -1245,105 +1528,55 @@ pub async fn run_agent_headless(
         allow_outside_workspace,
     ));
 
-    let scoped_memory_context = {
-        let keywords: Vec<&str> = effective_user_message.split_whitespace().take(10).collect();
-        let query = keywords.join(" ");
-        if query.trim().is_empty() {
-            String::new()
-        } else {
-            let db = state.db.lock().await;
-            match db.search_memories_scoped(&query, "pisci", pool_session_id.as_deref(), 5) {
-                Ok(mems) if !mems.is_empty() => {
-                    let mut ctx = String::from("\n\n## Relevant Memory\n");
-                    for m in &mems {
-                        ctx.push_str(&format!("- {}\n", m.content));
+    let scoped_memory_context = match scene_policy.memory_slice_mode() {
+        MemorySliceMode::Off => String::new(),
+        MemorySliceMode::ScopedSearch | MemorySliceMode::ScopedPlusRecent => {
+            let keywords: Vec<&str> = effective_user_message.split_whitespace().take(10).collect();
+            let query = keywords.join(" ");
+            if query.trim().is_empty() {
+                String::new()
+            } else {
+                let db = state.db.lock().await;
+                match db.search_memories_scoped(&query, "pisci", pool_session_id.as_deref(), 5) {
+                    Ok(mems) if !mems.is_empty() => {
+                        let mut ctx = String::from("\n\n## Relevant Memory\n");
+                        for m in &mems {
+                            ctx.push_str(&format!("- {}\n", m.content));
+                        }
+                        ctx
                     }
-                    ctx
+                    _ => String::new(),
                 }
-                _ => String::new(),
             }
         }
     };
 
-    let pool_context = if let Some(pool_id) = pool_session_id.as_deref() {
-        let db = state.db.lock().await;
-        let pool = db.get_pool_session(pool_id).map_err(|e| e.to_string())?;
-        let recent_messages = db
-            .get_pool_messages(pool_id, 12, 0)
-            .map_err(|e| e.to_string())?;
-        let todos = db.list_koi_todos(None).map_err(|e| e.to_string())?;
-        let pool_todos: Vec<_> = todos
-            .into_iter()
-            .filter(|t| t.pool_session_id.as_deref() == Some(pool_id))
-            .collect();
-
-        let todo_summary = if pool_todos.is_empty() {
-            "No pool todos.".to_string()
-        } else {
-            let mut counts = std::collections::BTreeMap::<String, usize>::new();
-            for todo in &pool_todos {
-                *counts.entry(todo.status.clone()).or_insert(0) += 1;
-            }
-            let parts = counts
+    let pool_context = if scene_policy.include_pool_context
+        && !matches!(scene_policy.pool_snapshot_mode(), PoolSnapshotMode::Off)
+    {
+        if let Some(pool_id) = pool_session_id.as_deref() {
+            let db = state.db.lock().await;
+            let pool = db.get_pool_session(pool_id).map_err(|e| e.to_string())?;
+            let recent_messages = db
+                .get_pool_messages(
+                    pool_id,
+                    scene_policy.recent_pool_message_limit() as i64 * 2,
+                    0,
+                )
+                .map_err(|e| e.to_string())?;
+            let todos = db.list_koi_todos(None).map_err(|e| e.to_string())?;
+            let pool_todos: Vec<_> = todos
                 .into_iter()
-                .map(|(status, count)| format!("{}={}", status, count))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("Pool todos: {}", parts)
-        };
-
-        let message_summary = if recent_messages.is_empty() {
-            "No recent pool messages.".to_string()
+                .filter(|t| t.pool_session_id.as_deref() == Some(pool_id))
+                .collect();
+            render_pool_context_snapshot(scene_policy, pool.as_ref(), &pool_todos, &recent_messages)
         } else {
-            let lines = recent_messages
-                .iter()
-                .rev()
-                .take(6)
-                .rev()
-                .map(|m| {
-                    let content = if m.content.chars().count() > 220 {
-                        format!("{}...", m.content.chars().take(220).collect::<String>())
-                    } else {
-                        m.content.clone()
-                    };
-                    format!(
-                        "- #{} {} [{}]: {}",
-                        m.id,
-                        m.sender_id,
-                        m.msg_type,
-                        content.replace('\n', " ")
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!("Recent pool messages:\n{}", lines)
-        };
-
-        let mut ctx = String::new();
-        if let Some(pool) = pool {
-            ctx.push_str("\n\n## Pool Context\n");
-            ctx.push_str(&format!(
-                "Pool: {} ({})\nStatus: {}",
-                pool.name, pool.id, pool.status
-            ));
-            if let Some(project_dir) = pool.project_dir {
-                ctx.push_str(&format!("\nProject dir: {}", project_dir));
-            }
-            if !pool.org_spec.trim().is_empty() {
-                let org_preview = if pool.org_spec.chars().count() > 800 {
-                    format!("{}...", pool.org_spec.chars().take(800).collect::<String>())
-                } else {
-                    pool.org_spec
-                };
-                ctx.push_str(&format!("\nOrg spec:\n{}", org_preview));
-            }
+            String::new()
         }
-        ctx.push_str(&format!("\n{}\n{}", todo_summary, message_summary));
-        ctx
     } else {
         String::new()
     };
-    let task_state_context = {
+    let task_state_context = if scene_policy.include_task_state {
         let db = state.db.lock().await;
         match db.load_task_state("session", session_id) {
             Ok(Some(ts))
@@ -1353,19 +1586,40 @@ pub async fn run_agent_headless(
             }
             _ => String::new(),
         }
+    } else {
+        String::new()
     };
 
-    let mut system_prompt = build_im_system_prompt(channel, vision_capable);
-    if !scoped_memory_context.is_empty() {
-        system_prompt.push_str(&scoped_memory_context);
+    let injection_budget = scene_policy.compute_injection_budget(context_window, max_tokens);
+    let injected_context = budget_truncate(
+        &format!(
+            "{}{}{}",
+            scoped_memory_context, task_state_context, pool_context
+        ),
+        injection_budget,
+    );
+    let injected_context_tokens =
+        crate::llm::estimate_request_input_tokens(&[], Some(&injected_context), &[]);
+    tracing::info!(
+        "headless_context_slices scene={:?} session={} history_mode={:?} memory_mode={:?} pool_snapshot_mode={:?} event_digest_mode={:?} memory_chars={} task_state_chars={} pool_chars={} injected_chars={} injected_tokens_est={}",
+        scene_kind,
+        session_id,
+        scene_policy.history_slice_mode(),
+        scene_policy.memory_slice_mode(),
+        scene_policy.pool_snapshot_mode(),
+        scene_policy.event_digest_mode(),
+        scoped_memory_context.chars().count(),
+        task_state_context.chars().count(),
+        pool_context.chars().count(),
+        injected_context.chars().count(),
+        injected_context_tokens
+    );
+
+    let mut system_prompt = build_headless_scene_system_prompt(scene_kind, channel, vision_capable);
+    if !injected_context.is_empty() {
+        system_prompt.push_str(&injected_context);
     }
-    if !task_state_context.is_empty() {
-        system_prompt.push_str(&task_state_context);
-    }
-    if !pool_context.is_empty() {
-        system_prompt.push_str(&pool_context);
-    }
-    if enable_project_instructions {
+    if scene_policy.project_instructions_enabled(enable_project_instructions) {
         match render_project_instruction_context(
             std::path::Path::new(&workspace_root),
             project_instruction_budget_chars as usize,
@@ -1398,7 +1652,8 @@ pub async fn run_agent_headless(
         },
         vision_override: Some(vision_capable),
         notification_rx: None,
-        auto_compact_input_tokens_threshold,
+        auto_compact_input_tokens_threshold: scene_policy
+            .effective_auto_compact_threshold(auto_compact_input_tokens_threshold),
     };
     // Load full conversation history for context.
     // After building LLM messages, sanitize any orphaned tool_use blocks (tool calls without
@@ -1408,6 +1663,7 @@ pub async fn run_agent_headless(
         &state.db,
         session_id,
         compute_context_budget(context_window, max_tokens),
+        scene_policy.history_slice_mode(),
     )
     .await?;
     tracing::info!(
@@ -1621,11 +1877,95 @@ fn budget_truncate(content: &str, max_chars: usize) -> String {
     format!("{}\n[... context truncated to fit budget ...]", truncated)
 }
 
-/// Max chars for memory + task_state injected into system prompt.
-/// Roughly 15% of context window (in chars, ~4 chars/token).
-fn compute_injection_budget(context_window: u32) -> usize {
-    let budget_tokens = (context_window as f64 * 0.15) as usize;
-    (budget_tokens * 4).max(2_000)
+#[cfg(test)]
+fn main_chat_requests_collaboration_context(query_text: &str) -> bool {
+    collaboration_context_hints(query_text)
+}
+
+pub fn build_main_chat_system_prompt(
+    memory_context: &str,
+    workspace_root: &str,
+    allow_outside: bool,
+) -> String {
+    let mut prompt =
+        build_system_prompt_with_env(memory_context, "", workspace_root, allow_outside);
+    prompt.push_str(main_chat_overlay_prompt());
+    prompt
+}
+
+fn heartbeat_scene_guidance() -> &'static str {
+    "\n\n## Heartbeat Supervisor Scene\n\
+You are running as Pisci's heartbeat supervisor.\n\
+- Your job is to inspect active work, detect stalls or follow-up needs, and take the smallest effective coordination action.\n\
+- Prefer reading pool state, todo state, and the latest relevant pool messages before acting.\n\
+- Treat heartbeat as supervision, not as a hidden workflow engine. Do not assume a fixed reviewer, implementer, or next actor unless the pool evidence or org_spec says so.\n\
+- Mechanical recovery may already have re-activated unclaimed todos before this run. Your role is to judge the resulting coordination state, not to silently impersonate another agent.\n\
+- Do not treat this run as a normal user conversation or IM thread.\n\
+- Do NOT create a new project pool during heartbeat.\n\
+- Do NOT archive a project automatically during heartbeat.\n\
+- Avoid broad exploration. Focus on the current pool snapshot, unblock work, or confirm that no action is needed.\n"
+}
+
+fn pool_coordinator_scene_guidance() -> &'static str {
+    "\n\n## Pool Coordinator Scene\n\
+You are coordinating work inside an existing pool.\n\
+- Focus on the current pool's org_spec, todos, blockers, and recent handoffs.\n\
+- Keep responses tightly scoped to project coordination and next actions.\n\
+- Use explicit `pool_chat` handoffs and `pool_org` state transitions. Do not rely on the host runtime to infer who should act next from silence alone.\n\
+- Do not inject unrelated global project rosters or unrelated user-chat context.\n"
+}
+
+fn build_pisci_core_prompt_compact() -> &'static str {
+    "You are Pisci, the system-level coordinator running on the user's local machine.\n\
+You must be truthful, tool-grounded, and conservative about assumptions.\n\
+- Use only the tools and context available in this run.\n\
+- Prefer the smallest effective action that preserves project momentum.\n\
+- Never invent project state, agent intent, file state, or task completion.\n\
+- Safety, permissions, and consistency are enforced by the host runtime; use explicit tool actions to make state changes visible.\n"
+}
+
+fn collaboration_protocol_prompt() -> &'static str {
+    "\n\n## Collaboration Protocol\n\
+- Project coordination must remain inspectable through `pool_org` and `pool_chat`.\n\
+- Todos record board state; chat messages record explicit handoffs and requests.\n\
+- Do not assume the host runtime will infer the next actor from silence.\n\
+- When another agent or Pisci must act, make that handoff explicit.\n\
+- Structured project-status signals are coordination hints, not automatic workflow transitions.\n"
+}
+
+fn main_chat_overlay_prompt() -> &'static str {
+    "\n\n## Main Chat Overlay\n\
+- You are interacting directly with the user.\n\
+- When multi-agent collaboration is appropriate, create or reuse a pool and coordinate through `pool_org` + `pool_chat`.\n\
+- Keep normal user-chat reasoning separate from pool-local coordination details unless the user asks for them.\n"
+}
+
+fn build_headless_scene_system_prompt(
+    scene_kind: SceneKind,
+    channel: &str,
+    vision_capable: bool,
+) -> String {
+    match scene_kind {
+        SceneKind::HeartbeatSupervisor => {
+            let mut prompt = String::from(build_pisci_core_prompt_compact());
+            prompt.push_str(collaboration_protocol_prompt());
+            prompt.push_str(heartbeat_scene_guidance());
+            prompt
+        }
+        SceneKind::PoolCoordinator => {
+            let mut prompt = String::from(build_pisci_core_prompt_compact());
+            prompt.push_str(collaboration_protocol_prompt());
+            prompt.push_str(pool_coordinator_scene_guidance());
+            prompt
+        }
+        SceneKind::IMHeadless => build_im_system_prompt(channel, vision_capable),
+        SceneKind::MainChat => {
+            let mut prompt = build_system_prompt("", "");
+            prompt.push_str(main_chat_overlay_prompt());
+            prompt
+        }
+        _ => build_system_prompt("", ""),
+    }
 }
 
 pub fn build_system_prompt(memory_context: &str, skill_context: &str) -> String {
@@ -1634,7 +1974,7 @@ pub fn build_system_prompt(memory_context: &str, skill_context: &str) -> String 
 
 pub fn build_system_prompt_with_env(
     memory_context: &str,
-    skill_context: &str,
+    _skill_context: &str,
     workspace_root: &str,
     allow_outside: bool,
 ) -> String {
@@ -1948,8 +2288,8 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 - If a task is no longer needed (scope change, duplicate, superseded), cancel it: `pool_org(action="cancel_todo", todo_id="...", reason="...")`. You can cancel ANY Koi's todo — you have global task authority.
 - Monitor blocked tasks with `pool_org(action="get_todos")`. If a task is stuck, unblock or reassign it.
 - Task status flow: `todo` → `in_progress` → `done` / `cancelled` / `blocked`. Only Pisci and the task owner can change status. Other Koi must @pisci to request task changes.
-- When the project is complete, ensure all remaining todos are either completed or cancelled before archiving the pool.
-- **Project completion flow**: When all tasks are done, summarize results for the user and ask for confirmation before archiving. Then call `pool_org(action="archive", pool_id=...)`. Only Pisci can archive a project — Koi should @pisci when they believe all work is finished.
+- When the project is complete, ensure all remaining todos are either completed or cancelled before even considering archive.
+- **Project completion flow**: When all tasks are done, summarize results for the user and leave the pool active by default. Only archive if the user explicitly asks you to archive/close the project. Do not treat silence, review readiness, or heartbeat scans as archive approval. Only Pisci can archive a project — Koi should @pisci when they believe all work is finished.
 - **Koi cannot archive**: If a Koi's final message says "ready to archive" or "all done", treat it as a signal to review and confirm with the user, not an automatic archive trigger.
 - **No fixed completion role**: A reviewer, architect, tester, or any other Koi can provide input, but none of them alone decides project completion. You decide based on overall pool state and then the user confirms.
 - Prefer these internal status signals from Koi pool_chat updates when assessing progress: `[ProjectStatus] follow_up_needed`, `[ProjectStatus] waiting`, `[ProjectStatus] ready_for_pisci_review`. Treat them as structured hints, not final authority.
@@ -2039,20 +2379,9 @@ pie title Distribution
     "C" : 25
 ```
 
-Use diagrams proactively when they make information clearer. Keep them concise.{memory}{skills}"#,
+Use diagrams proactively when they make information clearer. Keep them concise.{memory}"#,
         date = chrono::Utc::now().format("%Y-%m-%d"),
         memory = memory_context,
-        skills = if skill_context.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "\n\n## Available Skills\n\
-                 Call `skill_list` to browse all skills (name + description + SKILL.md path).\n\
-                 Once you identify a matching skill, use `file_read` to load its SKILL.md and follow it.\n\n\
-                 {}",
-                skill_context
-            )
-        }
     )
 }
 
@@ -2250,6 +2579,23 @@ struct ConvTurn {
     agent_msgs: Vec<ChatMessage>,
     /// 1-based turn index.
     index: usize,
+}
+
+fn split_history_into_turns(history: &[ChatMessage]) -> Vec<ConvTurn> {
+    let mut turns: Vec<ConvTurn> = Vec::new();
+    for msg in history {
+        let starts_new_turn = msg.role == "user" && msg.tool_results_json.is_none();
+        if starts_new_turn {
+            turns.push(ConvTurn {
+                user_msg: msg.clone(),
+                agent_msgs: Vec::new(),
+                index: turns.len() + 1,
+            });
+        } else if let Some(last) = turns.last_mut() {
+            last.agent_msgs.push(msg.clone());
+        }
+    }
+    turns
 }
 
 /// Trim a tool result string to `head` + `[trimmed: N chars]` + `tail`.
@@ -3180,6 +3526,7 @@ pub async fn get_context_preview(
         &session_context.latest_user_text,
         &workspace_root,
         context_window,
+        max_tokens,
         allow_outside_workspace,
         &builtin_tool_enabled,
         project_instruction_budget_chars,
@@ -3297,7 +3644,13 @@ pub async fn get_context_preview(
 
 #[cfg(test)]
 mod tests {
-    use super::build_context_messages;
+    use super::{
+        build_context_messages, derive_headless_session_source,
+        main_chat_requests_collaboration_context, resolve_headless_scene_kind,
+        validate_headless_session_scope, HeadlessRunOptions, SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL,
+        SESSION_SOURCE_PISCI_HEARTBEAT_POOL, SESSION_SOURCE_PISCI_POOL,
+    };
+    use crate::commands::scene::SceneKind;
     use crate::store::db::ChatMessage;
     use chrono::Utc;
 
@@ -3365,5 +3718,80 @@ mod tests {
                 .any(|msg| msg.content.as_text().contains("[turn:12]")),
             "recent turns should still be preserved"
         );
+    }
+
+    #[test]
+    fn heartbeat_and_pool_sessions_use_expected_sources() {
+        assert_eq!(
+            derive_headless_session_source("heartbeat", None),
+            SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL
+        );
+        assert_eq!(
+            derive_headless_session_source("heartbeat", Some("pool-1")),
+            SESSION_SOURCE_PISCI_POOL
+        );
+        assert_eq!(
+            derive_headless_session_source("feishu", Some("pool-1")),
+            SESSION_SOURCE_PISCI_POOL
+        );
+    }
+
+    #[test]
+    fn resolve_headless_scene_kind_respects_channel_scope_and_explicit_override() {
+        let explicit = HeadlessRunOptions {
+            scene_kind: Some(SceneKind::KoiTask),
+            ..HeadlessRunOptions::default()
+        };
+        assert_eq!(
+            resolve_headless_scene_kind("internal", "im_internal", Some(&explicit)),
+            SceneKind::KoiTask
+        );
+
+        let heartbeat = HeadlessRunOptions {
+            pool_session_id: Some("pool-1".into()),
+            ..HeadlessRunOptions::default()
+        };
+        assert_eq!(
+            resolve_headless_scene_kind(
+                "heartbeat",
+                SESSION_SOURCE_PISCI_HEARTBEAT_POOL,
+                Some(&heartbeat)
+            ),
+            SceneKind::HeartbeatSupervisor
+        );
+
+        let pool = HeadlessRunOptions {
+            pool_session_id: Some("pool-1".into()),
+            ..HeadlessRunOptions::default()
+        };
+        assert_eq!(
+            resolve_headless_scene_kind("internal", SESSION_SOURCE_PISCI_POOL, Some(&pool)),
+            SceneKind::PoolCoordinator
+        );
+
+        assert_eq!(
+            resolve_headless_scene_kind("feishu", "im_feishu", None),
+            SceneKind::IMHeadless
+        );
+    }
+
+    #[test]
+    fn validate_headless_session_scope_accepts_shared_pool_sessions() {
+        validate_headless_session_scope(
+            SESSION_SOURCE_PISCI_HEARTBEAT_POOL,
+            SESSION_SOURCE_PISCI_POOL,
+            Some("pool-1"),
+        )
+        .expect("legacy heartbeat-pool sessions should remain reusable for shared pool runs");
+    }
+
+    #[test]
+    fn collaboration_context_only_triggers_for_collab_queries() {
+        assert!(main_chat_requests_collaboration_context(
+            "请查看 pool 里的 koi 任务分配"
+        ));
+        assert!(!main_chat_requests_collaboration_context(
+            "帮我修一下这个普通 bug"
+        ));
     }
 }

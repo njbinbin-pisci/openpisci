@@ -410,7 +410,7 @@ pub fn default_heartbeat_prompt() -> String {
      - pool_chat(action=\"read\", pool_id=...) — 阅读最新消息\n\n\
      根据任务板状态判断并执行：\n\
      - 若所有 todo 状态均为 done 或 cancelled（无 todo/in_progress/blocked）：\n\
-       立即执行 pool_org(action=\"archive\", pool_id=...) 归档项目，并在 pool_chat 发送收尾总结。\n\
+       不要自动归档。先在 pool_chat 发送收尾总结，明确说明项目已进入“待用户确认归档”状态；只有用户明确要求归档时，Pisci 才能执行 pool_org(action=\"archive\", pool_id=...)。\n\
      - 若有 blocked 任务：主动解除阻塞或重新分配。\n\
      - 若 Koi 在空转讨论无产出：在 pool_chat 推动下一步或分配具体任务。\n\
      - 若项目卡住无进展：介入协调。\n\n\

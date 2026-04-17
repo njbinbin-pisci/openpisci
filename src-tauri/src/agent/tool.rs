@@ -165,6 +165,10 @@ impl ToolRegistry {
         self.tools.retain(|t| t.name() != name);
     }
 
+    pub fn retain(&mut self, mut predicate: impl FnMut(&dyn Tool) -> bool) {
+        self.tools.retain(|tool| predicate(tool.as_ref()));
+    }
+
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
         self.tools
             .iter()

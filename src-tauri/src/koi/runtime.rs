@@ -18,7 +18,7 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, Mutex};
 
 /// Global registry of running Koi sessions.
@@ -29,6 +29,44 @@ pub static KOI_SESSIONS: Lazy<Mutex<HashMap<String, mpsc::Sender<String>>>> =
 static ACTIVE_KOI_RUNS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static PENDING_KOI_NOTIFICATIONS: Lazy<Mutex<HashMap<String, Vec<String>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+/// Soft-fence in-flight set (keyed by `koi_id::pool_session_id`).
+/// When `reconcile_managed_pool_completion` finds unreconciled todos on a
+/// successful run, it synchronously re-engages the Koi once before applying
+/// the hard fence (needs_review + protocol_reminder). The retry itself ends
+/// with another call to `reconcile_managed_pool_completion`; this set lets the
+/// nested call recognize itself and apply the hard fence immediately rather
+/// than recursing into another soft-fence retry.
+static IN_FLIGHT_SOFT_FENCE: Lazy<Mutex<HashSet<String>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
+
+fn soft_fence_key(koi_id: &str, pool_session_id: &str) -> String {
+    format!("{}::{}", koi_id, pool_session_id)
+}
+
+fn managed_run_slot_key(koi_id: &str, pool_session_id: Option<&str>) -> String {
+    format!("{}:{}", koi_id, pool_session_id.unwrap_or("default"))
+}
+
+async fn refresh_managed_koi_status(
+    app: &AppHandle,
+    db_arc: &Arc<Mutex<Database>>,
+    koi_id: &str,
+) {
+    let prefix = format!("{}:", koi_id);
+    let is_busy = {
+        let active = ACTIVE_KOI_RUNS.lock().await;
+        active.iter().any(|key| key.starts_with(&prefix))
+    };
+    let new_status = if is_busy { "busy" } else { "idle" };
+    {
+        let db = db_arc.lock().await;
+        let _ = db.update_koi_status(koi_id, new_status);
+    }
+    let _ = app.emit(
+        "koi_status_changed",
+        json!({ "id": koi_id, "status": new_status }),
+    );
+}
 
 #[derive(Clone)]
 pub struct KoiRuntime {
@@ -59,6 +97,16 @@ impl KoiRunSlotGuard {
             active: true,
         })
     }
+
+    async fn release(mut self) {
+        if !self.active {
+            return;
+        }
+        self.runtime
+            .release_koi_run_slot(&self.koi_id, self.pool_session_id.as_deref())
+            .await;
+        self.active = false;
+    }
 }
 
 impl Drop for KoiRunSlotGuard {
@@ -84,6 +132,295 @@ pub struct KoiExecResult {
     pub result_message_id: Option<i64>,
 }
 
+pub(crate) async fn try_acquire_managed_run_slot(
+    app: &AppHandle,
+    db_arc: &Arc<Mutex<Database>>,
+    koi_id: &str,
+    pool_session_id: Option<&str>,
+) -> bool {
+    let key = managed_run_slot_key(koi_id, pool_session_id);
+    let inserted = {
+        let mut active = ACTIVE_KOI_RUNS.lock().await;
+        active.insert(key)
+    };
+    if inserted {
+        refresh_managed_koi_status(app, db_arc, koi_id).await;
+    }
+    inserted
+}
+
+pub(crate) async fn release_managed_run_slot(
+    app: &AppHandle,
+    db_arc: &Arc<Mutex<Database>>,
+    koi_id: &str,
+    pool_session_id: Option<&str>,
+) {
+    let key = managed_run_slot_key(koi_id, pool_session_id);
+    {
+        let mut active = ACTIVE_KOI_RUNS.lock().await;
+        active.remove(&key);
+    }
+    refresh_managed_koi_status(app, db_arc, koi_id).await;
+}
+
+pub(crate) async fn is_koi_run_slot_active(koi_id: &str, pool_session_id: Option<&str>) -> bool {
+    let key = managed_run_slot_key(koi_id, pool_session_id);
+    let active = ACTIVE_KOI_RUNS.lock().await;
+    active.contains(&key)
+}
+
+pub(crate) async fn reconcile_managed_pool_completion(
+    app: &AppHandle,
+    db_arc: &Arc<Mutex<Database>>,
+    pool_session_id: &str,
+    koi_id: &str,
+    koi_name: &str,
+    reply: &str,
+    success: bool,
+) {
+    async fn fetch_claimed_todos(
+        db_arc: &Arc<Mutex<Database>>,
+        pool_session_id: &str,
+        koi_id: &str,
+    ) -> Result<Vec<KoiTodo>, String> {
+        let db = db_arc.lock().await;
+        db.list_active_todos_by_pool(pool_session_id)
+            .map(|todos| {
+                todos
+                    .into_iter()
+                    .filter(|todo| {
+                        todo.status == "in_progress" && todo.claimed_by.as_deref() == Some(koi_id)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|err| err.to_string())
+    }
+
+    let mut claimed_todos = match fetch_claimed_todos(db_arc, pool_session_id, koi_id).await {
+        Ok(t) => t,
+        Err(err) => {
+            tracing::warn!(
+                "managed runtime: failed to inspect claimed todos for koi='{}' pool='{}': {}",
+                koi_name,
+                pool_session_id,
+                err
+            );
+            return;
+        }
+    };
+
+    if claimed_todos.is_empty() {
+        return;
+    }
+
+    // Soft fence: successful runs get ONE synchronous retry to reconcile their
+    // own claimed todos before the hard fence below applies needs_review. The
+    // retry itself finishes with another call to this function; we use an
+    // in-flight set to detect that recursive call and let it fall through to
+    // the hard fence without retrying again.
+    let flight_key = soft_fence_key(koi_id, pool_session_id);
+    let entered_soft_fence = if success {
+        let mut flight = IN_FLIGHT_SOFT_FENCE.lock().await;
+        if flight.contains(&flight_key) {
+            false
+        } else {
+            flight.insert(flight_key.clone());
+            true
+        }
+    } else {
+        false
+    };
+
+    if entered_soft_fence {
+        tracing::info!(
+            "reconcile_managed: soft-fence entry koi='{}' pool='{}' pending={}",
+            koi_name,
+            pool_session_id,
+            claimed_todos.len()
+        );
+        let koi_def_opt = {
+            let db = db_arc.lock().await;
+            db.resolve_koi_identifier(koi_id).ok().flatten()
+        };
+        if let Some(koi_def) = koi_def_opt {
+            let runtime = KoiRuntime::from_tauri(app.clone(), db_arc.clone());
+            runtime
+                .run_soft_fence_reconcile_for(&koi_def, pool_session_id, &claimed_todos)
+                .await;
+        } else {
+            tracing::warn!(
+                "reconcile_managed: soft fence could not resolve koi_def for id='{}' pool='{}'; falling through",
+                koi_id,
+                pool_session_id
+            );
+        }
+        {
+            let mut flight = IN_FLIGHT_SOFT_FENCE.lock().await;
+            flight.remove(&flight_key);
+        }
+        // Re-inspect the board. If the retry's agent honestly reconciled its
+        // todos (or the retry's own nested reconcile already applied the hard
+        // fence on them), there is nothing left to do. Otherwise (e.g. the
+        // retry timed out before its nested reconcile could run), fall
+        // through to the hard fence below on the still-unreconciled subset.
+        claimed_todos = match fetch_claimed_todos(db_arc, pool_session_id, koi_id).await {
+            Ok(t) => t,
+            Err(err) => {
+                tracing::warn!(
+                    "managed runtime: failed to re-inspect claimed todos post soft-fence for koi='{}' pool='{}': {}",
+                    koi_name,
+                    pool_session_id,
+                    err
+                );
+                return;
+            }
+        };
+        if claimed_todos.is_empty() {
+            return;
+        }
+        tracing::info!(
+            "reconcile_managed: soft fence did not fully reconcile koi='{}' pool='{}' remaining={}",
+            koi_name,
+            pool_session_id,
+            claimed_todos.len()
+        );
+    }
+
+    let reply_preview = if reply.chars().count() > 5000 {
+        format!("{}...", reply.chars().take(5000).collect::<String>())
+    } else {
+        reply.trim().to_string()
+    };
+
+    for todo in claimed_todos {
+        let mut emitted_messages = Vec::new();
+        let todo_action = {
+            let db = db_arc.lock().await;
+            if success {
+                if !reply_preview.is_empty() {
+                    match db.insert_pool_message_ext(
+                        pool_session_id,
+                        koi_id,
+                        &reply_preview,
+                        "status_update",
+                        &json!({
+                            "todo_id": todo.id,
+                            "auto_captured": true,
+                            "managed_externally": true
+                        })
+                        .to_string(),
+                        Some(&todo.id),
+                        None,
+                        Some("task_progress"),
+                    ) {
+                        Ok(msg) => {
+                            emitted_messages.push(serde_json::to_value(&msg).unwrap_or_default())
+                        }
+                        Err(err) => tracing::warn!(
+                            "managed runtime: failed to capture output for todo='{}': {}",
+                            todo.id,
+                            err
+                        ),
+                    }
+                }
+
+                let reminder = format!(
+                    "[ProtocolReminder] {} finished executing on '{}' without calling complete_todo. The task output has been captured above if any. Todo status set to needs_review.",
+                    koi_name,
+                    todo.title
+                );
+                match db.insert_pool_message_ext(
+                    pool_session_id,
+                    "system",
+                    &reminder,
+                    "status_update",
+                    &json!({
+                        "todo_id": todo.id,
+                        "protocol_reminder": "missing_complete_todo",
+                        "managed_externally": true
+                    })
+                    .to_string(),
+                    Some(&todo.id),
+                    None,
+                    Some("protocol_reminder"),
+                ) {
+                    Ok(msg) => {
+                        emitted_messages.push(serde_json::to_value(&msg).unwrap_or_default())
+                    }
+                    Err(err) => tracing::warn!(
+                        "managed runtime: failed to insert protocol reminder for todo='{}': {}",
+                        todo.id,
+                        err
+                    ),
+                }
+
+                if let Err(err) = db.mark_koi_todo_needs_review(
+                    &todo.id,
+                    "Agent finished without calling complete_todo",
+                ) {
+                    tracing::warn!(
+                        "managed runtime: failed to mark todo='{}' needs_review: {}",
+                        todo.id,
+                        err
+                    );
+                }
+                "needs_review"
+            } else {
+                let failure_summary = if reply_preview.is_empty() {
+                    format!("Koi '{}' failed without a structured error message.", koi_name)
+                } else {
+                    reply_preview.clone()
+                };
+                match db.insert_pool_message_ext(
+                    pool_session_id,
+                    koi_id,
+                    &failure_summary,
+                    "status_update",
+                    &json!({
+                        "todo_id": todo.id,
+                        "success": false,
+                        "managed_externally": true
+                    })
+                    .to_string(),
+                    Some(&todo.id),
+                    None,
+                    Some("task_failed"),
+                ) {
+                    Ok(msg) => {
+                        emitted_messages.push(serde_json::to_value(&msg).unwrap_or_default())
+                    }
+                    Err(err) => tracing::warn!(
+                        "managed runtime: failed to insert failure message for todo='{}': {}",
+                        todo.id,
+                        err
+                    ),
+                }
+
+                if let Err(err) = db.block_koi_todo(&todo.id, &failure_summary) {
+                    tracing::warn!(
+                        "managed runtime: failed to block todo='{}': {}",
+                        todo.id,
+                        err
+                    );
+                }
+                "blocked"
+            }
+        };
+
+        for payload in emitted_messages {
+            let _ = app.emit(&format!("pool_message_{}", pool_session_id), payload);
+        }
+        let _ = app.emit(
+            "koi_todo_updated",
+            json!({
+                "id": todo.id,
+                "action": todo_action,
+                "by": koi_id
+            }),
+        );
+    }
+}
+
 impl KoiRuntime {
     fn koi_pool_session_key(koi_id: &str, pool_session_id: &str) -> String {
         format!("{}:{}", koi_id, pool_session_id)
@@ -97,6 +434,7 @@ impl KoiRuntime {
         format!(
             "[Pool Notification] @{} from {} (in pool chat):\n{}\n\n\
              You can use pool_chat to respond. \
+             Not every mention is immediate work: future plans, acknowledgements, and FYI messages may mention you without requiring action now. \
              If this is actionable work, create a todo for yourself via pool_org so it is tracked. \
              If you cannot handle it right now, still create the todo — it will be picked up on your next activation.",
             koi_name, sender_name, content
@@ -320,7 +658,7 @@ impl KoiRuntime {
         };
         let koi_id = koi_def.id.as_str();
         let task = todo.title.clone();
-        let _run_guard =
+        let run_guard =
             KoiRunSlotGuard::acquire(self, koi_id, canonical_pool_session_id.as_deref())
                 .await
                 .ok_or_else(|| {
@@ -388,6 +726,7 @@ impl KoiRuntime {
                 &task_with_meta,
                 canonical_pool_session_id.as_deref(),
                 worktree_path.as_deref(),
+                false,
             ),
         )
         .await
@@ -422,8 +761,17 @@ impl KoiRuntime {
         } else {
             false
         };
+        let test_mode_completed = run_success
+            && canonical_pool_session_id.is_none()
+            && raw_reply.starts_with("[TestMode]");
+        let completion_recorded = explicitly_completed || test_mode_completed;
 
-        // Check if todo was already marked done by the agent via complete_todo tool
+        // Check if todo was already marked done by the agent via complete_todo tool.
+        // Note: execute_todo's post-agent reminder path at L761 is analogous to
+        // reconcile_managed_pool_completion's path. The soft fence for this
+        // execute_todo path is not yet wired; the trial's primary worker
+        // dispatch goes through call_koi background + reconcile_managed, which
+        // is where the soft fence actually fires.
         let todo_already_done = {
             let db = self.db().lock().await;
             db.get_koi_todo(&todo.id)
@@ -482,7 +830,7 @@ impl KoiRuntime {
                 );
                 drop(db);
                 Some(msg.id)
-            } else if !todo_already_done {
+            } else if !todo_already_done && !completion_recorded {
                 // Agent finished without error but didn't call complete_todo.
                 // 1) Post the Koi's actual output so its work is visible in the pool.
                 let koi_output = if raw_reply.chars().count() > 5000 {
@@ -552,14 +900,16 @@ impl KoiRuntime {
             let db = self.db().lock().await;
             if !run_success {
                 db.block_koi_todo(&todo.id, &raw_reply)?;
-            } else if !explicitly_completed {
+            } else if test_mode_completed {
+                db.complete_koi_todo(&todo.id, result_msg_id)?;
+            } else if !completion_recorded {
                 db.mark_koi_todo_needs_review(
                     &todo.id,
                     "Agent finished without calling complete_todo",
                 )?;
             }
         }
-        let todo_action = if todo_already_done || explicitly_completed {
+        let todo_action = if todo_already_done || completion_recorded {
             "completed"
         } else if !run_success {
             "blocked"
@@ -577,6 +927,7 @@ impl KoiRuntime {
         if let Some(ref wt) = worktree_path {
             self.cleanup_worktree(wt, &koi_def.name, &task);
         }
+        run_guard.release().await;
         Ok(KoiExecResult {
             success,
             reply: raw_reply,
@@ -890,8 +1241,7 @@ impl KoiRuntime {
             (koi_def, pool_session.id)
         };
         let koi_id = koi_def.id.as_str();
-        let _run_guard = match KoiRunSlotGuard::acquire(self, koi_id, Some(&pool_session_id)).await
-        {
+        let run_guard = match KoiRunSlotGuard::acquire(self, koi_id, Some(&pool_session_id)).await {
             Some(guard) => guard,
             None => {
                 return Ok(KoiExecResult {
@@ -911,7 +1261,7 @@ impl KoiRuntime {
             .await;
         let exec_result = match tokio::time::timeout(
             std::time::Duration::from_secs(koi_timeout_secs),
-            self.execute_koi_agent(&koi_def, &task, Some(&pool_session_id), None),
+            self.execute_koi_agent(&koi_def, &task, Some(&pool_session_id), None, false),
         )
         .await
         {
@@ -934,10 +1284,23 @@ impl KoiRuntime {
             Err(e) => (false, format!("Error: {}", e)),
         };
 
-        // For peer-mention activations, only treat the run as "completed" when it
-        // produced an explicit deliverable already recorded in the pool (typically
-        // via complete_todo or an equivalent result message). Plain conversational
-        // text is progress/status, not terminal completion.
+        // Note: the soft fence is embedded inside reconcile_managed_pool_completion
+        // so that it triggers AFTER the agent loop actually finishes (since
+        // call_koi background-spawns the agent and returns early; reconcile is
+        // the only checkpoint that runs post-agent-completion).
+        if let Some(app) = self.try_get_app_handle() {
+            reconcile_managed_pool_completion(
+                app,
+                self.db(),
+                &pool_session_id,
+                koi_id,
+                &koi_def.name,
+                &reply,
+                success,
+            )
+            .await;
+        }
+
         let result_msg_id = {
             let db = self.db().lock().await;
             let summary = if reply.chars().count() > 5000 {
@@ -945,23 +1308,8 @@ impl KoiRuntime {
             } else {
                 reply.clone()
             };
-            let latest_result = db
-                .get_latest_result_message(&pool_session_id, koi_id)
-                .unwrap_or_default();
-            let has_explicit_deliverable = success
-                && !summary.trim().is_empty()
-                && latest_result
-                    .as_deref()
-                    .map(|msg| {
-                        let msg = msg.trim();
-                        let sum = summary.trim();
-                        !msg.is_empty() && (sum.contains(msg) || msg.contains(sum))
-                    })
-                    .unwrap_or(false);
             let event_type = if !success {
                 Some("task_failed")
-            } else if has_explicit_deliverable {
-                Some("task_completed")
             } else if summary.trim().is_empty() {
                 None
             } else {
@@ -969,8 +1317,6 @@ impl KoiRuntime {
             };
             let msg_type = if !success {
                 "status_update"
-            } else if has_explicit_deliverable {
-                "result"
             } else {
                 "status_update"
             };
@@ -982,7 +1328,7 @@ impl KoiRuntime {
                     &summary,
                     msg_type,
                     &json!({
-                        "explicit_deliverable": has_explicit_deliverable,
+                        "activation_source": "mention",
                         "success": success
                     })
                     .to_string(),
@@ -1007,8 +1353,9 @@ impl KoiRuntime {
         // @pisci mention so the heartbeat cursor sees a fresh attention event.
         if is_timeout {
             let block_reason = format!(
-                "Koi '{}' timed out (10 min limit). Needs Pisci intervention.",
-                koi_def.name
+                "Koi '{}' timed out after {} seconds while checking messages. Needs Pisci intervention.",
+                koi_def.name,
+                koi_timeout_secs
             );
             let db = self.db().lock().await;
             if let Ok(todos) = db.list_active_todos_by_pool(&pool_session_id) {
@@ -1039,6 +1386,7 @@ impl KoiRuntime {
                 );
             }
         }
+        run_guard.release().await;
         Ok(KoiExecResult {
             success,
             reply,
@@ -1049,12 +1397,18 @@ impl KoiRuntime {
     /// Execute the Koi agent. This is the only part that needs Tauri for now
     /// (because CallKoiTool and AgentLoop need AppHandle/settings).
     /// In tests, override this via a simpler mock.
+    ///
+    /// When `await_completion` is true, the call returns only after the agent
+    /// has finished running AND the post-agent reconcile has executed. This
+    /// is required for the soft-fence retry path: we must know the retry's
+    /// outcome before deciding whether the hard fence should fire.
     async fn execute_koi_agent(
         &self,
         koi_def: &KoiDefinition,
         task: &str,
         pool_session_id: Option<&str>,
         workspace_override: Option<&str>,
+        await_completion: bool,
     ) -> anyhow::Result<String> {
         use crate::agent::tool::{Tool, ToolContext, ToolSettings};
         use tauri::Manager;
@@ -1081,6 +1435,16 @@ impl KoiRuntime {
                     Arc::new(ToolSettings::from_settings(&settings)),
                 )
             };
+            let loop_max_iterations = {
+                let settings = state.settings.lock().await;
+                if koi_def.max_iterations > 0 {
+                    Some(koi_def.max_iterations)
+                } else if settings.max_iterations > 0 {
+                    Some(settings.max_iterations)
+                } else {
+                    None
+                }
+            };
 
             // Create notification channel and register in global session registry.
             // Key includes pool_session_id so the same Koi can run in multiple projects concurrently.
@@ -1104,6 +1468,7 @@ impl KoiRuntime {
                 depth: 0,
                 managed_externally: true,
                 notification_rx: std::sync::Mutex::new(Some(notif_rx)),
+                await_completion,
             };
 
             let cancel_key = format!(
@@ -1124,12 +1489,8 @@ impl KoiRuntime {
                 workspace_root: std::path::PathBuf::from(&workspace_root),
                 bypass_permissions: false,
                 settings: tool_settings_data,
-                // 0 means "use system default (30)"; non-zero values are user-configured
-                max_iterations: Some(if koi_def.max_iterations > 0 {
-                    koi_def.max_iterations
-                } else {
-                    30
-                }),
+                // Koi-specific max_iterations overrides the user-configurable system default.
+                max_iterations: loop_max_iterations,
                 memory_owner_id: koi_def.id.clone(),
                 pool_session_id: pool_session_id.map(String::from),
                 cancel: cancel.clone(),
@@ -1191,6 +1552,147 @@ impl KoiRuntime {
         // Safety: we know the concrete types. Use a helper on EventBus.
         // For now, we add a method to EventBus for this.
         self.bus.app_handle()
+    }
+
+    /// Soft fence (one-shot). Re-engage this Koi with an explicit "you are
+    /// still in Reconciling" task and give it exactly one more turn. The
+    /// retry task spells out the three legitimate outcomes (complete_todo /
+    /// blocked / cancelled) so the model can mark `failed` work honestly
+    /// instead of being force-pushed to `needs_review`.
+    ///
+    /// This is the runtime-side entry. The standalone function callers
+    /// (notably `reconcile_managed_pool_completion`) use
+    /// `KoiRuntime::from_tauri` to obtain a runtime and then invoke this.
+    async fn run_soft_fence_reconcile_for(
+        &self,
+        koi_def: &KoiDefinition,
+        pool_session_id: &str,
+        pending: &[KoiTodo],
+    ) {
+        tracing::info!(
+            "soft fence: ENTRY koi='{}' (id={}) pool='{}' pending={}",
+            koi_def.name,
+            koi_def.id,
+            pool_session_id,
+            pending.len()
+        );
+        if pending.is_empty() {
+            return;
+        }
+
+        let pending_lines: Vec<String> = pending
+            .iter()
+            .map(|t| {
+                format!(
+                    "  - id=\"{}\" status=\"{}\" title=\"{}\"",
+                    t.id, t.status, t.title
+                )
+            })
+            .collect();
+
+        // Visible audit trail: post a [SoftFence] notice so future readers
+        // (and Pisci) can see that the harness re-engaged the Koi. This is
+        // NOT the hard-fence protocol_reminder; it explicitly says "another
+        // turn was granted".
+        {
+            let db = self.db().lock().await;
+            let notice = format!(
+                "[SoftFence] {} exited with {} unreconciled claimed todo(s) on the board. \
+                 Granting one more turn to reconcile (complete / blocked / cancelled).",
+                koi_def.name,
+                pending.len()
+            );
+            if let Ok(msg) = db.insert_pool_message_ext(
+                pool_session_id,
+                "system",
+                &notice,
+                "status_update",
+                &json!({
+                    "soft_fence": "reconcile_retry",
+                    "koi_id": koi_def.id,
+                    "pending_todo_ids": pending.iter().map(|t| &t.id).collect::<Vec<_>>(),
+                })
+                .to_string(),
+                None,
+                None,
+                Some("soft_fence"),
+            ) {
+                self.bus.emit_event(
+                    &format!("pool_message_{}", pool_session_id),
+                    serde_json::to_value(&msg).unwrap_or_default(),
+                );
+            }
+        }
+
+        let task = format!(
+            "You previously ran in pool \"{pool_id}\" and exited, but `pool_org` shows \
+             the following claimed todo(s) of yours are still unreconciled on the board:\n\n\
+             {pending_block}\n\n\
+             Per the Run Shape in your system prompt, the run is NOT Done while a claimed \
+             todo of yours sits in `todo` or `in_progress`. You are still in the Reconciling \
+             phase for each todo above.\n\n\
+             For EACH unreconciled todo, choose ONE option and execute it now. Do NOT default \
+             to (a) if (b) or (c) is the truth \u{2014} the board should reflect reality.\n\n\
+             (a) DONE \u{2014} the deliverable is real and is observable in pool_chat. Action: \
+             `pool_org(action=\"complete_todo\", todo_id=\"<id>\", summary=\"<one-line summary>\")`. \
+             If the deliverable is NOT yet visible in pool_chat, post it FIRST via \
+             `pool_chat(action=\"send\")` (include file path(s) and a brief summary), then \
+             call complete_todo. If a follow-up by another agent is needed, the same post must \
+             include `[ProjectStatus] follow_up_needed` and an `@mention` of the next \
+             responsible party (identify them per the Coordination Protocol \u{2014} from \
+             `org_spec`, the task description, or the @mention chain; never default to a \
+             fixed role name).\n\n\
+             (b) BLOCKED \u{2014} you genuinely cannot proceed (real blocker, missing upstream \
+             evidence, ambiguous requirement that needs clarification, etc.). Action: \
+             `pool_org(action=\"update_todo_status\", todo_id=\"<id>\", status=\"blocked\")`, \
+             then post a `pool_chat(action=\"send\")` message naming the blocker so another \
+             agent can act on it.\n\n\
+             (c) CANCELLED \u{2014} the work turned out unnecessary, wrongly scoped, or \
+             superseded. Action: `pool_org(action=\"cancel_todo\", todo_id=\"<id>\", \
+             reason=\"<why>\")`.\n\n\
+             After every todo above is in {{done, blocked, cancelled}}, you may stop. The \
+             harness will check the board one last time after this turn; if anything is still \
+             in `todo` or `in_progress`, it will be force-rewritten to `needs_review` with a \
+             permanent `protocol_reminder` event under your name. Take this turn seriously.",
+            pool_id = pool_session_id,
+            pending_block = pending_lines.join("\n")
+        );
+
+        let timeout_secs = self
+            .resolve_task_timeout_secs(koi_def, Some(pool_session_id), None)
+            .await;
+
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            self.execute_koi_agent(koi_def, &task, Some(pool_session_id), None, true),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {
+                tracing::info!(
+                    "soft fence: koi='{}' pool='{}' completed reconcile retry ({} pending)",
+                    koi_def.name,
+                    pool_session_id,
+                    pending.len()
+                );
+            }
+            Ok(Err(err)) => {
+                tracing::warn!(
+                    "soft fence: koi='{}' pool='{}' reconcile retry errored: {}",
+                    koi_def.name,
+                    pool_session_id,
+                    err
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "soft fence: koi='{}' pool='{}' reconcile retry timed out after {}s",
+                    koi_def.name,
+                    pool_session_id,
+                    timeout_secs
+                );
+            }
+        }
     }
 
     async fn peer_handoff_open_todo_count(
@@ -1304,7 +1806,8 @@ impl KoiRuntime {
                 continue;
             }
             let mention = format!("@{}", koi.name);
-            if !mention_all && !content.contains(&mention) {
+            let mentioned = content.contains(&mention);
+            if !mention_all && !mentioned {
                 continue;
             }
 

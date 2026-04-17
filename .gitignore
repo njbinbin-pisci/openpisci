@@ -1,6 +1,8 @@
 # Rust / Cargo
 target/
 # Note: Cargo.lock is intentionally committed for applications (not libraries)
+# Workspace members should not carry their own lockfile; only the workspace root's lockfile is tracked.
+src-tauri/pisci-core/Cargo.lock
 
 # Node / npm
 node_modules/

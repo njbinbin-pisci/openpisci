@@ -11,6 +11,7 @@ pub mod mcp;
 pub mod memory;
 pub mod permission;
 pub mod pool;
+pub mod scene;
 pub mod scheduler;
 pub mod settings;
 pub mod skills;
