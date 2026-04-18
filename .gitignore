@@ -31,6 +31,10 @@ Thumbs.db
 
 # Logs
 *.log
+# Ad-hoc CI / build dumps saved at the repo root during local debugging.
+/ci-log.txt
+/tauri-bundle-log.txt
+/*-log.txt
 
 # Windows installer artifacts
 *.msi
