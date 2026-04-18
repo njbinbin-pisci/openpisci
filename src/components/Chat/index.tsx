@@ -5,7 +5,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { RootState, chatActions, sessionsActions, ToolStep, StreamingState, PlanTodoItem } from "../../store";
+import { RootState, chatActions, sessionsActions, ToolStep, StreamingState, PlanTodoItem, ContextUsageSnapshot } from "../../store";
 import { chatApi, sessionsApi, gatewayApi, AgentEventType, ChannelInfo, ChatAttachment, type Session, type ChatMessage } from "../../services/tauri";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -225,6 +225,86 @@ function formatContextTime(value: string | null | undefined): string | null {
   return date.toLocaleString();
 }
 
+/** Tiny ring progress indicator for current-context-vs-compaction-trigger.
+ *
+ *  The ring fills 0–100% where 100% = `triggerThreshold` (the 60%-of-budget line
+ *  at which Level-2 proactive compaction fires). Readings above 100% overflow
+ *  visually (full ring + red) to indicate we're above the trigger line.
+ *
+ *  Color ramp: cool → warm → alert as the estimate approaches the trigger.
+ */
+function ContextUsageRing({
+  usage,
+  t,
+}: {
+  usage: ContextUsageSnapshot | undefined;
+  t: (key: string, options?: Record<string, unknown>) => string;
+}) {
+  if (!usage || usage.triggerThreshold <= 0) return null;
+  const pct = (usage.estimatedInputTokens / usage.triggerThreshold) * 100;
+  const displayPct = Math.min(100, Math.max(0, pct));
+  const size = 22;
+  const stroke = 2.5;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const dashOffset = circumference * (1 - displayPct / 100);
+  let color = "var(--accent, #4a9eff)";
+  if (pct >= 100) color = "#dc3545";
+  else if (pct >= 80) color = "#ff6b6b";
+  else if (pct >= 60) color = "#f0a020";
+  else if (pct >= 40) color = "#c9b458";
+  const tooltip = [
+    t("chat.contextRingTitle"),
+    t("chat.contextRingEstimate", {
+      estimated: formatTokenCount(usage.estimatedInputTokens),
+      trigger: formatTokenCount(usage.triggerThreshold),
+      budget: formatTokenCount(usage.totalInputBudget),
+      pct: pct.toFixed(0),
+    }),
+    t("chat.contextRingCumulative", {
+      input: formatTokenCount(usage.cumulativeInputTokens),
+      output: formatTokenCount(usage.cumulativeOutputTokens),
+    }),
+    usage.rollingSummaryVersion > 0
+      ? t("chat.contextRingSummary", { version: usage.rollingSummaryVersion })
+      : t("chat.contextRingNoSummary"),
+    usage.autoCompactThreshold > 0
+      ? t("chat.contextRingAutoCompact", {
+          threshold: formatTokenCount(usage.autoCompactThreshold),
+        })
+      : t("chat.contextRingAutoCompactDisabled"),
+  ].join("\n");
+  const label = `${Math.round(pct)}%`;
+  return (
+    <div className="context-usage-ring" title={tooltip} aria-label={tooltip}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke="var(--border)"
+          strokeWidth={stroke}
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke={color}
+          strokeWidth={stroke}
+          strokeDasharray={circumference}
+          strokeDashoffset={dashOffset}
+          strokeLinecap="round"
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          style={{ transition: "stroke-dashoffset 0.3s ease, stroke 0.3s ease" }}
+        />
+      </svg>
+      <span className="context-usage-label" style={{ color }}>{label}</span>
+    </div>
+  );
+}
+
 function buildSessionContextBadges(session: Session, t: (key: string, options?: Record<string, unknown>) => string): string[] {
   const badges: string[] = [];
   if ((session.rolling_summary_version ?? 0) > 0) {
@@ -243,7 +323,7 @@ export default function Chat() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const { sessions, activeSessionId } = useSelector((s: RootState) => s.sessions);
-  const { messagesBySession, streaming, toolSteps, planBySession, isRunning } = useSelector(
+  const { messagesBySession, streaming, toolSteps, planBySession, isRunning, contextUsage } = useSelector(
     (s: RootState) => s.chat
   );
 
@@ -323,6 +403,40 @@ export default function Chat() {
       setContextPreviewLoading(false);
     }
   };
+
+  /** Fire-and-forget seed the context-usage ring from the read-only preview command.
+   *  Called on session switch and after `done` so the ring reflects the idle state
+   *  of the session even when no agent run is currently streaming events. */
+  const seedContextUsage = useCallback((sessionId: string) => {
+    invoke<{
+      total_tokens: number;
+      total_input_budget: number;
+      rolling_summary_version: number;
+      total_input_tokens: number;
+      total_output_tokens: number;
+    }>("get_context_preview", { sessionId })
+      .then((preview) => {
+        const trigger = Math.round(preview.total_input_budget * 0.6);
+        dispatch(chatActions.setContextUsage({
+          sessionId,
+          usage: {
+            estimatedInputTokens: preview.total_tokens,
+            totalInputBudget: preview.total_input_budget,
+            triggerThreshold: trigger,
+            cumulativeInputTokens: preview.total_input_tokens,
+            cumulativeOutputTokens: preview.total_output_tokens,
+            rollingSummaryVersion: preview.rolling_summary_version,
+            autoCompactThreshold: contextUsageRef.current[sessionId]?.autoCompactThreshold ?? 0,
+          },
+        }));
+      })
+      .catch(() => { /* silent — ring just stays stale */ });
+  }, [dispatch]);
+
+  // Track latest contextUsage by ref so seedContextUsage can preserve auto-compact threshold
+  // (which only the agent-run event path knows about).
+  const contextUsageRef = useRef(contextUsage);
+  contextUsageRef.current = contextUsage;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesAreaRef = useRef<HTMLDivElement>(null);
   const toolStepsScrollRef = useRef<HTMLDivElement>(null);
@@ -478,6 +592,7 @@ export default function Chat() {
           sessionsApi.getMessages(activeSessionId, CHAT_INITIAL_SIZE, 0),
           sessionsApi.list(),
         ]);
+        seedContextUsage(activeSessionId);
         // Use setMessagesWithFrozen: if a frozenBubble exists for this session (set during
         // a recent agent run), it is preserved as a single collapsed bubble. For sessions
         // with no frozenBubble (old history, other sessions), it falls back to plain setMessages.
@@ -593,6 +708,20 @@ export default function Chat() {
           // Buffer delta for throttled flush (80ms interval)
           deltaBufferRef.current[sid] = (deltaBufferRef.current[sid] ?? "") + event.delta;
           break;
+        case "context_usage":
+          dispatch(chatActions.setContextUsage({
+            sessionId: sid,
+            usage: {
+              estimatedInputTokens: event.estimated_input_tokens,
+              totalInputBudget: event.total_input_budget,
+              triggerThreshold: event.trigger_threshold,
+              cumulativeInputTokens: event.cumulative_input_tokens,
+              cumulativeOutputTokens: event.cumulative_output_tokens,
+              rollingSummaryVersion: event.rolling_summary_version,
+              autoCompactThreshold: event.auto_compact_threshold,
+            },
+          }));
+          break;
         case "tool_start":
           dispatch(chatActions.addToolStep({ sessionId: sid, id: event.id, name: event.name, input: event.input }));
           break;
@@ -636,6 +765,7 @@ export default function Chat() {
           dispatch(chatActions.setRunning({ sessionId: boundSessionId, running: false }));
           dispatch(chatActions.freezeStreaming(boundSessionId));
           dispatch(chatActions.removeOptimisticMessages(boundSessionId));
+          seedContextUsage(boundSessionId);
           sessionsApi.getMessages(boundSessionId, CHAT_INITIAL_SIZE).then((messages) => {
             console.log('[Chat] done: reloaded', messages.length, 'messages for', boundSessionId);
             dispatch(chatActions.setMessagesWithFrozen({ sessionId: boundSessionId, messages }));
@@ -1446,6 +1576,10 @@ export default function Chat() {
                 disabled={running}
               />
               <div className="input-actions">
+                <ContextUsageRing
+                  usage={activeSessionId ? contextUsage[activeSessionId] : undefined}
+                  t={t}
+                />
                 <button
                   className="btn btn-attach"
                   onClick={handleAttach}

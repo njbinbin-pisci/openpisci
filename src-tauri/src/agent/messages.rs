@@ -99,6 +99,28 @@ pub enum AgentEvent {
         tool_input: serde_json::Value,
         description: String,
     },
+    /// Snapshot of the current context-window utilisation, emitted by the agent
+    /// loop before/after each compaction pass and after each main LLM call.
+    /// The frontend renders this as a ring progress indicator next to the send
+    /// button. All values are raw token counts (estimates); see
+    /// `llm::compute_total_input_budget` for how `total_input_budget` is derived.
+    ContextUsage {
+        /// Estimated tokens for the next LLM request (system + tools + messages).
+        estimated_input_tokens: u32,
+        /// Usable input budget for this request (window − max_tokens − safety factor).
+        total_input_budget: u32,
+        /// 60% of `total_input_budget`; estimates above this value trigger Level-2
+        /// proactive compaction on the next iteration.
+        trigger_threshold: u32,
+        /// Session-lifetime cumulative input tokens (monotonically non-decreasing).
+        cumulative_input_tokens: u32,
+        /// Session-lifetime cumulative output tokens.
+        cumulative_output_tokens: u32,
+        /// Rolling summary version, bumped on each successful compaction.
+        rolling_summary_version: u32,
+        /// Configured auto-compact threshold from settings (step size, 0 = disabled).
+        auto_compact_threshold: u32,
+    },
     /// Agent loop complete
     Done {
         total_input_tokens: u32,

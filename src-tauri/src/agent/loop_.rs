@@ -1566,6 +1566,25 @@ impl AgentLoop {
                         break;
                     }
                 }
+
+                // Emit a context-usage snapshot for the UI ring indicator. This fires on
+                // every iteration regardless of whether compaction ran, so the ring
+                // reflects the true state of the request we're about to send.
+                let trigger_threshold = (total_budget as f64 * 0.60) as usize;
+                let _ = event_tx
+                    .send(AgentEvent::ContextUsage {
+                        estimated_input_tokens: estimated.min(u32::MAX as usize) as u32,
+                        total_input_budget: total_budget.min(u32::MAX as usize) as u32,
+                        trigger_threshold: trigger_threshold.min(u32::MAX as usize) as u32,
+                        cumulative_input_tokens: cumulative_input_tokens.clamp(0, u32::MAX as i64)
+                            as u32,
+                        cumulative_output_tokens: cumulative_output_tokens
+                            .clamp(0, u32::MAX as i64) as u32,
+                        rolling_summary_version: rolling_summary_version
+                            .clamp(0, u32::MAX as i64) as u32,
+                        auto_compact_threshold: self.auto_compact_input_tokens_threshold,
+                    })
+                    .await;
             }
 
             info!(

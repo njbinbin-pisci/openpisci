@@ -508,6 +508,35 @@
   gap: 6px;
 }
 
+/* Context-usage ring indicator shown left of the attach button.
+ * Shows current request-input token estimate as a percentage of the
+ * proactive compaction trigger line (60% of the input budget). */
+.context-usage-ring {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto; /* push the ring to the left edge of input-actions */
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-tertiary, var(--bg-secondary));
+  cursor: help;
+  user-select: none;
+  white-space: pre-line; /* render \n in tooltip */
+}
+
+.context-usage-ring svg {
+  flex-shrink: 0;
+  display: block;
+}
+
+.context-usage-label {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  font-weight: 500;
+}
+
 /* Attachment preview strip above the textarea */
 .attachment-preview {
   display: flex;

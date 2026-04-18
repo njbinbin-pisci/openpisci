@@ -113,6 +113,22 @@ interface ChatState {
    *  sees the final report without waiting for the async DB reload.
    *  Cleared by setMessagesWithFrozen once DB data arrives. */
   pendingSummary: Record<string, string>;
+  /** Latest context-window utilisation snapshot per session, used to drive the ring
+   *  progress indicator next to the send button. Populated from AgentEvent.context_usage
+   *  during runs and seeded from get_context_preview on session switch / run completion. */
+  contextUsage: Record<string, ContextUsageSnapshot>;
+}
+
+export interface ContextUsageSnapshot {
+  estimatedInputTokens: number;
+  totalInputBudget: number;
+  /** 60% of totalInputBudget — the compaction trigger line */
+  triggerThreshold: number;
+  cumulativeInputTokens: number;
+  cumulativeOutputTokens: number;
+  rollingSummaryVersion: number;
+  /** Configured cumulative auto-compact threshold (0 = disabled) */
+  autoCompactThreshold: number;
 }
 
 const chatSlice = createSlice({
@@ -126,6 +142,7 @@ const chatSlice = createSlice({
     isRunning: {},
     frozenBubble: {},
     pendingSummary: {},
+    contextUsage: {},
   } as ChatState,
   reducers: {
     setMessages: (state, action: PayloadAction<{ sessionId: string; messages: ChatMessage[] }>) => {
@@ -191,6 +208,15 @@ const chatSlice = createSlice({
     },
     clearStreaming: (state, action: PayloadAction<string>) => {
       delete state.streaming[action.payload];
+    },
+    setContextUsage: (
+      state,
+      action: PayloadAction<{ sessionId: string; usage: ContextUsageSnapshot }>
+    ) => {
+      state.contextUsage[action.payload.sessionId] = action.payload.usage;
+    },
+    clearContextUsage: (state, action: PayloadAction<string>) => {
+      delete state.contextUsage[action.payload];
     },
     /** Called on `done`: snapshot streaming text into frozenBubble + pendingSummary, clear streaming.
      *

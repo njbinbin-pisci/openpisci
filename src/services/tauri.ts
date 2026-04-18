@@ -233,6 +233,18 @@ export type AgentEventType =
   | { type: "message_commit"; message: unknown }
   | { type: "permission_request"; request_id: string; tool_name: string; tool_input: unknown; description: string }
   | { type: "interactive_ui"; request_id: string; ui_definition: unknown }
+  | {
+      type: "context_usage";
+      estimated_input_tokens: number;
+      total_input_budget: number;
+      /** 60% of total_input_budget — proactive compaction fires above this line. */
+      trigger_threshold: number;
+      cumulative_input_tokens: number;
+      cumulative_output_tokens: number;
+      rolling_summary_version: number;
+      /** Configured auto-compact threshold step (0 = cumulative trigger disabled). */
+      auto_compact_threshold: number;
+    }
   | { type: "done"; total_input_tokens: number; total_output_tokens: number }
   | { type: "cancelled" }
   | { type: "error"; message: string }
