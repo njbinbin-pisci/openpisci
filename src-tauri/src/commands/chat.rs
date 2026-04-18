@@ -2870,7 +2870,7 @@ pub fn build_context_messages(
             }];
             for msg in &turn.agent_msgs {
                 if let Some(ref results_json) = msg.tool_results_json {
-                    let trimmed_blocks = trim_tool_result_blocks(results_json);
+                    let trimmed_blocks = minimal_tool_result_blocks(results_json);
                     let text_for_tokens = trimmed_blocks
                         .iter()
                         .filter_map(|b| {
@@ -3099,28 +3099,94 @@ fn reconstruct_blocks(msg: &ChatMessage) -> Vec<ContentBlock> {
     blocks
 }
 
-/// Build tool result blocks with trimmed content for middle-tier turns.
-fn trim_tool_result_blocks(results_json: &str) -> Vec<ContentBlock> {
-    let blocks: Vec<ContentBlock> = serde_json::from_str(results_json).unwrap_or_default();
-    blocks
-        .into_iter()
-        .map(|b| {
-            if let ContentBlock::ToolResult {
+/// Build tool result blocks using the dual-version *minimal* representation
+/// for middle-tier turns.
+///
+/// Priority order per entry:
+/// 1. `content_minimal` field from the persisted JSON (new rows written after
+///    the dual-version migration).
+/// 2. Rule-based backfill via `tool_receipt::render_receipt` using `tool_name`
+///    when available, or `"unknown"` otherwise (legacy rows).
+/// 3. Legacy head+tail char trim as the very last fallback (should only happen
+///    when the JSON is malformed enough that we cannot extract content).
+///
+/// Non-ToolResult blocks (e.g. images) are passed through unchanged.
+fn minimal_tool_result_blocks(results_json: &str) -> Vec<ContentBlock> {
+    let raw: serde_json::Value = match serde_json::from_str(results_json) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let arr = match raw.as_array() {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+
+    let mut out: Vec<ContentBlock> = Vec::with_capacity(arr.len());
+    for item in arr {
+        // Detect the block type via the embedded "type" tag.
+        let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if kind == "tool_result" {
+            let tool_use_id = item
+                .get("tool_use_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let full = item
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let is_error = item.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+            let minimal = item
+                .get("content_minimal")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let tool_name = item
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let demoted = match minimal {
+                Some(m) if !m.is_empty() => m,
+                _ => {
+                    // Backfill a receipt from the full content. If tool_name is
+                    // unknown (legacy rows), use the fallback branch of the
+                    // renderer (generic "called X" template).
+                    let name = if tool_name.is_empty() {
+                        "unknown"
+                    } else {
+                        tool_name
+                    };
+                    crate::agent::tool_receipt::render_receipt(
+                        name,
+                        &serde_json::Value::Null,
+                        &full,
+                        is_error,
+                        None,
+                    )
+                }
+            };
+            let content = if demoted.is_empty() {
+                // Defensive last resort: if receipt generation somehow yielded
+                // an empty string, fall back to the legacy head/tail char trim
+                // so the LLM still sees *something*.
+                trim_tool_result(&full, CTX_TRIM_HEAD, CTX_TRIM_TAIL)
+            } else {
+                demoted
+            };
+            out.push(ContentBlock::ToolResult {
                 tool_use_id,
                 content,
                 is_error,
-            } = b
-            {
-                ContentBlock::ToolResult {
-                    tool_use_id,
-                    content: trim_tool_result(&content, CTX_TRIM_HEAD, CTX_TRIM_TAIL),
-                    is_error,
-                }
-            } else {
-                b
+            });
+        } else {
+            // Non-tool_result blocks: deserialize normally and keep them.
+            if let Ok(b) = serde_json::from_value::<ContentBlock>(item.clone()) {
+                out.push(b);
             }
-        })
-        .collect()
+        }
+    }
+    out
 }
 
 /// Extract a representative text string from blocks for token estimation.
@@ -3641,11 +3707,13 @@ pub async fn get_context_preview(
 mod tests {
     use super::{
         build_context_messages, derive_headless_session_source,
-        main_chat_requests_collaboration_context, resolve_headless_scene_kind,
-        validate_headless_session_scope, HeadlessRunOptions, SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL,
-        SESSION_SOURCE_PISCI_HEARTBEAT_POOL, SESSION_SOURCE_PISCI_POOL,
+        main_chat_requests_collaboration_context, minimal_tool_result_blocks,
+        resolve_headless_scene_kind, validate_headless_session_scope, HeadlessRunOptions,
+        SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL, SESSION_SOURCE_PISCI_HEARTBEAT_POOL,
+        SESSION_SOURCE_PISCI_POOL,
     };
     use crate::commands::scene::SceneKind;
+    use crate::llm::ContentBlock;
     use crate::store::db::ChatMessage;
     use chrono::Utc;
 
@@ -3788,5 +3856,63 @@ mod tests {
         assert!(!main_chat_requests_collaboration_context(
             "帮我修一下这个普通 bug"
         ));
+    }
+
+    #[test]
+    fn minimal_blocks_use_content_minimal_when_present() {
+        // New-format row: tool_results_json carries both `content` (full) and
+        // `content_minimal` (rule-based receipt). The middle-tier reader must
+        // emit the minimal payload.
+        let json = r#"[
+            {
+                "type": "tool_result",
+                "tool_use_id": "call-1",
+                "tool_name": "shell",
+                "content": "total 1234\nexit code: 0\nverbose output line 1\nverbose output line 2",
+                "content_minimal": "ran: ls; exit=0; out=60 chars",
+                "is_error": false
+            }
+        ]"#;
+        let blocks = minimal_tool_result_blocks(json);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } = &blocks[0]
+        {
+            assert_eq!(tool_use_id, "call-1");
+            assert_eq!(content, "ran: ls; exit=0; out=60 chars");
+            assert!(!is_error);
+        } else {
+            panic!("expected a ToolResult block");
+        }
+    }
+
+    #[test]
+    fn minimal_blocks_backfill_receipt_for_legacy_rows() {
+        // Legacy row: no `content_minimal`, no `tool_name`. Reader must fall
+        // back to the rule-based receipt generator via the generic "unknown"
+        // tool template so the LLM still sees a concise timeline entry
+        // instead of the untrimmed full content.
+        let long_body: String = "x".repeat(5_000);
+        let json = serde_json::to_string(&serde_json::json!([{
+            "type": "tool_result",
+            "tool_use_id": "call-2",
+            "content": long_body,
+            "is_error": false
+        }]))
+        .unwrap();
+        let blocks = minimal_tool_result_blocks(&json);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::ToolResult { content, .. } = &blocks[0] {
+            assert!(
+                content.chars().count() < 500,
+                "legacy row should be demoted to a short receipt, got {} chars",
+                content.chars().count()
+            );
+        } else {
+            panic!("expected a ToolResult block");
+        }
     }
 }

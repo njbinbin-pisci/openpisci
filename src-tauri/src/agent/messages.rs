@@ -52,7 +52,18 @@ pub struct ToolCallRecord {
 pub struct ToolResultRecord {
     pub tool_call_id: String,
     pub tool_name: String,
+    /// Full tool result content. Used for recent turns (within `CTX_FULL_TURNS`)
+    /// and always by Level-2 summarisation.
     pub content: String,
+    /// Rule-based minimal "receipt" rendered at tool-execution time. Used for
+    /// middle-tier turns (past `CTX_FULL_TURNS`, before Level-2 kicks in) to
+    /// keep the LLM-facing context small without losing the timeline signal.
+    ///
+    /// Optional for forward-compatibility: rows written before the dual-version
+    /// migration will have `None` here and the read path backfills via
+    /// `tool_receipt::render_receipt` on demand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_minimal: Option<String>,
     pub is_error: bool,
 }
 

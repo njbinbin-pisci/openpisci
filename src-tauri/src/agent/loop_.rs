@@ -473,17 +473,155 @@ fn compact_trim_tool_results(messages: &mut [LlmMessage], single_limit: usize) -
 struct CompactionOutcome {
     messages: Vec<LlmMessage>,
     summary: String,
+    /// Prompt tokens billed for the summarisation call. Accumulated into the
+    /// session's cumulative_input_tokens so ring indicators reflect reality.
+    input_tokens: u32,
+    /// Completion tokens billed for the summarisation call. Accumulated into
+    /// cumulative_output_tokens.
+    output_tokens: u32,
+}
+
+/// Serialize a batch of `ContentBlock::ToolResult` blocks into the DB's
+/// `tool_results_json` column.
+///
+/// The base shape is the existing `ContentBlock` JSON (so legacy readers still
+/// work). When `tool_minimals` / `tool_names` are supplied, each entry is
+/// augmented with a `content_minimal` and/or `tool_name` field keyed by
+/// `tool_use_id`. The middle-tier read path in `commands/chat.rs` picks those
+/// up to swap in the minimal receipt for older turns.
+fn serialize_tool_results_with_receipts(
+    tool_results: &[&ContentBlock],
+    tool_minimals: Option<&HashMap<String, String>>,
+    tool_names: Option<&HashMap<String, String>>,
+) -> String {
+    let mut value = match serde_json::to_value(tool_results) {
+        Ok(v) => v,
+        Err(_) => return String::new(),
+    };
+    if let serde_json::Value::Array(ref mut arr) = value {
+        for entry in arr.iter_mut() {
+            let tool_use_id = entry
+                .get("tool_use_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            if let Some(id) = tool_use_id {
+                if let Some(map) = tool_minimals {
+                    if let Some(min) = map.get(&id) {
+                        entry["content_minimal"] = serde_json::Value::String(min.clone());
+                    }
+                }
+                if let Some(map) = tool_names {
+                    if let Some(name) = map.get(&id) {
+                        entry["tool_name"] = serde_json::Value::String(name.clone());
+                    }
+                }
+            }
+        }
+    }
+    serde_json::to_string(&value).unwrap_or_default()
 }
 
 fn is_compaction_summary_text(text: &str) -> bool {
     text.starts_with("[会话滚动摘要]") || text.starts_with("[对话摘要]")
 }
 
+/// Build the outgoing LLM request messages from the in-memory full `messages`,
+/// swapping in rule-based minimal receipts for tool-results belonging to turns
+/// older than `recent_full_turns`.
+///
+/// Invariants:
+/// - `messages` is never mutated. The in-memory log is the authoritative
+///   full-fidelity source for Level-2 summarisation.
+/// - A "turn boundary" is a `user` message whose content is plain `Text` (not a
+///   tool-result carrier), walking from newest to oldest. The final iteration
+///   of a run always counts as one full turn even before the next user message
+///   arrives.
+/// - If `tool_minimals` lacks an entry for a given `tool_use_id`, the original
+///   full content is kept. Callers that need a hard ceiling on tokens should
+///   follow up with `compact_trim_tool_results` on the returned vector.
+pub(crate) fn build_request_messages(
+    messages: &[LlmMessage],
+    tool_minimals: &HashMap<String, String>,
+    recent_full_turns: usize,
+) -> Vec<LlmMessage> {
+    // First pass: walk newest-to-oldest and record the index where the "recent"
+    // region begins. Everything at index < recent_start is older than the last
+    // `recent_full_turns` user turns and gets its tool-results demoted to
+    // minimal receipts.
+    //
+    // Algorithm: remember the index of the Nth-newest user-text boundary; if we
+    // then see an (N+1)-th boundary, stop — the remembered index is where the
+    // oldest-kept turn starts. If fewer than N+1 boundaries exist we keep all
+    // messages full (recent_start = 0).
+    let mut recent_start: usize = 0;
+    let mut turns_seen: usize = 0;
+    for (i, msg) in messages.iter().enumerate().rev() {
+        let is_user_text_boundary = msg.role == "user"
+            && matches!(&msg.content, MessageContent::Text(t) if !t.is_empty() && !is_compaction_summary_text(t));
+        if is_user_text_boundary {
+            turns_seen += 1;
+            if turns_seen == recent_full_turns {
+                recent_start = i;
+            } else if turns_seen > recent_full_turns {
+                break;
+            }
+        }
+    }
+
+    // Second pass: materialise the request vector. For indices below
+    // `recent_start`, substitute `content` of each `ToolResult` block with its
+    // minimal receipt from the side-map.
+    let mut out: Vec<LlmMessage> = Vec::with_capacity(messages.len());
+    for (i, msg) in messages.iter().enumerate() {
+        if i >= recent_start {
+            out.push(msg.clone());
+            continue;
+        }
+        match &msg.content {
+            MessageContent::Blocks(blocks) => {
+                let swapped: Vec<ContentBlock> = blocks
+                    .iter()
+                    .map(|b| match b {
+                        ContentBlock::ToolResult {
+                            tool_use_id,
+                            content: _,
+                            is_error,
+                        } => {
+                            if let Some(min) = tool_minimals.get(tool_use_id) {
+                                ContentBlock::ToolResult {
+                                    tool_use_id: tool_use_id.clone(),
+                                    content: min.clone(),
+                                    is_error: *is_error,
+                                }
+                            } else {
+                                b.clone()
+                            }
+                        }
+                        _ => b.clone(),
+                    })
+                    .collect();
+                out.push(LlmMessage {
+                    role: msg.role.clone(),
+                    content: MessageContent::Blocks(swapped),
+                });
+            }
+            MessageContent::Text(_) => out.push(msg.clone()),
+        }
+    }
+    out
+}
+
 /// Level-2 compaction: call LLM to summarise old messages, optionally merging
 /// an existing rolling summary with the newly compacted history.
+///
+/// `keep_tokens` is the approximate token budget for the "recent tail" that
+/// stays verbatim; everything older is fed to the summariser. Using tokens
+/// (rather than the old char-based heuristic) prevents CJK-heavy sessions from
+/// systematically under-keeping because 1 char is worth ~1 token in CJK but
+/// ~0.25 tokens in English.
 async fn compact_summarise(
     messages: Vec<LlmMessage>,
-    keep_chars: usize,
+    keep_tokens: usize,
     client: &dyn crate::llm::LlmClient,
     model: &str,
     max_tokens: u32,
@@ -494,34 +632,18 @@ async fn compact_summarise(
         return None;
     }
 
-    // Walk from the end, accumulating estimated chars until we exceed keep_chars.
-    // Everything before the boundary index gets summarised.
-    // We always keep at least the last 2 messages intact so the LLM has immediate
-    // context regardless of how large they are.
+    // Walk from the end, accumulating estimated tokens until we exceed
+    // keep_tokens. Everything before the boundary index gets summarised.
+    // We always keep at least the last 2 messages intact so the LLM has
+    // immediate context regardless of how large they are.
     let mut acc = 0usize;
     // Default: summarise everything except the last 6 messages (3 tool call rounds).
     let mut split_idx = messages.len().saturating_sub(6);
     for (i, msg) in messages.iter().enumerate().rev() {
-        // For tool-call messages (Blocks), estimate size from the serialised JSON
-        // since as_text() returns empty string for ToolUse/ToolResult blocks.
-        let chars = match &msg.content {
-            crate::llm::MessageContent::Text(t) => crate::llm::estimate_tokens(t) * 4,
-            crate::llm::MessageContent::Blocks(blocks) => blocks
-                .iter()
-                .map(|b| match b {
-                    crate::llm::ContentBlock::Text { text } => text.len(),
-                    crate::llm::ContentBlock::ToolUse { name, input, .. } => {
-                        name.len() + input.to_string().len()
-                    }
-                    crate::llm::ContentBlock::ToolResult { content, .. } => content.len(),
-                    _ => 0,
-                })
-                .sum::<usize>(),
-        };
-        acc += chars;
-        // Once the tail accumulation exceeds keep_chars, everything before
-        // index i belongs to the "old" region to be summarised.
-        if acc >= keep_chars && i > 0 {
+        // Use the shared token estimator so every byte we count here matches
+        // the budget math in build_request_messages / estimate_request_input_tokens.
+        acc += crate::llm::estimate_message_tokens(msg);
+        if acc >= keep_tokens && i > 0 {
             split_idx = i;
             break;
         }
@@ -628,6 +750,8 @@ async fn compact_summarise(
             Some(CompactionOutcome {
                 messages: new_messages,
                 summary: merged_summary,
+                input_tokens: resp.input_tokens,
+                output_tokens: resp.output_tokens,
             })
         }
         Ok(_) | Err(_) => None,
@@ -1065,6 +1189,25 @@ impl AgentLoop {
     /// Called after every new assistant/tool message is appended during the agent loop,
     /// so messages survive even if the process is killed mid-run.
     async fn persist_message(&self, session_id: &str, msg: &LlmMessage, turn_index: Option<i64>) {
+        self.persist_message_with_receipts(session_id, msg, turn_index, None, None)
+            .await;
+    }
+
+    /// Variant of `persist_message` that also writes dual-version tool results.
+    ///
+    /// `tool_minimals` maps `tool_use_id → minimal receipt` and `tool_names` maps
+    /// `tool_use_id → tool name`. When both are provided (typically only for the
+    /// tool-result-carrier message), the serialized `tool_results_json` gains a
+    /// `content_minimal` and `tool_name` field per entry, which the read path
+    /// consumes to swap in the minimal form for older turns.
+    async fn persist_message_with_receipts(
+        &self,
+        session_id: &str,
+        msg: &LlmMessage,
+        turn_index: Option<i64>,
+        tool_minimals: Option<&HashMap<String, String>>,
+        tool_names: Option<&HashMap<String, String>>,
+    ) {
         let Some(ref db_arc) = self.db else { return };
         let db = db_arc.lock().await;
         use crate::llm::{ContentBlock, MessageContent};
@@ -1091,7 +1234,11 @@ impl AgentLoop {
                         turn_index,
                     );
                 } else if !tool_results.is_empty() {
-                    let results_json = serde_json::to_string(&tool_results).unwrap_or_default();
+                    let results_json = serialize_tool_results_with_receipts(
+                        &tool_results,
+                        tool_minimals,
+                        tool_names,
+                    );
                     let _ = db.append_message_full(
                         session_id,
                         "user",
@@ -1149,6 +1296,15 @@ impl AgentLoop {
         // window), but new_messages always grows monotonically with every new assistant/tool
         // message. The caller persists new_messages to the DB.
         let mut new_messages: Vec<LlmMessage> = Vec::new();
+        // Dual-version tool-result side-maps (Phase C). Keyed by `tool_use_id`.
+        // `tool_minimals` carries rule-based minimal receipts; `tool_names_by_id`
+        // is used by `build_request_messages` to run the receipt generator on
+        // legacy messages whose DB row did not yet carry `content_minimal`.
+        //
+        // Scope: lives for the duration of a single `run`. Messages re-hydrated
+        // from the DB backfill on demand in the read path (commands/chat.rs).
+        let mut tool_minimals: HashMap<String, String> = HashMap::new();
+        let mut tool_names_by_id: HashMap<String, String> = HashMap::new();
 
         // Determine the turn_index for this run once, so all messages share the same index.
         // This must be computed before any messages are written.
@@ -1285,17 +1441,24 @@ impl AgentLoop {
                 // single_limit in chars: message_budget_tokens × share × 4 chars/token
                 let single_limit =
                     (message_budget as f64 * CONTEXT_SINGLE_RESULT_SHARE * 4.0) as usize;
-                compact_trim_tool_results(&mut messages, single_limit);
+
+                // Build the request-view first. For the middle tier, tool-result
+                // blocks are swapped to rule-based minimal receipts; this is
+                // expected to bring most sessions well under the budget, after
+                // which the legacy char-trim is only a safety net.
+                let mut demoted =
+                    build_request_messages(&messages, &tool_minimals, CTX_FULL_TURNS);
+                compact_trim_tool_results(&mut demoted, single_limit);
 
                 // Dynamic compaction (Level-2 proactive): if estimated token count exceeds
                 // 80% of the budget, summarise old messages now — before the LLM call —
                 // rather than waiting for a context overflow error (which some models never
                 // emit, instead silently truncating or producing near-empty responses).
                 //
-                // We retry with a smaller keep_chars if the first pass still leaves too
-                // many tokens (can happen when the budget estimate is conservative).
+                // We retry with a smaller keep_tokens if the first pass still leaves
+                // too many tokens (can happen when the budget estimate is conservative).
                 let req_messages =
-                    vision::inject_selected_context(&messages, &ctx.session_id).await;
+                    vision::inject_selected_context(&demoted, &ctx.session_id).await;
                 let mut estimated = crate::llm::estimate_request_input_tokens(
                     &req_messages,
                     Some(&self.system_prompt),
@@ -1317,17 +1480,25 @@ impl AgentLoop {
                     let threshold_reached = threshold_step > 0
                         && cumulative_input_tokens >= next_auto_compact_threshold
                         && estimated >= min_threshold_estimate;
-                    if estimated <= (total_budget as f64 * 0.60) as usize && !threshold_reached {
+                    // Bug fix 🔴1: once the per-request estimate is below the
+                    // 60% safety line, stop — regardless of whether cumulative
+                    // threshold_reached is still true. Otherwise a session
+                    // repeatedly pays for Level-2 summarisation every iteration
+                    // even though nothing is actually over budget.
+                    if estimated <= (total_budget as f64 * 0.60) as usize {
                         break;
                     }
-                    let keep_chars = (message_budget as f64 * ratio * 4.0) as usize;
+                    let keep_tokens = (message_budget as f64 * ratio) as usize;
                     warn!(
-                        "proactive compaction pass={} estimated_tokens={} total_budget={} message_budget={} keep_chars={} cumulative_input_tokens={} threshold_reached={} min_threshold_estimate={}",
-                        pass + 1, estimated, total_budget, message_budget, keep_chars, cumulative_input_tokens, threshold_reached, min_threshold_estimate
+                        "proactive compaction pass={} estimated_tokens={} total_budget={} message_budget={} keep_tokens={} cumulative_input_tokens={} threshold_reached={} min_threshold_estimate={}",
+                        pass + 1, estimated, total_budget, message_budget, keep_tokens, cumulative_input_tokens, threshold_reached, min_threshold_estimate
                     );
+                    // Level-2 summarisation receives the FULL in-memory messages
+                    // (never the demoted/minimal view) so the summariser has
+                    // enough signal to produce a faithful rolling summary.
                     if let Some(compacted) = compact_summarise(
                         messages.clone(),
-                        keep_chars,
+                        keep_tokens,
                         self.client.as_ref(),
                         &self.model,
                         self.max_tokens,
@@ -1335,9 +1506,23 @@ impl AgentLoop {
                     )
                     .await
                     {
-                        let compacted_req_messages =
-                            vision::inject_selected_context(&compacted.messages, &ctx.session_id)
-                                .await;
+                        // Account for prompt/completion tokens billed to the summariser.
+                        total_input = total_input.saturating_add(compacted.input_tokens);
+                        total_output = total_output.saturating_add(compacted.output_tokens);
+                        cumulative_input_tokens = cumulative_input_tokens
+                            .saturating_add(i64::from(compacted.input_tokens));
+                        cumulative_output_tokens = cumulative_output_tokens
+                            .saturating_add(i64::from(compacted.output_tokens));
+                        let compacted_demoted = build_request_messages(
+                            &compacted.messages,
+                            &tool_minimals,
+                            CTX_FULL_TURNS,
+                        );
+                        let compacted_req_messages = vision::inject_selected_context(
+                            &compacted_demoted,
+                            &ctx.session_id,
+                        )
+                        .await;
                         let new_estimated = crate::llm::estimate_request_input_tokens(
                             &compacted_req_messages,
                             Some(&self.system_prompt),
@@ -1356,8 +1541,14 @@ impl AgentLoop {
                         messages = compacted.messages;
                         estimated = new_estimated;
                         if threshold_reached {
-                            next_auto_compact_threshold =
-                                next_auto_compact_threshold.saturating_add(threshold_step.max(1));
+                            // Bug fix 🔴2: bump relative to the CURRENT cumulative
+                            // so that one oversized response cannot push cumulative
+                            // far past the new threshold and cause the next
+                            // iteration to re-trigger immediately.
+                            let step = threshold_step.max(1);
+                            let from_old = next_auto_compact_threshold.saturating_add(step);
+                            let from_now = cumulative_input_tokens.saturating_add(step);
+                            next_auto_compact_threshold = from_old.max(from_now);
                         }
                         if let Some(ref db_arc) = self.db {
                             let db = db_arc.lock().await;
@@ -1369,16 +1560,6 @@ impl AgentLoop {
                                 warn!("Failed to persist rolling summary: {}", error);
                             }
                         }
-                        let _ = event_tx
-                            .send(AgentEvent::TextDelta {
-                                delta: format!(
-                                    "\n\n[系统] 已自动压缩上下文并更新滚动摘要（v{}，累计输入/输出 tokens: {}/{}）。\n",
-                                    rolling_summary_version,
-                                    cumulative_input_tokens,
-                                    cumulative_output_tokens
-                                ),
-                            })
-                            .await;
                     } else {
                         // Summarisation failed — stop trying
                         warn!("proactive summarisation pass={} failed, proceeding with current context", pass + 1);
@@ -1419,8 +1600,12 @@ impl AgentLoop {
                 'model_loop: for model_candidate in &models_to_try {
                     // Build req_messages inside the model loop so that after
                     // compact_summarise updates `messages`, we use the fresh context.
+                    // Tool-result blocks from older turns are swapped to their
+                    // minimal receipts before vision-context injection.
+                    let demoted_messages =
+                        build_request_messages(&messages, &tool_minimals, CTX_FULL_TURNS);
                     let req_messages =
-                        vision::inject_selected_context(&messages, &ctx.session_id).await;
+                        vision::inject_selected_context(&demoted_messages, &ctx.session_id).await;
                     let req = LlmRequest {
                         messages: req_messages,
                         system: Some(self.system_prompt.clone()),
@@ -1483,14 +1668,14 @@ impl AgentLoop {
                                         );
                                     let message_budget =
                                         total_budget.saturating_sub(static_overhead_tokens);
-                                    // keep_chars: newest 60% of budget in chars
-                                    let keep_chars =
-                                        (message_budget as f64 * SUMMARY_KEEP_RECENT_RATIO * 4.0)
+                                    // keep_tokens: newest 60% of the budget in tokens
+                                    let keep_tokens =
+                                        (message_budget as f64 * SUMMARY_KEEP_RECENT_RATIO)
                                             as usize;
-                                    warn!("context overflow — attempting LLM summarisation (keep_chars={})", keep_chars);
+                                    warn!("context overflow — attempting LLM summarisation (keep_tokens={})", keep_tokens);
                                     let compacted = compact_summarise(
                                         messages.clone(),
-                                        keep_chars,
+                                        keep_tokens,
                                         self.client.as_ref(),
                                         model_candidate,
                                         self.max_tokens,
@@ -1499,6 +1684,13 @@ impl AgentLoop {
                                     )
                                     .await;
                                     if let Some(c) = compacted {
+                                        total_input = total_input.saturating_add(c.input_tokens);
+                                        total_output =
+                                            total_output.saturating_add(c.output_tokens);
+                                        cumulative_input_tokens = cumulative_input_tokens
+                                            .saturating_add(i64::from(c.input_tokens));
+                                        cumulative_output_tokens = cumulative_output_tokens
+                                            .saturating_add(i64::from(c.output_tokens));
                                         rolling_summary = c.summary;
                                         rolling_summary_version += 1;
                                         messages = c.messages;
@@ -1845,11 +2037,12 @@ impl AgentLoop {
                 tool_result_blocks.extend(blocks);
             }
 
-            // ── Record results into loop detector + inject warnings ──────────
+            // ── Record results into loop detector + compute minimal receipts ─
             for block in &tool_result_blocks {
                 if let ContentBlock::ToolResult {
                     tool_use_id,
                     content,
+                    is_error,
                     ..
                 } = block
                 {
@@ -1858,6 +2051,19 @@ impl AgentLoop {
                     {
                         let rh = stable_hash_result(content);
                         loop_detector.record(name, input, rh);
+                        let receipt = super::tool_receipt::render_receipt(
+                            name, input, content, *is_error, None,
+                        );
+                        tool_minimals.insert(tool_use_id.clone(), receipt);
+                        tool_names_by_id.insert(tool_use_id.clone(), name.clone());
+                    } else {
+                        // No matching ToolUse (shouldn't happen) — still emit a
+                        // generic receipt so the middle-tier read path doesn't
+                        // have to backfill from an unknown tool name.
+                        let receipt = super::tool_receipt::render_receipt(
+                            "unknown", &serde_json::Value::Null, content, *is_error, None,
+                        );
+                        tool_minimals.insert(tool_use_id.clone(), receipt);
                     }
                 }
             }
@@ -1883,8 +2089,14 @@ impl AgentLoop {
             };
             new_messages.push(tool_result_msg.clone());
             messages.push(tool_result_msg.clone());
-            self.persist_message(&ctx.session_id, &tool_result_msg, turn_index)
-                .await;
+            self.persist_message_with_receipts(
+                &ctx.session_id,
+                &tool_result_msg,
+                turn_index,
+                Some(&tool_minimals),
+                Some(&tool_names_by_id),
+            )
+            .await;
             messages = crate::commands::chat::collapse_superseded_tool_failures(messages);
 
             if let Some(reminder) = warning_reminder {
@@ -2294,10 +2506,14 @@ fn audit_action_label(tool_name: &str, input: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{compact_summarise, compact_trim_tool_results, CTX_TRIM_HEAD, CTX_TRIM_TAIL};
+    use super::{
+        build_request_messages, compact_summarise, compact_trim_tool_results,
+        serialize_tool_results_with_receipts, CTX_FULL_TURNS, CTX_TRIM_HEAD, CTX_TRIM_TAIL,
+    };
     use crate::llm::{ContentBlock, LlmChunk, LlmMessage, LlmRequest, LlmResponse, MessageContent};
     use anyhow::Result;
     use async_trait::async_trait;
+    use std::collections::HashMap;
 
     // ── Mock LLM clients ──────────────────────────────────────────────────────
 
@@ -2776,14 +2992,14 @@ mod tests {
         );
 
         // Reproduce the exact crash scenario from the logs:
-        // deepseek-chat, max_tokens=4096 → budget=49000, keep_chars=117600
+        // deepseek-chat, max_tokens=4096 → budget=49000, keep_tokens=29400
         let msgs = make_realistic_session(76); // 76 rounds ≈ 154 messages
         let original_len = msgs.len();
 
-        // keep_chars matching the real crash: budget(49000) × 0.60 × 4 = 117600
-        let keep_chars = 117_600usize;
+        // keep_tokens matching the real crash: budget(49000) × 0.60 = 29400
+        let keep_tokens = 29_400usize;
         let result =
-            compact_summarise(msgs, keep_chars, &client, "deepseek-chat", 4096, None).await;
+            compact_summarise(msgs, keep_tokens, &client, "deepseek-chat", 4096, None).await;
 
         assert!(result.is_some(), "154-message session should be compacted");
         let compacted = result.unwrap();
@@ -2807,6 +3023,213 @@ mod tests {
                 .as_text()
                 .contains("[会话滚动摘要]"),
             "first message should be summary"
+        );
+    }
+
+    // ── Phase C: build_request_messages ───────────────────────────────────────
+
+    fn user_text(text: &str) -> LlmMessage {
+        LlmMessage {
+            role: "user".into(),
+            content: MessageContent::text(text),
+        }
+    }
+
+    fn tool_result_carrier(id: &str, content: &str) -> LlmMessage {
+        LlmMessage {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content: content.to_string(),
+                is_error: false,
+            }]),
+        }
+    }
+
+    fn assistant_text(text: &str) -> LlmMessage {
+        LlmMessage {
+            role: "assistant".into(),
+            content: MessageContent::text(text),
+        }
+    }
+
+    #[test]
+    fn build_request_messages_keeps_recent_turns_full() {
+        // 4 turns, each: user → assistant → tool_result. With recent=3 the
+        // oldest turn's tool_result gets demoted; the newer three stay full.
+        let big = "X".repeat(5_000);
+        let mut messages = Vec::new();
+        for turn in 1..=4 {
+            messages.push(user_text(&format!("请求 {}", turn)));
+            messages.push(assistant_text(&format!("assistant {}", turn)));
+            messages.push(tool_result_carrier(&format!("call-{}", turn), &big));
+        }
+        let mut minimals = HashMap::new();
+        for turn in 1..=4 {
+            minimals.insert(format!("call-{}", turn), format!("receipt {}", turn));
+        }
+        let req = build_request_messages(&messages, &minimals, CTX_FULL_TURNS);
+        assert_eq!(req.len(), messages.len());
+
+        // Oldest tool result demoted
+        if let MessageContent::Blocks(ref b) = req[2].content {
+            if let ContentBlock::ToolResult { content, .. } = &b[0] {
+                assert_eq!(content, "receipt 1");
+            } else {
+                panic!("expected ToolResult");
+            }
+        } else {
+            panic!("expected Blocks");
+        }
+
+        // Newest three tool results preserved (big)
+        for idx in [5usize, 8, 11] {
+            if let MessageContent::Blocks(ref b) = req[idx].content {
+                if let ContentBlock::ToolResult { content, .. } = &b[0] {
+                    assert_eq!(content.chars().count(), 5_000, "turn at {} should be full", idx);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn build_request_messages_keeps_all_when_fewer_turns_than_window() {
+        // With only 3 user turns and recent_full_turns=3, NOTHING should be
+        // demoted — the whole session fits inside the recent window.
+        let big = "X".repeat(5_000);
+        let mut messages = Vec::new();
+        for turn in 1..=3 {
+            messages.push(user_text(&format!("请求 {}", turn)));
+            messages.push(assistant_text(&format!("assistant {}", turn)));
+            messages.push(tool_result_carrier(&format!("call-{}", turn), &big));
+        }
+        let mut minimals = HashMap::new();
+        for turn in 1..=3 {
+            minimals.insert(format!("call-{}", turn), format!("receipt {}", turn));
+        }
+        let req = build_request_messages(&messages, &minimals, CTX_FULL_TURNS);
+        for idx in [2usize, 5, 8] {
+            if let MessageContent::Blocks(ref b) = req[idx].content {
+                if let ContentBlock::ToolResult { content, .. } = &b[0] {
+                    assert_eq!(
+                        content.chars().count(),
+                        5_000,
+                        "turn at {} must stay full when total turns <= window",
+                        idx
+                    );
+                }
+            } else {
+                panic!("expected Blocks at idx {}", idx);
+            }
+        }
+    }
+
+    #[test]
+    fn build_request_messages_without_minimal_keeps_full() {
+        // If the side-map has no entry for a tool_use_id, build_request_messages
+        // must leave the full content intact rather than blanking it out.
+        let msgs = vec![
+            user_text("第 1 轮"),
+            assistant_text("ok1"),
+            tool_result_carrier("call-1", "LONG 1"),
+            user_text("第 2 轮"),
+            assistant_text("ok2"),
+            tool_result_carrier("call-2", "LONG 2"),
+            user_text("第 3 轮"),
+            assistant_text("ok3"),
+            tool_result_carrier("call-3", "LONG 3"),
+            user_text("第 4 轮"),
+            assistant_text("ok4"),
+            tool_result_carrier("call-4", "LONG 4"),
+        ];
+        let minimals = HashMap::new(); // empty
+        let req = build_request_messages(&msgs, &minimals, CTX_FULL_TURNS);
+        if let MessageContent::Blocks(ref b) = req[2].content {
+            if let ContentBlock::ToolResult { content, .. } = &b[0] {
+                assert_eq!(content, "LONG 1");
+            }
+        }
+    }
+
+    #[test]
+    fn serialize_tool_results_with_receipts_injects_fields() {
+        let blocks = vec![ContentBlock::ToolResult {
+            tool_use_id: "call-1".into(),
+            content: "full content".into(),
+            is_error: false,
+        }];
+        let refs: Vec<&ContentBlock> = blocks.iter().collect();
+        let mut minimals = HashMap::new();
+        minimals.insert("call-1".to_string(), "receipt-1".to_string());
+        let mut names = HashMap::new();
+        names.insert("call-1".to_string(), "shell".to_string());
+        let json = serialize_tool_results_with_receipts(&refs, Some(&minimals), Some(&names));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v[0]["content_minimal"], "receipt-1");
+        assert_eq!(v[0]["tool_name"], "shell");
+        // Legacy fields preserved
+        assert_eq!(v[0]["content"], "full content");
+        assert_eq!(v[0]["tool_use_id"], "call-1");
+    }
+
+    /// Spy client that records the last prompt it saw, so we can assert that
+    /// Level-2 summarisation receives the FULL content (not demoted minimal).
+    struct SpyClient {
+        last_prompt: std::sync::Mutex<String>,
+        response: String,
+    }
+
+    #[async_trait]
+    impl crate::llm::LlmClient for SpyClient {
+        async fn stream(
+            &self,
+            _req: LlmRequest,
+            _tx: tokio::sync::mpsc::Sender<LlmChunk>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn complete(&self, req: LlmRequest) -> Result<LlmResponse> {
+            let joined = req
+                .messages
+                .iter()
+                .map(|m| m.content.as_text())
+                .collect::<Vec<_>>()
+                .join("\n---\n");
+            *self.last_prompt.lock().unwrap() = joined;
+            Ok(LlmResponse {
+                content: self.response.clone(),
+                tool_calls: vec![],
+                input_tokens: 123,
+                output_tokens: 45,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn compact_summarise_uses_full_tool_result_content() {
+        // Build a history where tool results carry distinctive full content.
+        // After summarisation we assert the prompt contained that full text
+        // (proof that the caller passed FULL, not the minimal receipt).
+        let unique_marker = "FULL_CONTENT_MARKER_q7z9_long_tool_output";
+        let big_content = format!("{} {}", unique_marker, "y".repeat(2000));
+        let mut msgs = Vec::new();
+        for turn in 1..=8 {
+            msgs.push(user_text(&format!("请求 {}", turn)));
+            msgs.push(assistant_text(&format!("回答 {}", turn)));
+            msgs.push(tool_result_carrier(&format!("c{}", turn), &big_content));
+        }
+        let client = SpyClient {
+            last_prompt: std::sync::Mutex::new(String::new()),
+            response: "rolling summary output".into(),
+        };
+        // keep_tokens small enough to force summarisation of older turns.
+        let result = compact_summarise(msgs, 500, &client, "test-model", 4096, None).await;
+        assert!(result.is_some(), "summarise should have run");
+        let prompt = client.last_prompt.lock().unwrap().clone();
+        assert!(
+            prompt.contains(unique_marker),
+            "summariser prompt should include the full tool-result content"
         );
     }
 }
