@@ -538,7 +538,34 @@ export default function Chat() {
       if (i === 0) return true;
       const prev = arr[i - 1];
       return !(prev.role === m.role && prev.content === m.content);
-    });
+    })
+    // Merge consecutive assistant pure-text messages sharing the same turn_index into
+    // a single bubble. History would otherwise render each iteration of a single user
+    // turn as its own short bubble, which differs from the live streaming view where
+    // all iteration output is accumulated into one bubble.
+    .reduce<ChatMessage[]>((acc, msg) => {
+      const prev = acc[acc.length - 1];
+      const canMerge =
+        prev != null &&
+        prev.role === "assistant" &&
+        msg.role === "assistant" &&
+        !chatUiToolCallIds.has(prev.id) &&
+        !chatUiToolCallIds.has(msg.id) &&
+        prev.turn_index != null &&
+        msg.turn_index != null &&
+        prev.turn_index === msg.turn_index &&
+        prev.content.trim().length > 0 &&
+        msg.content.trim().length > 0;
+      if (canMerge && prev) {
+        acc[acc.length - 1] = {
+          ...prev,
+          content: `${prev.content.trimEnd()}\n\n${msg.content.trimStart()}`,
+        };
+      } else {
+        acc.push(msg);
+      }
+      return acc;
+    }, []);
   const streamingState: StreamingState | null = activeSessionId ? streaming[activeSessionId] ?? null : null;
   const streamingCurrent = streamingState?.current ?? "";
   const running = activeSessionId ? isRunning[activeSessionId] ?? false : false;
