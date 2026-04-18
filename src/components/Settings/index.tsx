@@ -74,7 +74,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   builtin_tool_enabled: {},
   // Agent config
   max_iterations: 50,
-  auto_compact_input_tokens_threshold: 100000,
+  auto_compact_input_tokens_threshold: 200000,
   project_instruction_budget_chars: 8000,
   enable_project_instructions: true,
   llm_read_timeout_secs: 120,
@@ -749,7 +749,7 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
               type="number"
               min={0}
               max={10000000}
-              value={form.auto_compact_input_tokens_threshold ?? 100000}
+              value={form.auto_compact_input_tokens_threshold ?? 200000}
               onChange={(e) =>
                 update(
                   "auto_compact_input_tokens_threshold",

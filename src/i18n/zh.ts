@@ -740,7 +740,7 @@ const zh = {
     maxIterations: "最大迭代次数",
     maxIterationsDesc: "Agent 单次任务最多执行的工具调用轮次（10-200）",
     autoCompactThreshold: "自动压缩累计输入阈值（Token）",
-    autoCompactThresholdDesc: "当会话累计输入 Token 达到该阈值时，系统会优先尝试生成或更新滚动摘要。设为 0 可关闭基于累计 Token 的自动压缩触发。",
+    autoCompactThresholdDesc: "当会话累计输入 Token 达到该阈值时，系统会优先尝试生成或更新滚动摘要。设为 0 只关闭基于累计 Token 的触发；当单次请求即将超过上下文预算 60% 时的紧急压缩仍会生效。",
     enableProjectInstructions: "启用项目规则文件注入",
     enableProjectInstructionsDesc: "自动发现并注入工作区祖先目录中的 `PISCI.md`、`PISCI.local.md`、`.pisci/PISCI.md`、`.pisci/instructions.md`。",
     projectInstructionBudget: "项目规则文件注入预算（字符）",

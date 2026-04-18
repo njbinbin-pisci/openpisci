@@ -388,7 +388,11 @@ fn default_max_iterations() -> u32 {
     50
 }
 fn default_auto_compact_input_tokens_threshold() -> u32 {
-    100_000
+    // Bumped from 100k → 200k after introducing dual-version tool results.
+    // With minimal receipts in middle-tier turns, sessions can accumulate more
+    // raw input tokens before a forced Level-2 summarisation buys us anything,
+    // so the old default was firing far too often on long research sessions.
+    200_000
 }
 fn default_project_instruction_budget_chars() -> u32 {
     8_000

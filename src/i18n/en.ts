@@ -740,7 +740,7 @@ const en = {
     maxIterations: "Max Iterations",
     maxIterationsDesc: "Maximum tool-call rounds per task (10-200)",
     autoCompactThreshold: "Auto-compact cumulative input threshold (tokens)",
-    autoCompactThresholdDesc: "When cumulative input tokens for a session reach this threshold, Pisci will proactively generate or refresh the rolling summary. Set to 0 to disable threshold-driven auto compaction.",
+    autoCompactThresholdDesc: "When cumulative input tokens for a session reach this threshold, Pisci will proactively generate or refresh the rolling summary. Set to 0 to disable cumulative-token-triggered compaction only — the emergency 60%-of-context-budget compaction still runs whenever a single request would exceed the model's window.",
     enableProjectInstructions: "Enable project instruction file injection",
     enableProjectInstructionsDesc: "Automatically discover and inject `PISCI.md`, `PISCI.local.md`, `.pisci/PISCI.md`, and `.pisci/instructions.md` from the workspace ancestor chain.",
     projectInstructionBudget: "Project instruction injection budget (chars)",
