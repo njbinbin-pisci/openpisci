@@ -2519,14 +2519,9 @@ pub fn compute_context_budget(context_window: u32, max_tokens: u32) -> usize {
     crate::llm::compute_context_budget(context_window, max_tokens)
 }
 
-/// How many recent conversation turns to keep with full tool call detail.
-const CTX_FULL_TURNS: usize = 3;
-/// Turns beyond this count are compressed to a single summary message.
-const CTX_COMPACT_AFTER: usize = 8;
-/// Characters to keep from the head of a trimmed tool result.
-const CTX_TRIM_HEAD: usize = 1000;
-/// Characters to keep from the tail of a trimmed tool result.
-const CTX_TRIM_TAIL: usize = 300;
+pub use crate::agent::compaction::{
+    CTX_COMPACT_AFTER, CTX_FULL_TURNS, CTX_TRIM_HEAD, CTX_TRIM_TAIL,
+};
 
 /// Persist the completed agent turn to the database with full tool call structure.
 ///

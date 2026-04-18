@@ -1,3 +1,4 @@
+pub mod compaction;
 pub mod loop_;
 pub mod messages;
 pub mod plan;

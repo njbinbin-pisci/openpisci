@@ -427,8 +427,7 @@ fn dynamic_result_limit(context_window_tokens: usize) -> usize {
 // Context compaction helpers
 // ---------------------------------------------------------------------------
 
-const CTX_TRIM_HEAD: usize = 1_000; // chars to keep from the start of a tool result
-const CTX_TRIM_TAIL: usize = 300; // chars to keep from the end of a tool result
+pub use super::compaction::{CTX_COMPACT_AFTER, CTX_FULL_TURNS, CTX_TRIM_HEAD, CTX_TRIM_TAIL};
 /// Minimum chars a tool result must exceed before it is eligible for trimming.
 /// Prevents trimming results that are already small enough to be useful in full.
 const CTX_TRIM_MIN_SIZE: usize = CTX_TRIM_HEAD + CTX_TRIM_TAIL + 100;
