@@ -149,6 +149,11 @@ export interface Settings {
   // Agent config
   max_iterations: number;
   auto_compact_input_tokens_threshold: number;
+  compaction_micro_percent: number;
+  compaction_auto_percent: number;
+  compaction_full_percent: number;
+  max_tool_result_tokens: number;
+  summary_model?: string | null;
   project_instruction_budget_chars: number;
   enable_project_instructions: boolean;
   llm_read_timeout_secs: number;
@@ -244,6 +249,25 @@ export type AgentEventType =
       rolling_summary_version: number;
       /** Configured auto-compact threshold step (0 = cumulative trigger disabled). */
       auto_compact_threshold: number;
+      /** p8 — optional per-layer token attribution (persona/scene/memory/project/
+       *  platform_hint/tool_defs/history_text/history_tool_result_full/
+       *  history_tool_result_receipt/rolling_summary/state_frame/vision/
+       *  request_overhead). Absent when the emitter hasn't computed it. */
+      layered_breakdown?: {
+        persona: number;
+        scene: number;
+        memory: number;
+        project: number;
+        platform_hint: number;
+        tool_defs: number;
+        history_text: number;
+        history_tool_result_full: number;
+        history_tool_result_receipt: number;
+        rolling_summary: number;
+        state_frame: number;
+        vision: number;
+        request_overhead: number;
+      };
     }
   | { type: "done"; total_input_tokens: number; total_output_tokens: number }
   | { type: "cancelled" }

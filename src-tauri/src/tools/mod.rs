@@ -20,6 +20,7 @@ pub mod pool_chat;
 pub mod pool_org;
 pub mod powershell;
 pub mod process_control;
+pub mod recall_tool;
 pub mod shell;
 pub mod skill_list;
 pub mod ssh;
@@ -122,6 +123,16 @@ pub fn build_registry(
     if is_enabled("memory_store") {
         if let Some(ref db_arc) = db {
             registry.register(Box::new(memory_tool::MemoryStoreTool {
+                db: db_arc.clone(),
+            }));
+        }
+    }
+
+    // recall_tool_result — re-fetch the original full output of a demoted
+    // tool result (p11). Requires DB access; enabled by default.
+    if is_enabled("recall_tool_result") {
+        if let Some(ref db_arc) = db {
+            registry.register(Box::new(recall_tool::RecallToolResultTool {
                 db: db_arc.clone(),
             }));
         }

@@ -1,0 +1,127 @@
+{
+  "session_id": "tool-03-browser-research",
+  "description": "Tool-heavy research session: web_search + browser_visit + memory_store to compile a comparison brief",
+  "channel": "pisci-agent",
+  "message_count": 18,
+  "messages": [
+    {
+      "role": "user",
+      "content": "帮我对比一下 Qdrant、Weaviate、Milvus 三家向量库在 1B 向量规模下的性价比，产出一份 1 页摘要。",
+      "ts": "2026-04-10T14:00:00Z"
+    },
+    {
+      "role": "assistant",
+      "blocks": [
+        {"type": "text", "text": "分三步：先搜公开基准，再各访问一次官方页，最后整合。"},
+        {"type": "tool_use", "id": "r1", "name": "web_search", "input": {"query": "Qdrant Weaviate Milvus 1 billion vectors benchmark 2025 2026"}}
+      ],
+      "ts": "2026-04-10T14:00:10Z"
+    },
+    {
+      "role": "user",
+      "blocks": [
+        {"type": "tool_result", "tool_use_id": "r1", "content": "[1] https://qdrant.tech/benchmarks/2026 - Qdrant 2026 Q1 benchmark: 1.2B vectors, HNSW M=32, 95ms p99 search, 128GB RAM\n[2] https://weaviate.io/blog/weaviate-1b-scale-2025-q4 - Weaviate 1.28 @ 1B scale, 180ms p99, recommended 6-node cluster (384GB total)\n[3] https://milvus.io/blog/1billion-vectors-benchmark-2026 - Milvus 2.5 on 1B scale, DiskANN backend, 220ms p99, SSD-optimized\n[4] https://arxiv.org/abs/2601.09442 - Independent VDBBench 2026 comparing 5 vendors\n[5] https://news.ycombinator.com/item?id=92004513 - HN thread with extensive benchmark discussion", "minimal": "[web_search] vector-db benchmarks → 5 hits (Qdrant 95ms, Weaviate 180ms, Milvus 220ms, VDBBench 2026, HN)"}
+      ],
+      "ts": "2026-04-10T14:00:12Z"
+    },
+    {
+      "role": "assistant",
+      "blocks": [
+        {"type": "tool_use", "id": "r2", "name": "browser_visit", "input": {"url": "https://arxiv.org/abs/2601.09442"}}
+      ],
+      "ts": "2026-04-10T14:00:25Z"
+    },
+    {
+      "role": "user",
+      "blocks": [
+        {"type": "tool_result", "tool_use_id": "r2", "content": "VDBBench 2026: A Unified Benchmark for Billion-Scale Vector Databases\n\nAbstract: We benchmark 5 production vector databases at 1B scale across recall@10 ≥ 0.95, p99 latency, throughput (QPS), and $/M-queries on AWS r7g.16xlarge. Results: Qdrant achieves 95ms p99 at 4200 QPS, $0.82/M-queries. Weaviate 170ms at 2800 QPS, $1.15/M. Milvus 210ms at 3100 QPS, $1.45/M (SSD-heavy config). Pinecone managed 180ms at 5000 QPS, $3.80/M. Vespa 130ms at 3500 QPS, $1.05/M.\n\nKey findings:\n- Qdrant leads latency AND cost at the expense of requiring full RAM residence\n- Weaviate best for heterogeneous filters (multi-tenancy)\n- Milvus most flexible (GPU support) but operationally complex\n- All vendors degrade ≥ 30% recall past 2B without additional sharding\n- Metadata: github.com/vdbbench/vdbbench-2026", "minimal": "[browser_visit] arxiv VDBBench 2026 (Qdrant 95ms/$0.82, Weaviate 170ms/$1.15, Milvus 210ms/$1.45)"}
+      ],
+      "ts": "2026-04-10T14:00:35Z"
+    },
+    {
+      "role": "assistant",
+      "blocks": [
+        {"type": "tool_use", "id": "r3", "name": "browser_visit", "input": {"url": "https://qdrant.tech/pricing"}}
+      ],
+      "ts": "2026-04-10T14:00:45Z"
+    },
+    {
+      "role": "user",
+      "blocks": [
+        {"type": "tool_result", "tool_use_id": "r3", "content": "Qdrant Cloud Pricing (as of 2026-04-01):\n- Free tier: 1GB storage, 100k vectors\n- Startup: $0.06/hour per GB RAM, min 4GB → $173/mo baseline\n- Pro: $0.12/hour per GB + $0.03/GB-month storage. 1B @ 768d float32 ≈ 3TB → ~$8,640/mo compute + $2,304/mo storage = ~$10,944/mo\n- Hybrid Cloud (BYOC): licensing $0.80/M-queries, customer brings own AWS/GCP\n- On-prem: contact sales (volume licensing from $50k/year)", "minimal": "[browser_visit] Qdrant pricing (1B @ 768d float32 → ~$10,944/mo managed, $0.80/M-queries BYOC)"}
+      ],
+      "ts": "2026-04-10T14:00:50Z"
+    },
+    {
+      "role": "assistant",
+      "blocks": [
+        {"type": "tool_use", "id": "r4", "name": "browser_visit", "input": {"url": "https://weaviate.io/pricing"}}
+      ],
+      "ts": "2026-04-10T14:01:02Z"
+    },
+    {
+      "role": "user",
+      "blocks": [
+        {"type": "tool_result", "tool_use_id": "r4", "content": "Weaviate Cloud Pricing (2026 Q2):\n- Sandbox: 14 days free, 1M vectors\n- Standard Cloud: $25/mo per 100k vectors (768d). 1B = ~$250,000/mo — NOT cost-effective at scale\n- Enterprise Dedicated: tiered from $4,500/mo baseline, 1B scale typically $28,000/mo (6-node cluster)\n- Serverless (new 2026): $0.095 per 1M vector-reads. At 100M queries/mo → $9,500/mo + storage\n- Self-hosted: OSS (Apache 2.0), zero licensing fee", "minimal": "[browser_visit] Weaviate pricing (1B Enterprise ~$28k/mo, Serverless $0.095/M reads, OSS free self-host)"}
+      ],
+      "ts": "2026-04-10T14:01:10Z"
+    },
+    {
+      "role": "assistant",
+      "blocks": [
+        {"type": "tool_use", "id": "r5", "name": "browser_visit", "input": {"url": "https://zilliz.com/pricing"}}
+      ],
+      "ts": "2026-04-10T14:01:18Z"
+    },
+    {
+      "role": "user",
+      "blocks": [
+        {"type": "tool_result", "tool_use_id": "r5", "content": "Zilliz Cloud (Managed Milvus) Pricing:\n- Serverless: $0.50 per GB-month stored + $0.10 per 1M queries. 1B @ 768d → 3TB → $1,500/mo storage + $10,000/mo @ 100M queries = $11,500/mo\n- Dedicated: starts $499/mo for a CU-1 (4 vCPU, 16GB). 1B typically needs CU-16 cluster → ~$16,000/mo\n- BYOC: available on AWS/GCP/Azure, pricing by negotiation, typically 30% savings vs dedicated\n- Open-source Milvus: self-host, zero license fee (Apache 2.0)", "minimal": "[browser_visit] Zilliz (Milvus managed) pricing (1B Dedicated ~$16k/mo, Serverless ~$11.5k/mo, OSS free)"}
+      ],
+      "ts": "2026-04-10T14:01:24Z"
+    },
+    {
+      "role": "assistant",
+      "blocks": [
+        {"type": "tool_use", "id": "r6", "name": "memory_store", "input": {"key": "vdb-comparison-2026Q2", "value": "Qdrant best latency ($0.82/M, 95ms p99, RAM-heavy); Weaviate best multi-tenant filters ($1.15/M, 170ms, OSS strong); Milvus best GPU/flexibility ($1.45/M, 210ms, SSD-optimized). All OSS Apache 2.0. Managed 1B ≈ $11k–$28k/mo."}}
+      ],
+      "ts": "2026-04-10T14:01:30Z"
+    },
+    {
+      "role": "user",
+      "blocks": [
+        {"type": "tool_result", "tool_use_id": "r6", "content": "stored key=vdb-comparison-2026Q2 (238 chars)", "minimal": "[memory_store] vdb-comparison-2026Q2 saved"}
+      ],
+      "ts": "2026-04-10T14:01:31Z"
+    },
+    {
+      "role": "assistant",
+      "content": "信息充分，产出 1 页摘要：\n\n# 向量数据库对比（1B 向量规模，2026 Q2）\n\n| 指标 | Qdrant | Weaviate | Milvus |\n|---|---|---|---|\n| p99 延迟 | **95ms** ⭐ | 170ms | 210ms |\n| QPS (r7g.16xlarge) | 4,200 | 2,800 | 3,100 |\n| $/M-queries (self-host) | **$0.82** ⭐ | $1.15 | $1.45 |\n| 1B 管控云月费 | ~$10.9k | ~$28k | ~$16k |\n| 核心优势 | 延迟+性价比 | 多租户过滤 | GPU+灵活 |\n| 核心弱点 | 需常驻 RAM (3TB) | 标准云贵 | 运维复杂 |\n| 开源许可 | Apache 2.0 | Apache 2.0 | Apache 2.0 |\n\n**结论**：\n- 纯延迟 + 成本敏感：选 Qdrant（尤其 BYOC 模式 $0.80/M）\n- 需要复杂多租户过滤：Weaviate OSS + 自管 6 节点，省钱且灵活\n- 需要 GPU 加速/混合召回：Milvus（Zilliz 管控或自建）\n- 三家均 Apache 2.0，可零成本自建起步，根据规模再上管控\n\n数据来源：VDBBench 2026 (arxiv 2601.09442)、Qdrant/Weaviate/Zilliz 官方定价页（2026-04-10 抓取）。\n记忆 key: vdb-comparison-2026Q2。",
+      "ts": "2026-04-10T14:01:50Z"
+    },
+    {
+      "role": "user",
+      "content": "再补一个问题：如果我未来半年要上 GPU 索引，Qdrant 支持吗？",
+      "ts": "2026-04-10T14:02:00Z"
+    },
+    {
+      "role": "assistant",
+      "blocks": [
+        {"type": "tool_use", "id": "r7", "name": "web_search", "input": {"query": "Qdrant GPU index support 2026 roadmap"}}
+      ],
+      "ts": "2026-04-10T14:02:08Z"
+    },
+    {
+      "role": "user",
+      "blocks": [
+        {"type": "tool_result", "tool_use_id": "r7", "content": "[1] https://github.com/qdrant/qdrant/issues/3847 (CUDA HNSW - open, roadmap 2026 Q4)\n[2] https://qdrant.tech/blog/gpu-indexing-preview (GPU build-time indexing since v1.14, search-time still CPU)\n[3] https://news.ycombinator.com/item?id=92135671 (discussion: Qdrant team confirms full GPU search is 2026 Q4 + 2027 Q1)", "minimal": "[web_search] Qdrant GPU → build-time GPU since v1.14, full GPU search planned 2026 Q4–2027 Q1"}
+      ],
+      "ts": "2026-04-10T14:02:12Z"
+    },
+    {
+      "role": "assistant",
+      "content": "补充结论：Qdrant 目前（v1.14+）**索引构建阶段已支持 GPU**，检索阶段仍走 CPU，完整 GPU 检索路线图排在 **2026 Q4 ~ 2027 Q1**。如果你半年内就需要 GPU 检索（而不是仅构建），Qdrant 会赶不上，建议直接上 Milvus（已通过 Knowhere + Raft 稳定支持 GPU 检索），或等 Qdrant Q4 再评估。",
+      "ts": "2026-04-10T14:02:20Z"
+    }
+  ]
+}

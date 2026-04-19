@@ -1,0 +1,26 @@
+{
+  "session_id": "hard-04-cross-session-recall",
+  "description": "Cross-session recall: the user asks a question that can ONLY be answered by recalling a fact established in a previous (already summarised) session. Tests whether long-term memory (the 'dream' layer) is available when the in-conversation L2 summary has dropped the literal evidence.",
+  "channel": "pisci-agent",
+  "notes_for_judge": {
+    "critical_facts": [
+      "the previous session established that the internal metrics gateway runs on port 9176 (NOT the public 8080)",
+      "authentication to the metrics gateway uses a client certificate at /etc/pisci/certs/metrics-client.pem, not a bearer token",
+      "the gateway is named 'pisci-internal-metrics-relay' in the service registry",
+      "the firewall whitelist for production includes only 10.0.0.0/8 — external IPs are blocked"
+    ]
+  },
+  "message_count": 12,
+  "messages": [
+    {"role": "user", "content": "[上一个会话摘要作为起点] 上次我们已经建立：内部 metrics 网关跑在 9176 端口（不是公网 8080），认证走客户端证书 /etc/pisci/certs/metrics-client.pem（不是 bearer token），服务注册名 pisci-internal-metrics-relay，防火墙只放行 10.0.0.0/8。 今天我想把一个新 dashboard 接上来，问你具体怎么接。"},
+    {"role": "assistant", "content": "按上次确立的信息：dashboard 必须以 9176 为目标端口，TLS 客户端证书用 /etc/pisci/certs/metrics-client.pem。我先确认服务当前是否还在同一台机器上。", "blocks": [{"type":"text","text":"按上次确立的信息：dashboard 必须以 9176 为目标端口，TLS 客户端证书用 /etc/pisci/certs/metrics-client.pem。我先确认服务当前是否还在同一台机器上。"},{"type":"tool_use","id":"r1","name":"shell","input":{"command":"getent services pisci-internal-metrics-relay"}}]},
+    {"role": "user", "blocks": [{"type":"tool_result","tool_use_id":"r1","content":"pisci-internal-metrics-relay 9176/tcp","minimal":"[shell] service registry confirms 9176/tcp"}]},
+    {"role": "assistant", "content": "服务注册名仍然是 pisci-internal-metrics-relay、端口 9176。下一步是 dashboard 侧的 outbound 是否在 10.0.0.0/8 之内——上次约定里防火墙只放行这个段。", "blocks": [{"type":"tool_use","id":"r2","name":"shell","input":{"command":"ip -4 addr show eth0 | awk '/inet /{print $2}'"}}]},
+    {"role": "user", "blocks": [{"type":"tool_result","tool_use_id":"r2","content":"10.12.7.44/16","minimal":"[shell] dashboard host IP=10.12.7.44/16 (in 10.0.0.0/8)"}]},
+    {"role": "assistant", "content": "IP=10.12.7.44，属于 10.0.0.0/8，不会被防火墙阻断。"},
+    {"role": "user", "content": "现在说具体怎么接，包括 URL、认证、网络三部分。"},
+    {"role": "assistant", "content": "完整接线方案：\n\n1) **URL**：`https://pisci-internal-metrics-relay.internal:9176/api/v1/metrics` （必须走 9176，不是 8080）\n2) **认证**：客户端证书 `/etc/pisci/certs/metrics-client.pem`（**不要**用 bearer token——内部网关禁用了这个路径）\n3) **网络**：dashboard 主机 IP=10.12.7.44 已在 10.0.0.0/8 白名单内，无须额外 firewall change\n\n这三点完全继承上次会话的结论。"},
+    {"role": "user", "content": "为什么不是 8080 + bearer token？"},
+    {"role": "assistant", "content": "根据上次会话结论：8080 是公网网关，不暴露内部 metrics；内部 relay 的端口是 9176，认证也被切到客户端证书（bearer token 在上次讨论里显式被拒绝，理由是多次 token 泄漏事件）。所以内部只能走 9176 + mTLS。"}
+  ]
+}

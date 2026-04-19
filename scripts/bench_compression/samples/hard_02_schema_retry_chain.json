@@ -1,0 +1,32 @@
+{
+  "session_id": "hard-02-schema-retry-chain",
+  "description": "Schema-correction retry chain: 5 consecutive failures on file_write with wrong arg names, each triggering a full-schema nudge, before a successful call. Tests Phase 3 FEC — errors_learned should surface without recreating failed history.",
+  "channel": "pisci-agent",
+  "notes_for_judge": {
+    "critical_facts": [
+      "the correct file_write signature uses 'path' (NOT 'pth', 'file', 'filename', or 'fp')",
+      "the correct content field is 'content' (NOT 'body', 'text', 'data')",
+      "the eventual successful write was src/config/flags.ts",
+      "the content written was `export const FLAG_NEW_UI = true;`",
+      "the agent learned both arg-name lessons during the chain"
+    ]
+  },
+  "message_count": 15,
+  "messages": [
+    {"role": "user", "content": "给 src/config/flags.ts 写一行 export const FLAG_NEW_UI = true;"},
+    {"role": "assistant", "content": "好的，写入文件。", "blocks": [{"type":"text","text":"好的，写入文件。"},{"type":"tool_use","id":"s1","name":"file_write","input":{"pth":"src/config/flags.ts","body":"export const FLAG_NEW_UI = true;"}}]},
+    {"role": "user", "blocks": [{"type":"tool_result","tool_use_id":"s1","content":"Error: unknown argument 'pth' (did you mean 'path'?) and 'body' (did you mean 'content'?)","is_error":true,"minimal":"[file_write ERROR] unknown 'pth' / 'body'"}]},
+    {"role": "assistant", "content": "改用 path。", "blocks": [{"type":"text","text":"改用 path。"},{"type":"tool_use","id":"s2","name":"file_write","input":{"path":"src/config/flags.ts","text":"export const FLAG_NEW_UI = true;"}}]},
+    {"role": "user", "blocks": [{"type":"tool_result","tool_use_id":"s2","content":"Error: unknown argument 'text' (did you mean 'content'?). Full schema: { path: string, content: string, append?: boolean }","is_error":true,"minimal":"[file_write ERROR] unknown 'text'; schema hint given"}]},
+    {"role": "assistant", "content": "抱歉，用 content。", "blocks": [{"type":"tool_use","id":"s3","name":"file_write","input":{"filename":"src/config/flags.ts","content":"export const FLAG_NEW_UI = true;"}}]},
+    {"role": "user", "blocks": [{"type":"tool_result","tool_use_id":"s3","content":"Error: unknown argument 'filename' (did you mean 'path'?). Full schema: { path: string, content: string, append?: boolean }","is_error":true,"minimal":"[file_write ERROR] unknown 'filename'"}]},
+    {"role": "assistant", "content": "再试。", "blocks": [{"type":"tool_use","id":"s4","name":"file_write","input":{"file":"src/config/flags.ts","content":"export const FLAG_NEW_UI = true;"}}]},
+    {"role": "user", "blocks": [{"type":"tool_result","tool_use_id":"s4","content":"Error: unknown argument 'file' (did you mean 'path'?).","is_error":true,"minimal":"[file_write ERROR] unknown 'file'"}]},
+    {"role": "assistant", "content": "再试，用完整规范。", "blocks": [{"type":"tool_use","id":"s5","name":"file_write","input":{"fp":"src/config/flags.ts","data":"export const FLAG_NEW_UI = true;"}}]},
+    {"role": "user", "blocks": [{"type":"tool_result","tool_use_id":"s5","content":"Error: unknown arguments 'fp' / 'data'. REQUIRED keys: path, content","is_error":true,"minimal":"[file_write ERROR] unknown 'fp'/'data'"}]},
+    {"role": "assistant", "content": "我记住了：path + content。", "blocks": [{"type":"tool_use","id":"s6","name":"file_write","input":{"path":"src/config/flags.ts","content":"export const FLAG_NEW_UI = true;"}}]},
+    {"role": "user", "blocks": [{"type":"tool_result","tool_use_id":"s6","content":"written 33 bytes to src/config/flags.ts","is_error":false,"minimal":"[file_write] 33B ok"}]},
+    {"role": "assistant", "content": "写入成功：src/config/flags.ts = `export const FLAG_NEW_UI = true;`\n\n已经得到的工具规范教训：file_write 的参数是 path（不是 pth/file/filename/fp）和 content（不是 body/text/data）。"},
+    {"role": "user", "content": "好。确认。"}
+  ]
+}

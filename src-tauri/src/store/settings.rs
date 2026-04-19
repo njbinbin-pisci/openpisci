@@ -278,8 +278,48 @@ pub struct Settings {
     pub max_iterations: u32,
     /// Automatically compact long-running sessions once cumulative input tokens
     /// reach this threshold. Set to 0 to disable threshold-based compaction.
+    ///
+    /// **Deprecated by p5a's three-tier scheme** — retained for backwards
+    /// compatibility with older settings files. The effective compaction
+    /// behaviour now comes from [`Self::compaction_micro_percent`] /
+    /// `compaction_auto_percent` / `compaction_full_percent`. The harness
+    /// still reads this field on start-up so users who previously lowered
+    /// it to 100k keep their existing behaviour until they migrate.
     #[serde(default = "default_auto_compact_input_tokens_threshold")]
     pub auto_compact_input_tokens_threshold: u32,
+
+    /// p5a / Claw-inspired three-tier compaction thresholds, expressed as
+    /// *percentage of the effective input-token budget* (= context window
+    /// minus `max_tokens`).
+    ///
+    /// *   Below `compaction_micro_percent` — nothing extra happens, just
+    ///     the default receipt demotion from p5.
+    /// *   `compaction_micro_percent`..`compaction_auto_percent` — MICRO:
+    ///     aggressive receipt demotion + per-result truncation (see
+    ///     `max_tool_result_tokens`).
+    /// *   `compaction_auto_percent`..`compaction_full_percent` — AUTO:
+    ///     trigger an async summary run (p7), replace the oldest non-recent
+    ///     history with a rolling summary.
+    /// *   `compaction_full_percent`+ — FULL: synchronous summary before
+    ///     the next LLM call; last line of defence against overflow.
+    #[serde(default = "default_compaction_micro_percent")]
+    pub compaction_micro_percent: u8,
+    #[serde(default = "default_compaction_auto_percent")]
+    pub compaction_auto_percent: u8,
+    #[serde(default = "default_compaction_full_percent")]
+    pub compaction_full_percent: u8,
+
+    /// Per-tool-result truncation cap in tokens (p5a). Tool results whose
+    /// estimated tokens exceed this value are written to the minimal
+    /// receipt form at the time the history is constructed, regardless of
+    /// how recent they are. 0 disables the cap.
+    #[serde(default = "default_max_tool_result_tokens")]
+    pub max_tool_result_tokens: u32,
+
+    /// Optional override for the model used to produce rolling summaries
+    /// (p7). When `None` or empty, the main chat model is reused.
+    #[serde(default)]
+    pub summary_model: Option<String>,
     /// Maximum characters from project instruction files injected into the system prompt.
     #[serde(default = "default_project_instruction_budget_chars")]
     pub project_instruction_budget_chars: u32,
@@ -393,6 +433,24 @@ fn default_auto_compact_input_tokens_threshold() -> u32 {
     // raw input tokens before a forced Level-2 summarisation buys us anything,
     // so the old default was firing far too often on long research sessions.
     200_000
+}
+fn default_compaction_micro_percent() -> u8 {
+    // Align with `crate::agent::harness::budget::DEFAULT_TIER_MICRO_PERCENT`.
+    // Duplicated here (rather than re-exported) so the store crate stays
+    // leaf-level with no agent dependency.
+    60
+}
+fn default_compaction_auto_percent() -> u8 {
+    80
+}
+fn default_compaction_full_percent() -> u8 {
+    95
+}
+fn default_max_tool_result_tokens() -> u32 {
+    // 8k tokens ≈ 32 KB at ~4 chars/token; enough to hold a full file_read
+    // of a medium source file but small enough that one oversized result
+    // never dominates a 200k-token budget.
+    8_000
 }
 fn default_project_instruction_budget_chars() -> u32 {
     8_000
@@ -530,6 +588,11 @@ impl Default for Settings {
             email_enabled: false,
             max_iterations: default_max_iterations(),
             auto_compact_input_tokens_threshold: default_auto_compact_input_tokens_threshold(),
+            compaction_micro_percent: default_compaction_micro_percent(),
+            compaction_auto_percent: default_compaction_auto_percent(),
+            compaction_full_percent: default_compaction_full_percent(),
+            max_tool_result_tokens: default_max_tool_result_tokens(),
+            summary_model: None,
             project_instruction_budget_chars: default_project_instruction_budget_chars(),
             enable_project_instructions: true,
             llm_read_timeout_secs: default_llm_read_timeout_secs(),

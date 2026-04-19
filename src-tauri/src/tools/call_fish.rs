@@ -4,7 +4,7 @@
 /// the task as a single user message. No session is created, no DB writes.
 /// While the Fish runs, FishProgress events are forwarded to the parent session
 /// so the user can see real-time progress in the main Chat view.
-use crate::agent::loop_::{AgentLoop, ConfirmFlags};
+use crate::agent::harness::HarnessConfig;
 use crate::agent::messages::AgentEvent;
 use crate::agent::tool::{Tool, ToolContext, ToolResult, ToolSettings};
 use crate::llm::{LlmMessage, MessageContent};
@@ -237,26 +237,26 @@ impl CallFishTool {
             allow_outside_workspace,
         ));
 
-        let agent = AgentLoop {
-            client,
-            registry: registry_tools,
-            policy,
-            system_prompt: fish_system_prompt,
-            model,
-            max_tokens,
-            context_window: 0,
-            fallback_models: vec![],
-            db: None, // stateless — no DB persistence
-            app_handle: Some(state.app_handle.clone()),
-            confirmation_responses: None,
-            confirm_flags: ConfirmFlags {
-                confirm_shell: false,
-                confirm_file_write: false,
-            },
-            vision_override: Some(vision_capable),
-            notification_rx: None,
-            auto_compact_input_tokens_threshold: 100_000,
+        // Fish is the canonical "ephemeral zero-persistence" harness —
+        // `HarnessConfig::for_fish` encodes that default so the struct
+        // literal does not leak here. `into_agent_loop` bridges to the
+        // legacy loop; p12 will shrink this bridge further.
+        let fish_compaction_settings = {
+            let s = state.settings.lock().await;
+            crate::agent::harness::config::CompactionSettings::from_settings(&s)
         };
+        let agent = HarnessConfig::for_fish(
+            model,
+            registry_tools,
+            policy,
+            fish_system_prompt,
+            max_tokens,
+            vision_capable,
+            100_000,
+            fish_compaction_settings,
+            state.app_handle.clone(),
+        )
+        .into_agent_loop(client, None, None);
 
         let fish_ctx = ToolContext {
             session_id: format!("fish_ephemeral_{}", fish_id),

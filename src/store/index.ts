@@ -129,6 +129,29 @@ export interface ContextUsageSnapshot {
   rollingSummaryVersion: number;
   /** Configured cumulative auto-compact threshold (0 = disabled) */
   autoCompactThreshold: number;
+  /** p8 — optional per-layer token attribution so the ring can display
+   *  a stacked visualisation. Absent for snapshots emitted before p8
+   *  or from legacy codepaths. */
+  layeredBreakdown?: LayeredTokenBreakdownSnapshot;
+}
+
+/** p8 — layered token attribution mirroring the Rust
+ *  `LayeredTokenBreakdownSnapshot`. All values are raw token estimates;
+ *  sum approximately equals `estimatedInputTokens`. */
+export interface LayeredTokenBreakdownSnapshot {
+  persona: number;
+  scene: number;
+  memory: number;
+  project: number;
+  platform_hint: number;
+  tool_defs: number;
+  history_text: number;
+  history_tool_result_full: number;
+  history_tool_result_receipt: number;
+  rolling_summary: number;
+  state_frame: number;
+  vision: number;
+  request_overhead: number;
 }
 
 const chatSlice = createSlice({

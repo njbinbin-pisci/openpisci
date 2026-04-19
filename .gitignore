@@ -35,6 +35,7 @@ Thumbs.db
 /ci-log.txt
 /tauri-bundle-log.txt
 /*-log.txt
+/harness-smoke*.jsonl
 
 # Windows installer artifacts
 *.msi

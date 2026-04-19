@@ -1,4 +1,4 @@
-use crate::agent::loop_::AgentLoop;
+use crate::agent::harness::HarnessConfig;
 use crate::agent::messages::AgentEvent;
 use crate::agent::tool::ToolContext;
 use crate::browser::SharedBrowserManager;
@@ -145,6 +145,167 @@ fn resolve_memory_consolidation_prompt(task_prompt: &str, db: &Database) -> Stri
         build_memory_consolidation_snapshot(db),
         task_prompt
     )
+}
+
+/// Phase 4c — build a focused consolidation snapshot for a single
+/// session. Used by the event-driven consolidation path
+/// ([`trigger_consolidation_for_session`]) so we don't blur the
+/// snapshot with unrelated sessions.
+fn build_session_consolidation_snapshot(db: &Database, session_id: &str) -> String {
+    let session = db.get_session(session_id).ok().flatten();
+    let task_states = db.list_recent_task_states(4).unwrap_or_default();
+    let memories = db.list_memories_for_owner("pisci").unwrap_or_default();
+
+    let session_line = match session {
+        Some(s) => {
+            let summary = if s.rolling_summary.trim().is_empty() {
+                "no rolling summary".to_string()
+            } else {
+                trim_preview(&s.rolling_summary.replace('\n', " "), 320)
+            };
+            format!(
+                "- {} [{}] msgs={} status={} summary={}",
+                s.title.clone().unwrap_or_else(|| s.id.clone()),
+                s.source,
+                s.message_count,
+                s.status,
+                summary
+            )
+        }
+        None => format!("- session {} not found", session_id),
+    };
+
+    let task_lines = if task_states.is_empty() {
+        "- No persisted task spines".to_string()
+    } else {
+        task_states
+            .iter()
+            .filter(|t| t.scope_id == session_id || t.status == "active")
+            .take(4)
+            .map(|t| {
+                let spine = t.to_task_spine();
+                format!(
+                    "- {}:{} status={} goal={} current_step={} pending={} done={}",
+                    t.scope_type,
+                    t.scope_id,
+                    t.status,
+                    trim_preview(&spine.goal, 80),
+                    trim_preview(&spine.current_step, 80),
+                    spine.pending.len(),
+                    spine.done.len()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let memory_lines = if memories.is_empty() {
+        "- No stored memories".to_string()
+    } else {
+        // Prefer memories with evidence anchored in THIS session
+        // (Phase 4d) or, failing that, the most recent 5.
+        let mut relevant: Vec<_> = memories
+            .iter()
+            .filter(|m| {
+                m.evidence_session_id.as_deref() == Some(session_id)
+                    || m.source_session_id.as_deref() == Some(session_id)
+            })
+            .collect();
+        if relevant.is_empty() {
+            relevant = memories.iter().rev().take(5).collect();
+        }
+        relevant
+            .iter()
+            .take(6)
+            .map(|m| {
+                format!(
+                    "- [{}/{}] {}",
+                    m.category,
+                    m.kind,
+                    trim_preview(&m.content.replace('\n', " "), 160)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    format!(
+        "## Session-focused Consolidation Snapshot\n\
+         ### Target Session ({})\n{}\n\n\
+         ### Related Task Spines\n{}\n\n\
+         ### Related Stored Memories\n{}\n",
+        session_id, session_line, task_lines, memory_lines
+    )
+}
+
+/// Phase 4c — event-triggered consolidation for a single session.
+///
+/// Public API (used in-process from session finalize hooks and when
+/// the L2 compaction has run N times for a session). Runs a
+/// **lightweight** consolidation bound to the specified session:
+/// instead of the wide-snapshot nightly cron, the prompt only sees
+/// this session's rolling summary, task spines, and session-anchored
+/// memories.
+///
+/// The existing cron (`0 4 * * *`) is unchanged — this is additive.
+///
+/// Returns the underlying task id used for the synchronous-spawn run.
+pub async fn trigger_consolidation_for_session(
+    state: &AppState,
+    session_id: &str,
+) -> Result<String, String> {
+    if session_id.trim().is_empty() {
+        return Err("session_id is required".into());
+    }
+    let task = ensure_memory_consolidation_task_inner(state, None).await?;
+
+    // Build the session-scoped snapshot and append it to the prompt
+    // so the agent focuses on this session's residual information.
+    let enriched_prompt = {
+        let db = state.db.lock().await;
+        let snapshot = build_session_consolidation_snapshot(&db, session_id);
+        format!(
+            "{}\n\n{}\n\n[triggered_by=session_finalize session_id={}]",
+            snapshot, task.task_prompt, session_id
+        )
+    };
+
+    {
+        let db = state.db.lock().await;
+        let _ = db.record_task_run(&task.id);
+    }
+
+    let app_h = state.app_handle.clone();
+    let task_id_clone = task.id.clone();
+    let db_arc = state.db.clone();
+    let settings_arc = state.settings.clone();
+    let browser = state.browser.clone();
+    let cancel_flags = state.cancel_flags.clone();
+    tokio::spawn(async move {
+        execute_task(
+            app_h,
+            task_id_clone,
+            enriched_prompt,
+            db_arc,
+            settings_arc,
+            browser,
+            cancel_flags,
+        )
+        .await;
+    });
+
+    Ok(task.id)
+}
+
+/// Tauri command wrapping [`trigger_consolidation_for_session`] so
+/// the frontend (or external integrations) can also fire a
+/// session-scoped consolidation on demand.
+#[tauri::command]
+pub async fn trigger_memory_consolidation_for_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<String, String> {
+    trigger_consolidation_for_session(&state, &session_id).await
 }
 
 async fn register_task_job(state: &AppState, task: &ScheduledTask) {
@@ -533,33 +694,32 @@ pub async fn execute_task(
         }
     };
 
-    let agent = AgentLoop {
-        client,
+    let system_prompt = format!(
+        "You are Pisci, a Windows AI Agent running a scheduled task.\n\
+         Task ID: {}\n\
+         Today's date: {}{}",
+        task_id,
+        chrono::Utc::now().format("%Y-%m-%d"),
+        task_state_section
+    );
+    let scheduler_compaction_settings = {
+        let s = settings.lock().await;
+        crate::agent::harness::config::CompactionSettings::from_settings(&s)
+    };
+    let agent = HarnessConfig::for_scheduler(
+        model,
+        vec![],
         registry,
         policy,
-        system_prompt: format!(
-            "You are Pisci, a Windows AI Agent running a scheduled task.\n\
-             Task ID: {}\n\
-             Today's date: {}{}",
-            task_id,
-            chrono::Utc::now().format("%Y-%m-%d"),
-            task_state_section
-        ),
-        model,
+        system_prompt,
         max_tokens,
-        context_window: 0,
-        fallback_models: vec![],
-        db: Some(db.clone()),
-        app_handle: None,
-        confirmation_responses: None,
-        confirm_flags: crate::agent::loop_::ConfirmFlags {
-            confirm_shell: false,
-            confirm_file_write: false,
-        },
-        vision_override: None,
-        notification_rx: None,
-        auto_compact_input_tokens_threshold: 100_000,
-    };
+        0,
+        None,
+        100_000,
+        scheduler_compaction_settings,
+        db.clone(),
+    )
+    .into_agent_loop(client, None, None);
 
     let ctx = ToolContext {
         session_id: format!("sched_{}", task_id),

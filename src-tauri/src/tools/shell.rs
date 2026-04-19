@@ -2,6 +2,7 @@ use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
@@ -69,6 +70,37 @@ impl Tool for ShellTool {
                     "type": "object",
                     "description": "Extra environment variables to set (key-value pairs)"
                 }
+            },
+            "required": ["command"]
+        })
+    }
+
+    fn description_minimal(&self) -> Cow<'_, str> {
+        // Terse: keep the critical operational tips (cwd=C:\, auto-elevate
+        // on access-denied) so minimal-mode agents still call it right.
+        // Long prose (per-interpreter recipes, tips list) only appears
+        // via `description()` on schema-correction / recall.
+        Cow::Borrowed(
+            "Execute a Windows shell command. Defaults to 64-bit PowerShell; set \
+             interpreter to powershell32 or cmd when needed. Working directory defaults \
+             to C:\\ — use absolute paths. Set elevated=true to run as Administrator \
+             (UAC prompt). Always retry with elevated=true on Access Denied.",
+        )
+    }
+
+    fn input_schema_minimal(&self) -> Value {
+        // Hand-tuned: keep enum and `required` exactly; drop verbose
+        // per-property prose. This is what the model sees on every
+        // iteration, so every token counts.
+        json!({
+            "type": "object",
+            "properties": {
+                "command":     { "type": "string" },
+                "interpreter": { "type": "string", "enum": ["powershell", "powershell32", "cmd"] },
+                "elevated":    { "type": "boolean" },
+                "cwd":         { "type": "string" },
+                "timeout":     { "type": "integer", "minimum": 1 },
+                "env":         { "type": "object" }
             },
             "required": ["command"]
         })

@@ -4,7 +4,7 @@
 /// - `run_debug_scenario`: Run a named test scenario through the real agent loop
 /// - `get_debug_report`: Collect a full diagnostic snapshot (settings, tools, recent audit, logs)
 /// - `get_log_tail`: Read the last N lines of the rolling log file
-use crate::agent::loop_::AgentLoop;
+use crate::agent::harness::HarnessConfig;
 use crate::agent::messages::AgentEvent;
 use crate::agent::tool::ToolContext;
 use crate::llm::{build_client, LlmMessage, MessageContent};
@@ -1110,39 +1110,37 @@ pub async fn run_debug_scenario(
         )
     };
 
-    let agent = AgentLoop {
-        client,
+    let system_prompt = format!(
+        "You are Pisci, a Windows AI Agent running a debug/test scenario.\n\
+         Scenario: {}\n\
+         Today's date: {}\n\
+         Workspace directory: {}\n\
+         When writing files, use the workspace directory above as the base path for relative filenames.\n\
+         {}\n\
+         Execute the task precisely. Do not ask for confirmation. \
+         Complete the task in as few tool calls as possible.",
+        scenario.name,
+        chrono::Utc::now().format("%Y-%m-%d"),
+        effective_workspace.display(),
+        tools_hint
+    );
+    let debug_compaction_settings = {
+        let s = state.settings.lock().await;
+        crate::agent::harness::config::CompactionSettings::from_settings(&s)
+    };
+    let agent = HarnessConfig::for_debug(
+        model,
         registry,
         policy,
-        system_prompt: format!(
-            "You are Pisci, a Windows AI Agent running a debug/test scenario.\n\
-             Scenario: {}\n\
-             Today's date: {}\n\
-             Workspace directory: {}\n\
-             When writing files, use the workspace directory above as the base path for relative filenames.\n\
-             {}\n\
-             Execute the task precisely. Do not ask for confirmation. \
-             Complete the task in as few tool calls as possible.",
-            scenario.name,
-            chrono::Utc::now().format("%Y-%m-%d"),
-            effective_workspace.display(),
-            tools_hint
-        ),
-        model,
+        system_prompt,
         max_tokens,
-        context_window: 0,
-        fallback_models: vec![],
-        db: Some(state.db.clone()),
-        app_handle: None,
-        confirmation_responses: None,
-        confirm_flags: crate::agent::loop_::ConfirmFlags {
-            confirm_shell: false,
-            confirm_file_write: false,
-        },
-        vision_override: None,
-        notification_rx: None,
-        auto_compact_input_tokens_threshold: 100_000,
-    };
+        0,
+        None,
+        debug_compaction_settings,
+        Some(state.db.clone()),
+        None,
+    )
+    .into_agent_loop(client, None, None);
 
     let cancel = Arc::new(AtomicBool::new(false));
 
@@ -1655,30 +1653,28 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
          - 如果 OpenPisci 在主显示器，可直接用 monitor_index=0（默认）"
         .to_string();
 
-    let agent = AgentLoop {
-        client,
+    let system_prompt = format!(
+        "You are Pisci, a Windows AI Agent running a UIA precision drag test.\nToday's date: {}\nWorkspace directory: {}\nUse ONLY these tools: screen_capture, uia. Do not call any other tools.\nExecute the task precisely. Do not ask for confirmation.",
+        chrono::Utc::now().format("%Y-%m-%d"),
+        effective_workspace.display(),
+    );
+    let uia_compaction_settings = {
+        let s = state.settings.lock().await;
+        crate::agent::harness::config::CompactionSettings::from_settings(&s)
+    };
+    let agent = HarnessConfig::for_debug(
+        model,
         registry,
         policy,
-        system_prompt: format!(
-            "You are Pisci, a Windows AI Agent running a UIA precision drag test.\nToday's date: {}\nWorkspace directory: {}\nUse ONLY these tools: screen_capture, uia. Do not call any other tools.\nExecute the task precisely. Do not ask for confirmation.",
-            chrono::Utc::now().format("%Y-%m-%d"),
-            effective_workspace.display(),
-        ),
-        model,
+        system_prompt,
         max_tokens,
-        context_window: 0,
-        fallback_models: vec![],
-        db: Some(state.db.clone()),
-        app_handle: None,
-        confirmation_responses: None,
-        confirm_flags: crate::agent::loop_::ConfirmFlags {
-            confirm_shell: false,
-            confirm_file_write: false,
-        },
-        vision_override: Some(vision_enabled),
-        notification_rx: None,
-        auto_compact_input_tokens_threshold: 100_000,
-    };
+        0,
+        Some(vision_enabled),
+        uia_compaction_settings,
+        Some(state.db.clone()),
+        None,
+    )
+    .into_agent_loop(client, None, None);
 
     let cancel = Arc::new(AtomicBool::new(false));
 

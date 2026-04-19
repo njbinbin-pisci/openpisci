@@ -803,6 +803,14 @@ pub fn run() {
 
             #[cfg(debug_assertions)]
             {
+                if std::env::var("PISCI_HIDE_WINDOWS_ON_STARTUP").ok().as_deref() == Some("1")
+                    || std::env::var("PISCI_RUN_COLLAB_TRIAL").ok().as_deref() == Some("1")
+                {
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.hide();
+                    }
+                }
+
                 let startup_headless_state = store::AppState {
                     db: state.db.clone(),
                     settings: state.settings.clone(),
@@ -1003,6 +1011,7 @@ pub fn run() {
             commands::scheduler::delete_task,
             commands::scheduler::ensure_memory_consolidation_task,
             commands::scheduler::run_memory_consolidation_now,
+            commands::scheduler::trigger_memory_consolidation_for_session,
             commands::scheduler::run_task_now,
             commands::scheduler::trigger_task_by_event,
             commands::system::get_vm_status,

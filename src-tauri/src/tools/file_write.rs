@@ -2,6 +2,7 @@ use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::borrow::Cow;
 
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
@@ -70,6 +71,25 @@ impl Tool for FileWriteTool {
                     "type": "string",
                     "description": "Full content to write. This REPLACES the entire file. Use file_edit to modify only part of an existing file."
                 }
+            },
+            "required": ["path", "content"]
+        })
+    }
+
+    fn description_minimal(&self) -> Cow<'_, str> {
+        Cow::Borrowed(
+            "Write full content to a file; creates parents and overwrites existing content. \
+             Use file_edit to change only part. Relative paths resolve from workspace root. \
+             Writes UTF-8 and preserves an existing UTF-8 BOM. For GBK/legacy encodings, use shell.",
+        )
+    }
+
+    fn input_schema_minimal(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path":    { "type": "string" },
+                "content": { "type": "string" }
             },
             "required": ["path", "content"]
         })
@@ -166,6 +186,37 @@ impl Tool for FileEditTool {
                         "properties": {
                             "old_string": { "type": "string", "description": "Exact text to replace (must appear exactly once)" },
                             "new_string": { "type": "string", "description": "Replacement text" }
+                        },
+                        "required": ["old_string", "new_string"]
+                    }
+                }
+            },
+            "required": ["path"]
+        })
+    }
+
+    fn description_minimal(&self) -> Cow<'_, str> {
+        Cow::Borrowed(
+            "Edit a file by exact string replacement. Single mode: {old_string,new_string}. \
+             Batch mode: {edits:[{old_string,new_string}...]} — validated first, applied atomically. \
+             Each old_string must appear exactly once. UTF-8 / UTF-8-BOM only; not GBK.",
+        )
+    }
+
+    fn input_schema_minimal(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path":       { "type": "string" },
+                "old_string": { "type": "string" },
+                "new_string": { "type": "string" },
+                "edits": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "old_string": { "type": "string" },
+                            "new_string": { "type": "string" }
                         },
                         "required": ["old_string", "new_string"]
                     }

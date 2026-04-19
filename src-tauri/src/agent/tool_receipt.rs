@@ -23,6 +23,43 @@ use serde_json::Value;
 /// with an ellipsis. Most receipts are well under 120 chars.
 pub const RECEIPT_MAX_CHARS: usize = 200;
 
+/// Suffix appended to a demoted minimal receipt so the agent can recall the
+/// original full-fidelity content via the `recall_tool_result` tool.
+///
+/// The format is intentionally compact (~25 chars max) and machine-readable:
+/// `[recall:<tool_use_id>]`. The recall tool parses this verbatim and the agent
+/// is taught (system prompt + tool description) that any demoted receipt with
+/// this suffix can be re-expanded on demand.
+pub const RECALL_HINT_PREFIX: &str = "[recall:";
+pub const RECALL_HINT_SUFFIX: &str = "]";
+
+/// Append `[recall:<tool_use_id>]` to a demoted receipt body, but only when
+/// the body does not already contain the marker (idempotent across the
+/// in-memory build path and the DB read path).
+///
+/// Returns the body unchanged when `tool_use_id` is empty (defensive — empty
+/// ids cannot be recalled and would just confuse the agent).
+pub fn with_recall_hint(body: &str, tool_use_id: &str) -> String {
+    if tool_use_id.is_empty() {
+        return body.to_string();
+    }
+    if body.contains(RECALL_HINT_PREFIX) {
+        return body.to_string();
+    }
+    let hint = format!(" {}{}{}", RECALL_HINT_PREFIX, tool_use_id, RECALL_HINT_SUFFIX);
+    // Stay within the receipt budget — if the combined string would exceed
+    // RECEIPT_MAX_CHARS we trim the body, never the hint (the hint is the
+    // only way back to full content and must always be intact).
+    let hint_chars = hint.chars().count();
+    let body_chars = body.chars().count();
+    if body_chars + hint_chars <= RECEIPT_MAX_CHARS {
+        return format!("{}{}", body, hint);
+    }
+    let keep = RECEIPT_MAX_CHARS.saturating_sub(hint_chars).saturating_sub(1);
+    let trimmed = truncate(body, keep);
+    format!("{}{}", trimmed, hint)
+}
+
 /// Render a minimal receipt for a tool invocation.
 ///
 /// `image_artifact_id` is the vision-store artifact id when the tool attached
@@ -641,5 +678,30 @@ mod tests {
         assert_eq!(parse_exit_code("exit code: 0"), Some(0));
         assert_eq!(parse_exit_code("ExitCode: 127"), Some(127));
         assert_eq!(parse_exit_code("foo bar"), None);
+    }
+
+    #[test]
+    fn recall_hint_is_appended_once_and_is_idempotent() {
+        let body = "ran: ls; exit=0; out=42 chars";
+        let with_hint = with_recall_hint(body, "tu_abc");
+        assert!(with_hint.ends_with("[recall:tu_abc]"));
+        assert!(with_hint.starts_with(body));
+        // Idempotent: applying again is a no-op.
+        let again = with_recall_hint(&with_hint, "tu_abc");
+        assert_eq!(again, with_hint);
+    }
+
+    #[test]
+    fn recall_hint_skipped_when_id_empty() {
+        let body = "called weird_tool: ok";
+        assert_eq!(with_recall_hint(body, ""), body);
+    }
+
+    #[test]
+    fn recall_hint_trims_body_to_stay_within_budget() {
+        let long: String = std::iter::repeat('a').take(RECEIPT_MAX_CHARS).collect();
+        let out = with_recall_hint(&long, "tu_xyz");
+        assert!(out.chars().count() <= RECEIPT_MAX_CHARS);
+        assert!(out.ends_with("[recall:tu_xyz]"));
     }
 }

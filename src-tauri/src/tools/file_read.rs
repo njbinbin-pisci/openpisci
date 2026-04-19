@@ -2,6 +2,7 @@ use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::borrow::Cow;
 
 const MAX_TEXT_BYTES: u64 = 256 * 1024; // 256 KB
 const MAX_IMAGE_BYTES: u64 = 4 * 1024 * 1024; // 4 MB
@@ -100,6 +101,27 @@ impl Tool for FileReadTool {
                     "type": "integer",
                     "description": "Maximum number of lines to read. Omit to read the whole file (up to 256KB)."
                 }
+            },
+            "required": ["path"]
+        })
+    }
+
+    fn description_minimal(&self) -> Cow<'_, str> {
+        Cow::Borrowed(
+            "Read a file's contents. Returns numbered text, or base64 for images. \
+             Relative paths resolve from workspace root. Use offset/limit for large files. \
+             Does NOT list directory contents — use file_list for that. \
+             Auto-detects UTF-8/UTF-16/GBK and reports encoding in the result header.",
+        )
+    }
+
+    fn input_schema_minimal(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path":   { "type": "string" },
+                "offset": { "type": "integer", "minimum": 1 },
+                "limit":  { "type": "integer", "minimum": 1 }
             },
             "required": ["path"]
         })

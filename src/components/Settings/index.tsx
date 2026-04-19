@@ -75,6 +75,11 @@ const DEFAULT_SETTINGS: SettingsData = {
   // Agent config
   max_iterations: 50,
   auto_compact_input_tokens_threshold: 200000,
+  compaction_micro_percent: 60,
+  compaction_auto_percent: 80,
+  compaction_full_percent: 95,
+  max_tool_result_tokens: 8000,
+  summary_model: "",
   project_instruction_budget_chars: 8000,
   enable_project_instructions: true,
   llm_read_timeout_secs: 120,
@@ -302,10 +307,26 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
         return;
       }
     }
+    const micro = Number(form.compaction_micro_percent ?? 60);
+    const auto = Number(form.compaction_auto_percent ?? 80);
+    const full = Number(form.compaction_full_percent ?? 95);
+    if (!(micro >= 0 && micro < auto && auto < full && full < 100)) {
+      setSaveError(t("settings.compactionThresholdOrderError"));
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
-      const updated = await settingsApi.save({ ...form, ssh_servers: sshServers, llm_providers: llmProviders });
+      const updated = await settingsApi.save({
+        ...form,
+        compaction_micro_percent: micro,
+        compaction_auto_percent: auto,
+        compaction_full_percent: full,
+        max_tool_result_tokens: Math.max(1000, Number(form.max_tool_result_tokens) || 8000),
+        summary_model: (form.summary_model ?? "").trim() || null,
+        ssh_servers: sshServers,
+        llm_providers: llmProviders,
+      });
       dispatch(settingsActions.setSettings(updated));
       dispatch(settingsActions.setConfigured(updated.is_configured ?? !!(updated.anthropic_api_key || updated.openai_api_key || updated.deepseek_api_key || updated.qwen_api_key)));
       // 立即切换语言
@@ -760,6 +781,96 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
             <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
               {t("settings.autoCompactThresholdDesc")}
             </p>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: 12,
+              padding: 14,
+              border: "1px solid var(--border)",
+              borderRadius: 10,
+              background: "var(--bg-secondary)",
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ gridColumn: "1 / -1", marginBottom: 4 }}>
+              <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>
+                {t("settings.compactionTiers")}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
+                {t("settings.compactionTiersDesc")}
+              </div>
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="label">{t("settings.compactionMicroPct")}</label>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                max={99}
+                value={form.compaction_micro_percent ?? 60}
+                onChange={(e) =>
+                  update("compaction_micro_percent", Math.min(99, Math.max(0, Number(e.target.value) || 0)))
+                }
+              />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="label">{t("settings.compactionAutoPct")}</label>
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={99}
+                value={form.compaction_auto_percent ?? 80}
+                onChange={(e) =>
+                  update("compaction_auto_percent", Math.min(99, Math.max(1, Number(e.target.value) || 1)))
+                }
+              />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="label">{t("settings.compactionFullPct")}</label>
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={99}
+                value={form.compaction_full_percent ?? 95}
+                onChange={(e) =>
+                  update("compaction_full_percent", Math.min(99, Math.max(1, Number(e.target.value) || 1)))
+                }
+              />
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div className="form-group">
+              <label className="label">{t("settings.maxToolResultTokens")}</label>
+              <input
+                className="input"
+                type="number"
+                min={1000}
+                max={200000}
+                value={form.max_tool_result_tokens ?? 8000}
+                onChange={(e) =>
+                  update("max_tool_result_tokens", Math.max(1000, Number(e.target.value) || 1000))
+                }
+              />
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                {t("settings.maxToolResultTokensDesc")}
+              </p>
+            </div>
+            <div className="form-group">
+              <label className="label">{t("settings.summaryModel")}</label>
+              <input
+                className="input"
+                value={form.summary_model ?? ""}
+                onChange={(e) => update("summary_model", e.target.value)}
+                placeholder={t("settings.summaryModelPlaceholder")}
+              />
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                {t("settings.summaryModelDesc")}
+              </p>
+            </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div className="form-group">

@@ -6,7 +6,7 @@
 /// - Records messages in the Chat Pool (if a pool_session_id is provided)
 /// - Sets memory_owner_id so new memories are scoped to the Koi
 /// - Allows the Koi to call other Kois (excluding itself, to prevent recursion)
-use crate::agent::loop_::{AgentLoop, ConfirmFlags};
+use crate::agent::harness::HarnessConfig;
 use crate::agent::messages::AgentEvent;
 use crate::agent::tool::{Tool, ToolContext, ToolResult, ToolSettings};
 use crate::commands::scene::{build_registry_for_scene, load_skill_loader, SceneKind, ScenePolicy};
@@ -668,32 +668,29 @@ impl CallKoiTool {
             allow_outside_workspace,
         ));
 
-        let agent = AgentLoop {
-            client,
-            registry: registry_tools,
+        // Per-run plumbing kept at the call site: the cross-session
+        // notification channel is *taken* out of `self` once and handed
+        // to the bridge so the AgentLoop receives ownership.
+        let notification_rx = self.notification_rx.lock().unwrap().take();
+        let koi_compaction_settings = {
+            let s = state.settings.lock().await;
+            crate::agent::harness::config::CompactionSettings::from_settings(&s)
+        };
+        let agent = HarnessConfig::for_koi(
+            model,
+            vec![],
+            registry_tools,
             policy,
             system_prompt,
-            model,
             max_tokens,
             context_window,
-            fallback_models: vec![],
-            db: Some(state.db.clone()),
-            app_handle: Some(state.app_handle.clone()),
-            confirmation_responses: None,
-            confirm_flags: ConfirmFlags {
-                confirm_shell: false,
-                confirm_file_write: false,
-            },
-            vision_override: Some(vision_capable),
-            notification_rx: self
-                .notification_rx
-                .lock()
-                .unwrap()
-                .take()
-                .map(|rx| tokio::sync::Mutex::new(rx)),
-            auto_compact_input_tokens_threshold: scene_policy
-                .effective_auto_compact_threshold(auto_compact_input_tokens_threshold),
-        };
+            Some(vision_capable),
+            scene_policy.effective_auto_compact_threshold(auto_compact_input_tokens_threshold),
+            koi_compaction_settings,
+            Some(state.db.clone()),
+            Some(state.app_handle.clone()),
+        )
+        .into_agent_loop(client, notification_rx, None);
 
         let koi_ctx = ToolContext {
             // Include pool_session_id so each project gets an isolated session context

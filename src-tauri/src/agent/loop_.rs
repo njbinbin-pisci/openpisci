@@ -9,7 +9,7 @@
 use super::messages::AgentEvent;
 use super::tool::{ToolContext, ToolRegistry};
 use super::vision;
-use crate::llm::{ContentBlock, ImageSource, LlmClient, LlmMessage, LlmRequest, MessageContent};
+use crate::llm::{ContentBlock, ImageSource, LlmClient, LlmMessage, MessageContent};
 use crate::policy::{PolicyDecision, PolicyGate};
 use crate::store::Database;
 use anyhow::Result;
@@ -62,7 +62,8 @@ pub struct ConfirmFlags {
     pub confirm_file_write: bool,
 }
 
-type ConfirmationResponseMap = Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>;
+pub(crate) type ConfirmationResponseMap =
+    Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>;
 
 // ── Loop Detection (per-tool tracking, inspired by OpenClaw) ─────────────────
 
@@ -427,7 +428,10 @@ fn dynamic_result_limit(context_window_tokens: usize) -> usize {
 // Context compaction helpers
 // ---------------------------------------------------------------------------
 
-pub use super::compaction::{CTX_COMPACT_AFTER, CTX_FULL_TURNS, CTX_TRIM_HEAD, CTX_TRIM_TAIL};
+pub use super::compaction::{
+    CTX_COMPACT_AFTER, CTX_FULL_TURNS, CTX_KEEP_RECENT_TOOL_CARRIERS, CTX_PRESERVE_RECENT_TURNS,
+    CTX_TRIM_HEAD, CTX_TRIM_TAIL,
+};
 /// Minimum chars a tool result must exceed before it is eligible for trimming.
 /// Prevents trimming results that are already small enough to be useful in full.
 const CTX_TRIM_MIN_SIZE: usize = CTX_TRIM_HEAD + CTX_TRIM_TAIL + 100;
@@ -470,15 +474,24 @@ fn compact_trim_tool_results(messages: &mut [LlmMessage], single_limit: usize) -
     changed
 }
 
-struct CompactionOutcome {
-    messages: Vec<LlmMessage>,
-    summary: String,
+pub struct CompactionOutcome {
+    pub messages: Vec<LlmMessage>,
+    pub summary: String,
     /// Prompt tokens billed for the summarisation call. Accumulated into the
     /// session's cumulative_input_tokens so ring indicators reflect reality.
-    input_tokens: u32,
+    pub input_tokens: u32,
     /// Completion tokens billed for the summarisation call. Accumulated into
     /// cumulative_output_tokens.
-    output_tokens: u32,
+    pub output_tokens: u32,
+    /// p7: structured fields extracted from the summariser output (empty
+    /// when the model falls back to plain prose). These feed the p6
+    /// `StateFrame` so a resumed session knows the latest plan / hint.
+    structured_plan_items: Vec<String>,
+    structured_next_step_hint: Option<String>,
+    /// Phase 2b: rich structured rolling summary (facts / decisions /
+    /// open items / evidence / errors learned). `None` when the legacy
+    /// prose-summary path was used and no structure was recovered.
+    pub structured_rolling: Option<crate::agent::summary_worker::StructuredRollingSummary>,
 }
 
 /// Serialize a batch of `ContentBlock::ToolResult` blocks into the DB's
@@ -536,6 +549,14 @@ fn is_compaction_summary_text(text: &str) -> bool {
 ///   tool-result carrier), walking from newest to oldest. The final iteration
 ///   of a run always counts as one full turn even before the next user message
 ///   arrives.
+/// - p5 **two-boundary scheme**: two *independent* cutoffs are computed —
+///   one counting `recent_full_turns` user-text turns (the classic one), one
+///   counting the last [`CTX_KEEP_RECENT_TOOL_CARRIERS`] messages that carry
+///   tool-result blocks. The effective cutoff is `min(turn_cutoff,
+///   tool_cutoff)` so whichever boundary preserves *more* history wins. The
+///   cutoff is then snapped **backwards** so it never lands between an
+///   assistant `tool_use` and its matching `tool_result` — demoting only the
+///   result (or only the call) would break provider pairing invariants.
 /// - If `tool_minimals` lacks an entry for a given `tool_use_id`, the original
 ///   full content is kept. Callers that need a hard ceiling on tokens should
 ///   follow up with `compact_trim_tool_results` on the returned vector.
@@ -543,30 +564,20 @@ pub(crate) fn build_request_messages(
     messages: &[LlmMessage],
     tool_minimals: &HashMap<String, String>,
     recent_full_turns: usize,
+    recent_tool_carriers: usize,
 ) -> Vec<LlmMessage> {
-    // First pass: walk newest-to-oldest and record the index where the "recent"
-    // region begins. Everything at index < recent_start is older than the last
-    // `recent_full_turns` user turns and gets its tool-results demoted to
-    // minimal receipts.
-    //
-    // Algorithm: remember the index of the Nth-newest user-text boundary; if we
-    // then see an (N+1)-th boundary, stop — the remembered index is where the
-    // oldest-kept turn starts. If fewer than N+1 boundaries exist we keep all
-    // messages full (recent_start = 0).
-    let mut recent_start: usize = 0;
-    let mut turns_seen: usize = 0;
-    for (i, msg) in messages.iter().enumerate().rev() {
-        let is_user_text_boundary = msg.role == "user"
-            && matches!(&msg.content, MessageContent::Text(t) if !t.is_empty() && !is_compaction_summary_text(t));
-        if is_user_text_boundary {
-            turns_seen += 1;
-            if turns_seen == recent_full_turns {
-                recent_start = i;
-            } else if turns_seen > recent_full_turns {
-                break;
-            }
-        }
-    }
+    let turn_cutoff = turn_based_recent_start(messages, recent_full_turns);
+    let tool_cutoff = tool_carrier_recent_start(messages, recent_tool_carriers);
+    // `min` = whichever boundary is *further back* (lower index) in the
+    // message vector, i.e. preserves more messages at full fidelity.
+    let mut recent_start = turn_cutoff.min(tool_cutoff);
+    // Snap so we never split a tool_use / tool_result pair across the
+    // boundary. The rule: walk back over any assistant message that is
+    // purely a `ToolUse` carrier (its matching `ToolResult` will appear in
+    // the preserved region). Equivalently, if `recent_start` currently
+    // points at a user message containing only `ToolResult` blocks, step
+    // back one more so the preceding assistant `ToolUse` comes with it.
+    recent_start = snap_to_pair_boundary(messages, recent_start);
 
     // Second pass: materialise the request vector. For indices below
     // `recent_start`, substitute `content` of each `ToolResult` block with its
@@ -590,7 +601,10 @@ pub(crate) fn build_request_messages(
                             if let Some(min) = tool_minimals.get(tool_use_id) {
                                 ContentBlock::ToolResult {
                                     tool_use_id: tool_use_id.clone(),
-                                    content: min.clone(),
+                                    content: crate::agent::tool_receipt::with_recall_hint(
+                                        min,
+                                        tool_use_id,
+                                    ),
                                     is_error: *is_error,
                                 }
                             } else {
@@ -611,6 +625,95 @@ pub(crate) fn build_request_messages(
     out
 }
 
+/// Turn-based boundary: index of the oldest message kept full when the
+/// policy is "keep the last N user-text turns". Returns 0 when there are
+/// fewer than N qualifying user-text boundaries (i.e. keep everything).
+fn turn_based_recent_start(messages: &[LlmMessage], recent_full_turns: usize) -> usize {
+    if recent_full_turns == 0 {
+        return messages.len();
+    }
+    let mut recent_start: usize = 0;
+    let mut turns_seen: usize = 0;
+    for (i, msg) in messages.iter().enumerate().rev() {
+        let is_user_text_boundary = msg.role == "user"
+            && matches!(&msg.content, MessageContent::Text(t) if !t.is_empty() && !is_compaction_summary_text(t));
+        if is_user_text_boundary {
+            turns_seen += 1;
+            if turns_seen == recent_full_turns {
+                recent_start = i;
+            } else if turns_seen > recent_full_turns {
+                break;
+            }
+        }
+    }
+    recent_start
+}
+
+/// Tool-carrier boundary: index of the oldest message that still falls
+/// within the most recent `keep` messages carrying `ToolResult` blocks.
+/// Returns 0 when there are fewer than `keep` such carriers (i.e. keep
+/// everything full).
+fn tool_carrier_recent_start(messages: &[LlmMessage], keep: usize) -> usize {
+    if keep == 0 {
+        return messages.len();
+    }
+    let mut carriers_seen: usize = 0;
+    for (i, msg) in messages.iter().enumerate().rev() {
+        let has_tool_result = matches!(
+            &msg.content,
+            MessageContent::Blocks(blocks) if blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+        );
+        if has_tool_result {
+            carriers_seen += 1;
+            if carriers_seen >= keep {
+                return i;
+            }
+        }
+    }
+    // Fewer than `keep` carriers exist anywhere — keep everything full.
+    0
+}
+
+/// Snap a candidate cutoff *backwards* so it never sits between an
+/// assistant `ToolUse` and its matching `ToolResult`. Called after the
+/// two boundaries have been minned; safe no-op when the cutoff is
+/// already at a pair boundary or at 0.
+fn snap_to_pair_boundary(messages: &[LlmMessage], mut start: usize) -> usize {
+    // Cheap short-circuits.
+    if start == 0 || start >= messages.len() {
+        return start;
+    }
+    // Step backwards while:
+    //   (a) the message at `start` is a user message containing ONLY
+    //       ToolResult blocks (i.e. it's a tool-result carrier, meaning
+    //       the assistant's ToolUse lives at start-1), OR
+    //   (b) the message at start-1 is an assistant message containing
+    //       ToolUse blocks — keeping the pair together requires
+    //       back-stepping across it.
+    // Bound the walk to avoid pathological all-tool-result sequences.
+    let mut guard = 0;
+    while start > 0 && guard < 16 {
+        let here = &messages[start];
+        let starts_with_tool_result = matches!(
+            &here.content,
+            MessageContent::Blocks(blocks)
+                if blocks.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. }))
+                && !blocks.is_empty()
+        );
+        let prev_has_tool_use = matches!(
+            &messages[start - 1].content,
+            MessageContent::Blocks(blocks) if blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+        );
+        if starts_with_tool_result || prev_has_tool_use {
+            start -= 1;
+            guard += 1;
+            continue;
+        }
+        break;
+    }
+    start
+}
+
 /// Level-2 compaction: call LLM to summarise old messages, optionally merging
 /// an existing rolling summary with the newly compacted history.
 ///
@@ -619,7 +722,7 @@ pub(crate) fn build_request_messages(
 /// (rather than the old char-based heuristic) prevents CJK-heavy sessions from
 /// systematically under-keeping because 1 char is worth ~1 token in CJK but
 /// ~0.25 tokens in English.
-async fn compact_summarise(
+pub async fn compact_summarise(
     messages: Vec<LlmMessage>,
     keep_tokens: usize,
     client: &dyn crate::llm::LlmClient,
@@ -718,12 +821,13 @@ async fn compact_summarise(
         .unwrap_or_default();
     let summary_prompt = format!(
         "请将以下内容合并为一条新的滚动摘要。\n\
-         输出纯摘要正文，不要添加标题或围栏。\n\
          摘要必须覆盖五部分：当前任务契约/用户目标、已完成工作、当前状态、未完成或待交接事项、关键文件/命令/结果。\n\
          必须保留仍然有效的任务目标、todo id、显式 handoff 目标（如 @Reviewer）、`[ProjectStatus]` 信号、阻塞原因、关键路径、错误和结论，省略重复中间步骤。\n\
          如果历史里出现了明确的下一位执行者、完成条件或待验证项，除非后续内容已经明确覆盖，否则不要丢失这些信息。\n\n\
-         {}新近待压缩的对话历史：\n{}",
-        existing_summary_block, history_text
+         {}新近待压缩的对话历史：\n{}{}",
+        existing_summary_block,
+        history_text,
+        crate::agent::summary_worker::STRUCTURED_SUMMARY_PROMPT_SUFFIX
     );
 
     let req = crate::llm::LlmRequest {
@@ -743,7 +847,14 @@ async fn compact_summarise(
 
     match client.complete(req).await {
         Ok(resp) if !resp.content.is_empty() => {
-            let merged_summary = resp.content.trim().to_string();
+            // p7: attempt structured JSON parse first; fall back to prose.
+            let structured =
+                crate::agent::summary_worker::parse_structured_summary(&resp.content);
+            let merged_summary = if structured.summary.is_empty() {
+                resp.content.trim().to_string()
+            } else {
+                structured.summary.clone()
+            };
             let summary_msg = crate::commands::chat::rolling_summary_message(&merged_summary);
             let mut new_messages = vec![summary_msg];
             new_messages.extend_from_slice(&messages[split_idx..]);
@@ -752,10 +863,219 @@ async fn compact_summarise(
                 summary: merged_summary,
                 input_tokens: resp.input_tokens,
                 output_tokens: resp.output_tokens,
+                structured_plan_items: structured.active_plan_items,
+                structured_next_step_hint: structured.next_step_hint,
+                structured_rolling: None,
             })
         }
         Ok(_) | Err(_) => None,
     }
+}
+
+/// Phase 2a: **Incremental / predictive-coding** Level-2 compaction.
+///
+/// Instead of re-summarising the entire old-message slab, this flow
+/// feeds the LLM only
+///
+/// 1. the previous [`StructuredRollingSummary`] (prior),
+/// 2. the "delta" = messages whose index is > `prev.last_msg_idx_covered`
+///    (plus older uncovered messages on first run), and
+/// 3. an optional `memory_snapshot` acting as a personalised codebook
+///    (Phase 4b) — facts/decisions already in long-term memory don't
+///    need to be re-summarised.
+///
+/// The LLM returns a list of [`MergeInstruction`]s and
+/// [`apply_merge_instructions`] produces the new summary atomically —
+/// if any step fails, the caller receives `None` and should keep the
+/// previous summary unchanged (atomic rollback, FEC-style).
+///
+/// Benefits vs. the whole-history path:
+/// - **O(|delta|)** input size instead of O(|history|) — up to 5–10×
+///   latency reduction for long sessions.
+/// - **Predictive coding**: only the residual is coded, satisfying
+///   rate-distortion R(D) more tightly.
+/// - **Memory-conditioned**: H(X | M) < H(X) reduces LLM work in
+///   proportion to how much the agent already "knows".
+///
+/// Phase 6: The delta is first passed through `rule_preprocess` at
+/// L2 aggressiveness to strip low-entropy noise before the LLM sees
+/// it.
+///
+/// Returns `None` when:
+/// - there is nothing new to summarise (delta empty), or
+/// - the LLM call fails, or
+/// - the returned merge instructions cannot be parsed / applied.
+pub async fn compact_summarise_incremental(
+    messages: Vec<LlmMessage>,
+    keep_tokens: usize,
+    client: &dyn crate::llm::LlmClient,
+    model: &str,
+    max_tokens: u32,
+    prev: Option<&crate::agent::summary_worker::StructuredRollingSummary>,
+    memory_snapshot: &[String],
+) -> Option<CompactionOutcome> {
+    use crate::agent::summary_worker as sw;
+
+    if messages.len() < 2 {
+        return None;
+    }
+
+    // Reuse the same tail-split math as the legacy path.
+    let mut acc = 0usize;
+    let mut split_idx = messages.len().saturating_sub(6);
+    for (i, msg) in messages.iter().enumerate().rev() {
+        acc += crate::llm::estimate_message_tokens(msg);
+        if acc >= keep_tokens && i > 0 {
+            split_idx = i;
+            break;
+        }
+    }
+    if split_idx == 0 {
+        return None;
+    }
+
+    // Delta = messages [last_covered .. split_idx].
+    let last_covered = prev.map(|p| p.last_msg_idx_covered).unwrap_or(0);
+    let delta_start = last_covered.min(split_idx);
+    let delta = &messages[delta_start..split_idx];
+    if delta.is_empty() {
+        return None;
+    }
+
+    // Phase 6: aggressive rule preprocessing on the LLM input only.
+    // Never touches the real conversation vector.
+    let pre_delta: Vec<LlmMessage> =
+        crate::agent::rule_preprocess::preprocess_messages(delta, crate::agent::rule_preprocess::Level::L2);
+
+    let delta_text: String = pre_delta
+        .iter()
+        .map(format_message_for_summariser)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if delta_text.trim().is_empty() {
+        return None;
+    }
+
+    // Render the prior summary + memory snapshot as a "known" block
+    // that the LLM must not re-emit. Dictionary coding.
+    let prior_block = match prev {
+        Some(p) if !p.is_empty() => format!(
+            "【先验摘要（已知事实/决策/待办，不要重复）】\n{}\n\n",
+            p.render_for_prompt(4_096)
+        ),
+        _ => String::new(),
+    };
+    let memory_block = if memory_snapshot.is_empty() {
+        String::new()
+    } else {
+        let lines: String = memory_snapshot
+            .iter()
+            .take(40)
+            .map(|s| format!("- {}", s))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("【长期记忆码本（已固化的事实，不要重复）】\n{}\n\n", lines)
+    };
+
+    let prompt = format!(
+        "你正在维护一份结构化的会话滚动摘要。请阅读下面的先验 + 新增片段，\
+         仅针对**新增信息**给出 merge 指令（JSON 数组）。\n\n\
+         {}{}【新增对话片段】\n{}\n{}",
+        prior_block,
+        memory_block,
+        delta_text,
+        sw::INCREMENTAL_MERGE_PROMPT_SUFFIX
+    );
+
+    let req = crate::llm::LlmRequest {
+        messages: vec![crate::llm::LlmMessage {
+            role: "user".into(),
+            content: crate::llm::MessageContent::text(&prompt),
+        }],
+        system: None,
+        tools: vec![],
+        model: model.to_string(),
+        max_tokens: max_tokens.clamp(512, 1024),
+        stream: false,
+        vision_override: Some(false),
+    };
+
+    let resp = match client.complete(req).await {
+        Ok(r) if !r.content.is_empty() => r,
+        _ => return None,
+    };
+
+    let instructions = match sw::parse_merge_instructions(&resp.content) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+
+    let prev_snapshot = prev.cloned().unwrap_or_default();
+    let new_summary =
+        match sw::apply_merge_instructions(&prev_snapshot, &instructions, split_idx) {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
+
+    let rendered = new_summary.render_for_prompt(4_096);
+    let summary_msg = crate::commands::chat::rolling_summary_message(&rendered);
+    let mut new_messages = vec![summary_msg];
+    new_messages.extend_from_slice(&messages[split_idx..]);
+
+    let plan_items: Vec<String> = new_summary.open_items.iter().map(|o| o.text.clone()).collect();
+
+    Some(CompactionOutcome {
+        messages: new_messages,
+        summary: new_summary.to_prose(),
+        input_tokens: resp.input_tokens,
+        output_tokens: resp.output_tokens,
+        structured_plan_items: plan_items,
+        structured_next_step_hint: None,
+        structured_rolling: Some(new_summary),
+    })
+}
+
+/// Render a single message as a compact snippet for the summariser
+/// prompt. Extracted so both legacy and incremental paths share
+/// identical formatting.
+fn format_message_for_summariser(m: &LlmMessage) -> String {
+    let role = if m.role == "user" {
+        "用户/工具结果"
+    } else {
+        "智能体"
+    };
+    let text = match &m.content {
+        crate::llm::MessageContent::Text(t) => t.clone(),
+        crate::llm::MessageContent::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|b| match b {
+                crate::llm::ContentBlock::Text { text } => {
+                    (!text.is_empty()).then(|| text.clone())
+                }
+                crate::llm::ContentBlock::ToolUse { name, input, .. } => {
+                    let input_str = input.to_string();
+                    let preview: String = input_str.chars().take(200).collect();
+                    Some(format!("调用工具 {}: {}", name, preview))
+                }
+                crate::llm::ContentBlock::ToolResult { content, tool_use_id, .. } => {
+                    let preview: String = content.chars().take(200).collect();
+                    Some(format!("[{}] 工具结果: {}", tool_use_id, preview))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    if text.is_empty() || is_compaction_summary_text(&text) {
+        return String::new();
+    }
+    let snippet = if text.chars().count() > 500 {
+        format!("{}...", text.chars().take(500).collect::<String>())
+    } else {
+        text
+    };
+    format!("[{}]: {}", role, snippet)
 }
 
 /// Returns true if the error message indicates a context overflow.
@@ -963,6 +1283,7 @@ impl AgentLoop {
             })
             .await;
 
+        let mut schema_correction_envelope: Option<String> = None;
         let result = match self.registry.get(name) {
             Some(tool) => {
                 // Log key input fields to aid debugging (path, command, query, etc.)
@@ -1058,6 +1379,11 @@ impl AgentLoop {
                             Ok(Err(e)) => {
                                 let err_msg = e.to_string();
                                 warn!("Tool '{}' error: {} | input: {}", name, err_msg, input_hint);
+                                schema_correction_envelope = maybe_schema_correction_envelope(
+                                    &self.registry,
+                                    name,
+                                    &err_msg,
+                                );
                                 let friendly = friendly_tool_error(name, &err_msg);
                                 super::tool::ToolResult::err(friendly)
                             }
@@ -1085,15 +1411,21 @@ impl AgentLoop {
                     .map(|t| t.name().to_string())
                     .collect();
                 super::tool::ToolResult::err(format!(
-                    "工具 '{}' 未找到。当前可用工具：{}。请检查工具名称是否正确，或在设置中启用该工具。",
+                    "Tool '{}' does not exist. Available tools: {}.",
                     name,
                     available.join(", ")
                 ))
             }
         };
 
-        let final_result_content =
+        let mut final_result_content =
             decorate_tool_failure_for_agent(name, input, &result.content, result.is_error);
+        if let Some(envelope) = schema_correction_envelope {
+            if !final_result_content.is_empty() {
+                final_result_content.push_str("\n\n");
+            }
+            final_result_content.push_str(&envelope);
+        }
         let end_result = format!("[trace_id:{}] {}", trace_id, final_result_content);
         let _ = event_tx
             .send(AgentEvent::ToolEnd {
@@ -1130,11 +1462,13 @@ impl AgentLoop {
         let mut guarded_content = guard_tool_result_content(
             &final_result_content,
             dynamic_result_limit(
-                crate::llm::compute_total_input_budget(self.context_window, self.max_tokens)
-                    .saturating_sub(crate::llm::estimate_request_overhead_tokens(
-                        Some(&self.system_prompt),
-                        &self.registry.to_tool_defs(),
-                    )),
+                    crate::llm::compute_total_input_budget(self.context_window, self.max_tokens)
+                        .saturating_sub(crate::llm::estimate_request_overhead_tokens(
+                            Some(&self.system_prompt),
+                            &self
+                                .registry
+                                .to_tool_defs(crate::agent::tool::ToolDefMode::Minimal),
+                        )),
             ),
         );
         if let Some(img) = result.image.as_ref() {
@@ -1404,7 +1738,9 @@ impl AgentLoop {
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
-            let tool_defs = self.registry.to_tool_defs();
+            let tool_defs = self
+                .registry
+                .to_tool_defs(crate::agent::tool::ToolDefMode::Minimal);
 
             // Drain pending notifications (e.g. @mention alerts from other Koi)
             if let Some(ref rx_mutex) = self.notification_rx {
@@ -1446,8 +1782,12 @@ impl AgentLoop {
                 // blocks are swapped to rule-based minimal receipts; this is
                 // expected to bring most sessions well under the budget, after
                 // which the legacy char-trim is only a safety net.
-                let mut demoted =
-                    build_request_messages(&messages, &tool_minimals, CTX_FULL_TURNS);
+                let mut demoted = build_request_messages(
+                    &messages,
+                    &tool_minimals,
+                    CTX_PRESERVE_RECENT_TURNS,
+                    CTX_KEEP_RECENT_TOOL_CARRIERS,
+                );
                 compact_trim_tool_results(&mut demoted, single_limit);
 
                 // Dynamic compaction (Level-2 proactive): if estimated token count exceeds
@@ -1516,7 +1856,8 @@ impl AgentLoop {
                         let compacted_demoted = build_request_messages(
                             &compacted.messages,
                             &tool_minimals,
-                            CTX_FULL_TURNS,
+                            CTX_PRESERVE_RECENT_TURNS,
+                            CTX_KEEP_RECENT_TOOL_CARRIERS,
                         );
                         let compacted_req_messages = vision::inject_selected_context(
                             &compacted_demoted,
@@ -1540,6 +1881,12 @@ impl AgentLoop {
                         rolling_summary_version += 1;
                         messages = compacted.messages;
                         estimated = new_estimated;
+                        // p7: structured fields from summariser output; forwarded
+                        // to the state_frame persist block a few lines below.
+                        let structured_plan_items_latest: Vec<String> =
+                            compacted.structured_plan_items.clone();
+                        let structured_next_step_hint_latest: Option<String> =
+                            compacted.structured_next_step_hint.clone();
                         if threshold_reached {
                             // Bug fix 🔴2: bump relative to the CURRENT cumulative
                             // so that one oversized response cannot push cumulative
@@ -1559,6 +1906,27 @@ impl AgentLoop {
                             ) {
                                 warn!("Failed to persist rolling summary: {}", error);
                             }
+                            // p6 + p7: refresh the state frame snapshot so a
+                            // resume right after this compaction picks up the
+                            // most recent tool call / error signals. Merge in
+                            // the structured active_plan_items / next_step_hint
+                            // if the summariser returned them.
+                            let mut frame =
+                                crate::agent::state_frame::derive_frame_from_tail(&messages, 24);
+                            if !structured_plan_items_latest.is_empty() {
+                                frame.active_plan_items =
+                                    structured_plan_items_latest.clone();
+                            }
+                            if structured_next_step_hint_latest.is_some() {
+                                frame.next_step_hint = structured_next_step_hint_latest.clone();
+                            }
+                            let frame_json = frame.to_json();
+                            if let Err(error) = db.update_session_state_frame_json(
+                                &ctx.session_id,
+                                frame_json.as_deref(),
+                            ) {
+                                warn!("Failed to persist state frame: {}", error);
+                            }
                         }
                     } else {
                         // Summarisation failed — stop trying
@@ -1571,6 +1939,44 @@ impl AgentLoop {
                 // every iteration regardless of whether compaction ran, so the ring
                 // reflects the true state of the request we're about to send.
                 let trigger_threshold = (total_budget as f64 * 0.60) as usize;
+
+                // p8 — compute a best-effort per-layer breakdown so the
+                // ring indicator can show which slot (system / tools /
+                // history / tool-results / vision) is dominating context.
+                // This uses the already-built demoted + vision-injected
+                // request view so it matches the numbers sent to the LLM.
+                let breakdown_snapshot = {
+                    let req_view = vision::inject_selected_context(&demoted, &ctx.session_id).await;
+                    let rolling_tokens = if rolling_summary.trim().is_empty() {
+                        0
+                    } else {
+                        crate::llm::estimate_tokens(&rolling_summary) as u32
+                    };
+                    let bd = crate::agent::harness::context_builder::compute_layered_breakdown(
+                        &req_view,
+                        Some(&self.system_prompt),
+                        &tool_defs,
+                        &tool_minimals,
+                        rolling_tokens,
+                        0,
+                    );
+                    crate::agent::messages::LayeredTokenBreakdownSnapshot {
+                        persona: bd.prompt.persona,
+                        scene: bd.prompt.scene,
+                        memory: bd.prompt.memory,
+                        project: bd.prompt.project,
+                        platform_hint: bd.prompt.platform_hint,
+                        tool_defs: bd.tool_def_tokens,
+                        history_text: bd.history_text_tokens,
+                        history_tool_result_full: bd.history_tool_result_full_tokens,
+                        history_tool_result_receipt: bd.history_tool_result_receipt_tokens,
+                        rolling_summary: bd.rolling_summary_tokens,
+                        state_frame: bd.state_frame_tokens,
+                        vision: bd.vision_tokens,
+                        request_overhead: bd.request_overhead_tokens,
+                    }
+                };
+
                 let _ = event_tx
                     .send(AgentEvent::ContextUsage {
                         estimated_input_tokens: estimated.min(u32::MAX as usize) as u32,
@@ -1583,6 +1989,7 @@ impl AgentLoop {
                         rolling_summary_version: rolling_summary_version
                             .clamp(0, u32::MAX as i64) as u32,
                         auto_compact_threshold: self.auto_compact_input_tokens_threshold,
+                        layered_breakdown: Some(breakdown_snapshot),
                     })
                     .await;
             }
@@ -1621,19 +2028,33 @@ impl AgentLoop {
                     // compact_summarise updates `messages`, we use the fresh context.
                     // Tool-result blocks from older turns are swapped to their
                     // minimal receipts before vision-context injection.
-                    let demoted_messages =
-                        build_request_messages(&messages, &tool_minimals, CTX_FULL_TURNS);
+                    let demoted_messages = build_request_messages(
+                        &messages,
+                        &tool_minimals,
+                        CTX_PRESERVE_RECENT_TURNS,
+                        CTX_KEEP_RECENT_TOOL_CARRIERS,
+                    );
                     let req_messages =
                         vision::inject_selected_context(&demoted_messages, &ctx.session_id).await;
-                    let req = LlmRequest {
-                        messages: req_messages,
-                        system: Some(self.system_prompt.clone()),
-                        tools: tool_defs.clone(),
-                        model: model_candidate.clone(),
-                        max_tokens: self.max_tokens,
-                        stream: true,
-                        vision_override: self.vision_override,
-                    };
+                    // Route through RequestBuilder so provider-specific
+                    // ceilings (e.g. Anthropic's 8192 max_tokens cap) are
+                    // applied in one place instead of leaking into every
+                    // call site. The builder is cheap to construct and we
+                    // rebuild per-iteration so fallback to another model —
+                    // possibly a different provider — picks up the right
+                    // limits automatically.
+                    let provider_kind =
+                        crate::agent::harness::ProviderKind::from_model_id(model_candidate);
+                    let req = crate::agent::harness::RequestBuilder::new(
+                        req_messages,
+                        Some(self.system_prompt.clone()),
+                        tool_defs.clone(),
+                        model_candidate.clone(),
+                        self.max_tokens,
+                    )
+                    .with_stream(true)
+                    .with_vision_override(self.vision_override)
+                    .build_for(provider_kind);
 
                     for attempt in 0..LLM_MAX_RETRIES {
                         // Check cancel before each LLM attempt
@@ -1722,6 +2143,30 @@ impl AgentLoop {
                                             ) {
                                                 warn!(
                                                     "Failed to persist rolling summary after overflow: {}",
+                                                    error
+                                                );
+                                            }
+                                            // p6 + p7: refresh state frame on overflow-triggered
+                                            // compaction as well so the UI sees a fresh snapshot.
+                                            let mut frame =
+                                                crate::agent::state_frame::derive_frame_from_tail(
+                                                    &messages, 24,
+                                                );
+                                            if !c.structured_plan_items.is_empty() {
+                                                frame.active_plan_items =
+                                                    c.structured_plan_items.clone();
+                                            }
+                                            if c.structured_next_step_hint.is_some() {
+                                                frame.next_step_hint =
+                                                    c.structured_next_step_hint.clone();
+                                            }
+                                            let frame_json = frame.to_json();
+                                            if let Err(error) = db.update_session_state_frame_json(
+                                                &ctx.session_id,
+                                                frame_json.as_deref(),
+                                            ) {
+                                                warn!(
+                                                    "Failed to persist state frame after overflow: {}",
                                                     error
                                                 );
                                             }
@@ -2184,6 +2629,13 @@ impl AgentLoop {
 fn friendly_tool_error(tool_name: &str, raw_error: &str) -> String {
     let raw_lower = raw_error.to_lowercase();
 
+    if is_structural_schema_error(raw_error) {
+        return format!(
+            "[{}] 工具输入与 schema 不匹配。请根据下方 schema_correction 修正参数，仅重试这个工具一次。\n详情：{}",
+            tool_name, raw_error
+        );
+    }
+
     // File system errors
     if raw_lower.contains("no such file")
         || raw_lower.contains("not found")
@@ -2321,6 +2773,43 @@ fn friendly_tool_error(tool_name: &str, raw_error: &str) -> String {
 
     // Generic fallback
     format!("[{}] 工具执行失败：{}", tool_name, raw_error)
+}
+
+fn is_structural_schema_error(raw_error: &str) -> bool {
+    let lower = raw_error.to_lowercase();
+    lower.contains("missing field")
+        || lower.contains("missing required")
+        || lower.contains("invalid type")
+        || lower.contains("invalid value")
+        || lower.contains("unknown field")
+        || lower.contains("unknown variant")
+        || lower.contains("did not match any variant")
+        || lower.contains("no variant of enum")
+        || lower.contains("additional properties are not allowed")
+        || lower.contains("additionalproperties")
+        || lower.contains("expected u")
+        || lower.contains("expected i")
+        || lower.contains("expected a string")
+        || lower.contains("expected a boolean")
+        || lower.contains("expected an array")
+        || lower.contains("expected a map")
+        || lower.contains("expected struct")
+}
+
+fn maybe_schema_correction_envelope(
+    registry: &crate::agent::tool::ToolRegistry,
+    tool_name: &str,
+    raw_error: &str,
+) -> Option<String> {
+    if !is_structural_schema_error(raw_error) {
+        return None;
+    }
+    let tool_def = registry.to_tool_defs_for(tool_name, crate::agent::tool::ToolDefMode::Full)?;
+    let full_schema_json = serde_json::to_string(&tool_def.input_schema).ok()?;
+    Some(format!(
+        "[schema_correction tool={}]\n{}\n[/schema_correction]",
+        tool_name, full_schema_json
+    ))
 }
 
 fn decorate_tool_failure_for_agent(
@@ -2527,12 +3016,16 @@ fn audit_action_label(tool_name: &str, input: &serde_json::Value) -> String {
 mod tests {
     use super::{
         build_request_messages, compact_summarise, compact_trim_tool_results,
-        serialize_tool_results_with_receipts, CTX_FULL_TURNS, CTX_TRIM_HEAD, CTX_TRIM_TAIL,
+        is_structural_schema_error, maybe_schema_correction_envelope,
+        serialize_tool_results_with_receipts, CTX_FULL_TURNS, CTX_KEEP_RECENT_TOOL_CARRIERS,
+        CTX_PRESERVE_RECENT_TURNS, CTX_TRIM_HEAD, CTX_TRIM_TAIL,
     };
+    use crate::agent::tool::{Tool, ToolRegistry};
     use crate::llm::{ContentBlock, LlmChunk, LlmMessage, LlmRequest, LlmResponse, MessageContent};
     use anyhow::Result;
     use async_trait::async_trait;
-    use std::collections::HashMap;
+    use serde_json::{json, Value};
+    use std::{borrow::Cow, collections::HashMap};
 
     // ── Mock LLM clients ──────────────────────────────────────────────────────
 
@@ -2584,6 +3077,46 @@ mod tests {
 
         async fn complete(&self, _req: LlmRequest) -> Result<LlmResponse> {
             Err(anyhow::anyhow!("simulated LLM failure"))
+        }
+    }
+
+    struct SchemaTool;
+
+    #[async_trait]
+    impl Tool for SchemaTool {
+        fn name(&self) -> &str {
+            "schema_tool"
+        }
+
+        fn description(&self) -> &str {
+            "A tool used to validate schema-correction envelopes."
+        }
+
+        fn description_minimal(&self) -> Cow<'_, str> {
+            Cow::Borrowed("validate schema correction")
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["fast", "safe"],
+                        "description": "Run mode."
+                    }
+                },
+                "required": ["path", "mode"],
+                "additionalProperties": false
+            })
+        }
+
+        async fn call(&self, _input: Value, _ctx: &crate::agent::tool::ToolContext) -> Result<crate::agent::tool::ToolResult> {
+            unreachable!("schema helper tool should not be executed in unit tests");
         }
     }
 
@@ -2688,6 +3221,63 @@ mod tests {
             "配件移动完成。已将管道支撑从(100,200,300)成功移动到(150,250,350)。",
         ));
         msgs
+    }
+
+    #[test]
+    fn schema_error_classifier_matches_structural_errors_only() {
+        assert!(is_structural_schema_error("missing field `path`"));
+        assert!(is_structural_schema_error("invalid type: integer `1`, expected a string"));
+        assert!(is_structural_schema_error("unknown field `extra`, expected one of `path`, `mode`"));
+        assert!(!is_structural_schema_error("permission denied"));
+        assert!(!is_structural_schema_error("exit code 1"));
+    }
+
+    #[test]
+    fn schema_correction_envelope_includes_full_schema_json() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(SchemaTool));
+
+        let envelope = maybe_schema_correction_envelope(
+            &registry,
+            "schema_tool",
+            "missing field `mode`",
+        )
+        .expect("structural schema error should produce envelope");
+
+        assert!(envelope.starts_with("[schema_correction tool=schema_tool]\n"));
+        assert!(envelope.contains("\"required\":[\"path\",\"mode\"]"));
+        assert!(envelope.contains("\"additionalProperties\":false"));
+        assert!(envelope.ends_with("\n[/schema_correction]"));
+    }
+
+    #[test]
+    fn schema_correction_envelope_skips_non_structural_and_unknown_tool() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(SchemaTool));
+
+        assert!(
+            maybe_schema_correction_envelope(&registry, "schema_tool", "permission denied").is_none()
+        );
+        assert!(
+            maybe_schema_correction_envelope(&registry, "missing_tool", "missing field `path`")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn schema_correction_envelope_survives_tool_result_roundtrip() {
+        let content = "[schema_correction tool=schema_tool]\n{\"type\":\"object\",\"required\":[\"path\"]}\n[/schema_correction]";
+        let block = ContentBlock::ToolResult {
+            tool_use_id: "call_schema_tool".to_string(),
+            content: content.to_string(),
+            is_error: true,
+        };
+        let json = serde_json::to_string(&block).expect("tool_result should serialize");
+        let decoded: ContentBlock = serde_json::from_str(&json).expect("tool_result should deserialize");
+        match decoded {
+            ContentBlock::ToolResult { content: restored, .. } => assert_eq!(restored, content),
+            other => panic!("unexpected block: {other:?}"),
+        }
     }
 
     // ── T1: Level-1 — small result not trimmed ────────────────────────────────
@@ -3074,38 +3664,161 @@ mod tests {
 
     #[test]
     fn build_request_messages_keeps_recent_turns_full() {
-        // 4 turns, each: user → assistant → tool_result. With recent=3 the
-        // oldest turn's tool_result gets demoted; the newer three stay full.
+        // p5 two-boundary contract: with 10 short turns (one tool_result per
+        // turn) both the turn-count boundary and the tool-carrier boundary
+        // kick in. The effective cutoff is `min(turn, tool)`:
+        //   * turn cutoff (keep 3 turns)          → index of turn 8's user
+        //   * tool cutoff (keep 8 carriers)       → index of turn 3's carrier
+        // so `min` = tool cutoff, and turns 1..=2's tool results get demoted
+        // while turns 3..=10 stay full (tool-carrier boundary wins, as the
+        // in-flight long-running work should).
         let big = "X".repeat(5_000);
         let mut messages = Vec::new();
-        for turn in 1..=4 {
+        for turn in 1..=10 {
             messages.push(user_text(&format!("请求 {}", turn)));
             messages.push(assistant_text(&format!("assistant {}", turn)));
             messages.push(tool_result_carrier(&format!("call-{}", turn), &big));
         }
         let mut minimals = HashMap::new();
-        for turn in 1..=4 {
+        for turn in 1..=10 {
             minimals.insert(format!("call-{}", turn), format!("receipt {}", turn));
         }
-        let req = build_request_messages(&messages, &minimals, CTX_FULL_TURNS);
+        let req = build_request_messages(
+            &messages,
+            &minimals,
+            CTX_PRESERVE_RECENT_TURNS,
+            CTX_KEEP_RECENT_TOOL_CARRIERS,
+        );
         assert_eq!(req.len(), messages.len());
 
-        // Oldest tool result demoted
-        if let MessageContent::Blocks(ref b) = req[2].content {
-            if let ContentBlock::ToolResult { content, .. } = &b[0] {
-                assert_eq!(content, "receipt 1");
-            } else {
-                panic!("expected ToolResult");
-            }
-        } else {
-            panic!("expected Blocks");
-        }
-
-        // Newest three tool results preserved (big)
-        for idx in [5usize, 8, 11] {
+        // Turns 1 and 2 (idx 2 and 5) demoted — outside both boundaries.
+        // p11: demoted receipts now carry a `[recall:<tool_use_id>]` suffix
+        // so the agent can re-fetch the full content via recall_tool_result.
+        for (idx, turn) in [(2usize, 1), (5, 2)] {
             if let MessageContent::Blocks(ref b) = req[idx].content {
                 if let ContentBlock::ToolResult { content, .. } = &b[0] {
-                    assert_eq!(content.chars().count(), 5_000, "turn at {} should be full", idx);
+                    let expected = format!("receipt {} [recall:call-{}]", turn, turn);
+                    assert_eq!(
+                        content, &expected,
+                        "turn {} (idx {}) should be demoted with recall hint",
+                        turn, idx
+                    );
+                    continue;
+                }
+            }
+            panic!("expected ToolResult at idx {}", idx);
+        }
+
+        // Turns 3..=10 preserved (within tool-carrier window of 8).
+        for (idx, _turn) in (8..30).step_by(3).zip(3..=10) {
+            if let MessageContent::Blocks(ref b) = req[idx].content {
+                if let ContentBlock::ToolResult { content, .. } = &b[0] {
+                    assert_eq!(
+                        content.chars().count(),
+                        5_000,
+                        "tool at idx {} should stay full",
+                        idx
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn build_request_messages_tool_carrier_boundary_protects_single_long_turn() {
+        // Single user turn, 12 tool-call iterations. CTX_KEEP_RECENT_TOOL_CARRIERS
+        // is 8, but CTX_PRESERVE_RECENT_TURNS boundary alone would be 0
+        // (only 1 user text boundary exists), so `min(0, tool_cutoff)` = 0
+        // → nothing is demoted. This protects long autonomous workflows.
+        let big = "Y".repeat(3_000);
+        let mut messages = Vec::new();
+        messages.push(user_text("开始长任务"));
+        for i in 1..=12 {
+            messages.push(assistant_text(&format!("iter {}", i)));
+            messages.push(tool_result_carrier(&format!("call-{}", i), &big));
+        }
+        let mut minimals = HashMap::new();
+        for i in 1..=12 {
+            minimals.insert(format!("call-{}", i), format!("receipt {}", i));
+        }
+        let req = build_request_messages(
+            &messages,
+            &minimals,
+            CTX_PRESERVE_RECENT_TURNS,
+            CTX_KEEP_RECENT_TOOL_CARRIERS,
+        );
+        for i in 1..=12 {
+            let idx = i * 2; // tool_result of iter i
+            if let MessageContent::Blocks(ref b) = req[idx].content {
+                if let ContentBlock::ToolResult { content, .. } = &b[0] {
+                    assert_eq!(
+                        content.chars().count(),
+                        3_000,
+                        "iter {} must stay full (single-turn protection)",
+                        i
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn build_request_messages_snaps_boundary_off_tool_use_result_pair() {
+        // Construct: [user_text, assistant_with_tool_use, tool_result] × 10.
+        // The raw boundary could fall on a `tool_result` carrier (a user
+        // message whose only blocks are ToolResult). `snap_to_pair_boundary`
+        // must step back over the preceding assistant `ToolUse` so the pair
+        // is kept intact when it crosses the boundary.
+        let big = "Z".repeat(2_000);
+        let mut messages = Vec::new();
+        for turn in 1..=10 {
+            messages.push(user_text(&format!("Q{}", turn)));
+            let tool_use_block = ContentBlock::ToolUse {
+                id: format!("call-{}", turn),
+                name: "shell".into(),
+                input: serde_json::json!({"command": "echo"}),
+            };
+            messages.push(LlmMessage {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Text {
+                        text: format!("thinking {}", turn),
+                    },
+                    tool_use_block,
+                ]),
+            });
+            messages.push(tool_result_carrier(&format!("call-{}", turn), &big));
+        }
+        let mut minimals = HashMap::new();
+        for turn in 1..=10 {
+            minimals.insert(format!("call-{}", turn), format!("r{}", turn));
+        }
+        let req = build_request_messages(
+            &messages,
+            &minimals,
+            CTX_PRESERVE_RECENT_TURNS,
+            CTX_KEEP_RECENT_TOOL_CARRIERS,
+        );
+        // For every assistant ToolUse that ended up retained with full
+        // content, the matching ToolResult must also be retained. The
+        // pair-boundary snap is what guarantees this.
+        for i in 0..req.len() {
+            if let MessageContent::Blocks(blocks) = &req[i].content {
+                for b in blocks {
+                    if let ContentBlock::ToolUse { id, .. } = b {
+                        // Find matching tool_result in req.
+                        let found = req.iter().any(|m| {
+                            if let MessageContent::Blocks(bs) = &m.content {
+                                bs.iter().any(|bb| {
+                                    matches!(bb, ContentBlock::ToolResult { tool_use_id, .. }
+                                             if tool_use_id == id)
+                                })
+                            } else {
+                                false
+                            }
+                        });
+                        assert!(found, "ToolUse {id} at idx {i} lost its ToolResult pair");
+                    }
                 }
             }
         }
@@ -3126,7 +3839,12 @@ mod tests {
         for turn in 1..=3 {
             minimals.insert(format!("call-{}", turn), format!("receipt {}", turn));
         }
-        let req = build_request_messages(&messages, &minimals, CTX_FULL_TURNS);
+        let req = build_request_messages(
+            &messages,
+            &minimals,
+            CTX_PRESERVE_RECENT_TURNS,
+            CTX_KEEP_RECENT_TOOL_CARRIERS,
+        );
         for idx in [2usize, 5, 8] {
             if let MessageContent::Blocks(ref b) = req[idx].content {
                 if let ContentBlock::ToolResult { content, .. } = &b[0] {
@@ -3162,7 +3880,12 @@ mod tests {
             tool_result_carrier("call-4", "LONG 4"),
         ];
         let minimals = HashMap::new(); // empty
-        let req = build_request_messages(&msgs, &minimals, CTX_FULL_TURNS);
+        let req = build_request_messages(
+            &msgs,
+            &minimals,
+            CTX_PRESERVE_RECENT_TURNS,
+            CTX_KEEP_RECENT_TOOL_CARRIERS,
+        );
         if let MessageContent::Blocks(ref b) = req[2].content {
             if let ContentBlock::ToolResult { content, .. } = &b[0] {
                 assert_eq!(content, "LONG 1");

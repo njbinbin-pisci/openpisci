@@ -253,6 +253,34 @@ function ContextUsageRing({
   else if (pct >= 80) color = "#ff6b6b";
   else if (pct >= 60) color = "#f0a020";
   else if (pct >= 40) color = "#c9b458";
+  // p8 — optional per-layer breakdown appended to the tooltip as a
+  // stacked summary. We roll the five layered-prompt slots (persona
+  // / scene / memory / project / platform_hint) into a single "system"
+  // line for compactness, and only surface layers whose weight is
+  // non-trivial to keep the tooltip scannable.
+  const breakdownLines: string[] = [];
+  if (usage.layeredBreakdown) {
+    const bd = usage.layeredBreakdown;
+    const systemPrompt =
+      bd.persona + bd.scene + bd.memory + bd.project + bd.platform_hint;
+    const entries: Array<[string, number]> = [
+      [t("chat.contextRingLayerSystem"), systemPrompt],
+      [t("chat.contextRingLayerTools"), bd.tool_defs],
+      [t("chat.contextRingLayerHistory"), bd.history_text],
+      [t("chat.contextRingLayerToolResultsFull"), bd.history_tool_result_full],
+      [t("chat.contextRingLayerToolResultsReceipt"), bd.history_tool_result_receipt],
+      [t("chat.contextRingLayerSummary"), bd.rolling_summary],
+      [t("chat.contextRingLayerStateFrame"), bd.state_frame],
+      [t("chat.contextRingLayerVision"), bd.vision],
+    ];
+    const meaningful = entries.filter(([, v]) => v >= 32);
+    if (meaningful.length > 0) {
+      breakdownLines.push(t("chat.contextRingLayeredHeader"));
+      for (const [label, value] of meaningful) {
+        breakdownLines.push(`  · ${label}: ${formatTokenCount(value)}`);
+      }
+    }
+  }
   const tooltip = [
     t("chat.contextRingTitle"),
     t("chat.contextRingEstimate", {
@@ -273,6 +301,7 @@ function ContextUsageRing({
           threshold: formatTokenCount(usage.autoCompactThreshold),
         })
       : t("chat.contextRingAutoCompactDisabled"),
+    ...breakdownLines,
   ].join("\n");
   const label = `${Math.round(pct)}%`;
   return (
@@ -746,6 +775,7 @@ export default function Chat() {
               cumulativeOutputTokens: event.cumulative_output_tokens,
               rollingSummaryVersion: event.rolling_summary_version,
               autoCompactThreshold: event.auto_compact_threshold,
+              layeredBreakdown: event.layered_breakdown,
             },
           }));
           break;

@@ -78,8 +78,39 @@ pub struct Memory {
     pub scope_id: String,
     /// For private memories: the pool_session_id where this memory was created (NULL = cross-project skill/preference)
     pub project_scope_id: Option<String>,
+    /// Phase 4d: shard kind in the structured rolling summary sense.
+    /// One of "fact" | "decision" | "preference" | "error_learned" | "open_item".
+    /// Defaults to "fact" for legacy rows and untyped saves.
+    #[serde(default = "default_memory_kind")]
+    pub kind: String,
+    /// Phase 4d: FEC anchor — session this memory was derived from.
+    #[serde(default)]
+    pub evidence_session_id: Option<String>,
+    /// Phase 4d: FEC anchor — concrete tool exchange the memory
+    /// references, enabling `recall_tool_result` retrieval.
+    #[serde(default)]
+    pub evidence_tool_use_id: Option<String>,
+    /// Phase 4d: most recent re-observation time. Distinct from
+    /// `updated_at` (which reflects content edits) so confidence-bump
+    /// re-observations don't clobber the edit timestamp used by UI
+    /// sorting.
+    #[serde(default)]
+    pub last_seen_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+fn default_memory_kind() -> String {
+    "fact".to_string()
+}
+
+/// Phase 4d: optional structured fields for [`Database::save_memory_structured`].
+/// All defaults preserve legacy `save_memory` behaviour.
+#[derive(Debug, Clone, Default)]
+pub struct MemorySaveExtras {
+    pub kind: Option<String>,
+    pub evidence_session_id: Option<String>,
+    pub evidence_tool_use_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,6 +361,13 @@ impl Database {
         let _ = self
             .conn
             .execute("ALTER TABLE sessions ADD COLUMN last_compacted_at TEXT", []);
+
+        // p6 state frame: structured snapshot of "where we are now" that
+        // survives across sessions. Kept as raw JSON so we can iterate on
+        // the shape without another migration.
+        let _ = self
+            .conn
+            .execute("ALTER TABLE sessions ADD COLUMN state_frame_json TEXT", []);
 
         // Memory enhancement: add embedding and memory_type columns (ignore if already exist)
         let _ = self
@@ -654,6 +692,47 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS idx_memories_project_scope ON memories(owner_id, scope_type, project_scope_id);"
         );
 
+        // Phase 4d (v2 rolling-summary plan): richer memory schema so
+        // long-term memory can act as a personalised codebook (Phase
+        // 4b) conditioning L2. See agent::summary_worker docs.
+        //
+        // - kind            → short typology ("fact" | "decision" |
+        //                     "preference" | "error_learned" | …)
+        //                     mirroring the structured rolling summary
+        //                     shards. Default "fact".
+        // - evidence_session_id / evidence_tool_use_id → FEC anchors
+        //   that point back to the concrete tool exchange that
+        //   produced this memory. NULL when the memory predates Phase
+        //   4d or was hand-saved by the user.
+        // - last_seen_at    → timestamp of the most recent re-observation;
+        //                     driven by save_memory's confidence-bump
+        //                     path. Defaults to created_at on insertion.
+        let _ = self.conn.execute(
+            "ALTER TABLE memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'fact'",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE memories ADD COLUMN evidence_session_id TEXT",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE memories ADD COLUMN evidence_tool_use_id TEXT",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE memories ADD COLUMN last_seen_at TEXT",
+            [],
+        );
+        // Backfill last_seen_at for legacy rows.
+        let _ = self.conn.execute(
+            "UPDATE memories SET last_seen_at = updated_at WHERE last_seen_at IS NULL",
+            [],
+        );
+        let _ = self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_memories_kind ON memories(owner_id, kind);\
+             CREATE INDEX IF NOT EXISTS idx_memories_evidence_session ON memories(evidence_session_id);"
+        );
+
         // One-time deduplication: remove duplicate messages caused by a previous bug where
         // persist_agent_turn saved the full message history (including already-stored messages).
         // Keep the earliest row (lowest rowid) for each (session_id, role, content) group.
@@ -906,6 +985,35 @@ impl Database {
         Ok(())
     }
 
+    /// Read the persisted `state_frame_json` blob for a session, if any.
+    /// Returns `Ok(None)` when the column is NULL / empty / the session
+    /// does not exist — callers should treat this as "no frame yet".
+    pub fn get_session_state_frame_json(&self, session_id: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT state_frame_json FROM sessions WHERE id = ?1")?;
+        let mut rows = stmt.query_map(params![session_id], |r| r.get::<_, Option<String>>(0))?;
+        match rows.next().transpose()? {
+            Some(Some(raw)) if !raw.trim().is_empty() => Ok(Some(raw)),
+            _ => Ok(None),
+        }
+    }
+
+    /// Persist (or clear with `None`) the state frame JSON for a session.
+    /// Also bumps `updated_at` so cross-device sync stays monotonic.
+    pub fn update_session_state_frame_json(
+        &self,
+        session_id: &str,
+        frame_json: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE sessions SET state_frame_json = ?1, updated_at = ?2 WHERE id = ?3",
+            params![frame_json, now, session_id],
+        )?;
+        Ok(())
+    }
+
     // ------------------------------------------------------------------
     // Messages
     // ------------------------------------------------------------------
@@ -1055,7 +1163,7 @@ impl Database {
 
     pub fn list_memories(&self) -> Result<Vec<Memory>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at \
+            "SELECT id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at, kind, evidence_session_id, evidence_tool_use_id, last_seen_at \
              FROM memories ORDER BY confidence DESC, updated_at DESC"
         )?;
         let rows = stmt.query_map([], Self::map_memory)?;
@@ -1066,7 +1174,7 @@ impl Database {
     /// List memories filtered by owner_id.
     pub fn list_memories_for_owner(&self, owner_id: &str) -> Result<Vec<Memory>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at \
+            "SELECT id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at, kind, evidence_session_id, evidence_tool_use_id, last_seen_at \
              FROM memories WHERE owner_id = ?1 ORDER BY confidence DESC, updated_at DESC"
         )?;
         let rows = stmt.query_map(params![owner_id], Self::map_memory)?;
@@ -1100,6 +1208,16 @@ impl Database {
                 .get::<_, String>(10)?
                 .parse::<DateTime<Utc>>()
                 .unwrap_or_else(|_| Utc::now()),
+            kind: r
+                .get::<_, String>(11)
+                .unwrap_or_else(|_| "fact".to_string()),
+            evidence_session_id: r.get::<_, Option<String>>(12).unwrap_or(None),
+            evidence_tool_use_id: r.get::<_, Option<String>>(13).unwrap_or(None),
+            last_seen_at: r
+                .get::<_, Option<String>>(14)
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse::<DateTime<Utc>>().ok()),
         })
     }
 
@@ -1120,16 +1238,75 @@ impl Database {
         scope_id: &str,
         project_scope_id: Option<&str>,
     ) -> Result<Memory> {
+        self.save_memory_structured(
+            content,
+            category,
+            confidence,
+            source_session_id,
+            owner_id,
+            scope_type,
+            scope_id,
+            project_scope_id,
+            MemorySaveExtras::default(),
+        )
+    }
+
+    /// Phase 4d — structured save path.
+    ///
+    /// Extends the legacy `save_memory` with the new v2 fields:
+    /// - `kind`: structured rolling summary shard typology.
+    /// - `evidence_session_id` / `evidence_tool_use_id`: FEC anchors.
+    ///
+    /// Also implements the **confidence-bump on re-observation**
+    /// protocol from the v2 plan: when `find_similar_memory` matches,
+    /// we raise `confidence` by `0.1` (capped at `1.0`) instead of
+    /// replacing it with `max(new, existing)`. This implements the
+    /// Dictionary-coding / AEP view — repeat observations of the same
+    /// fact reinforce belief.
+    ///
+    /// `last_seen_at` is always refreshed to "now"; `updated_at` is
+    /// refreshed **only** when content changes (preserving UI ordering).
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_memory_structured(
+        &self,
+        content: &str,
+        category: &str,
+        confidence: f64,
+        source_session_id: Option<&str>,
+        owner_id: &str,
+        scope_type: &str,
+        scope_id: &str,
+        project_scope_id: Option<&str>,
+        extras: MemorySaveExtras,
+    ) -> Result<Memory> {
+        let kind = extras.kind.unwrap_or_else(|| "fact".to_string());
         if let Some(existing) = self.find_similar_memory(content, category, owner_id)? {
-            let now_str = Utc::now().to_rfc3339();
-            let new_confidence = confidence.max(existing.confidence);
-            self.conn.execute(
-                "UPDATE memories SET content = ?1, confidence = ?2, updated_at = ?3 WHERE id = ?4",
-                params![content, new_confidence, now_str, existing.id],
-            )?;
+            let now = Utc::now();
+            let now_str = now.to_rfc3339();
+            // Confidence bump: +0.1 per re-observation, capped at 1.0.
+            // Also honours a lower bound of `confidence` for callers
+            // that pass an explicitly high belief.
+            let bumped = (existing.confidence + 0.1).min(1.0);
+            let new_confidence = bumped.max(confidence);
+            let content_changed = existing.content != content;
+            // Always refresh last_seen_at; refresh updated_at only when
+            // the canonical content actually changes.
+            if content_changed {
+                self.conn.execute(
+                    "UPDATE memories SET content = ?1, confidence = ?2, updated_at = ?3, last_seen_at = ?3 WHERE id = ?4",
+                    params![content, new_confidence, now_str, existing.id],
+                )?;
+            } else {
+                self.conn.execute(
+                    "UPDATE memories SET confidence = ?1, last_seen_at = ?2 WHERE id = ?3",
+                    params![new_confidence, now_str, existing.id],
+                )?;
+            }
             tracing::info!(
-                "Memory dedup: updated existing memory {} instead of creating duplicate",
-                existing.id
+                "Memory dedup: updated existing memory {} (confidence {:.2} -> {:.2})",
+                existing.id,
+                existing.confidence,
+                new_confidence
             );
             return Ok(Memory {
                 id: existing.id,
@@ -1142,8 +1319,12 @@ impl Database {
                 scope_type: existing.scope_type,
                 scope_id: existing.scope_id,
                 project_scope_id: existing.project_scope_id,
+                kind: existing.kind,
+                evidence_session_id: existing.evidence_session_id,
+                evidence_tool_use_id: existing.evidence_tool_use_id,
+                last_seen_at: Some(now),
                 created_at: existing.created_at,
-                updated_at: Utc::now(),
+                updated_at: if content_changed { now } else { existing.updated_at },
             });
         }
 
@@ -1151,9 +1332,23 @@ impl Database {
         let now = Utc::now();
         let now_str = now.to_rfc3339();
         self.conn.execute(
-            "INSERT INTO memories (id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
-            params![id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, now_str],
+            "INSERT INTO memories (id, content, category, confidence, source_session_id, owner_id, scope_type, scope_id, project_scope_id, kind, evidence_session_id, evidence_tool_use_id, last_seen_at, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?13)",
+            params![
+                id,
+                content,
+                category,
+                confidence,
+                source_session_id,
+                owner_id,
+                scope_type,
+                scope_id,
+                project_scope_id,
+                kind,
+                extras.evidence_session_id.as_deref(),
+                extras.evidence_tool_use_id.as_deref(),
+                now_str,
+            ],
         )?;
         Ok(Memory {
             id,
@@ -1166,6 +1361,10 @@ impl Database {
             scope_type: scope_type.to_string(),
             scope_id: scope_id.to_string(),
             project_scope_id: project_scope_id.map(String::from),
+            kind,
+            evidence_session_id: extras.evidence_session_id,
+            evidence_tool_use_id: extras.evidence_tool_use_id,
+            last_seen_at: Some(now),
             created_at: now,
             updated_at: now,
         })
@@ -1235,7 +1434,8 @@ impl Database {
     pub fn list_memories_with_embeddings(&self) -> Result<Vec<(Memory, Vec<f32>)>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, content, category, confidence, source_session_id, \
-             owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at, embedding \
+             owner_id, scope_type, scope_id, project_scope_id, created_at, updated_at, embedding, \
+             kind, evidence_session_id, evidence_tool_use_id, last_seen_at \
              FROM memories WHERE embedding IS NOT NULL",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -1266,6 +1466,16 @@ impl Database {
                         .get::<_, String>(10)?
                         .parse::<DateTime<Utc>>()
                         .unwrap_or_else(|_| Utc::now()),
+                    kind: r
+                        .get::<_, String>(12)
+                        .unwrap_or_else(|_| "fact".to_string()),
+                    evidence_session_id: r.get::<_, Option<String>>(13).unwrap_or(None),
+                    evidence_tool_use_id: r.get::<_, Option<String>>(14).unwrap_or(None),
+                    last_seen_at: r
+                        .get::<_, Option<String>>(15)
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.parse::<DateTime<Utc>>().ok()),
                 },
                 embedding_bytes,
             ))

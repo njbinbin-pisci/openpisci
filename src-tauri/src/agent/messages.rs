@@ -67,6 +67,30 @@ pub struct ToolResultRecord {
     pub is_error: bool,
 }
 
+/// Per-layer token counts mirrored from
+/// [`crate::agent::harness::LayeredTokenBreakdown`] but shaped for
+/// transport to the frontend. All values are raw token estimates; we
+/// intentionally keep the layout flat (no nested `LayeredPromptTokens`)
+/// so the frontend can render a stacked ring without needing to know
+/// the Rust type hierarchy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct LayeredTokenBreakdownSnapshot {
+    pub persona: u32,
+    pub scene: u32,
+    pub memory: u32,
+    pub project: u32,
+    pub platform_hint: u32,
+    pub tool_defs: u32,
+    pub history_text: u32,
+    pub history_tool_result_full: u32,
+    pub history_tool_result_receipt: u32,
+    pub rolling_summary: u32,
+    pub state_frame: u32,
+    pub vision: u32,
+    pub request_overhead: u32,
+}
+
 /// Events streamed to the frontend during agent execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -120,6 +144,13 @@ pub enum AgentEvent {
         rolling_summary_version: u32,
         /// Configured auto-compact threshold from settings (step size, 0 = disabled).
         auto_compact_threshold: u32,
+        /// p8 — optional per-layer token breakdown so the UI ring can
+        /// surface *what* is consuming context (system prompt vs. tools
+        /// vs. history vs. vision). Emitted best-effort; absent when the
+        /// agent loop is running in a codepath that has not yet computed
+        /// the breakdown.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layered_breakdown: Option<LayeredTokenBreakdownSnapshot>,
     },
     /// Agent loop complete
     Done {

@@ -1,4 +1,3 @@
-use crate::agent::loop_::AgentLoop;
 use crate::agent::messages::AgentEvent;
 use crate::agent::plan::summarize_todos;
 use crate::agent::tool::ToolContext;
@@ -221,13 +220,21 @@ async fn build_session_message_context_from_db(
         .as_ref()
         .map(|s| s.rolling_summary.as_str())
         .unwrap_or("");
+    // p6 state frame: reload the explicit "where are we now" snapshot and
+    // inject it right after the rolling summary so a resumed session picks
+    // up the latest bearings without re-deriving from compressed history.
+    let state_frame = db
+        .get_session_state_frame_json(session_id)
+        .ok()
+        .flatten()
+        .and_then(|raw| crate::agent::state_frame::StateFrame::from_json_opt(&raw));
     let latest_user_text = history
         .iter()
         .rev()
         .find(|m| m.role == "user" && !m.content.trim().is_empty())
         .map(|m| m.content.clone())
         .unwrap_or_default();
-    let llm_messages = match history_mode {
+    let mut llm_messages = match history_mode {
         HistorySliceMode::FullRecent => build_context_messages(
             &history,
             budget,
@@ -246,6 +253,20 @@ async fn build_session_message_context_from_db(
             }
         }
     };
+    if let Some(frame) = state_frame {
+        // Insert right after the rolling summary (if present) — i.e. at
+        // position 1 when a summary exists, else at the very top.
+        let summary_offset = if !rolling_summary.trim().is_empty() {
+            1
+        } else {
+            0
+        };
+        let insert_at = summary_offset.min(llm_messages.len());
+        llm_messages.insert(
+            insert_at,
+            crate::agent::state_frame::state_frame_message(&frame),
+        );
+    }
     Ok(SessionMessageContext {
         llm_messages,
         session_state,
@@ -505,7 +526,9 @@ async fn build_chat_prompt_artifacts(
         skill_loader_arc,
     );
     let registry = Arc::new(registry);
-    let tool_defs = registry.to_tool_defs();
+    // Chat budget estimation uses the same Minimal injection mode the
+    // harness will actually send, so the token accounting stays honest.
+    let tool_defs = registry.to_tool_defs(crate::agent::tool::ToolDefMode::Minimal);
 
     let memory_context = {
         let db = state.db.lock().await;
@@ -994,26 +1017,35 @@ pub async fn chat_send(
         allow_outside_workspace,
     ));
 
-    let agent = AgentLoop {
-        client,
+    // Main pisci chat — uses the persistent, UI-attached harness
+    // shape. Per-run plumbing (`notification_rx`, confirmations) is
+    // passed to the bridge rather than stored in the config.
+    let (fallback_models, compaction_settings) = {
+        let settings = state.settings.lock().await;
+        (
+            settings.fallback_models.clone(),
+            crate::agent::harness::config::CompactionSettings::from_settings(&settings),
+        )
+    };
+    let agent = crate::agent::harness::HarnessConfig::for_main_chat(
+        model.clone(),
+        fallback_models,
         registry,
         policy,
-        system_prompt: prompt_artifacts.system_prompt,
-        model: model.clone(),
+        prompt_artifacts.system_prompt,
         max_tokens,
         context_window,
-        fallback_models: state.settings.lock().await.fallback_models.clone(),
-        db: Some(state.db.clone()),
-        app_handle: Some(state.app_handle.clone()),
-        confirmation_responses: Some(state.confirmation_responses.clone()),
-        confirm_flags: crate::agent::loop_::ConfirmFlags {
+        crate::agent::harness::config::ConfirmFlags {
             confirm_shell,
             confirm_file_write,
         },
-        vision_override: Some(vision_capable),
-        notification_rx: None,
+        Some(vision_capable),
         auto_compact_input_tokens_threshold,
-    };
+        compaction_settings,
+        state.db.clone(),
+        state.app_handle.clone(),
+    )
+    .into_agent_loop(client, None, Some(state.confirmation_responses.clone()));
 
     let ctx = ToolContext {
         session_id: session_id.clone(),
@@ -1634,27 +1666,29 @@ pub async fn run_agent_headless(
         system_prompt.push_str(&extra_system_context);
     }
 
-    let agent = AgentLoop {
-        client,
+    // Headless main-chat path (run_agent_headless / trigger-driven):
+    // same scene as main chat, no UI, no interactive confirmations.
+    let (headless_fallback_models, headless_compaction_settings) = {
+        let settings = state.settings.lock().await;
+        (
+            settings.fallback_models.clone(),
+            crate::agent::harness::config::CompactionSettings::from_settings(&settings),
+        )
+    };
+    let agent = crate::agent::harness::HarnessConfig::for_main_headless(
+        model,
+        headless_fallback_models,
         registry,
         policy,
         system_prompt,
-        model,
         max_tokens,
         context_window,
-        fallback_models: state.settings.lock().await.fallback_models.clone(),
-        db: Some(state.db.clone()),
-        app_handle: None,
-        confirmation_responses: None,
-        confirm_flags: crate::agent::loop_::ConfirmFlags {
-            confirm_shell: false,
-            confirm_file_write: false,
-        },
-        vision_override: Some(vision_capable),
-        notification_rx: None,
-        auto_compact_input_tokens_threshold: scene_policy
-            .effective_auto_compact_threshold(auto_compact_input_tokens_threshold),
-    };
+        Some(vision_capable),
+        scene_policy.effective_auto_compact_threshold(auto_compact_input_tokens_threshold),
+        headless_compaction_settings,
+        state.db.clone(),
+    )
+    .into_agent_loop(client, None, None);
     // Load full conversation history for context.
     // After building LLM messages, sanitize any orphaned tool_use blocks (tool calls without
     // a matching tool_result) that can occur when a previous agent run was cancelled mid-turn.
@@ -2379,7 +2413,14 @@ pie title Distribution
     "C" : 25
 ```
 
-Use diagrams proactively when they make information clearer. Keep them concise.{memory}"#,
+Use diagrams proactively when they make information clearer. Keep them concise.
+
+## Context Compression & Recall
+Older tool results are automatically demoted to a one-line receipt to keep your context budget healthy. Demoted receipts end with a marker `[recall:<tool_use_id>]` (e.g. `ran: ls; exit=0; out=42 chars [recall:tu_abc123]`).
+
+- If you only need the high-level signal (success/failure, file path, byte count), trust the receipt.
+- If you need the original full output (e.g. re-read a long file you saw earlier, inspect specific shell stdout, look up a row inside a previous search), call `recall_tool_result(tool_use_id="tu_abc123")` — never re-run the original tool just to see its output again.
+- Recall costs context, so only call it when the receipt is genuinely insufficient.{memory}"#,
         date = chrono::Utc::now().format("%Y-%m-%d"),
         memory = memory_context,
     )
@@ -2964,7 +3005,7 @@ pub fn build_context_messages(
 /// This handles the case where the last agent turn was interrupted mid-tool-call,
 /// leaving dangling tool_call entries at the end of the history.
 /// We do NOT touch tool_call/result pairs in the middle of history — those are valid.
-fn sanitize_tool_call_pairs(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
+pub(crate) fn sanitize_tool_call_pairs(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
     let n = messages.len();
     if n == 0 {
         return messages;
@@ -3174,6 +3215,9 @@ fn minimal_tool_result_blocks(results_json: &str) -> Vec<ContentBlock> {
             } else {
                 demoted
             };
+            // p11: append `[recall:<tool_use_id>]` so the agent can re-fetch
+            // the original full content via the recall_tool_result tool.
+            let content = crate::agent::tool_receipt::with_recall_hint(&content, &tool_use_id);
             out.push(ContentBlock::ToolResult {
                 tool_use_id,
                 content,
@@ -3212,9 +3256,48 @@ fn tool_call_signature(name: &str, input: &serde_json::Value) -> String {
     format!("{}::{}", name, input_json)
 }
 
+const SUPERSEDE_RETRY_WINDOW_MSGS: usize = 6;
+
+fn is_tool_result_carrier(msg: &LlmMessage) -> bool {
+    matches!(
+        &msg.content,
+        MessageContent::Blocks(blocks)
+            if blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+    )
+}
+
+fn has_real_user_turn_between(msgs: &[LlmMessage], start_idx: usize, end_idx: usize) -> bool {
+    msgs.iter()
+        .enumerate()
+        .skip(start_idx.saturating_add(1))
+        .take(end_idx.saturating_sub(start_idx.saturating_add(1)))
+        .any(|(_, msg)| msg.role == "user" && !is_tool_result_carrier(msg))
+}
+
+fn is_retryable_tool_failure(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    content.contains("[schema_correction tool=")
+        || lower.contains("schema 不匹配")
+        || lower.contains("missing field")
+        || lower.contains("missing required")
+        || lower.contains("invalid type")
+        || lower.contains("invalid value")
+        || lower.contains("unknown field")
+        || lower.contains("unknown variant")
+        || lower.contains("did not match any variant")
+        || lower.contains("additional properties are not allowed")
+        || lower.contains("tool '")
+            && lower.contains("does not exist. available tools:")
+        || lower.contains("工具 '")
+            && (lower.contains("未找到") || lower.contains("当前可用工具"))
+}
+
 pub(crate) fn collapse_superseded_tool_failures(mut msgs: Vec<LlmMessage>) -> Vec<LlmMessage> {
-    let mut tool_use_meta: HashMap<String, (usize, String)> = HashMap::new();
+    let mut tool_use_meta: HashMap<String, (usize, String, String)> = HashMap::new();
     let mut last_success_pos: HashMap<String, usize> = HashMap::new();
+    let mut success_by_tool_name: HashMap<String, Vec<usize>> = HashMap::new();
 
     for (msg_idx, msg) in msgs.iter().enumerate() {
         let MessageContent::Blocks(blocks) = &msg.content else {
@@ -3223,7 +3306,10 @@ pub(crate) fn collapse_superseded_tool_failures(mut msgs: Vec<LlmMessage>) -> Ve
 
         for block in blocks {
             if let ContentBlock::ToolUse { id, name, input } = block {
-                tool_use_meta.insert(id.clone(), (msg_idx, tool_call_signature(name, input)));
+                tool_use_meta.insert(
+                    id.clone(),
+                    (msg_idx, tool_call_signature(name, input), name.clone()),
+                );
             }
         }
 
@@ -3237,11 +3323,15 @@ pub(crate) fn collapse_superseded_tool_failures(mut msgs: Vec<LlmMessage>) -> Ve
                 if *is_error {
                     continue;
                 }
-                if let Some((tool_msg_idx, signature)) = tool_use_meta.get(tool_use_id) {
+                if let Some((tool_msg_idx, signature, tool_name)) = tool_use_meta.get(tool_use_id) {
                     last_success_pos
                         .entry(signature.clone())
                         .and_modify(|pos| *pos = (*pos).max(*tool_msg_idx))
                         .or_insert(*tool_msg_idx);
+                    success_by_tool_name
+                        .entry(tool_name.clone())
+                        .or_default()
+                        .push(*tool_msg_idx);
                 }
             }
         }
@@ -3260,18 +3350,39 @@ pub(crate) fn collapse_superseded_tool_failures(mut msgs: Vec<LlmMessage>) -> Ve
             if let ContentBlock::ToolResult {
                 tool_use_id,
                 is_error,
+                content,
                 ..
             } = block
             {
                 if !*is_error {
                     continue;
                 }
-                if let Some((tool_msg_idx, signature)) = tool_use_meta.get(tool_use_id) {
+                if let Some((tool_msg_idx, signature, tool_name)) = tool_use_meta.get(tool_use_id) {
                     if last_success_pos
                         .get(signature)
-                        .is_some_and(|success_pos| tool_msg_idx < success_pos)
+                        .is_some_and(|success_pos| {
+                            tool_msg_idx < success_pos
+                                && !has_real_user_turn_between(&msgs, *tool_msg_idx, *success_pos)
+                        })
                     {
                         superseded_tool_use_ids.insert(tool_use_id.clone());
+                        continue;
+                    }
+
+                    if !is_retryable_tool_failure(content) {
+                        continue;
+                    }
+
+                    if let Some(success_positions) = success_by_tool_name.get(tool_name) {
+                        let matched_retry = success_positions.iter().any(|success_pos| {
+                            *success_pos > *tool_msg_idx
+                                && success_pos.saturating_sub(*tool_msg_idx)
+                                    <= SUPERSEDE_RETRY_WINDOW_MSGS
+                                && !has_real_user_turn_between(&msgs, *tool_msg_idx, *success_pos)
+                        });
+                        if matched_retry {
+                            superseded_tool_use_ids.insert(tool_use_id.clone());
+                        }
                     }
                 }
             }
@@ -3321,7 +3432,7 @@ pub(crate) fn collapse_superseded_tool_failures(mut msgs: Vec<LlmMessage>) -> Ve
 /// next message is not a tool-result carrier (or there is no next message), strip
 /// the ToolUse blocks from that assistant message. If stripping leaves the message
 /// empty, remove it entirely.
-fn sanitize_tool_use_result_pairing(mut msgs: Vec<LlmMessage>) -> Vec<LlmMessage> {
+pub(crate) fn sanitize_tool_use_result_pairing(mut msgs: Vec<LlmMessage>) -> Vec<LlmMessage> {
     let mut i = 0;
     while i < msgs.len() {
         let has_tool_use = if msgs[i].role == "assistant" {
@@ -3706,16 +3817,17 @@ pub async fn get_context_preview(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_context_messages, derive_headless_session_source,
+        build_context_messages, collapse_superseded_tool_failures, derive_headless_session_source,
         main_chat_requests_collaboration_context, minimal_tool_result_blocks,
         resolve_headless_scene_kind, validate_headless_session_scope, HeadlessRunOptions,
         SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL, SESSION_SOURCE_PISCI_HEARTBEAT_POOL,
         SESSION_SOURCE_PISCI_POOL,
     };
     use crate::commands::scene::SceneKind;
-    use crate::llm::ContentBlock;
+    use crate::llm::{ContentBlock, LlmMessage, MessageContent};
     use crate::store::db::ChatMessage;
     use chrono::Utc;
+    use serde_json::json;
 
     fn make_chat_message(
         session_id: &str,
@@ -3733,6 +3845,45 @@ mod tests {
             tool_results_json: None,
             turn_index: Some(turn_index),
         }
+    }
+
+    fn assistant_tool_use(id: &str, name: &str, input: serde_json::Value) -> LlmMessage {
+        LlmMessage {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: id.to_string(),
+                name: name.to_string(),
+                input,
+            }]),
+        }
+    }
+
+    fn user_tool_result(id: &str, content: &str, is_error: bool) -> LlmMessage {
+        LlmMessage {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content: content.to_string(),
+                is_error,
+            }]),
+        }
+    }
+
+    fn text_msg(role: &str, text: &str) -> LlmMessage {
+        LlmMessage {
+            role: role.to_string(),
+            content: MessageContent::Text(text.to_string()),
+        }
+    }
+
+    fn has_tool_result_content(msgs: &[LlmMessage], needle: &str) -> bool {
+        msgs.iter().any(|msg| match &msg.content {
+            MessageContent::Blocks(blocks) => blocks.iter().any(|block| match block {
+                ContentBlock::ToolResult { content, .. } => content.contains(needle),
+                _ => false,
+            }),
+            MessageContent::Text(_) => false,
+        })
     }
 
     #[test]
@@ -3882,7 +4033,8 @@ mod tests {
         } = &blocks[0]
         {
             assert_eq!(tool_use_id, "call-1");
-            assert_eq!(content, "ran: ls; exit=0; out=60 chars");
+            // p11: demoted receipts now carry a `[recall:<tool_use_id>]` suffix.
+            assert_eq!(content, "ran: ls; exit=0; out=60 chars [recall:call-1]");
             assert!(!is_error);
         } else {
             panic!("expected a ToolResult block");
@@ -3914,5 +4066,61 @@ mod tests {
         } else {
             panic!("expected a ToolResult block");
         }
+    }
+
+    #[test]
+    fn collapse_superseded_tool_failures_removes_structural_retry_lineage() {
+        let msgs = vec![
+            text_msg("user", "请读一下 config"),
+            assistant_tool_use("call-1", "file_read", json!({"pth":"C:\\temp\\a.txt"})),
+            user_tool_result(
+                "call-1",
+                "[file_read] 工具输入与 schema 不匹配。\n\n[schema_correction tool=file_read]\n{\"type\":\"object\",\"required\":[\"path\"]}\n[/schema_correction]",
+                true,
+            ),
+            text_msg("assistant", "参数名错了，我改成 path 重试。"),
+            assistant_tool_use("call-2", "file_read", json!({"path":"C:\\temp\\a.txt"})),
+            user_tool_result("call-2", "file content", false),
+        ];
+
+        let collapsed = collapse_superseded_tool_failures(msgs);
+        assert!(!has_tool_result_content(&collapsed, "schema_correction tool=file_read"));
+        assert!(has_tool_result_content(&collapsed, "file content"));
+    }
+
+    #[test]
+    fn collapse_superseded_tool_failures_keeps_non_retryable_failures() {
+        let msgs = vec![
+            text_msg("user", "先写 Program Files"),
+            assistant_tool_use("call-1", "file_write", json!({"path":"C:\\Program Files\\a.txt","content":"x"})),
+            user_tool_result("call-1", "permission denied", true),
+            text_msg("assistant", "那我换个文件继续当前任务。"),
+            assistant_tool_use("call-2", "file_write", json!({"path":"C:\\temp\\a.txt","content":"x"})),
+            user_tool_result("call-2", "ok", false),
+        ];
+
+        let collapsed = collapse_superseded_tool_failures(msgs);
+        assert!(has_tool_result_content(&collapsed, "permission denied"));
+        assert!(has_tool_result_content(&collapsed, "ok"));
+    }
+
+    #[test]
+    fn collapse_superseded_tool_failures_keeps_failures_across_real_user_turns() {
+        let msgs = vec![
+            text_msg("user", "读 a.txt"),
+            assistant_tool_use("call-1", "file_read", json!({"pth":"C:\\temp\\a.txt"})),
+            user_tool_result(
+                "call-1",
+                "[schema_correction tool=file_read]\n{\"type\":\"object\",\"required\":[\"path\"]}\n[/schema_correction]",
+                true,
+            ),
+            text_msg("user", "算了，接着读 b.txt"),
+            assistant_tool_use("call-2", "file_read", json!({"path":"C:\\temp\\b.txt"})),
+            user_tool_result("call-2", "b content", false),
+        ];
+
+        let collapsed = collapse_superseded_tool_failures(msgs);
+        assert!(has_tool_result_content(&collapsed, "schema_correction tool=file_read"));
+        assert!(has_tool_result_content(&collapsed, "b content"));
     }
 }
