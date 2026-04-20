@@ -196,6 +196,7 @@ pub async fn dispatch_heartbeat(
                     session_title: Some(format!("Pisci · {}", attention.pool_name)),
                     session_source: Some(HEARTBEAT_POOL_SOURCE.into()),
                     scene_kind: Some(SceneKind::HeartbeatSupervisor),
+                    ..HeadlessRunOptions::default()
                 }),
             )
             .await?;

@@ -38,7 +38,7 @@ pub async fn list_builtin_tools(
             name: "powershell_query".into(),
             description: "执行 PowerShell 脚本，支持 Windows 系统管理任务".into(),
             icon: "🪟".into(),
-            windows_only: false,
+            windows_only: true,
         },
         BuiltinToolInfo {
             name: "web_search".into(),
@@ -62,7 +62,7 @@ pub async fn list_builtin_tools(
             name: "office".into(),
             description: "操作 Office 文档（Word、Excel、PowerPoint）".into(),
             icon: "📊".into(),
-            windows_only: false,
+            windows_only: true,
         },
         BuiltinToolInfo {
             name: "email".into(),

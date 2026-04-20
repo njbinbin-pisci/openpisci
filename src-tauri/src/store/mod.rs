@@ -48,6 +48,17 @@ impl AppState {
             .path()
             .app_data_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from(".pisci"));
+        Self::new_sync_with_app_dir(app, scheduler, app_dir)
+    }
+
+    /// Synchronous construction with an explicit app-data directory.
+    /// Used by headless/CLI entry points so they can run against an isolated
+    /// config + database root without mutating the desktop app's default state.
+    pub fn new_sync_with_app_dir(
+        app: &AppHandle,
+        scheduler: crate::scheduler::cron::CronScheduler,
+        app_dir: std::path::PathBuf,
+    ) -> Result<Self> {
         std::fs::create_dir_all(&app_dir)?;
 
         let db_path = app_dir.join("pisci.db");

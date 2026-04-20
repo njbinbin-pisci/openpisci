@@ -1,4 +1,10 @@
-use crate::{commands, gateway, scheduler, store};
+use crate::{
+    commands, gateway,
+    headless_cli::{DisabledToolInfo, HeadlessCliMode, HeadlessCliRequest, HeadlessCliResponse, PoolWaitSummary},
+    scheduler, store, tools,
+};
+use serde_json::json;
+use std::sync::{Arc, Mutex as StdMutex};
 use tauri::{Emitter, Manager};
 use tracing::info;
 use tracing_subscriber::prelude::*;
@@ -55,18 +61,23 @@ fn guess_mime_from_path(path: &str) -> String {
     }
 }
 
-/// Returns the platform log directory: `<data_dir>/pisci/logs`.
-/// Falls back to the current directory if the platform path is unavailable.
+type CliResultSink = Arc<StdMutex<Option<Result<HeadlessCliResponse, String>>>>;
+
+fn default_app_data_dir() -> std::path::PathBuf {
+    dirs::data_local_dir()
+        .or_else(dirs::data_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("com.pisci.desktop")
+}
+
+/// Returns the platform log directory: `<data_dir>/logs`.
+/// Falls back to `./logs` only if the platform path is unavailable.
 fn log_dir() -> std::path::PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(base) = dirs::data_local_dir() {
-            return base.join("pisci").join("logs");
-        }
+    let base = default_app_data_dir();
+    if !base.as_os_str().is_empty() {
+        return base.join("logs");
     }
-    std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join("logs")
+    std::path::PathBuf::from(".").join("logs")
 }
 
 /// Initialise structured logging:
@@ -150,6 +161,306 @@ fn install_crash_reporter() {
     }));
 }
 
+fn clone_state(state: &store::AppState, app_handle: &tauri::AppHandle) -> store::AppState {
+    store::AppState {
+        db: state.db.clone(),
+        settings: state.settings.clone(),
+        plan_state: state.plan_state.clone(),
+        browser: state.browser.clone(),
+        cancel_flags: state.cancel_flags.clone(),
+        confirmation_responses: state.confirmation_responses.clone(),
+        interactive_responses: state.interactive_responses.clone(),
+        app_handle: app_handle.clone(),
+        scheduler: state.scheduler.clone(),
+        gateway: state.gateway.clone(),
+        pisci_heartbeat_cursor: state.pisci_heartbeat_cursor.clone(),
+    }
+}
+
+fn cli_disabled_tools(mode: HeadlessCliMode) -> Vec<DisabledToolInfo> {
+    tools::runtime_disabled_tools(mode.tool_profile())
+        .into_iter()
+        .map(|tool| DisabledToolInfo {
+            name: tool.name.to_string(),
+            reason: tool.reason.unwrap_or("Disabled by runtime profile.").to_string(),
+        })
+        .collect()
+}
+
+fn cli_extra_system_context(request: &HeadlessCliRequest) -> String {
+    let mut lines = vec![
+        "## Headless CLI Runtime".to_string(),
+        format!("- Mode: {}", request.mode.as_str()),
+        format!("- Host OS: {}", std::env::consts::OS),
+        "- This is a non-interactive headless CLI session.".to_string(),
+    ];
+    let disabled = cli_disabled_tools(request.mode);
+    if !disabled.is_empty() {
+        lines.push("- Disabled tools in this runtime:".to_string());
+        for tool in &disabled {
+            lines.push(format!("  - {}: {}", tool.name, tool.reason));
+        }
+    }
+    match request.mode {
+        HeadlessCliMode::Pisci => {
+            lines.push(
+                "- Stay single-agent. Do not create or manage collaborative pool work in this run."
+                    .to_string(),
+            );
+        }
+        HeadlessCliMode::Pool => {
+            lines.push(
+                "- You are coordinating a project pool. Use pool_org + pool_chat for visible collaboration."
+                    .to_string(),
+            );
+            if let Some(size) = request.pool_size {
+                lines.push(format!(
+                    "- Target collaboration scale: at most {} Koi unless the task clearly needs fewer.",
+                    size
+                ));
+            }
+            if !request.koi_ids.is_empty() {
+                lines.push(format!(
+                    "- Prefer coordinating these Koi IDs first: {}.",
+                    request.koi_ids.join(", ")
+                ));
+            }
+        }
+    }
+    if let Some(extra) = request
+        .extra_system_context
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        lines.push(String::new());
+        lines.push("## Additional Context".to_string());
+        lines.push(extra.to_string());
+    }
+    lines.join("\n")
+}
+
+async fn resolve_cli_pool(
+    state: &store::AppState,
+    request: &HeadlessCliRequest,
+) -> Result<crate::koi::PoolSession, String> {
+    let db = state.db.lock().await;
+    if let Some(requested) = request
+        .pool_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let pool = db
+            .resolve_pool_session_identifier(requested)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Pool '{}' not found.", requested))?;
+        if request.task_timeout_secs.is_some() {
+            db.update_pool_session_config(&pool.id, request.task_timeout_secs)
+                .map_err(|e| e.to_string())?;
+        }
+        return Ok(pool);
+    }
+
+    let name = request
+        .pool_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Headless Pool Run");
+    db.create_pool_session_with_dir(name, request.workspace.as_deref(), request.task_timeout_secs.unwrap_or(0))
+        .map_err(|e| e.to_string())
+}
+
+async fn wait_for_pool_completion(
+    state: &store::AppState,
+    pool_id: &str,
+    timeout_secs: u64,
+) -> Result<PoolWaitSummary, String> {
+    let start = std::time::Instant::now();
+    let idle_grace = std::time::Duration::from_secs(3);
+    let timeout = std::time::Duration::from_secs(timeout_secs.max(1));
+    let mut zero_since: Option<std::time::Instant> = None;
+
+    loop {
+        let (active, done, cancelled, blocked, latest_messages) = {
+            let db = state.db.lock().await;
+            let todos = db.list_koi_todos(None).map_err(|e| e.to_string())?;
+            let pool_todos = todos
+                .into_iter()
+                .filter(|todo| todo.pool_session_id.as_deref() == Some(pool_id))
+                .collect::<Vec<_>>();
+            let active = pool_todos
+                .iter()
+                .filter(|todo| matches!(todo.status.as_str(), "todo" | "in_progress" | "blocked"))
+                .count() as u32;
+            let done = pool_todos
+                .iter()
+                .filter(|todo| todo.status == "done")
+                .count() as u32;
+            let cancelled = pool_todos
+                .iter()
+                .filter(|todo| todo.status == "cancelled")
+                .count() as u32;
+            let blocked = pool_todos
+                .iter()
+                .filter(|todo| todo.status == "blocked")
+                .count() as u32;
+            let latest_messages = db
+                .get_pool_messages(pool_id, 10, 0)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|msg| {
+                    format!(
+                        "#{} {} ({}): {}",
+                        msg.id,
+                        msg.sender_id,
+                        msg.msg_type,
+                        msg.content.chars().take(240).collect::<String>()
+                    )
+                })
+                .collect::<Vec<_>>();
+            (active, done, cancelled, blocked, latest_messages)
+        };
+
+        if active == 0 {
+            match zero_since {
+                Some(since) if since.elapsed() >= idle_grace => {
+                    return Ok(PoolWaitSummary {
+                        completed: true,
+                        timed_out: false,
+                        active_todos: active,
+                        done_todos: done,
+                        cancelled_todos: cancelled,
+                        blocked_todos: blocked,
+                        latest_messages,
+                    });
+                }
+                None => zero_since = Some(std::time::Instant::now()),
+                _ => {}
+            }
+        } else {
+            zero_since = None;
+        }
+
+        if start.elapsed() >= timeout {
+            return Ok(PoolWaitSummary {
+                completed: false,
+                timed_out: true,
+                active_todos: active,
+                done_todos: done,
+                cancelled_todos: cancelled,
+                blocked_todos: blocked,
+                latest_messages,
+            });
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
+
+async fn run_cli_headless_request(
+    state: store::AppState,
+    app_handle: tauri::AppHandle,
+    request: HeadlessCliRequest,
+) -> Result<HeadlessCliResponse, String> {
+    let (builtin_tool_overrides, workspace_override) = {
+        let settings = state.settings.lock().await;
+        (
+            tools::apply_runtime_tool_profile(&settings.builtin_tool_enabled, request.mode.tool_profile()),
+            request
+                .workspace
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string),
+        )
+    };
+
+    let extra_context = cli_extra_system_context(&request);
+    let disabled_tools = cli_disabled_tools(request.mode);
+
+    let (session_id, scene_kind, pool_id) = match request.mode {
+        HeadlessCliMode::Pisci => (
+            request
+                .session_id
+                .clone()
+                .unwrap_or_else(|| format!("headless_cli_{}", chrono::Utc::now().timestamp())),
+            commands::scene::SceneKind::IMHeadless,
+            None,
+        ),
+        HeadlessCliMode::Pool => {
+            let pool = resolve_cli_pool(&state, &request).await?;
+            (
+                request
+                    .session_id
+                    .clone()
+                    .unwrap_or_else(|| commands::chat::pool_pisci_session_id(&pool.id)),
+                commands::scene::SceneKind::PoolCoordinator,
+                Some(pool.id),
+            )
+        }
+    };
+
+    let session_title = request.session_title.clone().unwrap_or_else(|| match request.mode {
+        HeadlessCliMode::Pisci => "Headless CLI Task".to_string(),
+        HeadlessCliMode::Pool => "Headless Pool Coordinator".to_string(),
+    });
+    let session_source = Some(match request.mode {
+        HeadlessCliMode::Pisci => "headless_cli".to_string(),
+        HeadlessCliMode::Pool => commands::chat::SESSION_SOURCE_PISCI_POOL.to_string(),
+    });
+    let channel = request.channel.clone().unwrap_or_else(|| "cli".to_string());
+
+    let options = commands::chat::HeadlessRunOptions {
+        pool_session_id: pool_id.clone(),
+        extra_system_context: Some(extra_context),
+        session_title: Some(session_title),
+        session_source,
+        scene_kind: Some(scene_kind),
+        workspace_root_override: workspace_override,
+        builtin_tool_overrides,
+    };
+
+    let (response_text, _, _) = commands::chat::run_agent_headless(
+        &state,
+        &session_id,
+        &request.prompt,
+        None,
+        &channel,
+        Some(options),
+    )
+    .await?;
+
+    let pool_wait = if request.mode == HeadlessCliMode::Pool && request.wait_for_completion {
+        Some(
+            wait_for_pool_completion(
+                &state,
+                pool_id.as_deref().unwrap_or_default(),
+                request.wait_timeout_secs.unwrap_or(900),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    let _ = app_handle.emit(
+        "headless_cli_completed",
+        json!({ "session_id": session_id, "mode": request.mode.as_str() }),
+    );
+
+    Ok(HeadlessCliResponse {
+        ok: true,
+        mode: request.mode.as_str().to_string(),
+        session_id,
+        pool_id,
+        response_text,
+        disabled_tools,
+        pool_wait,
+    })
+}
+
 /// Open a local file or directory with the system default application.
 /// On Windows, directories are opened with `explorer.exe` to guarantee
 /// Explorer opens (ShellExecute "open" verb is unreliable for directories).
@@ -189,15 +500,40 @@ fn open_path(path: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    run_impl(None, None);
+}
+
+pub(crate) fn run_headless_cli(request: HeadlessCliRequest) -> Result<HeadlessCliResponse, String> {
+    let sink: CliResultSink = Arc::new(StdMutex::new(None));
+    run_impl(Some(request), Some(sink.clone()));
+    let result = sink
+        .lock()
+        .map_err(|_| "Failed to read headless CLI result.".to_string())?
+        .take()
+        .unwrap_or_else(|| Err("Headless CLI exited without producing a result.".to_string()));
+    result
+}
+
+fn run_impl(
+    headless_cli_request: Option<HeadlessCliRequest>,
+    cli_result_sink: Option<CliResultSink>,
+) {
     let _log_guard = init_logging();
     install_crash_reporter();
 
     let allow_multiple = {
-        let config_path = store::settings::Settings::default_config_path();
-        store::settings::Settings::load(&config_path)
-            .map(|s| s.allow_multiple_instances)
-            .unwrap_or(false)
+        if headless_cli_request.is_some() {
+            true
+        } else {
+            let config_path = store::settings::Settings::default_config_path();
+            store::settings::Settings::load(&config_path)
+                .map(|s| s.allow_multiple_instances)
+                .unwrap_or(false)
+        }
     };
+
+    let setup_cli_request = headless_cli_request.clone();
+    let setup_cli_sink = cli_result_sink.clone();
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -222,13 +558,22 @@ pub fn run() {
     }
 
     builder
-        .setup(|app| {
+        .setup(move |app| {
+            let cli_request = setup_cli_request.clone();
+            let cli_sink = setup_cli_sink.clone();
             let app_handle = app.handle().clone();
 
             let state = tauri::async_runtime::block_on(async {
                 let scheduler = scheduler::cron::CronScheduler::new().await?;
                 scheduler.start().await?;
-                store::AppState::new_sync(&app_handle, scheduler)
+                if let Some(app_dir) = cli_request
+                    .as_ref()
+                    .and_then(HeadlessCliRequest::app_data_dir_override)
+                {
+                    store::AppState::new_sync_with_app_dir(&app_handle, scheduler, app_dir)
+                } else {
+                    store::AppState::new_sync(&app_handle, scheduler)
+                }
             })?;
             let managed_state = store::AppState {
                 db: state.db.clone(),
@@ -289,7 +634,7 @@ pub fn run() {
                 }
             }
 
-            {
+            if cli_request.is_none() {
                 let gateway = state.gateway.clone();
                 let db = state.db.clone();
                 let settings = state.settings.clone();
@@ -512,7 +857,7 @@ pub fn run() {
             let startup_heartbeat_disabled =
                 std::env::var("PISCI_DISABLE_STARTUP_HEARTBEAT").ok().as_deref() == Some("1");
 
-            if !startup_heartbeat_disabled {
+            if cli_request.is_none() && !startup_heartbeat_disabled {
                 let settings_arc = state.settings.clone();
                 let db_arc = state.db.clone();
                 let plan_state_arc = state.plan_state.clone();
@@ -575,7 +920,7 @@ pub fn run() {
                 });
             }
 
-            {
+            if cli_request.is_none() {
                 let db_arc = state.db.clone();
                 let app_h = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
@@ -778,28 +1123,53 @@ pub fn run() {
                 });
             }
 
-            if let Some(tray) = app.tray_by_id("main") {
-                use tauri::menu::{Menu, MenuItem};
-                if let (Ok(show_i), Ok(quit_i)) = (
-                    MenuItem::with_id(&app_handle, "tray_show", "显示主界面", true, None::<&str>),
-                    MenuItem::with_id(
-                        &app_handle,
-                        "tray_quit",
-                        "退出 OpenPisci",
-                        true,
-                        None::<&str>,
-                    ),
-                ) {
-                    if let Ok(menu) = Menu::with_items(&app_handle, &[&show_i, &quit_i]) {
-                        if let Err(e) = tray.set_menu(Some(menu)) {
-                            tracing::warn!("Tray set_menu: {}", e);
+            if cli_request.is_none() {
+                if let Some(tray) = app.tray_by_id("main") {
+                    use tauri::menu::{Menu, MenuItem};
+                    if let (Ok(show_i), Ok(quit_i)) = (
+                        MenuItem::with_id(&app_handle, "tray_show", "显示主界面", true, None::<&str>),
+                        MenuItem::with_id(
+                            &app_handle,
+                            "tray_quit",
+                            "退出 OpenPisci",
+                            true,
+                            None::<&str>,
+                        ),
+                    ) {
+                        if let Ok(menu) = Menu::with_items(&app_handle, &[&show_i, &quit_i]) {
+                            if let Err(e) = tray.set_menu(Some(menu)) {
+                                tracing::warn!("Tray set_menu: {}", e);
+                            }
                         }
                     }
+                    let _ = tray.set_tooltip(Some("OpenPisci"));
                 }
-                let _ = tray.set_tooltip(Some("OpenPisci"));
             }
 
             info!("OpenPisci started");
+
+            if let Some(request) = cli_request {
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.hide();
+                }
+                if let Some(overlay) = app.get_webview_window("overlay") {
+                    let _ = overlay.hide();
+                }
+                let state_ref = clone_state(&state, &app_handle);
+                let app_for_cli = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let result =
+                        run_cli_headless_request(state_ref, app_for_cli.clone(), request).await;
+                    let exit_code = if result.is_ok() { 0 } else { 1 };
+                    if let Some(sink) = cli_sink {
+                        if let Ok(mut slot) = sink.lock() {
+                            *slot = Some(result);
+                        }
+                    }
+                    app_for_cli.exit(exit_code);
+                });
+                return Ok(());
+            }
 
             #[cfg(debug_assertions)]
             {
@@ -870,6 +1240,7 @@ pub fn run() {
                                     session_title: Some(session_title),
                                     session_source: Some("startup_hook".to_string()),
                                     scene_kind: Some(commands::scene::SceneKind::IMHeadless),
+                                    ..commands::chat::HeadlessRunOptions::default()
                                 }),
                             )
                             .await

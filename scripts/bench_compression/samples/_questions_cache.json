@@ -13,72 +13,214 @@
   ],
   "sample-02-trading": [
     {
-      "q": "针对日线加密货币动量策略，推荐的walk-forward优化训练窗口和测试窗口分别是多少天？",
-      "a": "训练窗口252天，测试窗口63天"
+      "q": "避免过拟合的经验法则要求每个自由参数至少对应多少根K线（bars）？",
+      "a": "200-500根",
+      "kind": "critical"
     },
     {
-      "q": "在胜率为55%、盈亏比为1.5:1的策略示例中，采用25%的Kelly公式计算出的建议仓位比例是多少？",
-      "a": "6.25%"
+      "q": "当资金费率（Funding rate）每8小时超过多少时，应将多头头寸规模减少50%？",
+      "a": "0.08%",
+      "kind": "critical"
     }
   ],
   "sample-03-ml-short": [
     {
-      "q": "用户初始数据集的样本量和类别数分别是多少？",
-      "a": "10k样本，3个类别"
+      "q": "用户最初用于微调的模型架构是什么？",
+      "a": "BERT-base-uncased",
+      "kind": "critical"
     },
     {
-      "q": "助理建议将训练轮数（epochs）调整为多少？",
-      "a": "5"
+      "q": "经过超参数调优后，模型达到的准确率是多少？",
+      "a": "73.5%",
+      "kind": "critical"
     }
   ],
   "sample-04-mixed-long": [
     {
-      "q": "根据对话中的提取优先级排名，第一个应该优先拆分的模块是什么？其目标部署周期是多久？",
-      "a": "Notifications（通知服务），4-6周。"
+      "q": "按照对话给出的微服务提取优先级，排在第一位的模块是什么？",
+      "a": "Notifications",
+      "kind": "critical"
     },
     {
-      "q": "在零停机数据库迁移方案中，第一步建议采取什么操作来避免停机？",
-      "a": "Dual-write（双写：单体应用同时向旧表和新服务数据库写入）。"
+      "q": "优化orders表慢查询时，创建的复合索引的字段顺序是什么？",
+      "a": "user_id, status, created_at DESC",
+      "kind": "critical"
     }
   ],
   "sample-05-sysadmin": [
     {
-      "q": "启动 WireGuard 时遇到“Address already in use”错误，是哪个现有接口占用了地址？最终将 WireGuard 接口地址改为了哪个网段？",
-      "a": "docker0 桥接接口（10.200.0.1）；10.200.2.0/24"
+      "q": "导致WireGuard启动时报\"Address already in use\"错误的冲突网络接口是什么？",
+      "a": "docker0 bridge",
+      "kind": "critical"
     },
     {
-      "q": "使用 Certbot 为 Nginx 配置 HTTPS 后出现“too many redirects”错误的根本原因是什么？",
-      "a": "Nginx 配置中存在重复的重定向规则（同时包含 Certbot 自动添加的重定向和用户手动添加的 HTTP→HTTPS 重定向）"
+      "q": "导致Nginx配置Let's Encrypt后出现\"too many redirects\"错误的具体原因是什么？",
+      "a": "Nginx配置中同时存在Certbot自动添加的重定向和用户手动添加的HTTP→HTTPS重定向",
+      "kind": "critical"
     }
   ],
   "tool-01-bug-hunt": [
     {
-      "q": "报错最初定位到 discount.ts 的哪一行代码？",
-      "a": "第 33 行"
+      "q": "线上 checkout 报错的具体错误信息是什么？",
+      "a": "TypeError: Cannot read property 'price' of undefined",
+      "kind": "critical"
     },
     {
-      "q": "导致 .price 访问报错的根因是 Q1 合并后 MergedCart 中混入了什么对象？",
-      "a": "无 price 的占位对象"
+      "q": "导致报错的根因是 Q1 合并 MergedCart 后混入了缺少哪个字段的占位对象？",
+      "a": "price",
+      "kind": "critical"
     }
   ],
   "tool-02-data-pipeline": [
     {
-      "q": "验证数据量时，被 join 丢弃的订单具体数量是多少？",
-      "a": "143275"
+      "q": "导致 daily_metrics 表中 17% 订单被错误过滤的 JOIN 类型是什么？",
+      "a": "INNER JOIN",
+      "kind": "critical"
     },
     {
-      "q": "根据 schema 文档，revenue 字段正确的计算来源应该是哪个表的哪个字段？",
-      "a": "orders.amount"
+      "q": "根据 schema 和文档，revenue 字段原本正确的计算逻辑是什么？",
+      "a": "sum(orders.amount) WHERE status IN ('paid','shipped')",
+      "kind": "critical"
     }
   ],
   "tool-03-browser-research": [
     {
-      "q": "在 1B 向量规模下，Qdrant 的 p99 延迟是多少？",
-      "a": "95ms"
+      "q": "在 1B 向量规模对比中，Qdrant 的 p99 延迟是多少？",
+      "a": "95ms",
+      "kind": "critical"
     },
     {
       "q": "针对需要复杂多租户过滤的场景，摘要推荐的具体部署方案是什么？",
-      "a": "Weaviate OSS + 自管 6 节点"
+      "a": "Weaviate OSS + 自管 6 节点",
+      "kind": "critical"
+    }
+  ],
+  "hard-01-multi-day-project": [
+    {
+      "q": "根据之前的对话，请精确回答：user wants to migrate the billing module from Postgres to ClickHouse for cold-st。 完整回答一句话。",
+      "a": "user wants to migrate the billing module from Postgres to ClickHouse for cold-storage analytics; active billing reads stay on Postgres",
+      "kind": "critical"
+    },
+    {
+      "q": "根据之前的对话，请精确回答：the migration must preserve daily rollup tables 'billing_daily_rollups' and 'sub。 完整回答一句话。",
+      "a": "the migration must preserve daily rollup tables 'billing_daily_rollups' and 'subscription_events'",
+      "kind": "critical"
+    },
+    {
+      "q": "根据之前的对话，请精确回答：hard deadline is 2026-06-15。 完整回答一句话。",
+      "a": "hard deadline is 2026-06-15",
+      "kind": "critical"
+    },
+    {
+      "q": "根据之前的对话，请精确回答：agent decided on dual-write pattern with a 14-day backfill window。 完整回答一句话。",
+      "a": "agent decided on dual-write pattern with a 14-day backfill window",
+      "kind": "critical"
+    },
+    {
+      "q": "建议将 dual-write 逻辑收敛到的 writer 层具体文件路径是什么？",
+      "a": "src/billing/ingest/subscription_event_writer.ts",
+      "kind": "nice"
+    },
+    {
+      "q": "ClickHouse 目标表使用的具体表引擎（Table Engine）是什么？",
+      "a": "不知道",
+      "kind": "distractor"
+    }
+  ],
+  "hard-02-schema-retry-chain": [
+    {
+      "q": "根据之前的对话，请精确回答：the correct file_write signature uses 'path' (NOT 'pth', 'file', 'filename', or 。 完整回答一句话。",
+      "a": "the correct file_write signature uses 'path' (NOT 'pth', 'file', 'filename', or 'fp')",
+      "kind": "critical"
+    },
+    {
+      "q": "根据之前的对话，请精确回答：the correct content field is 'content' (NOT 'body', 'text', 'data')。 完整回答一句话。",
+      "a": "the correct content field is 'content' (NOT 'body', 'text', 'data')",
+      "kind": "critical"
+    },
+    {
+      "q": "根据之前的对话，请精确回答：the eventual successful write was src/config/flags。 完整回答一句话。",
+      "a": "the eventual successful write was src/config/flags.ts",
+      "kind": "critical"
+    },
+    {
+      "q": "根据之前的对话，请精确回答：the content written was `export const FLAG_NEW_UI = true;`。 完整回答一句话。",
+      "a": "the content written was `export const FLAG_NEW_UI = true;`",
+      "kind": "critical"
+    },
+    {
+      "q": "助手在总结工具规范教训时，指出path参数不应被哪些错误名称替代？",
+      "a": "pth、file、filename、fp",
+      "kind": "nice"
+    },
+    {
+      "q": "src/config/flags.ts 文件中 FLAG_OLD_UI 的初始值是多少？",
+      "a": "不知道",
+      "kind": "distractor"
+    }
+  ],
+  "hard-03-tool-result-flood": [
+    {
+      "q": "根据之前的对话，请精确回答：the root cause of the PaymentWebhookService timeout was a missing index on payme。 完整回答一句话。",
+      "a": "the root cause of the PaymentWebhookService timeout was a missing index on payment_events(webhook_ref_id)",
+      "kind": "critical"
+    },
+    {
+      "q": "根据之前的对话，请精确回答：the fix PR is #4421 which adds `CREATE INDEX idx_payment_events_webhook_ref ON p。 完整回答一句话。",
+      "a": "the fix PR is #4421 which adds `CREATE INDEX idx_payment_events_webhook_ref ON payment_events(webhook_ref_id)`",
+      "kind": "critical"
+    },
+    {
+      "q": "根据之前的对话，请精确回答：before the fix the p99 of webhook-dispatch was ~42s; after the fix it should dro。 完整回答一句话。",
+      "a": "before the fix the p99 of webhook-dispatch was ~42s; after the fix it should drop under 1s",
+      "kind": "critical"
+    },
+    {
+      "q": "根据之前的对话，请精确回答：the problem affected tenants 1001, 1024, and 1099 in production。 完整回答一句话。",
+      "a": "the problem affected tenants 1001, 1024, and 1099 in production",
+      "kind": "critical"
+    },
+    {
+      "q": "慢查询最初是在代码的哪一行被注意到的？",
+      "a": "line 156",
+      "kind": "nice"
+    },
+    {
+      "q": "payment_events 表当前的数据量是多少？",
+      "a": "不知道",
+      "kind": "distractor"
+    }
+  ],
+  "hard-04-cross-session-recall": [
+    {
+      "q": "根据之前的对话，请精确回答：the previous session established that the internal metrics gateway runs on port 。 完整回答一句话。",
+      "a": "the previous session established that the internal metrics gateway runs on port 9176 (NOT the public 8080)",
+      "kind": "critical"
+    },
+    {
+      "q": "根据之前的对话，请精确回答：authentication to the metrics gateway uses a client certificate at /etc/pisci/certs/metrics-client。 完整回答一句话。",
+      "a": "authentication to the metrics gateway uses a client certificate at /etc/pisci/certs/metrics-client.pem, not a bearer token",
+      "kind": "critical"
+    },
+    {
+      "q": "根据之前的对话，请精确回答：the gateway is named 'pisci-internal-metrics-relay' in the service registry。 完整回答一句话。",
+      "a": "the gateway is named 'pisci-internal-metrics-relay' in the service registry",
+      "kind": "critical"
+    },
+    {
+      "q": "根据之前的对话，请精确回答：the firewall whitelist for production includes only 10。 完整回答一句话。",
+      "a": "the firewall whitelist for production includes only 10.0.0.0/8 — external IPs are blocked",
+      "kind": "critical"
+    },
+    {
+      "q": "内部网关为什么明确拒绝使用 bearer token 认证？",
+      "a": "因为之前发生过多次 token 泄漏事件。",
+      "kind": "nice"
+    },
+    {
+      "q": "metrics 网关的服务端 CA 证书路径是什么？",
+      "a": "不知道",
+      "kind": "distractor"
     }
   ]
 }

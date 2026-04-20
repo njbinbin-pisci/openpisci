@@ -10,6 +10,7 @@ mod commands;
 mod desktop_app;
 mod fish;
 mod gateway;
+pub mod headless_cli;
 pub mod koi;
 mod llm;
 mod memory;

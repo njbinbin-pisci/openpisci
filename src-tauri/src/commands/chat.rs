@@ -1256,6 +1256,8 @@ pub struct HeadlessRunOptions {
     pub session_title: Option<String>,
     pub session_source: Option<String>,
     pub scene_kind: Option<SceneKind>,
+    pub workspace_root_override: Option<String>,
+    pub builtin_tool_overrides: HashMap<String, bool>,
 }
 
 pub(crate) const SESSION_SOURCE_IM_PREFIX: &str = "im_";
@@ -1376,14 +1378,14 @@ pub async fn run_agent_headless(
         model,
         api_key,
         base_url,
-        workspace_root,
+        mut workspace_root,
         max_tokens,
         context_window,
         policy_mode,
         tool_rate_limit_per_minute,
         tool_settings,
         max_iterations,
-        builtin_tool_enabled,
+        mut builtin_tool_enabled,
         allow_outside_workspace,
         vision_setting,
         llm_read_timeout_secs,
@@ -1415,6 +1417,22 @@ pub async fn run_agent_headless(
     };
     if api_key.is_empty() {
         return Err("API key not configured".into());
+    }
+
+    if let Some(override_root) = options
+        .as_ref()
+        .and_then(|o| o.workspace_root_override.as_ref())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        workspace_root = override_root.to_string();
+    }
+    if let Some(extra_tools) = options
+        .as_ref()
+        .map(|o| o.builtin_tool_overrides.clone())
+        .filter(|m| !m.is_empty())
+    {
+        builtin_tool_enabled.extend(extra_tools);
     }
 
     {

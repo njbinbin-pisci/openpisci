@@ -51,6 +51,117 @@ use std::sync::Arc;
 use tauri::AppHandle;
 use tokio::sync::Mutex;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeToolProfile {
+    Desktop,
+    HeadlessPisci,
+    HeadlessPool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolAvailability {
+    pub name: &'static str,
+    pub reason: Option<&'static str>,
+}
+
+const WINDOWS_ORIENTED_TOOLS: &[(&str, &str)] = &[
+    ("powershell_query", "Disabled outside Windows: relies on Windows PowerShell semantics."),
+    ("wmi", "Disabled outside Windows: WMI is Windows-only."),
+    ("office", "Disabled outside Windows: current implementation depends on Windows Office automation."),
+    ("uia", "Disabled outside Windows: UI Automation is Windows-only."),
+    ("screen_capture", "Disabled outside Windows: current implementation uses Windows APIs."),
+    ("com", "Disabled outside Windows: COM/OLE is Windows-only."),
+    ("com_invoke", "Disabled outside Windows: COM/OLE is Windows-only."),
+];
+
+const HEADLESS_PISCI_DISABLED_TOOLS: &[(&str, &str)] = &[
+    (
+        "call_koi",
+        "Disabled in headless pisci mode: single-agent baseline should not delegate to Koi.",
+    ),
+    (
+        "pool_org",
+        "Disabled in headless pisci mode: project-pool orchestration belongs to pool mode.",
+    ),
+    (
+        "pool_chat",
+        "Disabled in headless pisci mode: project-pool coordination belongs to pool mode.",
+    ),
+    (
+        "chat_ui",
+        "Disabled in headless modes: no interactive desktop chat UI is available.",
+    ),
+];
+
+const HEADLESS_COMMON_DISABLED_TOOLS: &[(&str, &str)] = &[(
+    "chat_ui",
+    "Disabled in headless modes: no interactive desktop chat UI is available.",
+)];
+
+fn disable_tools(
+    effective: &mut HashMap<String, bool>,
+    disabled: &[(&'static str, &'static str)],
+    output: &mut Vec<ToolAvailability>,
+) {
+    for (name, reason) in disabled {
+        effective.insert((*name).to_string(), false);
+        output.push(ToolAvailability {
+            name,
+            reason: Some(reason),
+        });
+    }
+}
+
+pub fn apply_runtime_tool_profile(
+    base: &HashMap<String, bool>,
+    profile: RuntimeToolProfile,
+) -> HashMap<String, bool> {
+    let mut effective = base.clone();
+    let mut ignored = Vec::new();
+    if !cfg!(target_os = "windows") {
+        disable_tools(&mut effective, WINDOWS_ORIENTED_TOOLS, &mut ignored);
+    }
+    match profile {
+        RuntimeToolProfile::Desktop => {}
+        RuntimeToolProfile::HeadlessPisci => {
+            disable_tools(&mut effective, HEADLESS_COMMON_DISABLED_TOOLS, &mut ignored);
+            disable_tools(&mut effective, HEADLESS_PISCI_DISABLED_TOOLS, &mut ignored);
+        }
+        RuntimeToolProfile::HeadlessPool => {
+            disable_tools(&mut effective, HEADLESS_COMMON_DISABLED_TOOLS, &mut ignored);
+        }
+    }
+    effective
+}
+
+pub fn runtime_disabled_tools(profile: RuntimeToolProfile) -> Vec<ToolAvailability> {
+    let mut out = Vec::new();
+    let mut effective = HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut push_unique = |disabled: &[(&'static str, &'static str)]| {
+        let unique: Vec<_> = disabled
+            .iter()
+            .copied()
+            .filter(|(name, _)| seen.insert(*name))
+            .collect();
+        disable_tools(&mut effective, &unique, &mut out);
+    };
+    if !cfg!(target_os = "windows") {
+        push_unique(WINDOWS_ORIENTED_TOOLS);
+    }
+    match profile {
+        RuntimeToolProfile::Desktop => {}
+        RuntimeToolProfile::HeadlessPisci => {
+            push_unique(HEADLESS_COMMON_DISABLED_TOOLS);
+            push_unique(HEADLESS_PISCI_DISABLED_TOOLS);
+        }
+        RuntimeToolProfile::HeadlessPool => {
+            push_unique(HEADLESS_COMMON_DISABLED_TOOLS);
+        }
+    }
+    out
+}
+
 /// Build the default tool registry with all enabled tools.
 /// Pass the shared browser manager so BrowserTool can reuse the same Chrome instance.
 /// Also loads any user-installed tools from `user_tools_dir`.
@@ -102,15 +213,6 @@ pub fn build_registry(
     }
     if is_enabled("web_search") {
         registry.register(Box::new(web_search::WebSearchTool));
-    }
-    if is_enabled("powershell_query") {
-        registry.register(Box::new(powershell::PowerShellTool));
-    }
-    if is_enabled("wmi") {
-        registry.register(Box::new(wmi_tool::WmiTool));
-    }
-    if is_enabled("office") {
-        registry.register(Box::new(office::OfficeTool));
     }
     if is_enabled("email") {
         registry.register(Box::new(email::EmailTool));
@@ -232,6 +334,15 @@ pub fn build_registry(
     // Windows-only tools
     #[cfg(target_os = "windows")]
     {
+        if is_enabled("powershell_query") {
+            registry.register(Box::new(powershell::PowerShellTool));
+        }
+        if is_enabled("wmi") {
+            registry.register(Box::new(wmi_tool::WmiTool));
+        }
+        if is_enabled("office") {
+            registry.register(Box::new(office::OfficeTool));
+        }
         if is_enabled("uia") {
             registry.register(Box::new(uia::UiaTool));
         }

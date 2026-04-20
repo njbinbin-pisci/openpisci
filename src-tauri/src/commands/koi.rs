@@ -317,6 +317,7 @@ pub async fn update_koi(
                     session_title: Some(format!("Pisci · {}", pool_name_clone)),
                     session_source: Some(SESSION_SOURCE_PISCI_POOL.to_string()),
                     scene_kind: Some(SceneKind::PoolCoordinator),
+                    ..HeadlessRunOptions::default()
                 }),
             )
             .await;
@@ -458,6 +459,7 @@ pub async fn delete_koi(
                     session_title: Some(format!("Pisci · {}", pool_name_clone)),
                     session_source: Some(SESSION_SOURCE_PISCI_POOL.to_string()),
                     scene_kind: Some(SceneKind::PoolCoordinator),
+                    ..HeadlessRunOptions::default()
                 }),
             )
             .await;
@@ -583,6 +585,7 @@ pub async fn set_koi_active(
                         session_title: Some(format!("Pisci · {}", pool_name_clone)),
                         session_source: Some(SESSION_SOURCE_PISCI_POOL.to_string()),
                         scene_kind: Some(SceneKind::PoolCoordinator),
+                        ..HeadlessRunOptions::default()
                     }),
                 )
                 .await;
@@ -696,6 +699,7 @@ pub async fn set_koi_active(
                         session_title: Some(format!("Pisci · {}", pool_name_clone)),
                         session_source: Some(SESSION_SOURCE_PISCI_POOL.to_string()),
                         scene_kind: Some(SceneKind::PoolCoordinator),
+                        ..HeadlessRunOptions::default()
                     }),
                 )
                 .await;
