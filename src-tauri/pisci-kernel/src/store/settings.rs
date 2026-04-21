@@ -310,15 +310,15 @@ pub struct Settings {
     /// Maximum tool-call iterations per agent run (default 50)
     #[serde(default = "default_max_iterations")]
     pub max_iterations: u32,
-    /// Automatically compact long-running sessions once cumulative input tokens
-    /// reach this threshold. Set to 0 to disable threshold-based compaction.
+    /// Cumulative-input-tokens cap after which an auto summary/compaction
+    /// kicks in. Set to 0 to disable.
     ///
-    /// **Deprecated by p5a's three-tier scheme** — retained for backwards
-    /// compatibility with older settings files. The effective compaction
-    /// behaviour now comes from [`Self::compaction_micro_percent`] /
-    /// `compaction_auto_percent` / `compaction_full_percent`. The harness
-    /// still reads this field on start-up so users who previously lowered
-    /// it to 100k keep their existing behaviour until they migrate.
+    /// Works alongside — not replaced by — the three-tier percent scheme
+    /// ([`Self::compaction_micro_percent`] / `compaction_auto_percent` /
+    /// `compaction_full_percent`): the percent tiers shape *how* compaction
+    /// behaves at each utilisation band, while this absolute threshold
+    /// decides *when* the threshold-driven path fires (scene policy can
+    /// override via `auto_compact_threshold_override`).
     #[serde(default = "default_auto_compact_input_tokens_threshold")]
     pub auto_compact_input_tokens_threshold: u32,
 
@@ -425,6 +425,14 @@ pub struct Settings {
     /// manually when using a custom model name that isn't auto-recognised.
     #[serde(default)]
     pub vision_enabled: bool,
+
+    // ── Streaming output ────────────────────────────────────────────────────
+    /// Stream LLM text deltas to the UI as they arrive instead of waiting
+    /// for the full response. Only wired into the main chat / Koi task
+    /// scenes; headless / coordinator / heartbeat paths ignore this flag
+    /// because they do not surface text to a live UI.
+    #[serde(default)]
+    pub enable_streaming: bool,
 
     // ── Overlay position ─────────────────────────────────────────────────────
     /// Last saved X position of the overlay window (physical pixels).
@@ -642,6 +650,7 @@ impl Default for Settings {
             llm_providers: Vec::new(),
             runtime_paths: HashMap::new(),
             vision_enabled: false,
+            enable_streaming: false,
             overlay_x: None,
             overlay_y: None,
             allow_multiple_instances: false,

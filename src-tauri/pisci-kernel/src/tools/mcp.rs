@@ -277,7 +277,6 @@ impl McpClient {
         Ok(infos)
     }
 
-    #[allow(dead_code)]
     pub async fn call_tool(&self, tool_name: &str, arguments: Value) -> Result<String> {
         self.ensure_connected().await?;
         let req = make_request(
@@ -332,7 +331,6 @@ impl McpClient {
 // ─── McpProxyTool ─────────────────────────────────────────────────────────────
 
 /// A single tool exposed by an MCP server, registered as a Tool in the registry.
-#[allow(dead_code)]
 pub struct McpProxyTool {
     pub server_name: String,
     pub tool_name: String,
@@ -376,7 +374,6 @@ impl Tool for McpProxyTool {
 
 /// Connect to an MCP server and return proxy tools for all its tools.
 /// Returns an empty vec on connection failure (with a warning).
-#[allow(dead_code)]
 pub async fn build_mcp_tools(config: &McpServerConfig) -> Vec<McpProxyTool> {
     if !config.enabled || config.name.is_empty() {
         return vec![];

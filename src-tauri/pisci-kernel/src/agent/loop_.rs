@@ -1118,6 +1118,69 @@ fn is_fallback_eligible_error(msg: &str) -> bool {
         || lower.contains("does not exist")
 }
 
+/// Unified entry point for the per-iteration LLM call. When
+/// `enable_streaming` is false, delegates to `LlmClient::complete` (the
+/// historical single-response path). When true, drives `LlmClient::stream`,
+/// forwards each text delta as an `AgentEvent::TextDelta`, and folds the
+/// emitted chunks back into an `LlmResponse` so the caller's downstream
+/// bookkeeping (token counters, tool-call extraction, persistence) stays
+/// unchanged.
+async fn llm_call_unified(
+    client: &dyn LlmClient,
+    req: crate::llm::LlmRequest,
+    enable_streaming: bool,
+    event_tx: &mpsc::Sender<AgentEvent>,
+) -> Result<crate::llm::LlmResponse> {
+    if !enable_streaming {
+        return client.complete(req).await;
+    }
+
+    let (tx, mut rx) = mpsc::channel::<crate::llm::LlmChunk>(32);
+    let mut text = String::new();
+    let mut tool_calls: Vec<crate::llm::ToolCall> = Vec::new();
+    let mut input_tokens = 0u32;
+    let mut output_tokens = 0u32;
+    let mut stream_error: Option<String> = None;
+
+    let stream_fut = client.stream(req, tx);
+    let recv_fut = async {
+        while let Some(chunk) = rx.recv().await {
+            match chunk {
+                crate::llm::LlmChunk::TextDelta(delta) => {
+                    text.push_str(&delta);
+                    let _ = event_tx.send(AgentEvent::TextDelta { delta }).await;
+                }
+                crate::llm::LlmChunk::ToolUse { id, name, input } => {
+                    tool_calls.push(crate::llm::ToolCall { id, name, input });
+                }
+                crate::llm::LlmChunk::Done {
+                    input_tokens: it,
+                    output_tokens: ot,
+                } => {
+                    input_tokens = it;
+                    output_tokens = ot;
+                }
+                crate::llm::LlmChunk::Error(e) => {
+                    stream_error = Some(e);
+                }
+            }
+        }
+    };
+
+    let (stream_res, _) = tokio::join!(stream_fut, recv_fut);
+    stream_res?;
+    if let Some(err) = stream_error {
+        return Err(anyhow::anyhow!(err));
+    }
+
+    Ok(crate::llm::LlmResponse {
+        content: text,
+        tool_calls,
+        input_tokens,
+        output_tokens,
+    })
+}
+
 pub struct AgentLoop {
     pub client: Box<dyn LlmClient>,
     pub registry: Arc<ToolRegistry>,
@@ -1151,6 +1214,11 @@ pub struct AgentLoop {
     /// Automatically trigger rolling-summary compaction once cumulative input
     /// tokens reach this threshold. `0` disables threshold-driven compaction.
     pub auto_compact_input_tokens_threshold: u32,
+    /// When true, main-loop LLM calls go through `LlmClient::stream` and
+    /// text deltas are forwarded as they arrive. When false, calls go
+    /// through `LlmClient::complete` and the full text is emitted once per
+    /// turn.
+    pub enable_streaming: bool,
 }
 
 impl AgentLoop {
@@ -2062,7 +2130,7 @@ impl AgentLoop {
                         model_candidate.clone(),
                         self.max_tokens,
                     )
-                    .with_stream(true)
+                    .with_stream(self.enable_streaming)
                     .with_vision_override(self.vision_override)
                     .build_for(provider_kind);
 
@@ -2087,7 +2155,12 @@ impl AgentLoop {
                                 info!("LLM call cancelled by user");
                                 break 'model_loop;
                             }
-                            r = self.client.complete(req.clone()) => r,
+                            r = llm_call_unified(
+                                self.client.as_ref(),
+                                req.clone(),
+                                self.enable_streaming,
+                                &event_tx,
+                            ) => r,
                         };
 
                         match llm_result {
@@ -2279,8 +2352,11 @@ impl AgentLoop {
                 .map(|tc| (tc.id.clone(), tc.name.clone(), tc.input.clone()))
                 .collect();
 
-            // Emit text delta as a single event
-            if !text_buf.is_empty() {
+            // In non-streaming mode we emit the whole response as a single
+            // `TextDelta`. Streaming mode already forwarded per-chunk deltas
+            // inside `llm_call_unified`, so re-emitting here would duplicate
+            // the text in the UI.
+            if !self.enable_streaming && !text_buf.is_empty() {
                 let _ = event_tx
                     .send(AgentEvent::TextDelta {
                         delta: text_buf.clone(),

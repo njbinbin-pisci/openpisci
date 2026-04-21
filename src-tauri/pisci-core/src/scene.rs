@@ -116,6 +116,12 @@ const HEARTBEAT_SUPERVISOR_TOOLS: &[&str] = &[
 pub struct ScenePolicy {
     pub registry_profile: RegistryProfile,
     pub allow_skill_loader: bool,
+    /// Whether user-configured MCP (Model Context Protocol) servers are
+    /// connected and their tools registered into this scene's registry.
+    /// Disabled for light-weight scenes (heartbeat / pool coordinator /
+    /// IM headless) so surprise network / subprocess I/O does not happen
+    /// during background paths.
+    pub allow_mcp_tools: bool,
     pub include_memory: bool,
     pub include_task_state: bool,
     pub include_pool_roster: bool,
@@ -146,6 +152,7 @@ impl ScenePolicy {
             SceneKind::MainChat => Self {
                 registry_profile: RegistryProfile::MainChat,
                 allow_skill_loader: true,
+                allow_mcp_tools: true,
                 include_memory: true,
                 include_task_state: true,
                 include_pool_roster: true,
@@ -158,6 +165,7 @@ impl ScenePolicy {
             SceneKind::PoolCoordinator => Self {
                 registry_profile: RegistryProfile::PoolCoordinator,
                 allow_skill_loader: false,
+                allow_mcp_tools: false,
                 include_memory: true,
                 include_task_state: true,
                 include_pool_roster: false,
@@ -170,6 +178,7 @@ impl ScenePolicy {
             SceneKind::KoiTask => Self {
                 registry_profile: RegistryProfile::KoiTask,
                 allow_skill_loader: true,
+                allow_mcp_tools: true,
                 include_memory: true,
                 include_task_state: false,
                 include_pool_roster: false,
@@ -182,6 +191,7 @@ impl ScenePolicy {
             SceneKind::IMHeadless => Self {
                 registry_profile: RegistryProfile::IMHeadless,
                 allow_skill_loader: false,
+                allow_mcp_tools: false,
                 include_memory: true,
                 include_task_state: true,
                 include_pool_roster: false,
@@ -194,6 +204,7 @@ impl ScenePolicy {
             SceneKind::HeartbeatSupervisor => Self {
                 registry_profile: RegistryProfile::HeartbeatSupervisor,
                 allow_skill_loader: false,
+                allow_mcp_tools: false,
                 include_memory: false,
                 include_task_state: false,
                 include_pool_roster: false,

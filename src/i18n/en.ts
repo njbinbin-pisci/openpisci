@@ -850,6 +850,8 @@ const en = {
     // Vision / multimodal
     visionEnabled: "Model supports vision (multimodal)",
     visionEnabledHint: "When enabled, images received via IM will be passed as visual input to the model. Auto-detected for Claude 3+, GPT-4o, Gemini, etc. Enable manually for custom model names.",
+    enableStreaming: "Enable streaming output",
+    enableStreamingHint: "When enabled, the main chat shows model replies as they stream in. When disabled, the full response appears at once after the turn completes.",
 
     // SSH Servers
     sshSection: "SSH Servers",

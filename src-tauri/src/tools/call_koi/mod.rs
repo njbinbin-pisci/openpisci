@@ -653,7 +653,8 @@ impl CallKoiTool {
             Some(state.settings.clone()),
             app_data_dir,
             skill_loader,
-        );
+        )
+        .await;
         // Replace the default call_koi (depth=0) with one scoped to this Koi.
         // The neutral kernel `pool_chat` tool already picks up the Koi's
         // identity from `ToolContext::memory_owner_id`, so we no longer

@@ -88,6 +88,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   heartbeat_interval_mins: 30,
   heartbeat_prompt: "检查是否有待处理任务，如无则回复 HEARTBEAT_OK",
   vision_enabled: false,
+  enable_streaming: false,
   ssh_servers: [],
   allow_multiple_instances: false,
 };
@@ -392,6 +393,19 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
               {t("settings.visionEnabled")}
             </label>
             <p className="field-hint" style={{ marginTop: 4 }}>{t("settings.visionEnabledHint")}</p>
+          </div>
+
+          <div className="form-group">
+            <label className="label" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={!!form.enable_streaming}
+                onChange={(e) => update("enable_streaming", e.target.checked)}
+                style={{ width: 16, height: 16, cursor: "pointer" }}
+              />
+              {t("settings.enableStreaming")}
+            </label>
+            <p className="field-hint" style={{ marginTop: 4 }}>{t("settings.enableStreamingHint")}</p>
           </div>
 
           {(form.provider === "anthropic" || !form.provider) && (

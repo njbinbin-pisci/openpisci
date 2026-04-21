@@ -61,3 +61,6 @@ windows = { version = "0.58", features = [
 ] }
 
 # The kernel intentionally does NOT depend on tauri or any GUI crate.
+
+[lints]
+workspace = true

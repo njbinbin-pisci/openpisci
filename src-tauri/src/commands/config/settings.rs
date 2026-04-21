@@ -276,6 +276,11 @@ pub async fn save_settings(state: State<'_, AppState>, updates: Value) -> Result
         settings.vision_enabled = v;
     }
 
+    // Streaming output
+    if let Some(v) = updates["enable_streaming"].as_bool() {
+        settings.enable_streaming = v;
+    }
+
     // SSH servers — full replacement when provided
     if let Some(arr) = updates["ssh_servers"].as_array() {
         let mut servers: Vec<SshServerConfig> = Vec::new();

@@ -167,9 +167,18 @@ pub struct HarnessConfig {
     /// per-provider request shape.
     pub provider_kind: ProviderKind,
 
-    /// Legacy single-threshold auto compaction. Kept during p5a migration.
+    /// Base auto-compact threshold in cumulative input tokens — the
+    /// user-configured knob that scene policy's `auto_compact_threshold_override`
+    /// can shadow (see `ScenePolicy::effective_auto_compact_threshold`).
     /// `0` disables threshold-driven compaction.
     pub auto_compact_input_tokens_threshold: u32,
+
+    /// When true, the agent loop asks the LLM client for SSE streaming
+    /// (`LlmClient::stream`) and forwards text deltas as they arrive so
+    /// the UI can render the response incrementally. When false (default)
+    /// the loop calls `LlmClient::complete` and emits a single bundled
+    /// `TextDelta` event per turn.
+    pub enable_streaming: bool,
 
     // ── Optional wiring ─────────────────────────────────────────────────
     /// Sqlite handle — only wired when this harness persists messages.
@@ -387,6 +396,15 @@ impl HarnessConfig {
         b.build()
     }
 
+    /// Post-construction override for the streaming flag. The scene
+    /// factories (`for_main_chat`, `for_koi`, …) accept a fixed argument
+    /// list to stay readable; hosts that need to toggle streaming at
+    /// runtime chain this setter between the factory and `into_agent_loop`.
+    pub fn with_streaming(mut self, enabled: bool) -> Self {
+        self.enable_streaming = enabled;
+        self
+    }
+
     /// Bridge: turn a harness config into the legacy
     /// [`crate::agent::loop_::AgentLoop`] value that existing call sites
     /// consume. p1 uses this during the incremental migration; later
@@ -418,6 +436,7 @@ impl HarnessConfig {
             vision_override: self.vision_override,
             notification_rx: notification_rx.map(tokio::sync::Mutex::new),
             auto_compact_input_tokens_threshold: self.auto_compact_input_tokens_threshold,
+            enable_streaming: self.enable_streaming,
         }
     }
 }
@@ -450,6 +469,7 @@ impl HarnessConfigBuilder {
             budget: LayeredBudget::default(),
             provider_kind,
             auto_compact_input_tokens_threshold: 0,
+            enable_streaming: false,
             persistence: None,
             summary_store: None,
             frame_provider: None,
@@ -493,6 +513,11 @@ impl HarnessConfigBuilder {
 
     pub fn with_auto_compact_threshold(mut self, tokens: u32) -> Self {
         self.inner.auto_compact_input_tokens_threshold = tokens;
+        self
+    }
+
+    pub fn with_streaming(mut self, enabled: bool) -> Self {
+        self.inner.enable_streaming = enabled;
         self
     }
 

@@ -849,6 +849,8 @@ const zh = {
     // Vision / multimodal
     visionEnabled: "模型支持视觉（多模态）",
     visionEnabledHint: "启用后，IM 收到的图片将作为视觉输入传给模型。已自动识别 Claude 3+、GPT-4o、Gemini 等主流模型，使用自定义模型名时可手动开启。",
+    enableStreaming: "启用流式输出",
+    enableStreamingHint: "启用后，主聊天窗口的模型回复会随生成逐字显示；关闭则整句回复完成后一次性出现。",
 
     // SSH Servers
     sshSection: "SSH 服务器",

@@ -2,6 +2,27 @@
 members = ["pisci-core", "pisci-kernel", "pisci-cli"]
 resolver = "2"
 
+# Workspace-wide lint policy. `cargo clippy --workspace` will treat all of
+# the rust warnings and the selected clippy lints below as hard errors, so
+# dead code / unused imports / obvious bugs can never sneak back in without
+# an explicit `#[allow(...)]` annotation at the call site.
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+# Correctness / bug-catching lints we want hard-enforced. Each entry is a
+# common foot-gun that's easy to accidentally commit during debugging.
+# `println!` / `eprintln!` remain allowed because CLI binaries and the
+# compaction evaluation harness legitimately write to stdout.
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+# Allow-list for patterns we intentionally keep; the default clippy profile
+# already warns on most of these, so listing them here documents intent.
+needless_return = "allow"
+module_inception = "allow"
+too_many_arguments = "allow"
+
 [workspace.dependencies]
 # Shared across workspace members
 chrono = { version = "0.4", features = ["serde"] }
@@ -133,6 +154,9 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[lints]
+workspace = true
 
 [profile.dev]
 incremental = true

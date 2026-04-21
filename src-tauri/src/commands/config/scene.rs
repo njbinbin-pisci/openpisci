@@ -8,6 +8,7 @@ pub use pisci_core::scene::{
 };
 use pisci_core::scene::RegistryProfile;
 use pisci_kernel::agent::tool::ToolRegistry;
+use pisci_kernel::tools::register_mcp_tools;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,7 +27,7 @@ pub fn load_skill_loader(app: &AppHandle) -> Option<SharedSkillLoader> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn build_registry_for_scene(
+pub async fn build_registry_for_scene(
     scene: SceneKind,
     browser: SharedBrowserManager,
     user_tools_dir: Option<&Path>,
@@ -38,6 +39,20 @@ pub fn build_registry_for_scene(
     skill_loader: Option<SharedSkillLoader>,
 ) -> ToolRegistry {
     let policy = ScenePolicy::for_kind(scene);
+
+    // Snapshot MCP server configs before the Settings mutex is moved into
+    // `DesktopHostTools`. Only scenes that opt-in (main-chat / koi task)
+    // actually touch MCP — everyone else skips the I/O.
+    let mcp_servers = if policy.allow_mcp_tools {
+        if let Some(ref settings_arc) = settings {
+            let guard = settings_arc.lock().await;
+            guard.mcp_servers.clone()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
 
     // `fill_pool_defaults()` auto-populates the four kernel pool seams
     // (event_sink / plan_store / pool_event_sink / pool_mention_dispatcher)
@@ -74,6 +89,13 @@ pub fn build_registry_for_scene(
 
     if let Some(allowlist) = policy.tool_allowlist() {
         registry.retain(|tool| allowlist.contains(&tool.name()));
+    }
+
+    // MCP tools are registered *after* the allowlist filter — their tool
+    // names are user-configured (e.g. `git.status`, `notion.search`) and
+    // cannot be enumerated statically, so the allowlist would strip them.
+    if !mcp_servers.is_empty() {
+        register_mcp_tools(&mut registry, &mcp_servers).await;
     }
 
     registry

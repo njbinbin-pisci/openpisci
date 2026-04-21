@@ -104,6 +104,8 @@ export interface Settings {
   heartbeat_prompt: string;
   // Vision / multimodal
   vision_enabled: boolean;
+  /** When true, main-chat LLM responses stream as they arrive. Default false. */
+  enable_streaming: boolean;
   // SSH Servers
   ssh_servers?: SshServerConfig[];
   // Named LLM Providers

@@ -541,7 +541,8 @@ async fn build_chat_prompt_artifacts(
         Some(state.settings.clone()),
         app_data_dir,
         skill_loader_arc,
-    );
+    )
+    .await;
     let registry = Arc::new(registry);
     // Chat budget estimation uses the same Minimal injection mode the
     // harness will actually send, so the token accounting stays honest.
@@ -1039,11 +1040,12 @@ pub async fn chat_send(
     // Main pisci chat — uses the persistent, UI-attached harness
     // shape. Per-run plumbing (`notification_rx`, confirmations) is
     // passed to the bridge rather than stored in the config.
-    let (fallback_models, compaction_settings) = {
+    let (fallback_models, compaction_settings, enable_streaming) = {
         let settings = state.settings.lock().await;
         (
             settings.fallback_models.clone(),
             pisci_kernel::agent::harness::config::CompactionSettings::from_settings(&settings),
+            settings.enable_streaming,
         )
     };
     let agent = pisci_kernel::agent::harness::HarnessConfig::for_main_chat(
@@ -1064,6 +1066,7 @@ pub async fn chat_send(
         state.db.clone(),
         state.plan_state.clone(),
     )
+    .with_streaming(enable_streaming)
     .into_agent_loop(client, None, Some(state.confirmation_responses.clone()));
 
     let ctx = ToolContext {
@@ -1594,7 +1597,8 @@ pub async fn run_agent_headless(
         Some(state.settings.clone()),
         app_data_dir_h,
         None,
-    );
+    )
+    .await;
     let registry = Arc::new(registry);
     let policy = Arc::new(PolicyGate::with_profile_and_flags(
         &workspace_root,
