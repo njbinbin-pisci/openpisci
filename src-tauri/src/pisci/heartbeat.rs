@@ -1,7 +1,7 @@
 use crate::commands::chat::{run_agent_headless, HeadlessRunOptions, SESSION_SOURCE_PISCI_POOL};
 use crate::commands::scene::SceneKind;
-use crate::koi::bridge;
-use crate::koi::KoiTodo;
+use crate::pool::bridge;
+use crate::pool::KoiTodo;
 use crate::store::AppState;
 pub use pisci_core::heartbeat::{
     build_pool_heartbeat_message, collect_pool_attention, PoolAttention,

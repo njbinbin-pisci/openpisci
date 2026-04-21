@@ -504,7 +504,7 @@ fn run_impl(
                 tauri::async_runtime::spawn(async move {
                     {
                         let (stale_koi, stale_todo) =
-                            crate::koi::bridge::watchdog_recover(db_arc.clone(), 0).await;
+                            crate::pool::bridge::watchdog_recover(db_arc.clone(), 0).await;
                         let stale_sessions = {
                             let db = db_arc.lock().await;
                             db.recover_stale_running_sessions(0).unwrap_or(0)
@@ -517,7 +517,7 @@ fn run_impl(
                                 stale_sessions
                             );
                         }
-                        match crate::koi::bridge::activate_pending_todos_arc(
+                        match crate::pool::bridge::activate_pending_todos_arc(
                             &app_h,
                             db_arc.clone(),
                             None,
@@ -543,7 +543,7 @@ fn run_impl(
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                     loop {
                         let (stale_koi, stale_todo) =
-                            crate::koi::bridge::watchdog_recover(db_arc.clone(), 600).await;
+                            crate::pool::bridge::watchdog_recover(db_arc.clone(), 600).await;
                         let stale_sessions = {
                             let db = db_arc.lock().await;
                             db.recover_stale_running_sessions(600).unwrap_or(0)
@@ -557,7 +557,7 @@ fn run_impl(
                             );
                         }
 
-                        match crate::koi::bridge::activate_pending_todos_arc(
+                        match crate::pool::bridge::activate_pending_todos_arc(
                             &app_h,
                             db_arc.clone(),
                             None,

@@ -1,3 +1,17 @@
+//! call_koi tool — lets Pisci or another Koi delegate a task to a
+//! persistent Koi agent.
+//!
+//! This module bundles the in-process desktop path:
+//! - [`CallKoiTool`] and its [`Tool`] impl (this file, below)
+//! - [`runtime`] — slot / soft-fence / Koi-session plumbing
+//! - [`event_bus`] — `AgentEvent` publisher that reaches the Tauri UI
+//!
+//! Callers go through [`CallKoiTool`]; [`runtime`] and [`event_bus`]
+//! are crate-internal glue used by the tool and its reconciliation path.
+
+pub mod event_bus;
+pub mod runtime;
+
 use crate::commands::scene::{build_registry_for_scene, load_skill_loader, SceneKind, ScenePolicy};
 use crate::store::db::TaskSpine;
 use crate::store::AppState;
@@ -567,7 +581,7 @@ impl CallKoiTool {
 
         // Mark Koi as busy only after we know execution can actually start.
         if !self.managed_externally {
-            let acquired = crate::koi::runtime::try_acquire_managed_run_slot(
+            let acquired = crate::tools::call_koi::runtime::try_acquire_managed_run_slot(
                 &state.app_handle,
                 &state.db,
                 &koi_id,
@@ -800,7 +814,7 @@ impl CallKoiTool {
 
             // Mark Koi as idle
             if !managed_externally {
-                crate::koi::runtime::release_managed_run_slot(
+                crate::tools::call_koi::runtime::release_managed_run_slot(
                     &app_bg,
                     &db_bg,
                     &koi_id_bg,
@@ -845,7 +859,7 @@ impl CallKoiTool {
 
                     if let Some(ref pool_sid) = pool_session_id_bg {
                         if managed_externally {
-                            crate::koi::runtime::reconcile_managed_pool_completion(
+                            crate::tools::call_koi::runtime::reconcile_managed_pool_completion(
                                 &app_bg,
                                 &db_bg,
                                 pool_sid,
@@ -888,7 +902,7 @@ impl CallKoiTool {
                     }
                     if let Some(ref pool_sid) = pool_session_id_bg {
                         if managed_externally {
-                            crate::koi::runtime::reconcile_managed_pool_completion(
+                            crate::tools::call_koi::runtime::reconcile_managed_pool_completion(
                                 &app_bg,
                                 &db_bg,
                                 pool_sid,

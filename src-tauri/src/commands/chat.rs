@@ -394,9 +394,9 @@ fn should_include_main_chat_collaboration_context(
 
 fn render_pool_context_snapshot(
     scene_policy: ScenePolicy,
-    pool: Option<&crate::koi::PoolSession>,
-    pool_todos: &[crate::koi::KoiTodo],
-    recent_messages: &[crate::koi::PoolMessage],
+    pool: Option<&crate::pool::PoolSession>,
+    pool_todos: &[crate::pool::KoiTodo],
+    recent_messages: &[crate::pool::PoolMessage],
 ) -> String {
     if !scene_policy.include_pool_context
         || matches!(scene_policy.pool_snapshot_mode(), PoolSnapshotMode::Off)

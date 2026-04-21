@@ -11,10 +11,10 @@ mod gateway;
 pub mod headless_cli;
 pub mod host;
 
-pub mod koi;
 #[cfg(test)]
 mod live_smoke;
 mod pisci;
+pub mod pool;
 mod skills;
 pub mod store;
 mod tools;

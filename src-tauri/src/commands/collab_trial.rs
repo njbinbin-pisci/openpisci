@@ -6,7 +6,7 @@
 /// - All events stream to the Chat Pool and Board in real-time
 ///
 /// The user can observe the full collaboration in the Pond UI.
-use crate::koi::bridge;
+use crate::pool::bridge;
 use crate::store::AppState;
 use pisci_core::project_state::{
     assess_project_state, ProjectAssessment as TrialAssessment, ProjectDecision as TrialDecision,
@@ -186,9 +186,9 @@ fn normalize_trial_text(value: &str) -> String {
 
 fn ensure_trial_koi(
     db: &crate::store::db::Database,
-    all_kois: &mut Vec<crate::koi::KoiDefinition>,
+    all_kois: &mut Vec<crate::pool::KoiDefinition>,
     spec: &TrialKoiSpec,
-) -> Result<crate::koi::KoiDefinition, String> {
+) -> Result<crate::pool::KoiDefinition, String> {
     let role_key = normalize_trial_text(spec.role.as_str());
     if let Some(existing) = all_kois
         .iter()
@@ -296,9 +296,9 @@ fn push_trial_observation(
 
 fn trial_koi_name<'a>(
     sender_id: &str,
-    lead: &'a crate::koi::KoiDefinition,
-    second: &'a crate::koi::KoiDefinition,
-    third: &'a crate::koi::KoiDefinition,
+    lead: &'a crate::pool::KoiDefinition,
+    second: &'a crate::pool::KoiDefinition,
+    third: &'a crate::pool::KoiDefinition,
 ) -> &'a str {
     if sender_id == lead.id {
         lead.name.as_str()
@@ -332,8 +332,8 @@ fn trial_koi_runtime_active(run_slot_active: bool, checkpoint_running: bool) -> 
 }
 
 pub(crate) fn assess_trial_project_state(
-    messages: &[crate::koi::PoolMessage],
-    todos: &[crate::koi::KoiTodo],
+    messages: &[crate::pool::PoolMessage],
+    todos: &[crate::pool::KoiTodo],
     koi_ids: &[String],
 ) -> TrialAssessment {
     assess_project_state(messages, todos, koi_ids)
@@ -627,11 +627,13 @@ pub async fn run_collaboration_trial_with_state(
             .map(|k| k.status.as_str())
             .unwrap_or("unknown");
         let lead_run_active =
-            crate::koi::runtime::is_koi_run_slot_active(&lead.id, Some(&pool.id)).await;
+            crate::tools::call_koi::runtime::is_koi_run_slot_active(&lead.id, Some(&pool.id)).await;
         let second_run_active =
-            crate::koi::runtime::is_koi_run_slot_active(&second.id, Some(&pool.id)).await;
+            crate::tools::call_koi::runtime::is_koi_run_slot_active(&second.id, Some(&pool.id))
+                .await;
         let third_run_active =
-            crate::koi::runtime::is_koi_run_slot_active(&third.id, Some(&pool.id)).await;
+            crate::tools::call_koi::runtime::is_koi_run_slot_active(&third.id, Some(&pool.id))
+                .await;
         let lead_effective_status = effective_trial_koi_status(
             lead_status,
             trial_koi_runtime_active(lead_run_active, lead_checkpoint_running),

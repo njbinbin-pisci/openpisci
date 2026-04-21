@@ -13,8 +13,8 @@ use serde::Deserialize;
 use tauri::State;
 
 use crate::host::DesktopEventSink;
-use crate::koi::bridge;
-use crate::koi::KoiTodo;
+use crate::pool::bridge;
+use crate::pool::KoiTodo;
 use crate::store::AppState;
 
 fn pool_sink(app: &tauri::AppHandle) -> Arc<DesktopEventSink> {

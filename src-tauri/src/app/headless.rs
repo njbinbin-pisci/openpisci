@@ -131,7 +131,7 @@ fn cli_extra_system_context(request: &HeadlessCliRequest) -> String {
 async fn resolve_cli_pool(
     state: &store::AppState,
     request: &HeadlessCliRequest,
-) -> Result<crate::koi::PoolSession, String> {
+) -> Result<crate::pool::PoolSession, String> {
     let db = state.db.lock().await;
     if let Some(requested) = request
         .pool_id

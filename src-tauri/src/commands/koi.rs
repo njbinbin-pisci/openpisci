@@ -3,8 +3,8 @@ use crate::commands::chat::{
     pool_pisci_session_id, run_agent_headless, HeadlessRunOptions, SESSION_SOURCE_PISCI_POOL,
 };
 use crate::commands::scene::SceneKind;
-use crate::koi::{KoiDefinition, KOI_COLORS, KOI_ICONS};
 use crate::pisci::heartbeat::ensure_heartbeat_session;
+use crate::pool::{KoiDefinition, KOI_COLORS, KOI_ICONS};
 use crate::store::AppState;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};

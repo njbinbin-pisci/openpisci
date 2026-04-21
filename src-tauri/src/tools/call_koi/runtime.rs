@@ -5,7 +5,7 @@
 //! (execute_todo / handle_mention / resume_todo / replace_todo / watchdog
 //! / activate_pending / …). Those responsibilities now live in
 //! [`pisci_kernel::pool::coordinator`], and production desktop commands
-//! reach the kernel via [`crate::koi::bridge`].
+//! reach the kernel via [`crate::pool::bridge`].
 //!
 //! What remains here is deliberately scoped to the in-process Koi path
 //! Pisci still uses when it invokes a Koi as a tool call
@@ -19,9 +19,9 @@
 //! * `KOI_SESSIONS` / `PENDING_KOI_NOTIFICATIONS` — notification channels
 //!   so a currently-running in-process Koi can be nudged mid-turn.
 
-use crate::koi::event_bus::EventBus;
-use crate::koi::{KoiDefinition, KoiTodo};
+use crate::pool::{KoiDefinition, KoiTodo};
 use crate::store::Database;
+use crate::tools::call_koi::event_bus::EventBus;
 use once_cell::sync::Lazy;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -369,13 +369,9 @@ pub(crate) async fn reconcile_managed_pool_completion(
 }
 
 impl KoiRuntime {
-    pub fn new(bus: Arc<dyn EventBus>) -> Self {
-        Self { bus }
-    }
-
     /// Convenience constructor: build from a Tauri `AppHandle`.
     pub fn from_tauri(app: AppHandle, db: Arc<Mutex<Database>>) -> Self {
-        let bus = Arc::new(crate::koi::event_bus::TauriEventBus { app, db_ref: db });
+        let bus = Arc::new(crate::tools::call_koi::event_bus::TauriEventBus { app, db_ref: db });
         Self { bus }
     }
 

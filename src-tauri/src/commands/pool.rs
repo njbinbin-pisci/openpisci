@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use crate::host::DesktopEventSink;
-use crate::koi::bridge;
-use crate::koi::{PoolMessage, PoolSession};
+use crate::pool::bridge;
+use crate::pool::{PoolMessage, PoolSession};
 use crate::store::AppState;
 use pisci_core::host::{PoolEvent, PoolEventSink, PoolMessageSnapshot, PoolSessionSnapshot};
 use serde::Deserialize;
