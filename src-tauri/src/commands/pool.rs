@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use crate::host::DesktopEventSink;
-use crate::koi::runtime::KoiRuntime;
+use crate::koi::bridge;
 use crate::koi::{PoolMessage, PoolSession};
 use crate::store::AppState;
 use pisci_core::host::{PoolEvent, PoolEventSink, PoolMessageSnapshot, PoolSessionSnapshot};
@@ -147,7 +147,9 @@ pub async fn send_pool_message(
 
     emit_message(&app, &msg);
 
-    // Auto-detect @mention and dispatch to Koi asynchronously
+    // Auto-detect @mention and dispatch to Koi asynchronously via the
+    // kernel coordinator. The coordinator reuses the same PoolStore
+    // (SQLite DB) and queues each mention as its own subprocess turn.
     if input.content.contains('@') && input.sender_id != "system" {
         let app_clone = app.clone();
         let db_arc = state.db.clone();
@@ -155,15 +157,10 @@ pub async fn send_pool_message(
         let pool_sid = input.session_id.clone();
         let content = input.content.clone();
         tokio::spawn(async move {
-            let runtime = KoiRuntime::from_tauri(app_clone, db_arc);
-            match runtime.handle_mention(&sender, &pool_sid, &content).await {
-                Ok(results) if !results.is_empty() => {
-                    tracing::info!("Auto @mention dispatch: {} Koi activated", results.len());
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!("Auto @mention dispatch failed: {}", e);
-                }
+            if let Err(e) =
+                bridge::handle_mention_arc(&app_clone, db_arc, &sender, &pool_sid, &content).await
+            {
+                tracing::warn!("Auto @mention dispatch failed: {e}");
             }
         });
     }
@@ -217,7 +214,6 @@ pub async fn dispatch_koi_task(
     priority: Option<String>,
     timeout_secs: Option<u32>,
 ) -> Result<serde_json::Value, String> {
-    let runtime = KoiRuntime::from_tauri(app.clone(), state.db.clone());
     let priority = priority.as_deref().unwrap_or("medium");
 
     if let Some(ref psid) = pool_session_id {
@@ -253,23 +249,24 @@ pub async fn dispatch_koi_task(
             emit_message(&app, &msg);
         }
 
-        let results = runtime
-            .handle_mention("user", psid, &mention_content)
+        // Fan out via the kernel coordinator. Dispatch is async — the
+        // subprocess turn streams events separately; we just confirm
+        // the mention was accepted.
+        bridge::handle_mention(&app, &state, "user", psid, &mention_content)
             .await
             .map_err(|e| e.to_string())?;
 
-        let reply = if results.is_empty() {
-            format!("Task posted to pool. @{} has been notified.", koi_name)
-        } else {
-            results[0].reply.clone()
-        };
-
         Ok(json!({
             "success": true,
-            "reply": reply,
+            "reply": format!("Task posted to pool. @{} has been notified.", koi_name),
             "result_message_id": null,
         }))
     } else {
+        // Direct-assign path (no pool): still handled by the legacy
+        // desktop KoiRuntime until a headless equivalent ships in
+        // pisci-kernel. The kernel already owns the pool-scoped
+        // critical path above.
+        let runtime = crate::koi::runtime::KoiRuntime::from_tauri(app.clone(), state.db.clone());
         let result = runtime
             .assign_and_execute(&koi_id, &task, "user", None, priority, timeout_secs)
             .await
@@ -433,10 +430,11 @@ pub async fn resume_pool_session(
     let db_arc = state.db.clone();
     let pool_id = id.clone();
     tokio::spawn(async move {
-        let runtime = KoiRuntime::from_tauri(app_clone, db_arc);
-        let _ = runtime
-            .handle_mention("system", &pool_id, &resume_msg)
-            .await;
+        if let Err(e) =
+            bridge::handle_mention_arc(&app_clone, db_arc, "system", &pool_id, &resume_msg).await
+        {
+            tracing::warn!("resume_pool_session mention dispatch failed: {e}");
+        }
     });
 
     emit_pool_status(&app, &session, false);
@@ -501,7 +499,10 @@ pub async fn archive_pool_session(
     Ok(())
 }
 
-/// Handle an @mention in a pool message, dispatching to the mentioned Koi.
+/// Handle an @mention in a pool message, dispatching to the mentioned
+/// Koi via the kernel coordinator. Returns immediately once dispatch is
+/// accepted — the actual Koi turns stream back through `pool_event_*`
+/// Tauri events as their subprocesses progress.
 #[tauri::command]
 pub async fn handle_pool_mention(
     app: tauri::AppHandle,
@@ -510,25 +511,8 @@ pub async fn handle_pool_mention(
     pool_session_id: String,
     content: String,
 ) -> Result<Option<serde_json::Value>, String> {
-    let runtime = KoiRuntime::from_tauri(app, state.db.clone());
-    match runtime
-        .handle_mention(&sender_id, &pool_session_id, &content)
-        .await
-    {
-        Ok(results) if !results.is_empty() => {
-            let items: Vec<serde_json::Value> = results
-                .iter()
-                .map(|r| {
-                    json!({
-                        "success": r.success,
-                        "reply": r.reply,
-                        "result_message_id": r.result_message_id,
-                    })
-                })
-                .collect();
-            Ok(Some(json!({ "results": items })))
-        }
-        Ok(_) => Ok(None),
+    match bridge::handle_mention(&app, &state, &sender_id, &pool_session_id, &content).await {
+        Ok(()) => Ok(Some(json!({ "dispatched": true }))),
         Err(e) => Err(e.to_string()),
     }
 }

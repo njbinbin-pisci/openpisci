@@ -13,7 +13,7 @@ use serde::Deserialize;
 use tauri::State;
 
 use crate::host::DesktopEventSink;
-use crate::koi::runtime::KoiRuntime;
+use crate::koi::bridge;
 use crate::koi::KoiTodo;
 use crate::store::AppState;
 
@@ -155,10 +155,9 @@ pub async fn resume_koi_todo(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
-    let runtime = KoiRuntime::from_tauri(app, state.db.clone());
-    runtime
-        .resume_todo(&id, "user")
+    bridge::resume_todo(&app, &state, &id, "user")
         .await
+        .map(|_| ())
         .map_err(|e| e.to_string())
 }
 

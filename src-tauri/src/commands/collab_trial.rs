@@ -7,7 +7,7 @@
 /// - All events stream to the Chat Pool and Board in real-time
 ///
 /// The user can observe the full collaboration in the Pond UI.
-use crate::koi::runtime::KoiRuntime;
+use crate::koi::bridge;
 use crate::store::AppState;
 use pisci_core::project_state::{
     assess_project_state, ProjectAssessment as TrialAssessment, ProjectDecision as TrialDecision,
@@ -364,7 +364,6 @@ pub async fn run_collaboration_trial_with_state(
     );
 
     let app_handle = app.clone();
-    let runtime = KoiRuntime::from_tauri(app.clone(), state.db.clone());
     let mut status = TrialStatus {
         phase: "setup".into(),
         pool_id: String::new(),
@@ -513,25 +512,15 @@ pub async fn run_collaboration_trial_with_state(
 
     // Wake the lead specialist via @mention — the agent reads the pool and decides autonomously.
     let chain_start = std::time::Instant::now();
-    let lead_results = runtime
-        .handle_mention("pisci", &pool.id, &task_message)
-        .await;
+    let lead_results =
+        bridge::handle_mention(&app_handle, state, "pisci", &pool.id, &task_message).await;
 
     let kickoff_preview = match &lead_results {
-        Ok(results) if !results.is_empty() => {
-            let first = &results[0];
-            format!(
-                "Initial @mention dispatched to {}. Runtime returned {} result(s). First result success={}, preview={}",
-                lead.name,
-                results.len(),
-                first.success,
-                first.reply.chars().take(160).collect::<String>()
-            )
-        }
-        Ok(_) => {
-            "Initial @mention returned no execution result. The trial could not confirm that the first specialist was activated."
-                .to_string()
-        }
+        Ok(()) => format!(
+            "Initial @mention dispatched to {}. Subprocess turn is running — \
+             results will stream via pool events.",
+            lead.name
+        ),
         Err(e) => format!("Initial @mention dispatch failed: {}", e),
     };
     push_trial_observation(
@@ -539,12 +528,12 @@ pub async fn run_collaboration_trial_with_state(
         "kickoff_dispatch",
         "Pisci",
         format!("Kick off collaboration with @{}", lead.name),
-        matches!(&lead_results, Ok(results) if !results.is_empty()),
+        lead_results.is_ok(),
         kickoff_preview.clone(),
         chain_start.elapsed().as_millis() as u64,
     );
 
-    if !matches!(&lead_results, Ok(results) if !results.is_empty()) {
+    if lead_results.is_err() {
         set_trial_error(
             &mut status,
             "debug.multiAgentTrialTaskFailed",
