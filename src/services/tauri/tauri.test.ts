@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { settingsApi, sessionsApi, chatApi, skillsApi, schedulerApi, memoryApi, auditApi } from "./tauri";
+import { settingsApi, sessionsApi, chatApi, skillsApi, schedulerApi, memoryApi, auditApi } from ".";
 
 const mockInvoke = vi.mocked(invoke);
 
