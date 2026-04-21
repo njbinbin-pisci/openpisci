@@ -1,5 +1,5 @@
 [workspace]
-members = ["pisci-core"]
+members = ["pisci-core", "pisci-kernel", "pisci-cli"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -7,11 +7,18 @@ resolver = "2"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+async-trait = "0.1"
+anyhow = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 pisci-core = { path = "pisci-core" }
+pisci-kernel = { path = "pisci-kernel" }
+pisci-cli = { path = "pisci-cli" }
 
 [package]
 name = "pisci-desktop"
-version = "0.6.0"
+version = "0.7.0"
 description = "OpenPisci 锟?Open-source Windows AI Agent Desktop"
 authors = ["Pisci Team"]
 license = "Apache-2.0"
@@ -28,6 +35,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # Pure collaboration/core logic
 pisci-core = { workspace = true }
+pisci-kernel = { workspace = true }
+pisci-cli = { workspace = true }
 
 # Tauri
 tauri = { version = "2", features = ["tray-icon"] }

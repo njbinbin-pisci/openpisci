@@ -4,6 +4,9 @@ import react from "@vitejs/plugin-react";
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
+  // Use relative asset paths so desktop builds can load bundled files
+  // regardless of how the app protocol/root is resolved at runtime.
+  base: "./",
   plugins: [react()],
   clearScreen: false,
   server: {

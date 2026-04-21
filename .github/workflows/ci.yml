@@ -37,10 +37,70 @@ jobs:
         run: npm test
 
   # ──────────────────────────────────────────────────────────────────────────
-  # Rust: clippy → test → build
+  # Rust kernel / CLI: OS/UI-neutral crates build on any platform
   # ──────────────────────────────────────────────────────────────────────────
-  rust:
-    name: Rust (clippy · test · build)
+  rust-kernel:
+    name: Rust kernel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: src-tauri
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Rust format check (kernel crates)
+        run: cargo fmt -p pisci-core -p pisci-kernel -p pisci-cli --check
+
+      - name: Clippy (kernel crates)
+        run: cargo clippy -p pisci-core -p pisci-kernel -p pisci-cli --all-targets -- -D warnings
+
+      - name: Unit tests (kernel crates)
+        run: cargo test -p pisci-core -p pisci-kernel -p pisci-cli --lib --bins
+
+      - name: Build openpisci-headless
+        run: cargo build -p pisci-cli --release --bin openpisci-headless
+
+      # Linux-only, because the headless binary is the reference cross-platform
+      # entry point. Running it here prevents the CLI surface (args parsing,
+      # capabilities JSON, pool-mode rejection) from drifting without the
+      # desktop crate's Windows-specific rebuild picking it up.
+      - name: Headless integration tests (Linux only)
+        if: runner.os == 'Linux'
+        run: cargo test -p pisci-cli --test headless_cli
+
+      # Opt-in end-to-end LLM smoke — only runs when the repo has
+      # `OPENPISCI_TEST_API_KEY` configured as a secret. Without the
+      # secret the e2e test skips itself (still exits 0), so this step
+      # is safe to leave in the matrix permanently.
+      - name: Headless end-to-end LLM smoke (Linux, opt-in)
+        if: runner.os == 'Linux'
+        env:
+          OPENPISCI_TEST_API_KEY: ${{ secrets.OPENPISCI_TEST_API_KEY }}
+          OPENPISCI_TEST_PROVIDER: ${{ vars.OPENPISCI_TEST_PROVIDER }}
+          OPENPISCI_TEST_MODEL: ${{ vars.OPENPISCI_TEST_MODEL }}
+          OPENPISCI_TEST_BASE_URL: ${{ vars.OPENPISCI_TEST_BASE_URL }}
+        run: cargo test -p pisci-cli --test headless_cli -- e2e_run_returns_answer_with_real_api_key --nocapture
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Desktop host (Tauri) — Windows-only because the current host links against
+  # Windows-specific tools (UIA, screen, COM, PowerShell, …).
+  # ──────────────────────────────────────────────────────────────────────────
+  rust-desktop:
+    name: Rust desktop (clippy · test · build)
     runs-on: windows-latest
     defaults:
       run:
@@ -86,7 +146,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   package:
     name: Tauri Bundle
-    needs: [frontend, rust]
+    needs: [frontend, rust-kernel, rust-desktop]
     runs-on: windows-latest
     # Required for softprops/action-gh-release to upload assets on tag pushes (default GITHUB_TOKEN is read-only otherwise).
     permissions:

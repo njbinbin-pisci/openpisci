@@ -1,0 +1,63 @@
+[package]
+name = "pisci-kernel"
+version = "0.7.0"
+edition = "2021"
+description = "OpenPisci agent runtime kernel — OS/UI-neutral agent loop, LLM, storage, memory and platform-neutral tools."
+
+[dependencies]
+pisci-core = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# Storage — SQLite bundled to avoid external DLL dependency.
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# HTTP client used by LLM adapters.
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "multipart", "gzip", "deflate", "brotli"], default-features = false }
+
+# LLM streaming primitives.
+futures = "0.3"
+
+# Policy / security.
+regex = "1"
+once_cell = "1"
+chacha20poly1305 = "0.10"
+hex = "0.4"
+getrandom = "0.2"
+base64 = "0.22"
+
+# Scheduler.
+tokio-cron-scheduler = "0.13"
+
+# Utilities.
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+dirs = "5"
+urlencoding = "2"
+
+# Neutral tools.
+scraper = "0.25.0"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "hostname", "pool", "tokio1-rustls-tls"] }
+imap = "2.4.1"
+native-tls = "0.2"
+mailparse = "0.15"
+russh = { version = "0.57", default-features = false, features = ["ring"] }
+lopdf = { version = "0.34", features = ["nom_parser"] }
+pdf-extract = "0.7"
+encoding_rs = "0.8.35"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# Windows-only utilities used by the `elevate` helper (UAC relaunch).
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# The kernel intentionally does NOT depend on tauri or any GUI crate.

@@ -1,6 +1,6 @@
 use crate::browser::download;
+use crate::host::DesktopHostTools;
 use crate::store::AppState;
-use crate::tools;
 use serde::Serialize;
 use std::collections::HashMap;
 use tauri::State;
@@ -233,16 +233,12 @@ pub async fn get_runtime_capabilities(
     let vm = get_vm_status().await?;
 
     let settings = state.settings.lock().await.clone();
-    let registry = tools::build_registry(
-        state.browser.clone(),
-        None,
-        None,
-        Some(&settings.builtin_tool_enabled),
-        None,
-        None,
-        None,
-        None,
-    );
+    let registry = DesktopHostTools {
+        browser: Some(state.browser.clone()),
+        builtin_tool_enabled: Some(settings.builtin_tool_enabled.clone()),
+        ..Default::default()
+    }
+    .build_registry();
     let tools = registry
         .all()
         .iter()

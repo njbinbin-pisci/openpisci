@@ -1,6 +1,9 @@
 use crate::{
     commands, gateway,
-    headless_cli::{DisabledToolInfo, HeadlessCliMode, HeadlessCliRequest, HeadlessCliResponse, PoolWaitSummary},
+    headless_cli::{
+        disabled_tools_for_mode, tool_profile, DisabledToolInfo, HeadlessCliMode,
+        HeadlessCliRequest, HeadlessCliResponse, PoolWaitSummary,
+    },
     scheduler, store, tools,
 };
 use serde_json::json;
@@ -62,6 +65,55 @@ fn guess_mime_from_path(path: &str) -> String {
 }
 
 type CliResultSink = Arc<StdMutex<Option<Result<HeadlessCliResponse, String>>>>;
+
+fn persist_headless_cli_result(
+    output: Option<&str>,
+    result: &Result<HeadlessCliResponse, String>,
+) -> Result<(), String> {
+    match result {
+        Ok(response) => {
+            let json = serde_json::to_string_pretty(response)
+                .map_err(|e| format!("Serialize failed: {}", e))?;
+            if let Some(path) = output.map(str::trim).filter(|s| !s.is_empty()) {
+                let path = std::path::Path::new(path);
+                if let Some(parent) = path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent).map_err(|e| {
+                            format!("Failed to create '{}': {}", parent.display(), e)
+                        })?;
+                    }
+                }
+                std::fs::write(path, format!("{}\n", json))
+                    .map_err(|e| format!("Failed to write '{}': {}", path.display(), e))?;
+            } else {
+                println!("{}", json);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            if let Some(path) = output.map(str::trim).filter(|s| !s.is_empty()) {
+                let path = std::path::Path::new(path);
+                if let Some(parent) = path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent).map_err(|e| {
+                            format!("Failed to create '{}': {}", parent.display(), e)
+                        })?;
+                    }
+                }
+                let payload = serde_json::json!({
+                    "ok": false,
+                    "error": error,
+                });
+                std::fs::write(path, format!("{}\n", payload))
+                    .map_err(|e| format!("Failed to write '{}': {}", path.display(), e))?;
+            }
+            if !error.is_empty() {
+                eprintln!("{}", error);
+            }
+            Err(error.clone())
+        }
+    }
+}
 
 fn default_app_data_dir() -> std::path::PathBuf {
     dirs::data_local_dir()
@@ -178,13 +230,7 @@ fn clone_state(state: &store::AppState, app_handle: &tauri::AppHandle) -> store:
 }
 
 fn cli_disabled_tools(mode: HeadlessCliMode) -> Vec<DisabledToolInfo> {
-    tools::runtime_disabled_tools(mode.tool_profile())
-        .into_iter()
-        .map(|tool| DisabledToolInfo {
-            name: tool.name.to_string(),
-            reason: tool.reason.unwrap_or("Disabled by runtime profile.").to_string(),
-        })
-        .collect()
+    disabled_tools_for_mode(mode)
 }
 
 fn cli_extra_system_context(request: &HeadlessCliRequest) -> String {
@@ -268,8 +314,12 @@ async fn resolve_cli_pool(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("Headless Pool Run");
-    db.create_pool_session_with_dir(name, request.workspace.as_deref(), request.task_timeout_secs.unwrap_or(0))
-        .map_err(|e| e.to_string())
+    db.create_pool_session_with_dir(
+        name,
+        request.workspace.as_deref(),
+        request.task_timeout_secs.unwrap_or(0),
+    )
+    .map_err(|e| e.to_string())
 }
 
 async fn wait_for_pool_completion(
@@ -367,7 +417,10 @@ async fn run_cli_headless_request(
     let (builtin_tool_overrides, workspace_override) = {
         let settings = state.settings.lock().await;
         (
-            tools::apply_runtime_tool_profile(&settings.builtin_tool_enabled, request.mode.tool_profile()),
+            tools::apply_runtime_tool_profile(
+                &settings.builtin_tool_enabled,
+                tool_profile(request.mode),
+            ),
             request
                 .workspace
                 .as_deref()
@@ -402,10 +455,13 @@ async fn run_cli_headless_request(
         }
     };
 
-    let session_title = request.session_title.clone().unwrap_or_else(|| match request.mode {
-        HeadlessCliMode::Pisci => "Headless CLI Task".to_string(),
-        HeadlessCliMode::Pool => "Headless Pool Coordinator".to_string(),
-    });
+    let session_title = request
+        .session_title
+        .clone()
+        .unwrap_or_else(|| match request.mode {
+            HeadlessCliMode::Pisci => "Headless CLI Task".to_string(),
+            HeadlessCliMode::Pool => "Headless Pool Coordinator".to_string(),
+        });
     let session_source = Some(match request.mode {
         HeadlessCliMode::Pisci => "headless_cli".to_string(),
         HeadlessCliMode::Pool => commands::chat::SESSION_SOURCE_PISCI_POOL.to_string(),
@@ -420,6 +476,7 @@ async fn run_cli_headless_request(
         scene_kind: Some(scene_kind),
         workspace_root_override: workspace_override,
         builtin_tool_overrides,
+        context_toggles: request.context_toggles.clone(),
     };
 
     let (response_text, _, _) = commands::chat::run_agent_headless(
@@ -1157,9 +1214,11 @@ fn run_impl(
                 }
                 let state_ref = clone_state(&state, &app_handle);
                 let app_for_cli = app_handle.clone();
+                let cli_output = request.output.clone();
                 tauri::async_runtime::spawn(async move {
                     let result =
                         run_cli_headless_request(state_ref, app_for_cli.clone(), request).await;
+                    let _ = persist_headless_cli_result(cli_output.as_deref(), &result);
                     let exit_code = if result.is_ok() { 0 } else { 1 };
                     if let Some(sink) = cli_sink {
                         if let Ok(mut slot) = sink.lock() {

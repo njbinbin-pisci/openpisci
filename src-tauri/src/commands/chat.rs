@@ -208,6 +208,7 @@ async fn build_session_message_context_from_db(
     session_id: &str,
     budget: usize,
     history_mode: HistorySliceMode,
+    context_toggles: &crate::headless_cli::HeadlessContextToggles,
 ) -> Result<SessionMessageContext, String> {
     let db = db_arc.lock().await;
     let history = db
@@ -223,44 +224,47 @@ async fn build_session_message_context_from_db(
     // p6 state frame: reload the explicit "where are we now" snapshot and
     // inject it right after the rolling summary so a resumed session picks
     // up the latest bearings without re-deriving from compressed history.
-    let state_frame = db
-        .get_session_state_frame_json(session_id)
-        .ok()
-        .flatten()
-        .and_then(|raw| crate::agent::state_frame::StateFrame::from_json_opt(&raw));
+    let state_frame = if context_toggles.disable_state_frame {
+        None
+    } else {
+        db.get_session_state_frame_json(session_id)
+            .ok()
+            .flatten()
+            .and_then(|raw| crate::agent::state_frame::StateFrame::from_json_opt(&raw))
+    };
     let latest_user_text = history
         .iter()
         .rev()
         .find(|m| m.role == "user" && !m.content.trim().is_empty())
         .map(|m| m.content.clone())
         .unwrap_or_default();
+    let rolling_summary_opt =
+        if context_toggles.disable_rolling_summary || rolling_summary.trim().is_empty() {
+            None
+        } else {
+            Some(rolling_summary)
+        };
     let mut llm_messages = match history_mode {
-        HistorySliceMode::FullRecent => build_context_messages(
-            &history,
-            budget,
-            (!rolling_summary.trim().is_empty()).then_some(rolling_summary),
-        ),
-        HistorySliceMode::SummaryOnly => build_context_messages_summary_only(
-            &history,
-            budget,
-            (!rolling_summary.trim().is_empty()).then_some(rolling_summary),
-        ),
+        HistorySliceMode::FullRecent => {
+            build_context_messages(&history, budget, rolling_summary_opt)
+        }
+        HistorySliceMode::SummaryOnly => {
+            build_context_messages_summary_only(&history, budget, rolling_summary_opt)
+        }
         HistorySliceMode::None => {
-            if rolling_summary.trim().is_empty() {
+            if rolling_summary_opt.is_none() {
                 Vec::new()
             } else {
-                vec![rolling_summary_message(rolling_summary)]
+                vec![rolling_summary_message(
+                    rolling_summary_opt.unwrap_or_default(),
+                )]
             }
         }
     };
     if let Some(frame) = state_frame {
         // Insert right after the rolling summary (if present) — i.e. at
         // position 1 when a summary exists, else at the very top.
-        let summary_offset = if !rolling_summary.trim().is_empty() {
-            1
-        } else {
-            0
-        };
+        let summary_offset = if rolling_summary_opt.is_some() { 1 } else { 0 };
         let insert_at = summary_offset.min(llm_messages.len());
         llm_messages.insert(
             insert_at,
@@ -284,6 +288,7 @@ async fn build_session_message_context(
         session_id,
         budget,
         HistorySliceMode::FullRecent,
+        &crate::headless_cli::HeadlessContextToggles::default(),
     )
     .await
 }
@@ -1043,7 +1048,7 @@ pub async fn chat_send(
         auto_compact_input_tokens_threshold,
         compaction_settings,
         state.db.clone(),
-        state.app_handle.clone(),
+        state.plan_state.clone(),
     )
     .into_agent_loop(client, None, Some(state.confirmation_responses.clone()));
 
@@ -1258,6 +1263,7 @@ pub struct HeadlessRunOptions {
     pub scene_kind: Option<SceneKind>,
     pub workspace_root_override: Option<String>,
     pub builtin_tool_overrides: HashMap<String, bool>,
+    pub context_toggles: crate::headless_cli::HeadlessContextToggles,
 }
 
 pub(crate) const SESSION_SOURCE_IM_PREFIX: &str = "im_";
@@ -1442,6 +1448,10 @@ pub async fn run_agent_headless(
     crate::agent::vision::clear_selection(session_id).await;
 
     let pool_session_id = options.as_ref().and_then(|o| o.pool_session_id.clone());
+    let context_toggles = options
+        .as_ref()
+        .map(|o| o.context_toggles.clone())
+        .unwrap_or_default();
     let extra_system_context = options
         .as_ref()
         .and_then(|o| o.extra_system_context.clone())
@@ -1578,30 +1588,37 @@ pub async fn run_agent_headless(
         allow_outside_workspace,
     ));
 
-    let scoped_memory_context = match scene_policy.memory_slice_mode() {
-        MemorySliceMode::Off => String::new(),
-        MemorySliceMode::ScopedSearch | MemorySliceMode::ScopedPlusRecent => {
-            let keywords: Vec<&str> = effective_user_message.split_whitespace().take(10).collect();
-            let query = keywords.join(" ");
-            if query.trim().is_empty() {
-                String::new()
-            } else {
-                let db = state.db.lock().await;
-                match db.search_memories_scoped(&query, "pisci", pool_session_id.as_deref(), 5) {
-                    Ok(mems) if !mems.is_empty() => {
-                        let mut ctx = String::from("\n\n## Relevant Memory\n");
-                        for m in &mems {
-                            ctx.push_str(&format!("- {}\n", m.content));
+    let scoped_memory_context = if context_toggles.disable_memory_context {
+        String::new()
+    } else {
+        match scene_policy.memory_slice_mode() {
+            MemorySliceMode::Off => String::new(),
+            MemorySliceMode::ScopedSearch | MemorySliceMode::ScopedPlusRecent => {
+                let keywords: Vec<&str> =
+                    effective_user_message.split_whitespace().take(10).collect();
+                let query = keywords.join(" ");
+                if query.trim().is_empty() {
+                    String::new()
+                } else {
+                    let db = state.db.lock().await;
+                    match db.search_memories_scoped(&query, "pisci", pool_session_id.as_deref(), 5)
+                    {
+                        Ok(mems) if !mems.is_empty() => {
+                            let mut ctx = String::from("\n\n## Relevant Memory\n");
+                            for m in &mems {
+                                ctx.push_str(&format!("- {}\n", m.content));
+                            }
+                            ctx
                         }
-                        ctx
+                        _ => String::new(),
                     }
-                    _ => String::new(),
                 }
             }
         }
     };
 
-    let pool_context = if scene_policy.include_pool_context
+    let pool_context = if !context_toggles.disable_pool_context
+        && scene_policy.include_pool_context
         && !matches!(scene_policy.pool_snapshot_mode(), PoolSnapshotMode::Off)
     {
         if let Some(pool_id) = pool_session_id.as_deref() {
@@ -1626,19 +1643,20 @@ pub async fn run_agent_headless(
     } else {
         String::new()
     };
-    let task_state_context = if scene_policy.include_task_state {
-        let db = state.db.lock().await;
-        match db.load_task_state("session", session_id) {
-            Ok(Some(ts))
-                if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) =>
-            {
-                render_task_state_section("Active Task State", "Progress", &ts)
+    let task_state_context =
+        if !context_toggles.disable_task_state_context && scene_policy.include_task_state {
+            let db = state.db.lock().await;
+            match db.load_task_state("session", session_id) {
+                Ok(Some(ts))
+                    if ts.status == "active" && (!ts.goal.is_empty() || !ts.summary.is_empty()) =>
+                {
+                    render_task_state_section("Active Task State", "Progress", &ts)
+                }
+                _ => String::new(),
             }
-            _ => String::new(),
-        }
-    } else {
-        String::new()
-    };
+        } else {
+            String::new()
+        };
 
     let injection_budget = scene_policy.compute_injection_budget(context_window, max_tokens);
     let injected_context = budget_truncate(
@@ -1669,7 +1687,9 @@ pub async fn run_agent_headless(
     if !injected_context.is_empty() {
         system_prompt.push_str(&injected_context);
     }
-    if scene_policy.project_instructions_enabled(enable_project_instructions) {
+    if !context_toggles.disable_project_instructions
+        && scene_policy.project_instructions_enabled(enable_project_instructions)
+    {
         match render_project_instruction_context(
             std::path::Path::new(&workspace_root),
             project_instruction_budget_chars as usize,
@@ -1716,6 +1736,7 @@ pub async fn run_agent_headless(
         session_id,
         compute_context_budget(context_window, max_tokens),
         scene_policy.history_slice_mode(),
+        &context_toggles,
     )
     .await?;
     tracing::info!(
@@ -2591,24 +2612,6 @@ pub use crate::agent::compaction::{
 ///
 /// All rows for this turn share the same `turn_index` derived from the current
 /// message count in the session.
-/// Persist only the *new* messages produced by the agent loop.
-/// Strip `SEND_FILE:` and `SEND_IMAGE:` marker lines from text before persisting to DB.
-/// These lines are consumed by the gateway for file dispatch and must not appear in chat history.
-pub(crate) fn strip_send_markers(text: &str) -> std::borrow::Cow<'_, str> {
-    if !text.contains("SEND_FILE:") && !text.contains("SEND_IMAGE:") {
-        return std::borrow::Cow::Borrowed(text);
-    }
-    let cleaned: String = text
-        .lines()
-        .filter(|line| {
-            let t = line.trim();
-            !t.starts_with("SEND_FILE:") && !t.starts_with("SEND_IMAGE:")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    std::borrow::Cow::Owned(cleaned.trim().to_string())
-}
-
 /// No-op: messages are now persisted in real-time by `AgentLoop::persist_message()`
 /// during the run, so there is nothing left to write here.
 /// The `final_messages` parameter is kept for logging only.
@@ -3195,15 +3198,15 @@ fn minimal_tool_result_blocks(results_json: &str) -> Vec<ContentBlock> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let is_error = item.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+            let is_error = item
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let minimal = item
                 .get("content_minimal")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let tool_name = item
-                .get("tool_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let tool_name = item.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
 
             let demoted = match minimal {
                 Some(m) if !m.is_empty() => m,
@@ -3306,10 +3309,8 @@ fn is_retryable_tool_failure(content: &str) -> bool {
         || lower.contains("unknown variant")
         || lower.contains("did not match any variant")
         || lower.contains("additional properties are not allowed")
-        || lower.contains("tool '")
-            && lower.contains("does not exist. available tools:")
-        || lower.contains("工具 '")
-            && (lower.contains("未找到") || lower.contains("当前可用工具"))
+        || lower.contains("tool '") && lower.contains("does not exist. available tools:")
+        || lower.contains("工具 '") && (lower.contains("未找到") || lower.contains("当前可用工具"))
 }
 
 pub(crate) fn collapse_superseded_tool_failures(mut msgs: Vec<LlmMessage>) -> Vec<LlmMessage> {
@@ -3376,13 +3377,10 @@ pub(crate) fn collapse_superseded_tool_failures(mut msgs: Vec<LlmMessage>) -> Ve
                     continue;
                 }
                 if let Some((tool_msg_idx, signature, tool_name)) = tool_use_meta.get(tool_use_id) {
-                    if last_success_pos
-                        .get(signature)
-                        .is_some_and(|success_pos| {
-                            tool_msg_idx < success_pos
-                                && !has_real_user_turn_between(&msgs, *tool_msg_idx, *success_pos)
-                        })
-                    {
+                    if last_success_pos.get(signature).is_some_and(|success_pos| {
+                        tool_msg_idx < success_pos
+                            && !has_real_user_turn_between(&msgs, *tool_msg_idx, *success_pos)
+                    }) {
                         superseded_tool_use_ids.insert(tool_use_id.clone());
                         continue;
                     }
@@ -4102,7 +4100,10 @@ mod tests {
         ];
 
         let collapsed = collapse_superseded_tool_failures(msgs);
-        assert!(!has_tool_result_content(&collapsed, "schema_correction tool=file_read"));
+        assert!(!has_tool_result_content(
+            &collapsed,
+            "schema_correction tool=file_read"
+        ));
         assert!(has_tool_result_content(&collapsed, "file content"));
     }
 
@@ -4110,10 +4111,18 @@ mod tests {
     fn collapse_superseded_tool_failures_keeps_non_retryable_failures() {
         let msgs = vec![
             text_msg("user", "先写 Program Files"),
-            assistant_tool_use("call-1", "file_write", json!({"path":"C:\\Program Files\\a.txt","content":"x"})),
+            assistant_tool_use(
+                "call-1",
+                "file_write",
+                json!({"path":"C:\\Program Files\\a.txt","content":"x"}),
+            ),
             user_tool_result("call-1", "permission denied", true),
             text_msg("assistant", "那我换个文件继续当前任务。"),
-            assistant_tool_use("call-2", "file_write", json!({"path":"C:\\temp\\a.txt","content":"x"})),
+            assistant_tool_use(
+                "call-2",
+                "file_write",
+                json!({"path":"C:\\temp\\a.txt","content":"x"}),
+            ),
             user_tool_result("call-2", "ok", false),
         ];
 
@@ -4138,7 +4147,10 @@ mod tests {
         ];
 
         let collapsed = collapse_superseded_tool_failures(msgs);
-        assert!(has_tool_result_content(&collapsed, "schema_correction tool=file_read"));
+        assert!(has_tool_result_content(
+            &collapsed,
+            "schema_correction tool=file_read"
+        ));
         assert!(has_tool_result_content(&collapsed, "b content"));
     }
 }

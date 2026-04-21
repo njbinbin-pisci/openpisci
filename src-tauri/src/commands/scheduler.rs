@@ -3,10 +3,10 @@ use crate::agent::messages::AgentEvent;
 use crate::agent::tool::ToolContext;
 use crate::browser::SharedBrowserManager;
 use crate::commands::chat::{persist_task_spine_from_plan_state, render_task_state_section};
+use crate::host::DesktopHostTools;
 use crate::llm::{build_client, LlmMessage, MessageContent};
 use crate::policy::PolicyGate;
 use crate::store::{db::ScheduledTask, AppState, Database, Settings};
-use crate::tools;
 use serde::Serialize;
 use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -663,16 +663,19 @@ pub async fn execute_task(
     let user_tools_dir: Option<std::path::PathBuf> =
         app.path().app_data_dir().map(|d| d.join("user-tools")).ok();
     let app_data_dir_s = app.path().app_data_dir().ok();
-    let registry = Arc::new(tools::build_registry(
-        browser,
-        user_tools_dir.as_deref(),
-        Some(db.clone()),
-        Some(&builtin_tool_enabled),
-        Some(app.clone()),
-        Some(settings.clone()),
-        app_data_dir_s,
-        None, // skill_search not used in scheduled task sessions
-    ));
+    let registry = Arc::new(
+        DesktopHostTools {
+            browser: Some(browser),
+            db: Some(db.clone()),
+            settings: Some(settings.clone()),
+            app_handle: Some(app.clone()),
+            app_data_dir: app_data_dir_s,
+            skill_loader: None,
+            builtin_tool_enabled: Some(builtin_tool_enabled.clone()),
+            user_tools_dir,
+        }
+        .build_registry(),
+    );
     let policy = Arc::new(PolicyGate::with_profile_and_flags(
         &workspace_root,
         &policy_mode,

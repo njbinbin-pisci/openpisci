@@ -3,29 +3,37 @@
 // lib.rs — Tauri application library entry point.
 // main.rs calls run() from here; this allows Tauri mobile targets to work.
 
-pub mod agent;
 mod browser;
 mod commands;
-#[cfg(not(test))]
 mod desktop_app;
 mod fish;
 mod gateway;
 pub mod headless_cli;
+pub mod host;
+
 pub mod koi;
-mod llm;
-mod memory;
+#[cfg(test)]
+mod live_smoke;
 mod pisci;
-mod policy;
-mod project_context;
-mod scheduler;
-mod security;
 mod skills;
 pub mod store;
 mod tools;
 
-#[cfg(not(test))]
+// -- Re-exports from the kernel ------------------------------------------
+//
+// These modules physically live in `pisci-kernel` but many call sites in
+// the desktop crate still refer to them via `crate::agent::...`,
+// `crate::llm::...`, `crate::memory::...`, etc. The `pub use` bindings
+// below make those paths resolve transparently so that moving code to the
+// kernel does not require touching hundreds of `use` statements across
+// the desktop codebase.
+pub use pisci_kernel::agent;
+pub use pisci_kernel::llm;
+pub use pisci_kernel::memory;
+pub use pisci_kernel::policy;
+pub use pisci_kernel::project_context;
+pub use pisci_kernel::scheduler;
+pub use pisci_kernel::security;
+
 pub use desktop_app::run;
 pub use store::AppState;
-
-#[cfg(test)]
-pub fn run() {}

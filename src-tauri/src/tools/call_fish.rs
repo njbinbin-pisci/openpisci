@@ -219,16 +219,18 @@ impl CallFishTool {
             .app_data_dir()
             .map(|d| d.join("user-tools"))
             .ok();
-        let registry_tools = Arc::new(crate::tools::build_registry(
-            state.browser.clone(),
-            user_tools_dir.as_deref(),
-            Some(state.db.clone()),
-            Some(&builtin_tool_enabled),
-            None, // no call_fish inside Fish (prevent recursion)
-            None,
-            None,
-            None,
-        ));
+        let registry_tools = Arc::new(
+            crate::host::DesktopHostTools {
+                browser: Some(state.browser.clone()),
+                db: Some(state.db.clone()),
+                builtin_tool_enabled: Some(builtin_tool_enabled.clone()),
+                user_tools_dir,
+                // No app_handle: disables call_fish / call_koi / chat_ui so
+                // nested fish can't spawn more fish (recursion guard).
+                ..Default::default()
+            }
+            .build_registry(),
+        );
 
         let policy = Arc::new(crate::policy::PolicyGate::with_profile_and_flags(
             &workspace_root,
@@ -239,8 +241,7 @@ impl CallFishTool {
 
         // Fish is the canonical "ephemeral zero-persistence" harness —
         // `HarnessConfig::for_fish` encodes that default so the struct
-        // literal does not leak here. `into_agent_loop` bridges to the
-        // legacy loop; p12 will shrink this bridge further.
+        // literal does not leak here.
         let fish_compaction_settings = {
             let s = state.settings.lock().await;
             crate::agent::harness::config::CompactionSettings::from_settings(&s)
@@ -254,7 +255,7 @@ impl CallFishTool {
             vision_capable,
             100_000,
             fish_compaction_settings,
-            state.app_handle.clone(),
+            state.plan_state.clone(),
         )
         .into_agent_loop(client, None, None);
 

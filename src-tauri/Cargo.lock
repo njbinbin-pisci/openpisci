@@ -4283,9 +4283,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "pisci-core"
-version = "0.1.0"
+name = "pisci-cli"
+version = "0.7.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
+ "dirs 5.0.1",
+ "pisci-core",
+ "pisci-kernel",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "pisci-core"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
  "chrono",
  "serde",
  "serde_json",
@@ -4293,7 +4310,7 @@ dependencies = [
 
 [[package]]
 name = "pisci-desktop"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4314,7 +4331,9 @@ dependencies = [
  "native-tls",
  "once_cell",
  "pdf-extract",
+ "pisci-cli",
  "pisci-core",
+ "pisci-kernel",
  "qrcode",
  "regex",
  "reqwest 0.12.28",
@@ -4347,6 +4366,45 @@ dependencies = [
  "uuid",
  "windows 0.58.0",
  "zip 2.4.2",
+]
+
+[[package]]
+name = "pisci-kernel"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "chrono",
+ "dirs 5.0.1",
+ "encoding_rs",
+ "futures",
+ "getrandom 0.2.17",
+ "hex",
+ "image",
+ "imap",
+ "lettre",
+ "lopdf",
+ "mailparse",
+ "native-tls",
+ "once_cell",
+ "pdf-extract",
+ "pisci-core",
+ "regex",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "russh",
+ "scraper",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-cron-scheduler",
+ "tracing",
+ "urlencoding",
+ "uuid",
+ "windows 0.58.0",
 ]
 
 [[package]]

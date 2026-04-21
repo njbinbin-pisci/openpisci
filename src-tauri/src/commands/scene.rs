@@ -1,8 +1,8 @@
 use crate::agent::tool::ToolRegistry;
 use crate::browser::SharedBrowserManager;
+use crate::host::DesktopHostTools;
 use crate::skills::loader::SkillLoader;
 use crate::store::{Database, Settings};
-use crate::tools;
 #[allow(unused_imports)]
 pub use pisci_core::scene::{
     CollaborationContextMode, EventDigestMode, HistorySliceMode, MemorySliceMode, PoolSnapshotMode,
@@ -38,20 +38,21 @@ pub fn build_registry_for_scene(
     skill_loader: Option<SharedSkillLoader>,
 ) -> ToolRegistry {
     let policy = ScenePolicy::for_kind(scene);
-    let mut registry = tools::build_registry(
-        browser,
-        user_tools_dir,
+    let mut registry = DesktopHostTools {
+        browser: Some(browser),
         db,
-        builtin_tool_enabled,
-        app,
         settings,
+        app_handle: app,
         app_data_dir,
-        if policy.allow_skill_loader {
+        skill_loader: if policy.allow_skill_loader {
             skill_loader
         } else {
             None
         },
-    );
+        builtin_tool_enabled: builtin_tool_enabled.cloned(),
+        user_tools_dir: user_tools_dir.map(PathBuf::from),
+    }
+    .build_registry();
 
     match policy.registry_profile {
         RegistryProfile::MainChat

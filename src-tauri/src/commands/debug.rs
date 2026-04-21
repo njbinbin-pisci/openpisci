@@ -7,10 +7,10 @@
 use crate::agent::harness::HarnessConfig;
 use crate::agent::messages::AgentEvent;
 use crate::agent::tool::ToolContext;
+use crate::host::DesktopHostTools;
 use crate::llm::{build_client, LlmMessage, MessageContent};
 use crate::policy::PolicyGate;
 use crate::store::AppState;
-use crate::tools;
 use serde::{Deserialize, Serialize};
 use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{Manager, State};
@@ -1073,16 +1073,19 @@ pub async fn run_debug_scenario(
         .ok();
     let app_data_dir_d = state.app_handle.path().app_data_dir().ok();
 
-    let registry = Arc::new(tools::build_registry(
-        state.browser.clone(),
-        user_tools_dir.as_deref(),
-        Some(state.db.clone()),
-        Some(&builtin_tool_enabled),
-        Some(state.app_handle.clone()),
-        Some(state.settings.clone()),
-        app_data_dir_d,
-        None, // skill_search not used in debug scenarios
-    ));
+    let registry = Arc::new(
+        DesktopHostTools {
+            browser: Some(state.browser.clone()),
+            db: Some(state.db.clone()),
+            settings: Some(state.settings.clone()),
+            app_handle: Some(state.app_handle.clone()),
+            app_data_dir: app_data_dir_d,
+            skill_loader: None,
+            builtin_tool_enabled: Some(builtin_tool_enabled.clone()),
+            user_tools_dir,
+        }
+        .build_registry(),
+    );
 
     let policy = Arc::new(PolicyGate::with_profile(
         &workspace_root,
@@ -1403,16 +1406,12 @@ pub async fn get_debug_report(state: State<'_, AppState>) -> Result<DebugReport,
     // Available tools
     let available_tools = {
         let settings = state.settings.lock().await;
-        let registry = tools::build_registry(
-            state.browser.clone(),
-            None,
-            None,
-            Some(&settings.builtin_tool_enabled),
-            None,
-            None,
-            None,
-            None,
-        );
+        let registry = DesktopHostTools {
+            browser: Some(state.browser.clone()),
+            builtin_tool_enabled: Some(settings.builtin_tool_enabled.clone()),
+            ..Default::default()
+        }
+        .build_registry();
         registry
             .all()
             .iter()
@@ -1610,16 +1609,19 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
         .ok();
     let app_data_dir_d2 = state.app_handle.path().app_data_dir().ok();
 
-    let registry = Arc::new(tools::build_registry(
-        state.browser.clone(),
-        user_tools_dir.as_deref(),
-        Some(state.db.clone()),
-        Some(&builtin_tool_enabled),
-        Some(state.app_handle.clone()),
-        Some(state.settings.clone()),
-        app_data_dir_d2,
-        None, // skill_search not used in debug scenarios
-    ));
+    let registry = Arc::new(
+        DesktopHostTools {
+            browser: Some(state.browser.clone()),
+            db: Some(state.db.clone()),
+            settings: Some(state.settings.clone()),
+            app_handle: Some(state.app_handle.clone()),
+            app_data_dir: app_data_dir_d2,
+            skill_loader: None,
+            builtin_tool_enabled: Some(builtin_tool_enabled.clone()),
+            user_tools_dir,
+        }
+        .build_registry(),
+    );
 
     let policy = Arc::new(PolicyGate::with_profile(
         &workspace_root,

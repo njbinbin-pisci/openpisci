@@ -1,0 +1,477 @@
+name = "openpisci-swe-lite"
+version = 1
+
+[[profiles]]
+name = "baseline_pisci"
+mode = "pisci"
+
+[[profiles]]
+name = "context_lite"
+mode = "pisci"
+[profiles.context_toggles]
+disable_memory_context = true
+disable_task_state_context = true
+disable_project_instructions = true
+disable_rolling_summary = true
+disable_state_frame = true
+
+[[profiles]]
+name = "experimental_pool"
+mode = "pool"
+wait_for_completion = true
+wait_timeout_secs = 900
+pool_size = 3
+
+[[tasks]]
+id = "py001_sum_even"
+title = "Fix even number aggregation"
+task_timeout_secs = 240
+test_timeout_secs = 60
+test_command = '''{python} -m unittest discover -s tests -p "test_*.py" -q'''
+prompt = """
+The repository has a failing unit test around even-number aggregation.
+Please inspect the code, make the smallest correct fix, run the unit tests,
+and then summarize the root cause and the patch.
+"""
+[[tasks.seed_files]]
+path = "app/__init__.py"
+content = ""
+[[tasks.seed_files]]
+path = "app/stats.py"
+content = """
+def sum_even(values):
+    return sum(v for v in values if v % 2 == 1)
+"""
+[[tasks.seed_files]]
+path = "tests/test_stats.py"
+content = """
+import unittest
+from app.stats import sum_even
+
+
+class StatsTests(unittest.TestCase):
+    def test_sum_even_only_counts_even_numbers(self):
+        self.assertEqual(sum_even([1, 2, 3, 4, 6]), 12)
+
+
+if __name__ == "__main__":
+    unittest.main()
+"""
+
+[[tasks]]
+id = "py002_normalize_email"
+title = "Fix email normalization"
+task_timeout_secs = 240
+test_timeout_secs = 60
+test_command = '''{python} -m unittest discover -s tests -p "test_*.py" -q'''
+prompt = """
+The email normalization helper is not canonicalizing addresses correctly.
+Please fix the implementation, run the tests, and explain the behavior change.
+"""
+[[tasks.seed_files]]
+path = "app/__init__.py"
+content = ""
+[[tasks.seed_files]]
+path = "app/identity.py"
+content = """
+def normalize_email(value: str) -> str:
+    return value.strip()
+"""
+[[tasks.seed_files]]
+path = "tests/test_identity.py"
+content = """
+import unittest
+from app.identity import normalize_email
+
+
+class IdentityTests(unittest.TestCase):
+    def test_normalize_email_strips_and_lowercases(self):
+        self.assertEqual(normalize_email("  Alice.Example@Example.COM "), "alice.example@example.com")
+
+
+if __name__ == "__main__":
+    unittest.main()
+"""
+
+[[tasks]]
+id = "py003_deep_merge"
+title = "Fix nested config merge"
+task_timeout_secs = 300
+test_timeout_secs = 60
+test_command = '''{python} -m unittest discover -s tests -p "test_*.py" -q'''
+prompt = """
+The config merge logic should preserve untouched nested keys while applying overrides.
+Please fix the merge behavior, run the tests, and keep the change minimal.
+"""
+[[tasks.seed_files]]
+path = "app/__init__.py"
+content = ""
+[[tasks.seed_files]]
+path = "app/defaults.py"
+content = """
+DEFAULTS = {
+    "database": {"host": "localhost", "port": 5432, "pool": {"size": 10, "timeout": 30}},
+    "features": {"cache": True, "jobs": True},
+}
+"""
+[[tasks.seed_files]]
+path = "app/config_merge.py"
+content = """
+from copy import deepcopy
+
+
+def merge_config(base: dict, override: dict) -> dict:
+    merged = deepcopy(base)
+    for key, value in override.items():
+        merged[key] = value
+    return merged
+"""
+[[tasks.seed_files]]
+path = "tests/test_config_merge.py"
+content = """
+import unittest
+from app.defaults import DEFAULTS
+from app.config_merge import merge_config
+
+
+class ConfigMergeTests(unittest.TestCase):
+    def test_nested_merge_preserves_unspecified_keys(self):
+        merged = merge_config(DEFAULTS, {"database": {"pool": {"size": 20}}})
+        self.assertEqual(merged["database"]["host"], "localhost")
+        self.assertEqual(merged["database"]["port"], 5432)
+        self.assertEqual(merged["database"]["pool"]["size"], 20)
+        self.assertEqual(merged["database"]["pool"]["timeout"], 30)
+
+
+if __name__ == "__main__":
+    unittest.main()
+"""
+
+[[tasks]]
+id = "py004_retry_backoff"
+title = "Fix retry backoff schedule"
+task_timeout_secs = 240
+test_timeout_secs = 60
+test_command = '''{python} -m unittest discover -s tests -p "test_*.py" -q'''
+prompt = """
+The retry helper should use exponential backoff starting at the base delay.
+Please correct the schedule, run the tests, and report the fixed formula.
+"""
+[[tasks.seed_files]]
+path = "app/__init__.py"
+content = ""
+[[tasks.seed_files]]
+path = "app/retry.py"
+content = """
+def next_delay_seconds(base_delay: int, attempt: int) -> int:
+    return base_delay * attempt
+"""
+[[tasks.seed_files]]
+path = "tests/test_retry.py"
+content = """
+import unittest
+from app.retry import next_delay_seconds
+
+
+class RetryTests(unittest.TestCase):
+    def test_exponential_backoff(self):
+        self.assertEqual(next_delay_seconds(5, 1), 5)
+        self.assertEqual(next_delay_seconds(5, 2), 10)
+        self.assertEqual(next_delay_seconds(5, 3), 20)
+
+
+if __name__ == "__main__":
+    unittest.main()
+"""
+
+[[tasks]]
+id = "py005_repo_path"
+title = "Fix repository path joining"
+task_timeout_secs = 240
+test_timeout_secs = 60
+test_command = '''{python} -m unittest discover -s tests -p "test_*.py" -q'''
+prompt = """
+The repository path helper incorrectly treats absolute-looking child paths as real absolutes.
+Please fix the join behavior, run the tests, and explain the edge case.
+"""
+[[tasks.seed_files]]
+path = "app/__init__.py"
+content = ""
+[[tasks.seed_files]]
+path = "app/paths.py"
+content = """
+from pathlib import Path
+
+
+def join_repo_path(root: str, child: str) -> str:
+    return str(Path(root) / Path(child))
+"""
+[[tasks.seed_files]]
+path = "tests/test_paths.py"
+content = """
+import unittest
+from app.paths import join_repo_path
+
+
+class PathTests(unittest.TestCase):
+    def test_join_repo_path_strips_leading_slashes(self):
+        self.assertEqual(join_repo_path("/workspace/repo", "/src/app.py"), "/workspace/repo/src/app.py")
+
+
+if __name__ == "__main__":
+    unittest.main()
+"""
+
+[[tasks]]
+id = "py006_jsonl_resume"
+title = "Fix JSONL loader with resume follow-up"
+task_timeout_secs = 300
+test_timeout_secs = 60
+test_command = '''{python} -m unittest discover -s tests -p "test_*.py" -q'''
+phase_followup_context = "This is a resume-style follow-up in the same session. Preserve task continuity and finish the fix rather than starting over."
+[[tasks.phases]]
+prompt = """
+Investigate the failing JSONL parser test, explain the bug in your response,
+and keep enough state so you can continue in a follow-up request.
+"""
+[[tasks.phases]]
+prompt = """
+Continue the same task from the existing session, implement the fix, run the tests,
+and summarize the patch.
+"""
+[[tasks.seed_files]]
+path = "app/__init__.py"
+content = ""
+[[tasks.seed_files]]
+path = "app/jsonl_loader.py"
+content = """
+import json
+
+
+def load_jsonl_lines(text: str) -> list[dict]:
+    rows = []
+    for line in text.splitlines():
+        rows.append(json.loads(line))
+    return rows
+"""
+[[tasks.seed_files]]
+path = "tests/test_jsonl_loader.py"
+content = """
+import unittest
+from app.jsonl_loader import load_jsonl_lines
+
+
+class JsonlTests(unittest.TestCase):
+    def test_blank_lines_are_ignored(self):
+        raw = '{"a": 1}\\n\\n{"b": 2}\\n'
+        self.assertEqual(load_jsonl_lines(raw), [{"a": 1}, {"b": 2}])
+
+
+if __name__ == "__main__":
+    unittest.main()
+"""
+
+[[tasks]]
+id = "py007_parse_bool"
+title = "Fix boolean environment parsing"
+task_timeout_secs = 240
+test_timeout_secs = 60
+test_command = '''{python} -m unittest discover -s tests -p "test_*.py" -q'''
+prompt = """
+The environment parser treats any non-empty string as true.
+Please fix the accepted true/false values, run the tests, and document the supported forms.
+"""
+[[tasks.seed_files]]
+path = "app/__init__.py"
+content = ""
+[[tasks.seed_files]]
+path = "app/envparse.py"
+content = """
+def parse_bool_env(value: str | None) -> bool:
+    return bool(value)
+"""
+[[tasks.seed_files]]
+path = "tests/test_envparse.py"
+content = """
+import unittest
+from app.envparse import parse_bool_env
+
+
+class EnvParseTests(unittest.TestCase):
+    def test_false_strings_are_not_truthy(self):
+        self.assertFalse(parse_bool_env("false"))
+        self.assertFalse(parse_bool_env("0"))
+        self.assertFalse(parse_bool_env("off"))
+
+    def test_true_strings_are_truthy(self):
+        self.assertTrue(parse_bool_env("true"))
+        self.assertTrue(parse_bool_env("1"))
+
+
+if __name__ == "__main__":
+    unittest.main()
+"""
+
+[[tasks]]
+id = "py008_markdown_table"
+title = "Fix markdown table rendering"
+task_timeout_secs = 240
+test_timeout_secs = 60
+test_command = '''{python} -m unittest discover -s tests -p "test_*.py" -q'''
+prompt = """
+The markdown table helper is generating an invalid separator row.
+Please fix the renderer, run the tests, and summarize the formatting bug.
+"""
+[[tasks.seed_files]]
+path = "app/__init__.py"
+content = ""
+[[tasks.seed_files]]
+path = "app/report.py"
+content = """
+def build_markdown_table(headers: list[str], rows: list[list[str]]) -> str:
+    top = "| " + " | ".join(headers) + " |"
+    separator = "|" + "---|" * (len(headers) - 1)
+    body = ["| " + " | ".join(row) + " |" for row in rows]
+    return "\\n".join([top, separator, *body])
+"""
+[[tasks.seed_files]]
+path = "tests/test_report.py"
+content = """
+import unittest
+from app.report import build_markdown_table
+
+
+class ReportTests(unittest.TestCase):
+    def test_separator_has_one_segment_per_header(self):
+        table = build_markdown_table(["name", "score", "status"], [["alice", "5", "ok"]])
+        lines = table.splitlines()
+        self.assertEqual(lines[1], "|---|---|---|")
+
+
+if __name__ == "__main__":
+    unittest.main()
+"""
+
+[[tasks]]
+id = "py009_listener_cleanup"
+title = "Fix listener cleanup on disconnect"
+task_timeout_secs = 300
+test_timeout_secs = 60
+test_command = '''{python} -m unittest discover -s tests -p "test_*.py" -q'''
+prompt = """
+The realtime socket wrapper leaks message listeners after disconnect.
+Please find the cleanup bug, make the minimal fix, run the tests, and summarize the leak mechanism.
+"""
+[[tasks.seed_files]]
+path = "app/__init__.py"
+content = ""
+[[tasks.seed_files]]
+path = "app/realtime/__init__.py"
+content = ""
+[[tasks.seed_files]]
+path = "app/realtime/registry.py"
+content = """
+class ListenerRegistry:
+    def __init__(self):
+        self._listeners = {}
+
+    def add(self, socket_id, event_name, callback):
+        self._listeners.setdefault(socket_id, {})[event_name] = callback
+
+    def remove(self, socket_id, event_name):
+        bucket = self._listeners.get(event_name, {})
+        bucket.pop(socket_id, None)
+"""
+[[tasks.seed_files]]
+path = "app/realtime/socket.py"
+content = """
+from app.realtime.registry import ListenerRegistry
+
+
+class FakeSocket:
+    def __init__(self, socket_id: str, registry: ListenerRegistry):
+        self.socket_id = socket_id
+        self.registry = registry
+
+    def on_message(self, callback):
+        self.registry.add(self.socket_id, "message", callback)
+
+    def disconnect(self):
+        self.registry.remove(self.socket_id, "message")
+"""
+[[tasks.seed_files]]
+path = "tests/test_socket.py"
+content = """
+import unittest
+from app.realtime.registry import ListenerRegistry
+from app.realtime.socket import FakeSocket
+
+
+class SocketTests(unittest.TestCase):
+    def test_disconnect_removes_listener(self):
+        registry = ListenerRegistry()
+        sock = FakeSocket("sock-1", registry)
+        sock.on_message(lambda payload: payload)
+        sock.disconnect()
+        self.assertEqual(registry._listeners.get("sock-1", {}), {})
+
+
+if __name__ == "__main__":
+    unittest.main()
+"""
+
+[[tasks]]
+id = "py010_scheduler_midnight"
+title = "Fix midnight window scheduling"
+task_timeout_secs = 300
+test_timeout_secs = 60
+test_command = '''{python} -m unittest discover -s tests -p "test_*.py" -q'''
+phase_followup_context = "This follow-up should reuse the same session state and finish the bug fix instead of re-diagnosing from scratch."
+[[tasks.phases]]
+prompt = """
+Inspect the scheduling bug around midnight windows.
+Explain the issue first, then wait for a follow-up before you apply the patch.
+"""
+[[tasks.phases]]
+prompt = """
+Continue from the same session, implement the fix for the midnight scheduling bug,
+run the tests, and summarize the corrected behavior.
+"""
+[[tasks.seed_files]]
+path = "app/__init__.py"
+content = ""
+[[tasks.seed_files]]
+path = "app/scheduler.py"
+content = """
+from datetime import datetime, timedelta
+
+
+def next_run_after(now: datetime, hour: int, minute: int) -> datetime:
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate < now:
+        return candidate
+    return candidate + timedelta(days=1)
+"""
+[[tasks.seed_files]]
+path = "tests/test_scheduler.py"
+content = """
+import unittest
+from datetime import datetime
+from app.scheduler import next_run_after
+
+
+class SchedulerTests(unittest.TestCase):
+    def test_same_day_future_window_stays_same_day(self):
+        now = datetime(2026, 1, 10, 23, 50)
+        expected = datetime(2026, 1, 10, 23, 55)
+        self.assertEqual(next_run_after(now, 23, 55), expected)
+
+    def test_past_window_rolls_to_next_day(self):
+        now = datetime(2026, 1, 10, 23, 50)
+        expected = datetime(2026, 1, 11, 23, 40)
+        self.assertEqual(next_run_after(now, 23, 40), expected)
+
+
+if __name__ == "__main__":
+    unittest.main()
+"""

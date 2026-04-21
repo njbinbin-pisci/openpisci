@@ -1,8 +1,13 @@
 # OpenPisci Headless CLI
 
-`openpisci` 是 OpenPisci 的正式 headless/CLI 入口，面向自动化任务、CI 和 benchmark harness。
+OpenPisci 提供两个面向自动化与 benchmark 的 headless 入口，两者由不同 crate 拥有：
 
-当前支持两个子命令：
+| 二进制              | 所属 crate        | 用途                                                      |
+|---------------------|-------------------|-----------------------------------------------------------|
+| `openpisci`         | `pisci-desktop`   | 成熟的完整 headless runner（复用桌面 `AppState`）         |
+| `openpisci-headless`| `pisci-cli`       | 纯 kernel 驱动的 CLI demo；当前只暴露 `capabilities/version`，随 commands 层迁移会接管 `openpisci` 的 `run` 路径 |
+
+`openpisci` 当前支持两个子命令：
 
 - `openpisci run`
 - `openpisci capabilities`
@@ -12,10 +17,14 @@
 在仓库 `src-tauri/` 目录下：
 
 ```powershell
+# 传统完整 headless runner（仍由 pisci-desktop 构建）：
 cargo build --bin openpisci
+
+# 纯 kernel 版本：
+cargo build -p pisci-cli --bin openpisci-headless
 ```
 
-生成物默认在仓库根目录的 `target/debug/openpisci.exe`。
+两者均写入 `src-tauri/target/{debug,release}/`。`bench_swe_lite` 的 `find_binary` 会优先命中该目录。
 
 ## 运行模式
 
@@ -86,6 +95,14 @@ target\debug\openpisci.exe run --input request.json --output result.json
   "wait_for_completion": "boolean, optional",
   "wait_timeout_secs": "number, optional",
   "extra_system_context": "string, optional",
+  "context_toggles": {
+    "disable_memory_context": "boolean, optional",
+    "disable_task_state_context": "boolean, optional",
+    "disable_pool_context": "boolean, optional",
+    "disable_project_instructions": "boolean, optional",
+    "disable_rolling_summary": "boolean, optional",
+    "disable_state_frame": "boolean, optional"
+  },
   "output": "string, optional"
 }
 ```
@@ -100,6 +117,7 @@ target\debug\openpisci.exe run --input request.json --output result.json
 - `koi_ids`: 给协调提示词的优先候选 Koi 列表
 - `wait_for_completion`: 仅在 `pool` 模式下有意义；为 `true` 时等待 pool 收敛
 - `wait_timeout_secs`: pool 等待超时，默认 900 秒
+- `context_toggles`: benchmark / ablation 用的上下文开关；用于关闭 memory、task state、project instructions、rolling summary、state frame 等注入来源，便于比较不同 harness 配置
 
 ## `run` 响应协议
 

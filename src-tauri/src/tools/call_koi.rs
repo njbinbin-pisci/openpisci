@@ -688,7 +688,7 @@ impl CallKoiTool {
             scene_policy.effective_auto_compact_threshold(auto_compact_input_tokens_threshold),
             koi_compaction_settings,
             Some(state.db.clone()),
-            Some(state.app_handle.clone()),
+            Some(state.plan_state.clone()),
         )
         .into_agent_loop(client, notification_rx, None);
 

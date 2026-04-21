@@ -1,0 +1,26 @@
+[package]
+name = "pisci-cli"
+version = "0.7.0"
+edition = "2021"
+description = "OpenPisci headless CLI — cross-platform agent runner with no Tauri / GUI dependency."
+
+# Two binaries for the time being:
+#   * `openpisci-headless` — thin kernel demo binary owned by this crate.
+#   * `openpisci` (in pisci-desktop) — full headless runner that still
+#     requires a live Tauri `AppState`. Ownership migrates here once the
+#     commands layer is refactored to consume `HostRuntime` directly.
+
+[[bin]]
+name = "openpisci-headless"
+path = "src/bin/openpisci-headless.rs"
+
+[dependencies]
+pisci-core = { workspace = true }
+pisci-kernel = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs = "5"
