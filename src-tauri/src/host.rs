@@ -13,11 +13,14 @@
 //! Creating a host is cheap (just clones `Arc`s). The resulting `DesktopHost`
 //! can be handed to kernel entry points as `Arc<dyn HostRuntime>`.
 
+use pisci_core::host::SubagentRuntime;
 use pisci_core::host::{
-    ConfirmRequest, EventSink, HostRuntime, HostTools, InteractiveRequest, Notifier, SecretsStore,
-    ToolRegistryHandle,
+    ConfirmRequest, EventSink, HostRuntime, HostTools, InteractiveRequest, Notifier, PoolEvent,
+    PoolEventSink, SecretsStore, ToolRegistryHandle,
 };
+use pisci_kernel::agent::plan::PlanStore;
 use pisci_kernel::agent::tool::{new_tool_registry_handle, ToolRegistry, ToolRegistryHandleExt};
+use pisci_kernel::pool::coordinator::CoordinatorConfig;
 use pisci_kernel::tools::NeutralToolsConfig;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -30,9 +33,7 @@ use tokio::sync::Mutex;
 use crate::browser::SharedBrowserManager;
 use crate::skills::loader::SkillLoader;
 use crate::store::{AppState, Database, Settings};
-use crate::tools::{
-    app_control, browser, call_fish, call_koi, chat_ui, plan_todo, pool_chat, pool_org, skill_list,
-};
+use crate::tools::{app_control, browser, call_fish, call_koi, chat_ui, skill_list};
 
 #[cfg(target_os = "windows")]
 use crate::tools::{com_invoke, com_tool, office, powershell, screen, uia, wmi_tool};
@@ -71,6 +72,148 @@ impl EventSink for DesktopEventSink {
 
     fn emit_broadcast(&self, event: &str, payload: Value) {
         let _ = self.app.emit(event, payload);
+    }
+}
+
+// ─── PoolEventSink -----------------------------------------------------------
+//
+// Translates kernel-level [`PoolEvent`]s into the Tauri event names the
+// existing React UI already subscribes to (see
+// `src/components/Pond/**` and `src/services/tauri.ts`). Every variant is
+// additionally forwarded on the canonical `host://pool_event` channel so
+// new consumers (e.g. a future unified reducer) can subscribe to the full
+// typed stream without per-kind listeners.
+//
+// Event-name mapping (kept in sync with the frontend):
+//   PoolCreated                         → `pool_session_created`
+//   PoolUpdated / PoolPaused / Resumed  → `pool_session_updated`
+//   PoolArchived                        → `pool_session_updated` (status=archived)
+//   MessageAppended                     → `pool_message_{pool_id}`
+//   TodoChanged                         → `koi_todo_updated`
+//   KoiAssigned                         → `koi_status_changed` (status=assigned)
+//   KoiStatusChanged                    → `koi_status_changed`
+//   KoiStaleRecovered                   → `koi_status_changed` (status=idle) + recovered count
+//   CoordinatorIdle / Completed / TimedOut → `pool_coordinator_*`
+//   FishProgress                        → `fish_progress_{parent_session_id}`
+/// Canonical channel every [`PoolEvent`] is also fanned out on, so
+/// forward-looking consumers can subscribe once and dispatch on the
+/// serialised `kind` tag instead of maintaining per-variant listeners.
+pub const POOL_EVENT_CANONICAL_CHANNEL: &str = "host://pool_event";
+
+/// Pure mapper: produce the list of `(tauri_event_name, payload)` pairs
+/// a given [`PoolEvent`] must be emitted on. Extracted into a
+/// standalone function so tests can assert the wire-format contract
+/// without constructing a Tauri [`AppHandle`].
+///
+/// The canonical channel ([`POOL_EVENT_CANONICAL_CHANNEL`]) is NOT
+/// included here; [`DesktopEventSink::emit_pool`] emits it separately
+/// to keep this function focused on the variant-specific fan-out.
+pub fn pool_event_envelopes(event: &PoolEvent) -> Vec<(String, Value)> {
+    match event {
+        PoolEvent::PoolCreated { pool } => vec![(
+            "pool_session_created".to_string(),
+            serde_json::to_value(pool).unwrap_or(Value::Null),
+        )],
+        PoolEvent::PoolUpdated { pool }
+        | PoolEvent::PoolPaused { pool }
+        | PoolEvent::PoolResumed { pool } => vec![(
+            "pool_session_updated".to_string(),
+            serde_json::to_value(pool).unwrap_or(Value::Null),
+        )],
+        PoolEvent::PoolArchived { pool_id } => vec![(
+            "pool_session_updated".to_string(),
+            json!({ "id": pool_id, "status": "archived" }),
+        )],
+        PoolEvent::MessageAppended { pool_id, message } => vec![(
+            format!("pool_message_{}", pool_id),
+            serde_json::to_value(message).unwrap_or(Value::Null),
+        )],
+        PoolEvent::TodoChanged {
+            pool_id,
+            action,
+            todo,
+        } => vec![(
+            "koi_todo_updated".to_string(),
+            json!({
+                "id": todo.id,
+                "pool_id": pool_id,
+                "action": action,
+                "todo": todo,
+            }),
+        )],
+        PoolEvent::KoiAssigned {
+            pool_id,
+            koi_id,
+            todo_id,
+        } => vec![(
+            "koi_status_changed".to_string(),
+            json!({
+                "id": koi_id,
+                "pool_id": pool_id,
+                "status": "assigned",
+                "todo_id": todo_id,
+            }),
+        )],
+        PoolEvent::KoiStatusChanged {
+            pool_id,
+            koi_id,
+            status,
+        } => vec![(
+            "koi_status_changed".to_string(),
+            json!({
+                "id": koi_id,
+                "pool_id": pool_id,
+                "status": status,
+            }),
+        )],
+        PoolEvent::KoiStaleRecovered {
+            pool_id,
+            koi_id,
+            recovered_todo_count,
+        } => vec![(
+            "koi_status_changed".to_string(),
+            json!({
+                "id": koi_id,
+                "pool_id": pool_id,
+                "status": "idle",
+                "recovered_todo_count": recovered_todo_count,
+                "stale_recovered": true,
+            }),
+        )],
+        PoolEvent::CoordinatorIdle { pool_id } => vec![(
+            "pool_coordinator_idle".to_string(),
+            json!({ "pool_id": pool_id }),
+        )],
+        PoolEvent::CoordinatorCompleted { pool_id, summary } => vec![(
+            "pool_coordinator_completed".to_string(),
+            json!({ "pool_id": pool_id, "summary": summary }),
+        )],
+        PoolEvent::CoordinatorTimedOut { pool_id, summary } => vec![(
+            "pool_coordinator_timed_out".to_string(),
+            json!({ "pool_id": pool_id, "summary": summary }),
+        )],
+        PoolEvent::FishProgress {
+            parent_session_id,
+            fish_id,
+            stage,
+            payload,
+        } => vec![(
+            format!("fish_progress_{}", parent_session_id),
+            json!({
+                "fish_id": fish_id,
+                "stage": stage,
+                "payload": payload,
+            }),
+        )],
+    }
+}
+
+impl PoolEventSink for DesktopEventSink {
+    fn emit_pool(&self, event: &PoolEvent) {
+        let _ = self.app.emit(POOL_EVENT_CANONICAL_CHANNEL, event);
+        for (name, payload) in pool_event_envelopes(event) {
+            let _ = self.app.emit(&name, payload);
+        }
     }
 }
 
@@ -171,6 +314,24 @@ pub struct DesktopHostTools {
     pub skill_loader: Option<Arc<Mutex<SkillLoader>>>,
     pub builtin_tool_enabled: Option<HashMap<String, bool>>,
     pub user_tools_dir: Option<PathBuf>,
+    /// Shared agent event sink — the desktop reuses [`DesktopEventSink`]
+    /// (from `AppState.host_event_sink`) so legacy session events and
+    /// kernel-emitted events travel over the same `AppHandle`.
+    pub event_sink: Option<Arc<dyn EventSink>>,
+    /// Shared per-session plan state backing the kernel `plan_todo`
+    /// tool. Populated from `AppState.plan_state`.
+    pub plan_store: Option<PlanStore>,
+    /// Outlet for kernel pool events. Reuses [`DesktopEventSink`].
+    pub pool_event_sink: Option<Arc<dyn PoolEventSink>>,
+    /// Host-supplied [`SubagentRuntime`]. The desktop wires a
+    /// subprocess-backed runtime (spawns `openpisci-headless run
+    /// --mode pisci`) so Koi turns execute out-of-process. `None`
+    /// leaves `assign_koi` / `resume_todo` / `replace_todo` returning
+    /// a clean "not available" error rather than silently dropping
+    /// work.
+    pub subagent_runtime: Option<Arc<dyn SubagentRuntime>>,
+    /// Coordinator configuration (task timeout, worktree usage).
+    pub coordinator_config: CoordinatorConfig,
 }
 
 impl DesktopHostTools {
@@ -181,12 +342,49 @@ impl DesktopHostTools {
             .unwrap_or(true)
     }
 
+    /// Auto-populate the kernel pool seams (`event_sink`,
+    /// `plan_store`, `pool_event_sink`) from the host's [`AppHandle`]
+    /// if they are not already set. `subagent_runtime` is left as-is:
+    /// the desktop wires it explicitly at startup (see [`DesktopHost::new`])
+    /// so scene-local clones inherit the one runtime rather than
+    /// spinning up a fresh subprocess pool per call.
+    pub fn fill_pool_defaults(mut self) -> Self {
+        let Some(app) = self.app_handle.as_ref() else {
+            return self;
+        };
+        // db is still required for plan-store lookup even though we no
+        // longer need it for the legacy dispatcher.
+        let _ = self.db.as_ref();
+        let sink = Arc::new(DesktopEventSink::new(app.clone()));
+        if self.event_sink.is_none() {
+            let sink_dyn: Arc<dyn EventSink> = sink.clone();
+            self.event_sink = Some(sink_dyn);
+        }
+        if self.pool_event_sink.is_none() {
+            let sink_dyn: Arc<dyn PoolEventSink> = sink.clone();
+            self.pool_event_sink = Some(sink_dyn);
+        }
+        if self.plan_store.is_none() {
+            self.plan_store = app.try_state::<AppState>().map(|s| s.plan_state.clone());
+        }
+        self
+    }
+
     fn neutral_config(&self) -> NeutralToolsConfig {
         NeutralToolsConfig {
             db: self.db.clone(),
             settings: self.settings.clone(),
             builtin_tool_enabled: self.builtin_tool_enabled.clone(),
             user_tools_dir: self.user_tools_dir.clone(),
+            // Full kernel wiring: the desktop registers pool_org /
+            // pool_chat / plan_todo through the neutral tool registry
+            // using the shared event sink, plan store, pool event
+            // sink, and subagent runtime.
+            event_sink: self.event_sink.clone(),
+            plan_store: self.plan_store.clone(),
+            pool_event_sink: self.pool_event_sink.clone(),
+            subagent_runtime: self.subagent_runtime.clone(),
+            coordinator_config: self.coordinator_config.clone(),
         }
     }
 
@@ -224,11 +422,10 @@ impl HostTools for DesktopHostTools {
                 registry.register(Box::new(browser::BrowserTool::new(browser.clone())));
             }
         }
-        if self.is_enabled("plan_todo") {
-            if let Some(ref app) = self.app_handle {
-                registry.register(Box::new(plan_todo::PlanTodoTool { app: app.clone() }));
-            }
-        }
+        // `plan_todo`, `pool_org`, and `pool_chat` are registered by the
+        // neutral kernel layer via `register_neutral_tools` above (driven
+        // by `NeutralToolsConfig.plan_store / pool_event_sink / ...`).
+        // We only keep the Tauri-coupled tools here.
         if self.is_enabled("call_fish") {
             if let Some(ref app) = self.app_handle {
                 registry.register(Box::new(call_fish::CallFishTool { app: app.clone() }));
@@ -249,23 +446,6 @@ impl HostTools for DesktopHostTools {
         if self.is_enabled("chat_ui") {
             if let Some(ref app) = self.app_handle {
                 registry.register(Box::new(chat_ui::ChatUiTool { app: app.clone() }));
-            }
-        }
-        if self.is_enabled("pool_org") {
-            if let (Some(ref app), Some(ref db)) = (&self.app_handle, &self.db) {
-                registry.register(Box::new(pool_org::PoolOrgTool {
-                    app: app.clone(),
-                    db: db.clone(),
-                }));
-            }
-        }
-        if self.is_enabled("pool_chat") {
-            if let (Some(ref app), Some(ref db)) = (&self.app_handle, &self.db) {
-                registry.register(Box::new(pool_chat::PoolChatTool {
-                    app: app.clone(),
-                    db: db.clone(),
-                    sender_id: "pisci".to_string(),
-                }));
             }
         }
         if self.is_enabled("app_control") {
@@ -410,6 +590,27 @@ impl DesktopHost {
             .app_data_dir()
             .ok()
             .or_else(|| Some(PathBuf::from(".pisci")));
+        // Reuse `DesktopEventSink` for both `EventSink` and `PoolEventSink`
+        // so legacy session events and kernel pool events share a single
+        // `AppHandle` + atomic emit path.
+        let event_sink_dyn: Arc<dyn EventSink> = event_sink.clone();
+        let pool_event_sink_dyn: Arc<dyn PoolEventSink> = event_sink.clone();
+
+        // Locate `openpisci-headless` for the kernel's subagent
+        // runtime. Production builds ship the headless binary
+        // alongside the desktop executable; dev runs can drop it
+        // anywhere on PATH or set `PISCI_HEADLESS_BIN`. The runtime
+        // itself tolerates a missing binary — `spawn_koi_turn` just
+        // surfaces the filesystem error up to the caller.
+        let headless_bin = resolve_headless_binary();
+        let subprocess = pisci_kernel::pool::SubprocessSubagentRuntime::new(headless_bin);
+        let subprocess = if let Some(ref dir) = app_data_dir {
+            subprocess.with_app_data_dir(dir.clone())
+        } else {
+            subprocess
+        };
+        let subagent_runtime: Arc<dyn SubagentRuntime> = Arc::new(subprocess);
+
         let tools = Arc::new(DesktopHostTools {
             browser: Some(state.browser.clone()),
             db: Some(state.db.clone()),
@@ -425,6 +626,11 @@ impl DesktopHost {
             skill_loader: None,
             builtin_tool_enabled: None,
             user_tools_dir: None,
+            event_sink: Some(event_sink_dyn),
+            plan_store: Some(state.plan_state.clone()),
+            pool_event_sink: Some(pool_event_sink_dyn),
+            subagent_runtime: Some(subagent_runtime),
+            coordinator_config: Default::default(),
         });
         let secrets = Arc::new(DesktopSecretsStore::new(state.settings.clone()));
         Self {
@@ -460,4 +666,48 @@ impl HostRuntime for DesktopHost {
             .app_data_dir()
             .unwrap_or_else(|_| PathBuf::from(".pisci"))
     }
+
+    fn pool_event_sink(&self) -> Arc<dyn PoolEventSink> {
+        // `DesktopEventSink` implements both [`EventSink`] and
+        // [`PoolEventSink`] — reuse the same instance so both legacy
+        // session events and new pool events travel over the same
+        // `AppHandle`.
+        self.event_sink.clone()
+    }
+
+    fn subagent_runtime(&self) -> Option<Arc<dyn SubagentRuntime>> {
+        self.tools.subagent_runtime.clone()
+    }
+}
+
+/// Locate the `openpisci-headless` binary the kernel's
+/// [`SubprocessSubagentRuntime`] should spawn.
+///
+/// Resolution order:
+/// 1. `PISCI_HEADLESS_BIN` environment variable (absolute path).
+/// 2. Sibling of the desktop executable
+///    (`current_exe().parent().join("openpisci-headless[.exe]")`).
+/// 3. Bare command name `openpisci-headless` — defers resolution to
+///    `PATH` at spawn time.
+fn resolve_headless_binary() -> PathBuf {
+    if let Ok(raw) = std::env::var("PISCI_HEADLESS_BIN") {
+        let raw = raw.trim();
+        if !raw.is_empty() {
+            return PathBuf::from(raw);
+        }
+    }
+    let exe_name = if cfg!(windows) {
+        "openpisci-headless.exe"
+    } else {
+        "openpisci-headless"
+    };
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join(exe_name);
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+    PathBuf::from(exe_name)
 }

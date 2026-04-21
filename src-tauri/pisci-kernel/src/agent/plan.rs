@@ -1,10 +1,30 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanTodoItem {
     pub id: String,
     pub content: String,
     pub status: String,
+}
+
+/// Shared per-session plan state used by the kernel `plan_todo` tool and
+/// by host code that renders the plan back into the system prompt (task
+/// spine) or forwards it into scheduler turns.
+pub type PlanState = HashMap<String, Vec<PlanTodoItem>>;
+
+/// Thread-safe handle to [`PlanState`]. Hosts construct one at startup
+/// and hand the same `Arc` to (a) the neutral `plan_todo` tool, (b) any
+/// call-Koi / call-Fish tool that forwards plan context, and (c) chat
+/// command handlers that rehydrate the task spine.
+pub type PlanStore = Arc<Mutex<PlanState>>;
+
+/// Build an empty [`PlanStore`]. Equivalent to `Arc::new(Mutex::new(..))`,
+/// exposed so hosts avoid importing `tokio::sync` directly.
+pub fn new_plan_store() -> PlanStore {
+    Arc::new(Mutex::new(HashMap::new()))
 }
 
 impl PlanTodoItem {

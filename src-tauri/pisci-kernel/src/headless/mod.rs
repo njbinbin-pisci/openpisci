@@ -109,6 +109,11 @@ pub fn register_default_cli_tools(
         settings: Some(settings),
         builtin_tool_enabled: None,
         user_tools_dir: None,
+        event_sink: None,
+        plan_store: None,
+        pool_event_sink: None,
+        subagent_runtime: None,
+        coordinator_config: Default::default(),
     };
     crate::tools::register_neutral_tools(handle, &cfg);
 }

@@ -673,7 +673,9 @@ pub async fn execute_task(
             skill_loader: None,
             builtin_tool_enabled: Some(builtin_tool_enabled.clone()),
             user_tools_dir,
+            ..DesktopHostTools::default()
         }
+        .fill_pool_defaults()
         .build_registry(),
     );
     let policy = Arc::new(PolicyGate::with_profile_and_flags(

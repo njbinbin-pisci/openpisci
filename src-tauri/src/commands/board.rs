@@ -1,10 +1,34 @@
-/// Board commands — Kanban board for Koi todo management.
+//! Board commands — Kanban board for Koi todo management.
+//!
+//! These Tauri commands remain thin wrappers around the persistence
+//! layer for UI-initiated todo mutations. All event emissions go through
+//! [`DesktopEventSink::emit_pool`] so desktop, CLI, and kernel sources
+//! share a single [`PoolEvent`]-shaped wire format (see
+//! `host::DesktopEventSink`'s impl for the per-variant Tauri event name).
+
+use std::sync::Arc;
+
+use pisci_core::host::{PoolEvent, PoolEventSink, TodoChangeAction, TodoSnapshot};
+use serde::Deserialize;
+use tauri::State;
+
+use crate::host::DesktopEventSink;
 use crate::koi::runtime::KoiRuntime;
 use crate::koi::KoiTodo;
 use crate::store::AppState;
-use serde::Deserialize;
-use serde_json::json;
-use tauri::{Emitter, State};
+
+fn pool_sink(app: &tauri::AppHandle) -> Arc<DesktopEventSink> {
+    Arc::new(DesktopEventSink::new(app.clone()))
+}
+
+fn emit_todo(app: &tauri::AppHandle, action: TodoChangeAction, todo: &KoiTodo) {
+    let pool_id = todo.pool_session_id.clone().unwrap_or_default();
+    pool_sink(app).emit_pool(&PoolEvent::TodoChanged {
+        pool_id,
+        action,
+        todo: TodoSnapshot::from(todo),
+    });
+}
 
 #[tauri::command]
 pub async fn list_koi_todos(
@@ -31,6 +55,7 @@ pub struct CreateKoiTodoInput {
 
 #[tauri::command]
 pub async fn create_koi_todo(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     input: CreateKoiTodoInput,
 ) -> Result<KoiTodo, String> {
@@ -48,8 +73,9 @@ pub async fn create_koi_todo(
             input.task_timeout_secs.unwrap_or(0),
         )
         .map_err(|e| e.to_string())?;
+    drop(db);
 
-    let _ = state.app_handle.emit("koi_todo_updated", &todo);
+    emit_todo(&app, TodoChangeAction::Created, &todo);
     Ok(todo)
 }
 
@@ -64,6 +90,7 @@ pub struct UpdateKoiTodoInput {
 
 #[tauri::command]
 pub async fn update_koi_todo(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     input: UpdateKoiTodoInput,
 ) -> Result<(), String> {
@@ -76,13 +103,19 @@ pub async fn update_koi_todo(
         input.priority.as_deref(),
     )
     .map_err(|e| e.to_string())?;
+    // Re-read so the emitted snapshot reflects the latest state.
+    let todo = db.get_koi_todo(&input.id).map_err(|e| e.to_string())?;
+    drop(db);
 
-    let _ = state.app_handle.emit("koi_todo_updated", &input.id);
+    if let Some(todo) = todo {
+        emit_todo(&app, TodoChangeAction::Updated, &todo);
+    }
     Ok(())
 }
 
 #[tauri::command]
 pub async fn claim_koi_todo(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     id: String,
     claimed_by: String,
@@ -90,15 +123,17 @@ pub async fn claim_koi_todo(
     let db = state.db.lock().await;
     db.claim_koi_todo(&id, &claimed_by)
         .map_err(|e| e.to_string())?;
-    let _ = state.app_handle.emit(
-        "koi_todo_updated",
-        json!({ "id": id, "action": "claimed", "claimed_by": claimed_by }),
-    );
+    let todo = db.get_koi_todo(&id).map_err(|e| e.to_string())?;
+    drop(db);
+    if let Some(todo) = todo {
+        emit_todo(&app, TodoChangeAction::Claimed, &todo);
+    }
     Ok(())
 }
 
 #[tauri::command]
 pub async fn complete_koi_todo(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     id: String,
     result_message_id: Option<i64>,
@@ -106,10 +141,11 @@ pub async fn complete_koi_todo(
     let db = state.db.lock().await;
     db.complete_koi_todo(&id, result_message_id)
         .map_err(|e| e.to_string())?;
-    let _ = state.app_handle.emit(
-        "koi_todo_updated",
-        json!({ "id": id, "action": "completed" }),
-    );
+    let todo = db.get_koi_todo(&id).map_err(|e| e.to_string())?;
+    drop(db);
+    if let Some(todo) = todo {
+        emit_todo(&app, TodoChangeAction::Completed, &todo);
+    }
     Ok(())
 }
 
@@ -127,10 +163,25 @@ pub async fn resume_koi_todo(
 }
 
 #[tauri::command]
-pub async fn delete_koi_todo(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let db = state.db.lock().await;
-    db.delete_koi_todo(&id).map_err(|e| e.to_string())?;
+pub async fn delete_koi_todo(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    // Read the todo once so the delete-event snapshot is accurate —
+    // after `delete_koi_todo` the row is gone and we can only emit an
+    // id.
+    let snapshot = {
+        let db = state.db.lock().await;
+        db.get_koi_todo(&id).map_err(|e| e.to_string())?
+    };
+    {
+        let db = state.db.lock().await;
+        db.delete_koi_todo(&id).map_err(|e| e.to_string())?;
+    }
 
-    let _ = state.app_handle.emit("koi_todo_updated", &id);
+    if let Some(todo) = snapshot {
+        emit_todo(&app, TodoChangeAction::Deleted, &todo);
+    }
     Ok(())
 }

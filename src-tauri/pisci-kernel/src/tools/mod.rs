@@ -21,6 +21,9 @@ pub mod file_write;
 pub mod mcp;
 pub mod memory_tool;
 pub mod pdf;
+pub mod plan_todo;
+pub mod pool_chat;
+pub mod pool_org;
 pub mod process_control;
 pub mod recall_tool;
 pub mod shell;
@@ -29,9 +32,12 @@ pub mod user_tool;
 pub mod vision_context;
 pub mod web_search;
 
+use crate::agent::plan::PlanStore;
 use crate::agent::tool::{Tool, ToolRegistry, ToolRegistryHandleExt};
+use crate::pool::coordinator::CoordinatorConfig;
+use crate::pool::PoolStore;
 use crate::store::{Database, Settings};
-use pisci_core::host::ToolRegistryHandle;
+use pisci_core::host::{EventSink, PoolEventSink, SubagentRuntime, ToolRegistryHandle};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -54,6 +60,25 @@ pub struct NeutralToolsConfig {
     /// Directory holding user-authored tool definitions (JSON). `None`
     /// disables dynamic user-tool loading.
     pub user_tools_dir: Option<PathBuf>,
+    /// Shared agent event sink (required for `plan_todo`). Hosts that
+    /// omit this field keep the plan tool disabled; the agent loop has
+    /// its own event channel.
+    pub event_sink: Option<Arc<dyn EventSink>>,
+    /// Shared per-session plan state (required for `plan_todo`).
+    pub plan_store: Option<PlanStore>,
+    /// Sink for [`pisci_core::host::PoolEvent`] — required to enable
+    /// the `pool_org` / `pool_chat` tools.
+    pub pool_event_sink: Option<Arc<dyn PoolEventSink>>,
+    /// Host-supplied [`SubagentRuntime`] used by the coordinator to
+    /// wake Kois via subprocesses for `@mention`, `assign_koi`,
+    /// `resume_todo`, and `replace_todo`. When `None`, those actions
+    /// surface a clean "no subagent runtime configured" error rather
+    /// than silently dropping wake-ups.
+    pub subagent_runtime: Option<Arc<dyn SubagentRuntime>>,
+    /// Coordinator configuration (task timeout, worktree usage, …).
+    /// Defaults are fine for tests; hosts typically override to match
+    /// user settings.
+    pub coordinator_config: CoordinatorConfig,
 }
 
 impl NeutralToolsConfig {
@@ -145,6 +170,36 @@ pub fn register_neutral_into(registry: &mut ToolRegistry, cfg: &NeutralToolsConf
     }
     if cfg.is_enabled("pdf") {
         registry.register(Box::new(pdf::PdfTool));
+    }
+
+    // ── Pool / plan tools ───────────────────────────────────────────
+    if cfg.is_enabled("pool_org") {
+        if let (Some(db), Some(sink)) = (cfg.db.as_ref(), cfg.pool_event_sink.as_ref()) {
+            registry.register(Box::new(pool_org::PoolOrgTool {
+                store: PoolStore::new(db.clone()),
+                sink: sink.clone(),
+                subagent: cfg.subagent_runtime.clone(),
+                coordinator_cfg: cfg.coordinator_config.clone(),
+            }));
+        }
+    }
+    if cfg.is_enabled("pool_chat") {
+        if let (Some(db), Some(sink)) = (cfg.db.as_ref(), cfg.pool_event_sink.as_ref()) {
+            registry.register(Box::new(pool_chat::PoolChatTool {
+                store: PoolStore::new(db.clone()),
+                sink: sink.clone(),
+                subagent: cfg.subagent_runtime.clone(),
+                coordinator_cfg: cfg.coordinator_config.clone(),
+            }));
+        }
+    }
+    if cfg.is_enabled("plan_todo") {
+        if let (Some(store), Some(sink)) = (cfg.plan_store.as_ref(), cfg.event_sink.as_ref()) {
+            registry.register(Box::new(plan_todo::PlanTodoTool {
+                store: store.clone(),
+                event_sink: sink.clone(),
+            }));
+        }
     }
 
     // ── User-authored JSON tools ────────────────────────────────────

@@ -6,7 +6,8 @@
 //!
 //! * `version` and `--help` smoke tests.
 //! * `capabilities` schema (JSON structure + required fields).
-//! * `run` argument validation (pool rejection, missing prompt).
+//! * `run` argument validation (missing prompt, unknown flags).
+//! * `rpc` subcommand protocol smoke (shutdown roundtrip, invalid frame).
 //!
 //! The tests intentionally do NOT require a live LLM API key — they target
 //! the kernel/CLI wiring, not the agent loop. A separate opt-in smoke test
@@ -71,16 +72,26 @@ fn capabilities_emits_expected_schema() {
 
     let disabled = value["disabled_tools"].as_array().unwrap();
     let names: Vec<&str> = disabled.iter().filter_map(|v| v["name"].as_str()).collect();
-    for required in ["browser", "call_fish", "call_koi", "plan_todo"] {
+    for required in ["browser", "call_fish", "call_koi", "chat_ui"] {
         assert!(
             names.contains(&required),
             "expected disabled tool `{required}` in {names:?}"
         );
     }
+    // Phase 1.7: pool / plan tools now live in pisci-kernel and must NOT
+    // be flagged as disabled for the CLI host.
+    for newly_enabled in ["plan_todo", "pool_org", "pool_chat"] {
+        assert!(
+            !names.contains(&newly_enabled),
+            "{newly_enabled} should be enabled for openpisci-headless, still listed in {names:?}"
+        );
+    }
 }
 
 #[test]
-fn capabilities_pool_mode_marks_run_unsupported() {
+fn capabilities_pool_mode_reports_mode_tag() {
+    // Phase 2 onwards, pool is supported — the capabilities payload just
+    // reports the selected mode without marking `<run>` unsupported.
     let (out, stdout, _stderr) = run(&["capabilities", "--mode", "pool"]);
     assert!(out.status.success());
     let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
@@ -92,18 +103,8 @@ fn capabilities_pool_mode_marks_run_unsupported() {
         .filter_map(|v| v["name"].as_str().map(str::to_string))
         .collect();
     assert!(
-        names.iter().any(|n| n == "<run>"),
-        "pool mode should flag <run> as unsupported, got {names:?}"
-    );
-}
-
-#[test]
-fn run_rejects_pool_mode() {
-    let (out, _stdout, stderr) = run(&["run", "--prompt", "hi", "--mode", "pool"]);
-    assert!(!out.status.success(), "pool mode should fail");
-    assert!(
-        stderr.contains("does not support pool mode"),
-        "unexpected stderr: {stderr}"
+        !names.iter().any(|n| n == "<run>"),
+        "<run> should no longer be flagged unsupported; got {names:?}"
     );
 }
 
@@ -132,6 +133,103 @@ fn unknown_subcommand_errors_out() {
     let (out, _stdout, stderr) = run(&["not-a-command"]);
     assert!(!out.status.success());
     assert!(stderr.contains("unknown subcommand"));
+}
+
+#[test]
+fn rpc_shutdown_roundtrip() {
+    // Drive the child by piping `shutdown` on stdin and asserting the
+    // child replies with a `null` result, then exits cleanly. This
+    // validates the JSON-RPC framing used by `SubprocessSubagentRuntime`
+    // without needing a real Koi turn.
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+
+    let mut child = Command::new(bin_path())
+        .arg("rpc")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rpc child");
+
+    {
+        let stdin = child.stdin.as_mut().expect("child stdin");
+        stdin
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"shutdown\"}\n")
+            .expect("write shutdown");
+        stdin.flush().ok();
+    }
+
+    let mut stdout = String::new();
+    child
+        .stdout
+        .as_mut()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .expect("read child stdout");
+    let status = child.wait().expect("child exit");
+    assert!(
+        status.success(),
+        "rpc child should exit 0 after shutdown, got {status:?}, stdout=`{stdout}`"
+    );
+    // The response line must be valid JSON with `"id":1` and a null
+    // result. `trim` to tolerate trailing whitespace; `lines().next()`
+    // because extra log lines may trail on stderr not stdout.
+    let line = stdout.lines().next().unwrap_or("").trim();
+    let value: serde_json::Value =
+        serde_json::from_str(line).unwrap_or_else(|e| panic!("bad rpc response `{line}`: {e}"));
+    assert_eq!(value["id"], 1);
+    assert!(
+        value.get("result").is_some(),
+        "response missing result: {value}"
+    );
+}
+
+#[test]
+fn rpc_unknown_method_returns_jsonrpc_error() {
+    // The rpc loop must keep running after an unknown-method error and
+    // must not crash. We send one invalid method, one shutdown, and
+    // expect two response lines.
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+
+    let mut child = Command::new(bin_path())
+        .arg("rpc")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rpc child");
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        stdin
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"no.such.method\"}\n")
+            .unwrap();
+        stdin
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"shutdown\"}\n")
+            .unwrap();
+        stdin.flush().ok();
+    }
+    let mut stdout = String::new();
+    child
+        .stdout
+        .as_mut()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .expect("read stdout");
+    child.wait().expect("exit");
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(
+        lines.len() >= 2,
+        "expected two response lines, got {lines:?}"
+    );
+    let first: serde_json::Value = serde_json::from_str(lines[0].trim()).unwrap();
+    assert_eq!(first["id"], 10);
+    assert_eq!(first["error"]["code"], -32601);
+    let second: serde_json::Value = serde_json::from_str(lines[1].trim()).unwrap();
+    assert_eq!(second["id"], 11);
+    assert!(second.get("result").is_some());
 }
 
 #[test]

@@ -1,20 +1,24 @@
 //! `openpisci-headless` — fully host-agnostic CLI entry point.
 //!
-//! Wires a [`CliHost`] onto the pisci kernel and supports three subcommands:
+//! Wires a [`CliHost`] onto the pisci kernel and supports four subcommands:
 //!
 //!   * `capabilities [--mode pisci|pool]` — JSON report of OS, selected
 //!     mode, and disabled tools. Does not talk to an LLM.
 //!   * `version` — prints the kernel version.
-//!   * `run --prompt <text> [--workspace <dir>] ...` — runs a single
-//!     pisci-mode agent turn entirely inside `pisci-kernel`, with neutral
-//!     tools only. `pool` mode is rejected here and must use the desktop
-//!     `openpisci` binary.
+//!   * `run --prompt <text> [--workspace <dir>] ...` — runs one agent
+//!     turn through `pisci-kernel`. `--mode pisci` stays single-agent;
+//!     `--mode pool` creates/attaches to a pool session and fans out Koi
+//!     turns as `openpisci-headless rpc` subprocesses.
+//!   * `rpc` — JSON-RPC child loop consumed by
+//!     `pisci_kernel::pool::SubprocessSubagentRuntime` for Koi turn
+//!     execution. Not intended to be invoked by humans.
 //!
 //! All events are serialised as NDJSON on stdout via [`CliEventSink`]; the
 //! final response is either printed to stdout as pretty JSON or written to
 //! `--output <file>`.
 
 use pisci_cli::args::{parse_capabilities_mode, parse_run_request, print_usage, write_response};
+use pisci_cli::rpc_server::run_rpc_loop;
 use pisci_cli::runner::{resolve_app_data_dir, run_pisci_once};
 use pisci_core::host::{DisabledToolInfo, HeadlessCliMode};
 use serde_json::json;
@@ -33,6 +37,17 @@ fn current_os() -> &'static str {
 /// here (not in the kernel) because "which desktop tools are missing" is a
 /// host-policy decision rather than a kernel fact.
 fn headless_disabled_tools(mode: HeadlessCliMode) -> Vec<DisabledToolInfo> {
+    // `plan_todo`, `pool_org`, and `pool_chat` used to live in this list
+    // back when they were Tauri-only. Since Phase 1.7 of the pool
+    // migration they ship inside `pisci-kernel::tools` and are registered
+    // by `run_pisci_once`, so openpisci-headless can now drive them
+    // end-to-end (plan state + pool coordination over the shared SQLite
+    // DB). The only remaining limitation is that Koi turn dispatch
+    // (`assign_koi` / `resume_todo` / `replace_todo`) still requires the
+    // desktop `KoiRuntime` until Phase 2 wires a subprocess-backed
+    // `SubagentRuntime` — until then the CLI host reports the tools as
+    // available but returns a clean "dispatcher not wired" error when a
+    // caller actually tries to spawn a Koi.
     let common = [
         (
             "browser",
@@ -43,24 +58,12 @@ fn headless_disabled_tools(mode: HeadlessCliMode) -> Vec<DisabledToolInfo> {
             "Disabled in openpisci-headless: no interactive desktop chat UI.",
         ),
         (
-            "plan_todo",
-            "Disabled in openpisci-headless: plan state is not broadcast to a UI.",
-        ),
-        (
             "call_fish",
             "Disabled in openpisci-headless: fish sub-agents require an AppHandle.",
         ),
         (
             "call_koi",
             "Disabled in openpisci-headless: koi delegation requires AppState.",
-        ),
-        (
-            "pool_org",
-            "Disabled in openpisci-headless: pool orchestration is desktop-only.",
-        ),
-        (
-            "pool_chat",
-            "Disabled in openpisci-headless: pool orchestration is desktop-only.",
         ),
         (
             "app_control",
@@ -97,15 +100,7 @@ fn headless_disabled_tools(mode: HeadlessCliMode) -> Vec<DisabledToolInfo> {
         }
     }
 
-    if matches!(mode, HeadlessCliMode::Pool) {
-        out.push(DisabledToolInfo {
-            name: "<run>".to_string(),
-            reason:
-                "openpisci-headless does not support pool mode; use the desktop `openpisci` binary."
-                    .to_string(),
-        });
-    }
-
+    let _ = mode;
     out
 }
 
@@ -143,6 +138,7 @@ fn real_main(args: &[String]) -> Result<(), String> {
     let subcommand = args.first().map(String::as_str).unwrap_or("capabilities");
     match subcommand {
         "run" => run_subcommand(&args[1..]),
+        "rpc" => run_rpc_loop(),
         "capabilities" | "caps" | "--capabilities" => capabilities_subcommand(&args[1..]),
         "--version" | "version" | "-v" => {
             println!("openpisci-headless {}", pisci_kernel::KERNEL_VERSION);
@@ -154,7 +150,7 @@ fn real_main(args: &[String]) -> Result<(), String> {
         }
         other => {
             eprintln!(
-                "openpisci-headless: unknown subcommand `{other}`. Available: run, capabilities, version"
+                "openpisci-headless: unknown subcommand `{other}`. Available: run, rpc, capabilities, version"
             );
             Err(String::new())
         }

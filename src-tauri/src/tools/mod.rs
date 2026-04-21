@@ -6,12 +6,13 @@ pub mod call_koi;
 pub mod chat_ui;
 pub mod dpi;
 pub mod office;
-pub mod plan_todo;
-pub mod pool_chat;
-pub mod pool_org;
 pub mod powershell;
 pub mod skill_list;
 pub mod wmi_tool;
+
+// `plan_todo`, `pool_org`, `pool_chat` now live entirely in
+// `pisci-kernel::tools::*` and register themselves through
+// `register_neutral_tools` — the desktop no longer carries its own copy.
 
 // ─── Platform-neutral tools re-exported from the kernel.
 //
@@ -72,18 +73,17 @@ const WINDOWS_ORIENTED_TOOLS: &[(&str, &str)] = &[
     ),
 ];
 
+// Tools disabled in headless pisci mode. `pool_org` / `pool_chat` /
+// `plan_todo` are intentionally **not** in this list: starting from
+// Phase 1.7 they live in `pisci-kernel::tools` and are registered by
+// every headless run so a Koi turn spawned as a standalone
+// `openpisci-headless` process can still coordinate through the pool
+// database. `call_koi` remains desktop-only (it needs the in-process
+// Tauri `KoiRuntime`, which the CLI host does not host).
 const HEADLESS_PISCI_DISABLED_TOOLS: &[(&str, &str)] = &[
     (
         "call_koi",
         "Disabled in headless pisci mode: single-agent baseline should not delegate to Koi.",
-    ),
-    (
-        "pool_org",
-        "Disabled in headless pisci mode: project-pool orchestration belongs to pool mode.",
-    ),
-    (
-        "pool_chat",
-        "Disabled in headless pisci mode: project-pool coordination belongs to pool mode.",
     ),
     (
         "chat_ui",

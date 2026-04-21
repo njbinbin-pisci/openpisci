@@ -1717,8 +1717,8 @@ impl KoiRuntime {
         content: &str,
     ) {
         let is_handoff = matches!(
-            crate::pisci::project_state::extract_project_status_signal(content),
-            Some(crate::pisci::project_state::STATUS_FOLLOW_UP)
+            pisci_core::project_state::extract_project_status_signal(content),
+            Some(pisci_core::project_state::STATUS_FOLLOW_UP)
         );
         if !is_handoff {
             return;

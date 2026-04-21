@@ -10,7 +10,8 @@ use std::io::{self, Write};
 use std::sync::Mutex;
 
 use pisci_core::host::{
-    ConfirmRequest, EventSink, HostRuntime, HostTools, InteractiveRequest, Notifier, SecretsStore,
+    ConfirmRequest, EventSink, HostRuntime, HostTools, InteractiveRequest, Notifier, PoolEvent,
+    PoolEventSink, SecretsStore, SubagentRuntime,
 };
 use serde_json::{json, Value};
 
@@ -59,6 +60,34 @@ impl CliEventSink {
         };
         let _ = writeln!(out, "{}", value);
         let _ = out.flush();
+    }
+}
+
+// NDJSON wire shape for pool events — one line per emission, same stdout
+// stream used for `session_event` / `broadcast`, but with the outer
+// `kind` set to `pool_event` so consumers can route on a single field:
+//
+// ```json
+// {"kind":"pool_event","pool_id":"p1","event":"pool_created",
+//  "payload":{"kind":"pool_created","pool":{...}}}
+// ```
+//
+// `payload` is the full serialized [`PoolEvent`] (including its own
+// `kind` tag), so downstream consumers can deserialize it back into a
+// `PoolEvent` without losing any field. `event` and `pool_id` are
+// denormalised convenience copies for quick filtering.
+impl PoolEventSink for CliEventSink {
+    fn emit_pool(&self, event: &PoolEvent) {
+        // Fallback to `Value::Null` if serialization somehow fails — better
+        // to surface a degraded line than to drop the event silently.
+        let payload = serde_json::to_value(event).unwrap_or(Value::Null);
+        let line = json!({
+            "kind": "pool_event",
+            "pool_id": event.pool_id(),
+            "event": event.kind(),
+            "payload": payload,
+        });
+        self.write_line(&line);
     }
 }
 
@@ -119,13 +148,16 @@ impl SecretsStore for CliSecretsStore {
     }
 }
 
-/// Aggregate host passed to the kernel. Holds all four adapter singletons.
+/// Aggregate host passed to the kernel. Holds all four adapter singletons
+/// plus (optionally, for pool-mode parents) a [`SubagentRuntime`] used to
+/// fan out Koi turns as subprocesses.
 pub struct CliHost {
     event_sink: std::sync::Arc<CliEventSink>,
     notifier: std::sync::Arc<CliNotifier>,
     host_tools: std::sync::Arc<CliHostTools>,
     secrets: std::sync::Arc<CliSecretsStore>,
     app_data_dir: std::path::PathBuf,
+    subagent_runtime: Option<std::sync::Arc<dyn SubagentRuntime>>,
 }
 
 impl CliHost {
@@ -136,7 +168,17 @@ impl CliHost {
             host_tools: std::sync::Arc::new(CliHostTools),
             secrets: std::sync::Arc::new(CliSecretsStore),
             app_data_dir,
+            subagent_runtime: None,
         }
+    }
+
+    /// Attach a [`SubagentRuntime`] so the CLI host can drive pool-mode
+    /// runs. Without this, `assign_koi` / mention dispatch will surface
+    /// "no subagent runtime" errors — appropriate for the pisci-only
+    /// path but not for `run --mode pool`.
+    pub fn with_subagent_runtime(mut self, runtime: std::sync::Arc<dyn SubagentRuntime>) -> Self {
+        self.subagent_runtime = Some(runtime);
+        self
     }
 }
 
@@ -155,5 +197,16 @@ impl HostRuntime for CliHost {
     }
     fn app_data_dir(&self) -> std::path::PathBuf {
         self.app_data_dir.clone()
+    }
+
+    fn pool_event_sink(&self) -> std::sync::Arc<dyn PoolEventSink> {
+        // `CliEventSink` implements both [`EventSink`] and [`PoolEventSink`]
+        // so every emission goes through the same stdout lock — prevents
+        // interleaving between pool/session lines at line boundaries.
+        self.event_sink.clone()
+    }
+
+    fn subagent_runtime(&self) -> Option<std::sync::Arc<dyn SubagentRuntime>> {
+        self.subagent_runtime.clone()
     }
 }

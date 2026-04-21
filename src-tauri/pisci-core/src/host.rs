@@ -183,6 +183,25 @@ pub trait HostRuntime: Send + Sync {
     fn host_tools(&self) -> Arc<dyn HostTools>;
     fn secrets(&self) -> Arc<dyn SecretsStore>;
     fn app_data_dir(&self) -> PathBuf;
+
+    /// Typed pool-event outlet. Hosts that care about pool state
+    /// transitions (desktop UI, CLI NDJSON, benchmark harnesses) override
+    /// this; hosts that don't keep the null default, which silently drops
+    /// every event. The return type is `Arc<dyn PoolEventSink>` so
+    /// kernel services can clone the handle into background tasks
+    /// without borrowing the host.
+    fn pool_event_sink(&self) -> Arc<dyn PoolEventSink> {
+        Arc::new(NullPoolEventSink)
+    }
+
+    /// Optional [`SubagentRuntime`] the host provides for fanning out
+    /// Koi turns as subprocesses. Hosts that don't run multi-agent
+    /// coordination (pure Pisci CLI chat, benchmark harness) return
+    /// `None`; hosts that do (desktop app, `openpisci-headless run
+    /// --mode pool`) plug in a [`SubprocessSubagentRuntime`].
+    fn subagent_runtime(&self) -> Option<Arc<dyn SubagentRuntime>> {
+        None
+    }
 }
 
 // -- Shared headless schema ------------------------------------------------
@@ -301,6 +320,454 @@ pub struct HeadlessCliResponse {
     pub disabled_tools: Vec<DisabledToolInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool_wait: Option<PoolWaitSummary>,
+}
+
+// ─── Pool events & traits ───────────────────────────────────────────────
+//
+// The pool runtime emits a finite, strongly-typed event stream that hosts
+// surface in whatever way suits them: the desktop maps each variant onto
+// a Tauri event name (e.g. `pool_message_{id}`), while the CLI writes each
+// event as one NDJSON line on stdout. Both hosts share the exact same
+// wire shape so that downstream consumers (frontend, python harnesses,
+// subprocess readers) see one canonical protocol.
+
+/// Categorical description of a todo row mutation. Used by
+/// [`PoolEvent::TodoChanged`] so frontends can run cheap reducer logic
+/// without diffing the full snapshot against their local cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoChangeAction {
+    Created,
+    Updated,
+    Claimed,
+    Completed,
+    Cancelled,
+    Blocked,
+    Resumed,
+    Replaced,
+    Deleted,
+}
+
+/// Lightweight snapshot of a `KoiTodo` row. Kept as a flat struct so hosts
+/// can forward it verbatim to their UI layer without reaching into
+/// `pisci_core::models`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoSnapshot {
+    pub id: String,
+    pub owner_id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub priority: String,
+    pub assigned_by: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depends_on: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_message_id: Option<i64>,
+    pub source_type: String,
+    #[serde(default)]
+    pub task_timeout_secs: u32,
+}
+
+impl From<&crate::models::KoiTodo> for TodoSnapshot {
+    fn from(t: &crate::models::KoiTodo) -> Self {
+        Self {
+            id: t.id.clone(),
+            owner_id: t.owner_id.clone(),
+            title: t.title.clone(),
+            description: t.description.clone(),
+            status: t.status.clone(),
+            priority: t.priority.clone(),
+            assigned_by: t.assigned_by.clone(),
+            pool_session_id: t.pool_session_id.clone(),
+            claimed_by: t.claimed_by.clone(),
+            depends_on: t.depends_on.clone(),
+            blocked_reason: t.blocked_reason.clone(),
+            result_message_id: t.result_message_id,
+            source_type: t.source_type.clone(),
+            task_timeout_secs: t.task_timeout_secs,
+        }
+    }
+}
+
+/// Flat pool-session snapshot — mirrors `PoolSession` but only carries the
+/// fields hosts actually forward to the UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoolSessionSnapshot {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_dir: Option<String>,
+    #[serde(default)]
+    pub task_timeout_secs: u32,
+}
+
+impl From<&crate::models::PoolSession> for PoolSessionSnapshot {
+    fn from(p: &crate::models::PoolSession) -> Self {
+        Self {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            status: p.status.clone(),
+            project_dir: p.project_dir.clone(),
+            task_timeout_secs: p.task_timeout_secs,
+        }
+    }
+}
+
+/// Structured view of a newly appended pool message. The event carries the
+/// full row verbatim (rather than just the id) so frontends can render
+/// without a round-trip to the backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoolMessageSnapshot {
+    pub id: i64,
+    pub pool_session_id: String,
+    pub sender_id: String,
+    pub content: String,
+    pub msg_type: String,
+    #[serde(default)]
+    pub metadata: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub todo_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<&crate::models::PoolMessage> for PoolMessageSnapshot {
+    fn from(m: &crate::models::PoolMessage) -> Self {
+        // `PoolMessage::metadata` is a JSON-encoded string for historical
+        // reasons; the wire-level snapshot promotes it back to a `Value`
+        // so hosts don't need to re-parse. Fallback to `Null` on malformed
+        // stored metadata instead of dropping the event.
+        let metadata: Value = if m.metadata.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&m.metadata).unwrap_or(Value::Null)
+        };
+        Self {
+            id: m.id,
+            pool_session_id: m.pool_session_id.clone(),
+            sender_id: m.sender_id.clone(),
+            content: m.content.clone(),
+            msg_type: m.msg_type.clone(),
+            metadata,
+            todo_id: m.todo_id.clone(),
+            reply_to_message_id: m.reply_to_message_id,
+            event_type: m.event_type.clone(),
+            created_at: m.created_at,
+        }
+    }
+}
+
+/// Fully typed pool-layer event stream.
+///
+/// The kernel emits these; hosts translate each variant into their own
+/// transport (Tauri `emit`, stdout NDJSON, websocket, …). Variants are
+/// deliberately coarse — one per observable state transition — so every
+/// downstream consumer can subscribe exhaustively.
+///
+/// `#[serde(tag = "kind", rename_all = "snake_case")]` keeps the wire
+/// format stable and future-compatible: adding a new variant with a new
+/// tag is a non-breaking change for forward-compatible consumers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PoolEvent {
+    PoolCreated {
+        pool: PoolSessionSnapshot,
+    },
+    PoolUpdated {
+        pool: PoolSessionSnapshot,
+    },
+    PoolPaused {
+        pool: PoolSessionSnapshot,
+    },
+    PoolResumed {
+        pool: PoolSessionSnapshot,
+    },
+    PoolArchived {
+        pool_id: String,
+    },
+
+    MessageAppended {
+        pool_id: String,
+        message: PoolMessageSnapshot,
+    },
+
+    TodoChanged {
+        pool_id: String,
+        action: TodoChangeAction,
+        todo: TodoSnapshot,
+    },
+
+    KoiAssigned {
+        pool_id: String,
+        koi_id: String,
+        todo_id: String,
+    },
+    KoiStatusChanged {
+        pool_id: String,
+        koi_id: String,
+        status: String,
+    },
+    KoiStaleRecovered {
+        pool_id: String,
+        koi_id: String,
+        recovered_todo_count: u32,
+    },
+
+    CoordinatorIdle {
+        pool_id: String,
+    },
+    CoordinatorCompleted {
+        pool_id: String,
+        summary: PoolWaitSummary,
+    },
+    CoordinatorTimedOut {
+        pool_id: String,
+        summary: PoolWaitSummary,
+    },
+
+    /// Progress frame from a running `call_fish` sub-agent. Forwarded to
+    /// the parent session's event stream so the UI can show the worker's
+    /// tool calls / partial output.
+    FishProgress {
+        parent_session_id: String,
+        fish_id: String,
+        stage: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload: Option<Value>,
+    },
+}
+
+impl PoolEvent {
+    /// Stable string key for metrics and tracing.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            PoolEvent::PoolCreated { .. } => "pool_created",
+            PoolEvent::PoolUpdated { .. } => "pool_updated",
+            PoolEvent::PoolPaused { .. } => "pool_paused",
+            PoolEvent::PoolResumed { .. } => "pool_resumed",
+            PoolEvent::PoolArchived { .. } => "pool_archived",
+            PoolEvent::MessageAppended { .. } => "message_appended",
+            PoolEvent::TodoChanged { .. } => "todo_changed",
+            PoolEvent::KoiAssigned { .. } => "koi_assigned",
+            PoolEvent::KoiStatusChanged { .. } => "koi_status_changed",
+            PoolEvent::KoiStaleRecovered { .. } => "koi_stale_recovered",
+            PoolEvent::CoordinatorIdle { .. } => "coordinator_idle",
+            PoolEvent::CoordinatorCompleted { .. } => "coordinator_completed",
+            PoolEvent::CoordinatorTimedOut { .. } => "coordinator_timed_out",
+            PoolEvent::FishProgress { .. } => "fish_progress",
+        }
+    }
+
+    /// Pool id most relevant to this event, when the variant carries one.
+    /// Some variants (`FishProgress`) are scoped to a session rather than
+    /// a pool, and return `None`.
+    pub fn pool_id(&self) -> Option<&str> {
+        match self {
+            PoolEvent::PoolCreated { pool }
+            | PoolEvent::PoolUpdated { pool }
+            | PoolEvent::PoolPaused { pool }
+            | PoolEvent::PoolResumed { pool } => Some(&pool.id),
+            PoolEvent::PoolArchived { pool_id }
+            | PoolEvent::MessageAppended { pool_id, .. }
+            | PoolEvent::TodoChanged { pool_id, .. }
+            | PoolEvent::KoiAssigned { pool_id, .. }
+            | PoolEvent::KoiStatusChanged { pool_id, .. }
+            | PoolEvent::KoiStaleRecovered { pool_id, .. }
+            | PoolEvent::CoordinatorIdle { pool_id }
+            | PoolEvent::CoordinatorCompleted { pool_id, .. }
+            | PoolEvent::CoordinatorTimedOut { pool_id, .. } => Some(pool_id),
+            PoolEvent::FishProgress { .. } => None,
+        }
+    }
+}
+
+/// Host-supplied outlet for [`PoolEvent`]s.
+///
+/// Implementations must be cheap / non-blocking (or at least
+/// fire-and-forget) — the pool runtime calls `emit_pool` synchronously
+/// from its state-mutating paths. Long-running transport work (HTTP,
+/// file I/O) belongs on a background task inside the implementation.
+pub trait PoolEventSink: Send + Sync {
+    fn emit_pool(&self, event: &PoolEvent);
+}
+
+// A no-op sink is handy for tests and for hosts that consume pool events
+// through a different channel (e.g. polling) during a migration window.
+pub struct NullPoolEventSink;
+
+impl PoolEventSink for NullPoolEventSink {
+    fn emit_pool(&self, _event: &PoolEvent) {}
+}
+
+// ─── Subagent runtime ──────────────────────────────────────────────────
+//
+// `SubagentRuntime` abstracts how a Koi turn is actually executed:
+//   * Desktop + CLI in 0.8.0: spawn `openpisci-headless run --mode pisci`
+//     as a child process and stream NDJSON back (subprocess isolation,
+//     crash containment, identical code path for both hosts).
+//   * Tests: `StubSubagentRuntime` that returns a scripted outcome.
+//
+// The runtime is driven by the kernel pool coordinator (Phase 2.1) and
+// exposed to `call_koi` / `call_fish` through `ToolContext`.
+
+/// Input payload for one Koi turn. The coordinator fills this in before
+/// handing it to the runtime; the runtime is responsible for materialising
+/// the turn (subprocess, in-process, remote …) and reporting back.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KoiTurnRequest {
+    pub pool_id: String,
+    pub koi_id: String,
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub todo_id: Option<String>,
+    /// Fully assembled system prompt — the runtime passes this through
+    /// verbatim; prompt assembly lives in the coordinator.
+    pub system_prompt: String,
+    /// User message for the turn (the task brief / pool mention text).
+    pub user_prompt: String,
+    /// Workspace directory the Koi should operate in (git worktree path
+    /// on desktop; arbitrary project dir in bench / CLI contexts).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_timeout_secs: Option<u32>,
+    /// Opaque list of tool profile hints (e.g. `"browser"`, `"ssh"`).
+    /// The subprocess runtime forwards these so the child can enable the
+    /// matching neutral / host-specific tools.
+    #[serde(default)]
+    pub extra_tool_profile: Vec<String>,
+    /// Extra system context to inject after the core prompt. Used for
+    /// continuity / memory / org_spec slices when the coordinator has
+    /// already resolved them and doesn't want the child to reassemble.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_system_context: Option<String>,
+}
+
+/// Handle returned by `spawn_koi_turn` — opaque to the coordinator, used
+/// only to pair `cancel_koi_turn` / `wait_koi_turn` with the running
+/// turn. The concrete runtime may store a subprocess pid, an internal
+/// task handle, or whatever it needs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KoiTurnHandle {
+    pub turn_id: String,
+    pub pool_id: String,
+    pub koi_id: String,
+}
+
+/// Terminal outcome of a Koi turn. Only emitted once per handle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KoiTurnOutcome {
+    pub handle: KoiTurnHandle,
+    pub exit_kind: KoiTurnExit,
+    pub response_text: String,
+    /// Final assistant response / summary text (already shown to the user
+    /// in pool_chat by the kernel services).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KoiTurnExit {
+    Completed,
+    Cancelled,
+    TimedOut,
+    Crashed,
+}
+
+/// Abstraction over how a Koi turn is materialised. Subprocess-backed in
+/// 0.8.0; stub-backed in tests; potentially remote-backed later. The
+/// coordinator never calls `fork`, `Command` or `tokio::spawn` directly.
+#[async_trait]
+pub trait SubagentRuntime: Send + Sync {
+    async fn spawn_koi_turn(&self, request: KoiTurnRequest) -> anyhow::Result<KoiTurnHandle>;
+    async fn cancel_koi_turn(&self, handle: &KoiTurnHandle) -> anyhow::Result<()>;
+    async fn wait_koi_turn(&self, handle: &KoiTurnHandle) -> anyhow::Result<KoiTurnOutcome>;
+}
+
+// ─── Pool coordinator run shape ────────────────────────────────────────
+//
+// `PoolRunRequest` / `PoolRunResponse` are the kernel-level contract for
+// "run one pool coordinator turn (or loop until idle) against this pool".
+// Both the headless CLI `openpisci-headless pool` and the desktop
+// `openpisci --mode pool` drive the same function in Phase 3 — no host
+// owns its own copy of the loop.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoolRunRequest {
+    pub pool_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// When true, the coordinator runs until idle (`active_todos == 0`
+    /// stable for ≥ `idle_window_secs`) or `wait_timeout_secs` elapses.
+    /// When false, exactly one coordinator turn runs and returns.
+    #[serde(default)]
+    pub run_until_idle: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_timeout_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_window_secs: Option<u64>,
+    #[serde(default)]
+    pub context_toggles: HeadlessContextToggles,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoolRunResponse {
+    pub ok: bool,
+    pub pool_id: String,
+    pub session_id: String,
+    pub response_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait: Option<PoolWaitSummary>,
+}
+
+// ─── HumanGate ────────────────────────────────────────────────────────
+//
+// `HumanGate` is a thin abstraction for "pause the agent and ask the
+// user something". It sits alongside `Notifier` but carries pool-aware
+// context and a scoped default — the CLI gate auto-confirms (or denies,
+// via env var) without user input, while the desktop gate surfaces a
+// modal. Kept as a distinct trait so a future CI run can inject a
+// scripted gate without touching `Notifier`.
+
+#[async_trait]
+pub trait HumanGate: Send + Sync {
+    /// Yes/no gate that blocks until the user answers (or the implementor
+    /// decides based on policy / env var).
+    async fn confirm(&self, req: ConfirmRequest) -> bool;
+    /// Richer interactive prompt; the returned JSON matches the request
+    /// `kind` contract.
+    async fn interact(&self, req: InteractiveRequest) -> Value;
+}
+
+/// Trivial always-`default` gate — handy for CLI and tests.
+pub struct DefaultAnswerHumanGate;
+
+#[async_trait]
+impl HumanGate for DefaultAnswerHumanGate {
+    async fn confirm(&self, req: ConfirmRequest) -> bool {
+        req.default.unwrap_or(false)
+    }
+    async fn interact(&self, req: InteractiveRequest) -> Value {
+        req.default.unwrap_or(Value::Null)
+    }
 }
 
 #[cfg(test)]

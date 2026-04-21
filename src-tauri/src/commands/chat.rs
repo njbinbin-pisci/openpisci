@@ -6,12 +6,12 @@ use crate::commands::scene::{
     MemorySliceMode, PoolSnapshotMode, SceneKind, ScenePolicy,
 };
 use crate::llm::{build_client_with_timeout, ContentBlock, LlmMessage, MessageContent, ToolDef};
-use crate::pisci::project_state::build_coordination_event_digest;
 use crate::policy::PolicyGate;
 use crate::project_context::render_project_instruction_context;
 use crate::store::{
     db::ChatMessage, db::Session, db::SessionContextState, db::TaskSpine, db::TaskState, AppState,
 };
+use pisci_core::project_state::build_coordination_event_digest;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{atomic::AtomicBool, Arc};
@@ -1267,6 +1267,7 @@ pub struct HeadlessRunOptions {
 }
 
 pub(crate) const SESSION_SOURCE_IM_PREFIX: &str = "im_";
+#[allow(dead_code)]
 pub(crate) const SESSION_SOURCE_PISCI_INBOX_GLOBAL: &str = "pisci_inbox_global";
 pub(crate) const SESSION_SOURCE_PISCI_POOL: &str = "pisci_pool";
 pub(crate) const SESSION_SOURCE_PISCI_INBOX_POOL: &str = "pisci_inbox_pool";

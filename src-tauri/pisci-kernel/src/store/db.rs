@@ -2206,6 +2206,23 @@ impl Database {
         })
     }
 
+    /// Insert a Koi row with a caller-supplied primary key. Used by
+    /// integration tests (and by seeding migrations that want a
+    /// deterministic `pisci` row) to satisfy the `kois.id` foreign
+    /// keys on `koi_todos` / `claimed_by` without going through the
+    /// UUID-generating [`Database::create_koi`].
+    ///
+    /// `INSERT OR IGNORE` — calling twice is idempotent.
+    pub fn upsert_koi_with_id(&self, id: &str, name: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT OR IGNORE INTO kois (id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, max_iterations, task_timeout_secs) \
+             VALUES (?1, ?2, '', '', '', '', '', 'idle', ?3, ?3, 0, 0)",
+            params![id, name, now],
+        )?;
+        Ok(())
+    }
+
     pub fn ensure_starter_kois(&self) -> Result<Vec<pisci_core::models::KoiDefinition>> {
         if !self.list_kois()?.is_empty() {
             return Ok(Vec::new());

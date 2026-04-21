@@ -1083,7 +1083,9 @@ pub async fn run_debug_scenario(
             skill_loader: None,
             builtin_tool_enabled: Some(builtin_tool_enabled.clone()),
             user_tools_dir,
+            ..DesktopHostTools::default()
         }
+        .fill_pool_defaults()
         .build_registry(),
     );
 
@@ -1619,7 +1621,9 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
             skill_loader: None,
             builtin_tool_enabled: Some(builtin_tool_enabled.clone()),
             user_tools_dir,
+            ..DesktopHostTools::default()
         }
+        .fill_pool_defaults()
         .build_registry(),
     );
 

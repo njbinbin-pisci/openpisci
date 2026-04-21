@@ -1,10 +1,43 @@
+//! Chat Pool commands — Agent collaboration chat room.
+//!
+//! State-change events funnel through [`DesktopEventSink::emit_pool`]
+//! so desktop, kernel, and CLI hosts share one wire format (see
+//! `host::DesktopEventSink` for the per-variant Tauri event name).
+
+use std::sync::Arc;
+
+use crate::host::DesktopEventSink;
 use crate::koi::runtime::KoiRuntime;
-/// Chat Pool commands — Agent collaboration chat room.
 use crate::koi::{PoolMessage, PoolSession};
 use crate::store::AppState;
+use pisci_core::host::{PoolEvent, PoolEventSink, PoolMessageSnapshot, PoolSessionSnapshot};
 use serde::Deserialize;
 use serde_json::json;
-use tauri::{Emitter, State};
+use tauri::State;
+
+fn pool_sink(app: &tauri::AppHandle) -> Arc<DesktopEventSink> {
+    Arc::new(DesktopEventSink::new(app.clone()))
+}
+
+fn emit_message(app: &tauri::AppHandle, msg: &PoolMessage) {
+    pool_sink(app).emit_pool(&PoolEvent::MessageAppended {
+        pool_id: msg.pool_session_id.clone(),
+        message: PoolMessageSnapshot::from(msg),
+    });
+}
+
+fn emit_pool_status(app: &tauri::AppHandle, session: &PoolSession, archived: bool) {
+    let snapshot = PoolSessionSnapshot::from(session);
+    let event = match (archived, session.status.as_str()) {
+        (true, _) => PoolEvent::PoolArchived {
+            pool_id: session.id.clone(),
+        },
+        (false, "paused") => PoolEvent::PoolPaused { pool: snapshot },
+        (false, "active") => PoolEvent::PoolResumed { pool: snapshot },
+        (false, _) => PoolEvent::PoolUpdated { pool: snapshot },
+    };
+    pool_sink(app).emit_pool(&event);
+}
 
 pub(crate) fn ensure_pool_can_archive(db: &crate::store::Database, id: &str) -> Result<(), String> {
     let session = db
@@ -112,8 +145,7 @@ pub async fn send_pool_message(
         .map_err(|e| e.to_string())?;
     drop(db);
 
-    let event_name = format!("pool_message_{}", input.session_id);
-    let _ = state.app_handle.emit(&event_name, &msg);
+    emit_message(&app, &msg);
 
     // Auto-detect @mention and dispatch to Koi asynchronously
     if input.content.contains('@') && input.sender_id != "system" {
@@ -217,10 +249,8 @@ pub async fn dispatch_koi_task(
                     &json!({ "target_koi": &koi_id, "priority": priority, "timeout_secs": timeout_secs }).to_string(),
                 )
                 .map_err(|e| e.to_string())?;
-            let _ = app.emit(
-                &format!("pool_message_{}", psid),
-                serde_json::to_value(&msg).unwrap_or_default(),
-            );
+            drop(db);
+            emit_message(&app, &msg);
         }
 
         let results = runtime
@@ -304,7 +334,11 @@ pub async fn cancel_koi_task(
 /// - Resets in_progress todos back to "todo" so they can be resumed later
 /// - Posts a system message in the pool chat
 #[tauri::command]
-pub async fn pause_pool_session(state: State<'_, AppState>, id: String) -> Result<(), String> {
+pub async fn pause_pool_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
     // 1. Update pool status
     {
         let db = state.db.lock().await;
@@ -315,7 +349,6 @@ pub async fn pause_pool_session(state: State<'_, AppState>, id: String) -> Resul
     // 2. Cancel all running Koi tasks in this pool
     {
         let flags = state.cancel_flags.lock().await;
-        let prefix = "koi_runtime_".to_string();
         // cancel_flags keys for pool tasks are "koi_runtime_{koi_id}_{pool_id}"
         // and for call_koi path "koi_{koi_id}_{pool_id}"
         for (key, flag) in flags.iter() {
@@ -324,9 +357,6 @@ pub async fn pause_pool_session(state: State<'_, AppState>, id: String) -> Resul
                 tracing::info!("pause_pool_session: cancel flag set for '{}'", key);
             }
         }
-        drop(flags);
-        // suppress unused warning
-        let _ = prefix;
     }
 
     // 3. Reset in_progress todos back to "todo"
@@ -340,22 +370,29 @@ pub async fn pause_pool_session(state: State<'_, AppState>, id: String) -> Resul
         }
     }
 
-    // 4. Post system message
-    {
+    // 4. Post system message + refresh snapshot.
+    let (session, sys_msg) = {
         let db = state.db.lock().await;
-        let _ = db.insert_pool_message(
-            &id,
-            "system",
-            "⏸ 项目已被用户暂停。所有进行中的任务已重置为待办。",
-            "status_update",
-            "{}",
-        );
-    }
+        let sys_msg = db
+            .insert_pool_message(
+                &id,
+                "system",
+                "⏸ 项目已被用户暂停。所有进行中的任务已重置为待办。",
+                "status_update",
+                "{}",
+            )
+            .ok();
+        let session = db
+            .get_pool_session(&id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Pool '{}' not found after pause", id))?;
+        (session, sys_msg)
+    };
 
-    let _ = state.app_handle.emit(
-        "pool_session_updated",
-        serde_json::json!({ "id": id, "status": "paused" }),
-    );
+    if let Some(msg) = sys_msg.as_ref() {
+        emit_message(&app, msg);
+    }
+    emit_pool_status(&app, &session, false);
     Ok(())
 }
 
@@ -377,15 +414,19 @@ pub async fn resume_pool_session(
 
     // 2. Post system message + @pisci to re-engage
     let resume_msg = "▶ 项目已被用户恢复。@pisci 请检查待办任务并继续协调。".to_string();
-    {
+    let (session, sys_msg) = {
         let db = state.db.lock().await;
         let msg = db
             .insert_pool_message(&id, "system", &resume_msg, "status_update", "{}")
             .map_err(|e| e.to_string())?;
-        drop(db);
-        let event_name = format!("pool_message_{}", id);
-        let _ = state.app_handle.emit(&event_name, &msg);
-    }
+        let session = db
+            .get_pool_session(&id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Pool '{}' not found after resume", id))?;
+        (session, msg)
+    };
+
+    emit_message(&app, &sys_msg);
 
     // 3. Trigger @pisci mention so Pisci wakes up and resumes coordination
     let app_clone = app.clone();
@@ -398,10 +439,7 @@ pub async fn resume_pool_session(
             .await;
     });
 
-    let _ = state.app_handle.emit(
-        "pool_session_updated",
-        serde_json::json!({ "id": id, "status": "active" }),
-    );
+    emit_pool_status(&app, &session, false);
     Ok(())
 }
 
@@ -410,7 +448,11 @@ pub async fn resume_pool_session(
 /// - Sets pool status to "archived"
 /// - Posts a system message
 #[tauri::command]
-pub async fn archive_pool_session(state: State<'_, AppState>, id: String) -> Result<(), String> {
+pub async fn archive_pool_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
     {
         let db = state.db.lock().await;
         ensure_pool_can_archive(&db, &id)?;
@@ -433,22 +475,29 @@ pub async fn archive_pool_session(state: State<'_, AppState>, id: String) -> Res
             .map_err(|e| e.to_string())?;
     }
 
-    // 3. Post system message
-    {
+    // 3. Post system message + refresh snapshot.
+    let (session, sys_msg) = {
         let db = state.db.lock().await;
-        let _ = db.insert_pool_message(
-            &id,
-            "system",
-            "🗄 项目已归档。项目进入只读状态，Koi 不再接受新任务。",
-            "status_update",
-            "{}",
-        );
-    }
+        let msg = db
+            .insert_pool_message(
+                &id,
+                "system",
+                "🗄 项目已归档。项目进入只读状态，Koi 不再接受新任务。",
+                "status_update",
+                "{}",
+            )
+            .ok();
+        let session = db
+            .get_pool_session(&id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Pool '{}' not found after archive", id))?;
+        (session, msg)
+    };
 
-    let _ = state.app_handle.emit(
-        "pool_session_updated",
-        serde_json::json!({ "id": id, "status": "archived" }),
-    );
+    if let Some(msg) = sys_msg.as_ref() {
+        emit_message(&app, msg);
+    }
+    emit_pool_status(&app, &session, true);
     Ok(())
 }
 

@@ -38,6 +38,12 @@ pub fn build_registry_for_scene(
     skill_loader: Option<SharedSkillLoader>,
 ) -> ToolRegistry {
     let policy = ScenePolicy::for_kind(scene);
+
+    // `fill_pool_defaults()` auto-populates the four kernel pool seams
+    // (event_sink / plan_store / pool_event_sink / pool_mention_dispatcher)
+    // from the scene's `AppHandle` + `Database`, so the neutral kernel
+    // tools (`plan_todo`, `pool_org`, `pool_chat`) light up without each
+    // call site repeating the boilerplate.
     let mut registry = DesktopHostTools {
         browser: Some(browser),
         db,
@@ -51,7 +57,9 @@ pub fn build_registry_for_scene(
         },
         builtin_tool_enabled: builtin_tool_enabled.cloned(),
         user_tools_dir: user_tools_dir.map(PathBuf::from),
+        ..DesktopHostTools::default()
     }
+    .fill_pool_defaults()
     .build_registry();
 
     match policy.registry_profile {

@@ -697,6 +697,137 @@ export interface KoiPalette {
   icons: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Pool events (canonical `host://pool_event` channel, Phase 1.8)
+//
+// Kernel type: `pisci_core::host::PoolEvent`. The Rust side serialises each
+// variant with `#[serde(tag = "kind", rename_all = "snake_case")]`, so a
+// discriminated union keyed on `kind` maps one-to-one with zero custom
+// adapter code. Keep these shapes in lock-step with `host.rs`.
+// ---------------------------------------------------------------------------
+
+export interface PoolSessionSnapshot {
+  id: string;
+  name: string;
+  status: string;
+  project_dir?: string;
+  task_timeout_secs: number;
+}
+
+export interface PoolMessageSnapshot {
+  id: number;
+  pool_session_id: string;
+  sender_id: string;
+  content: string;
+  msg_type: string;
+  metadata?: unknown;
+  todo_id?: string;
+  reply_to_message_id?: number;
+  event_type?: string;
+  created_at: string;
+}
+
+export interface TodoSnapshot {
+  id: string;
+  owner_id: string;
+  title: string;
+  description: string;
+  status: string;
+  priority: string;
+  assigned_by: string;
+  pool_session_id?: string;
+  claimed_by?: string;
+  depends_on?: string;
+  blocked_reason?: string;
+  result_message_id?: number;
+  source_type: string;
+  task_timeout_secs: number;
+}
+
+export type TodoChangeAction =
+  | "created"
+  | "updated"
+  | "claimed"
+  | "completed"
+  | "cancelled"
+  | "blocked"
+  | "resumed"
+  | "replaced";
+
+export interface PoolWaitSummary {
+  completed: boolean;
+  timed_out: boolean;
+  active_todos: number;
+  done_todos: number;
+  cancelled_todos: number;
+  blocked_todos: number;
+  latest_messages: string[];
+}
+
+export type PoolEvent =
+  | { kind: "pool_created"; pool: PoolSessionSnapshot }
+  | { kind: "pool_updated"; pool: PoolSessionSnapshot }
+  | { kind: "pool_paused"; pool: PoolSessionSnapshot }
+  | { kind: "pool_resumed"; pool: PoolSessionSnapshot }
+  | { kind: "pool_archived"; pool_id: string }
+  | { kind: "message_appended"; pool_id: string; message: PoolMessageSnapshot }
+  | {
+      kind: "todo_changed";
+      pool_id: string;
+      action: TodoChangeAction;
+      todo: TodoSnapshot;
+    }
+  | {
+      kind: "koi_assigned";
+      pool_id: string;
+      koi_id: string;
+      todo_id: string;
+    }
+  | {
+      kind: "koi_status_changed";
+      pool_id: string;
+      koi_id: string;
+      status: string;
+    }
+  | {
+      kind: "koi_stale_recovered";
+      pool_id: string;
+      koi_id: string;
+      recovered_todo_count: number;
+    }
+  | { kind: "coordinator_idle"; pool_id: string }
+  | {
+      kind: "coordinator_completed";
+      pool_id: string;
+      summary: PoolWaitSummary;
+    }
+  | {
+      kind: "coordinator_timed_out";
+      pool_id: string;
+      summary: PoolWaitSummary;
+    }
+  | {
+      kind: "fish_progress";
+      parent_session_id: string;
+      fish_id: string;
+      stage: string;
+      payload?: unknown;
+    };
+
+/** Canonical Tauri channel every `PoolEvent` is published on in addition
+ *  to the legacy per-variant channels (`pool_session_updated`,
+ *  `pool_message_{id}`, `koi_todo_updated`, ...). */
+export const POOL_EVENT_CHANNEL = "host://pool_event";
+
+/** Subscribe to the typed, forward-looking pool-event stream. Prefer this
+ *  helper over ad-hoc `listen()` calls on the legacy per-variant channels
+ *  when you need to reason about multiple variants at once. */
+export function subscribePoolEvents(
+  handler: (event: PoolEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<PoolEvent>(POOL_EVENT_CHANNEL, (e) => handler(e.payload));
+}
+
 export const koiApi = {
   list: () => invoke<KoiWithStats[]>("list_kois"),
   get: (id: string) => invoke<KoiDefinition | null>("get_koi", { id }),

@@ -11,10 +11,10 @@ use crate::agent::messages::AgentEvent;
 use crate::agent::tool::{Tool, ToolContext, ToolResult, ToolSettings};
 use crate::commands::scene::{build_registry_for_scene, load_skill_loader, SceneKind, ScenePolicy};
 use crate::llm::{LlmMessage, MessageContent};
-use crate::pisci::project_state::build_coordination_event_digest;
 use crate::store::db::TaskSpine;
 use crate::store::AppState;
 use async_trait::async_trait;
+use pisci_core::project_state::build_coordination_event_digest;
 use serde_json::{json, Value};
 use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{AppHandle, Emitter, Manager};
@@ -638,9 +638,11 @@ impl CallKoiTool {
             app_data_dir,
             skill_loader,
         );
-        // Replace the default call_koi (depth=0) with one scoped to this Koi
+        // Replace the default call_koi (depth=0) with one scoped to this Koi.
+        // The neutral kernel `pool_chat` tool already picks up the Koi's
+        // identity from `ToolContext::memory_owner_id`, so we no longer
+        // need to re-register a sender-scoped copy here.
         registry_tools.unregister("call_koi");
-        registry_tools.unregister("pool_chat");
         if self.depth + 1 < MAX_CALL_DEPTH {
             registry_tools.register(Box::new(CallKoiTool {
                 app: self.app.clone(),
@@ -651,13 +653,6 @@ impl CallKoiTool {
                 await_completion: false,
             }));
         }
-
-        // Register pool_chat tool scoped to this Koi's identity
-        registry_tools.register(Box::new(crate::tools::pool_chat::PoolChatTool {
-            app: self.app.clone(),
-            db: state.db.clone(),
-            sender_id: koi_id.clone(),
-        }));
 
         let registry_tools = Arc::new(registry_tools);
 

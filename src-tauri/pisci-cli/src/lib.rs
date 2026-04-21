@@ -12,4 +12,5 @@
 
 pub mod args;
 pub mod host;
+pub mod rpc_server;
 pub mod runner;

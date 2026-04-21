@@ -14,6 +14,7 @@ pub mod headless;
 pub mod llm;
 pub mod memory;
 pub mod policy;
+pub mod pool;
 pub mod project_context;
 pub mod scheduler;
 pub mod security;

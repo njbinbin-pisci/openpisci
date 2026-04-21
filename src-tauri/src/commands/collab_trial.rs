@@ -8,10 +8,10 @@
 ///
 /// The user can observe the full collaboration in the Pond UI.
 use crate::koi::runtime::KoiRuntime;
-use crate::pisci::project_state::{
+use crate::store::AppState;
+use pisci_core::project_state::{
     assess_project_state, ProjectAssessment as TrialAssessment, ProjectDecision as TrialDecision,
 };
-use crate::store::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
