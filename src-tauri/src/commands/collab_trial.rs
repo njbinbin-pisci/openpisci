@@ -1,9 +1,8 @@
 /// Collaboration Trial — spawn real Koi agents with LLM to test multi-agent cooperation.
 ///
-/// Unlike `test_runner` (which uses mock execution), this module:
 /// - Creates real Koi agents in the production DB
 /// - Creates a real Pool session visible in the UI
-/// - Uses KoiRuntime with TauriEventBus to drive real LLM agent loops
+/// - Fans subprocess Koi turns through `koi::bridge::handle_mention` (kernel coordinator)
 /// - All events stream to the Chat Pool and Board in real-time
 ///
 /// The user can observe the full collaboration in the Pond UI.

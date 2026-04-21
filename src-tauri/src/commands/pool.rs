@@ -262,15 +262,19 @@ pub async fn dispatch_koi_task(
             "result_message_id": null,
         }))
     } else {
-        // Direct-assign path (no pool): still handled by the legacy
-        // desktop KoiRuntime until a headless equivalent ships in
-        // pisci-kernel. The kernel already owns the pool-scoped
-        // critical path above.
-        let runtime = crate::koi::runtime::KoiRuntime::from_tauri(app.clone(), state.db.clone());
-        let result = runtime
-            .assign_and_execute(&koi_id, &task, "user", None, priority, timeout_secs)
-            .await
-            .map_err(|e| e.to_string())?;
+        // Direct-assign path (no pool) — single subprocess turn via the
+        // kernel coordinator's assign_and_execute entry point.
+        let result = bridge::assign_and_execute(
+            &app,
+            &state,
+            &koi_id,
+            &task,
+            "user",
+            priority,
+            timeout_secs,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
 
         Ok(json!({
             "success": result.success,

@@ -1,6 +1,6 @@
 use crate::commands::chat::{run_agent_headless, HeadlessRunOptions, SESSION_SOURCE_PISCI_POOL};
 use crate::commands::scene::SceneKind;
-use crate::koi::runtime::KoiRuntime;
+use crate::koi::bridge;
 use crate::koi::KoiTodo;
 use crate::store::AppState;
 pub use pisci_core::heartbeat::{
@@ -16,7 +16,6 @@ const HEARTBEAT_POOL_SOURCE: &str = SESSION_SOURCE_PISCI_POOL;
 const HEARTBEAT_GLOBAL_SESSION_ID: &str = "pisci_heartbeat_global";
 
 async fn run_mechanical_pool_recovery(state: &AppState) -> Result<Vec<String>, String> {
-    let runtime = KoiRuntime::from_tauri(state.app_handle.clone(), state.db.clone());
     let pools = {
         let db = state.db.lock().await;
         db.list_pool_sessions().map_err(|e| e.to_string())?
@@ -24,8 +23,7 @@ async fn run_mechanical_pool_recovery(state: &AppState) -> Result<Vec<String>, S
     let mut notes = Vec::new();
 
     for pool in pools.into_iter().filter(|pool| pool.status == "active") {
-        let activated = runtime
-            .activate_pending_todos(Some(&pool.id))
+        let activated = bridge::activate_pending_todos(&state.app_handle, state, Some(&pool.id))
             .await
             .map_err(|e| e.to_string())?;
         if activated > 0 {

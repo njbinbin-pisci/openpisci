@@ -988,26 +988,10 @@ export const windowApi = {
 };
 
 // ---------------------------------------------------------------------------
-// Test Runner (multi-agent integration tests)
+// Collaboration Trial (LLM-driven debug harness)
 // ---------------------------------------------------------------------------
 
-export interface TestResult {
-  name: string;
-  passed: boolean;
-  message: string;
-  duration_ms: number;
-}
-
-export interface TestSuiteResult {
-  total: number;
-  passed: number;
-  failed: number;
-  results: TestResult[];
-  summary: string;
-}
-
 export const testApi = {
-  runMultiAgentTests: () => invoke<TestSuiteResult>("run_multi_agent_tests"),
   runCollaborationTrial: () => invoke<CollabTrialStatus>("run_collaboration_trial"),
 };
 

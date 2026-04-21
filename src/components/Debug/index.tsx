@@ -1066,23 +1066,6 @@ function UiaTestPanel() {
 
 // ─── Multi-Agent Test Panel ───────────────────────────────────────────────────
 
-interface TestResult {
-  name: string;
-  passed: boolean;
-  message: string;
-  message_key?: string | null;
-  message_params?: Record<string, unknown> | null;
-  duration_ms: number;
-}
-
-interface TestSuiteResult {
-  total: number;
-  passed: number;
-  failed: number;
-  results: TestResult[];
-  summary: string;
-}
-
 interface TrialStep {
   name: string;
   koi_name: string;
@@ -1109,12 +1092,6 @@ function localizeTrialPhase(t: (key: string, options?: any) => string, phase: st
   const key = `debug.multiAgentPhase_${phase}`;
   const translated = t(key);
   return translated === key ? phase : translated;
-}
-
-function localizeTestName(t: (key: string, options?: any) => string, name: string): string {
-  const key = `debug.multiAgentTest_${name}`;
-  const translated = t(key);
-  return translated === key ? name : translated;
 }
 
 function localizeTrialStepName(t: (key: string, options?: any) => string, name: string): string {
@@ -1185,9 +1162,7 @@ const PHASE_ICONS: Record<string, string> = {
 
 function MultiAgentTestPanel() {
   const { t } = useTranslation();
-  const [suiteResult, setSuiteResult] = useState<TestSuiteResult | null>(null);
   const [trialResult, setTrialResult] = useState<TrialStatus | null>(null);
-  const [runningPipeline, setRunningPipeline] = useState(false);
   const [runningTrial, setRunningTrial] = useState(false);
 
   const [trialMessages, setTrialMessages] = useState<PoolMessage[]>([]);
@@ -1246,22 +1221,6 @@ function MultiAgentTestPanel() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleRunPipeline = async () => {
-    setRunningPipeline(true);
-    setSuiteResult(null);
-    try {
-      const result = await invoke<TestSuiteResult>("run_multi_agent_tests");
-      setSuiteResult(result);
-    } catch (e: any) {
-      setSuiteResult({
-        total: 0, passed: 0, failed: 1, results: [],
-        summary: `${t("common.error")}: ${e}`,
-      });
-    } finally {
-      setRunningPipeline(false);
-    }
-  };
-
   const handleRunTrial = async () => {
     setRunningTrial(true);
     setTrialResult(null);
@@ -1296,48 +1255,6 @@ function MultiAgentTestPanel() {
 
   return (
     <div className="dbg-multiagent">
-      <div className="dbg-multiagent-section">
-        <h3>{t("debug.multiAgentPipelineTitle")}</h3>
-        <p className="dbg-multiagent-desc">
-          {t("debug.multiAgentPipelineDesc")}
-        </p>
-        <button
-          className="dbg-btn dbg-btn-primary"
-          onClick={handleRunPipeline}
-          disabled={runningPipeline}
-        >
-          {runningPipeline ? t("debug.running") : t("debug.multiAgentRunPipeline")}
-        </button>
-
-        {suiteResult && (
-          <div className="dbg-multiagent-results">
-            <div className="dbg-multiagent-summary">
-              {suiteResult.results.length > 0
-                ? t("debug.multiAgentPipelineSummary", {
-                    passed: suiteResult.passed,
-                    total: suiteResult.total,
-                    failed: suiteResult.failed,
-                  })
-                : suiteResult.summary}
-            </div>
-            {suiteResult.results.map((r, i) => (
-              <div key={i} className={`dbg-multiagent-row ${r.passed ? "dbg-row-pass" : "dbg-row-fail"}`}>
-                <span className="dbg-multiagent-status">{r.passed ? t("debug.multiAgentPass") : t("debug.multiAgentFail")}</span>
-                <span className="dbg-multiagent-name">{localizeTestName(t, r.name)}</span>
-                <span className="dbg-multiagent-time">{ms(r.duration_ms)}</span>
-                {!r.passed && (
-                  <span className="dbg-multiagent-msg">
-                    {localizeMessage(t, r.message_key, r.message_params, r.message)}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <hr className="dbg-multiagent-divider" />
-
       <div className="dbg-multiagent-section">
         <h3>{t("debug.multiAgentTrialTitle")}</h3>
         <p className="dbg-multiagent-desc">

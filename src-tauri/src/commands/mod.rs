@@ -16,7 +16,6 @@ pub mod scheduler;
 pub mod settings;
 pub mod skills;
 pub mod system;
-pub mod test_runner;
 pub mod tools;
 pub mod user_tools;
 pub mod window;

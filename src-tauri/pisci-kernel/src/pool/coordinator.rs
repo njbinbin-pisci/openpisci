@@ -1087,6 +1087,198 @@ pub async fn handle_mention(
     Ok(())
 }
 
+// ─── activate_pending_todos ───────────────────────────────────────────
+
+/// Scan for todos stuck in the `todo` state with no `claimed_by` owner
+/// and dispatch one fresh subagent turn per todo.
+///
+/// The `pool_session_id` parameter controls scope:
+/// * `Some(psid)` — only touch todos whose pool session matches `psid`.
+///   The pool must be `active` (archived pools are skipped by design).
+/// * `None`       — only touch pool-free todos (direct-assign backlog);
+///   pool-scoped todos are left alone so each pool owns its own recovery
+///   cadence (heartbeat drives the per-pool path).
+///
+/// The number of turns successfully *spawned* is returned. Individual
+/// turn failures are logged and counted as successful dispatches (the
+/// coordinator already handles translating them into `failed` / `blocked`
+/// todo transitions downstream).
+pub async fn activate_pending_todos(
+    store: &PoolStore,
+    sink: Arc<dyn PoolEventSink>,
+    subagent: Arc<dyn SubagentRuntime>,
+    cfg: &CoordinatorConfig,
+    pool_session_id: Option<&str>,
+) -> anyhow::Result<u32> {
+    use std::collections::HashSet;
+
+    let (todos, active_pool_ids) = store
+        .read(|db| {
+            let todos = db.list_koi_todos(None)?;
+            let active_pool_ids: HashSet<String> = db
+                .list_pool_sessions()?
+                .into_iter()
+                .filter(|p| p.status == "active")
+                .map(|p| p.id)
+                .collect();
+            Ok((todos, active_pool_ids))
+        })
+        .await?;
+
+    let pending: Vec<&KoiTodo> = todos
+        .iter()
+        .filter(|t| {
+            if t.status != "todo" || t.claimed_by.is_some() {
+                return false;
+            }
+            match pool_session_id {
+                Some(psid) => {
+                    t.pool_session_id.as_deref() == Some(psid) && active_pool_ids.contains(psid)
+                }
+                // Global patrol is pool-free by design — every pool
+                // schedules its own recovery through the heartbeat path.
+                None => t.pool_session_id.is_none(),
+            }
+        })
+        .collect();
+
+    let mut activated = 0u32;
+    for todo in pending {
+        let owner_id = todo.owner_id.clone();
+        let koi_status = store
+            .read(move |db| {
+                Ok(db
+                    .get_koi(&owner_id)?
+                    .map(|k| k.status)
+                    .unwrap_or_else(|| "offline".into()))
+            })
+            .await
+            .unwrap_or_else(|_| "offline".into());
+        if koi_status != "idle" {
+            continue;
+        }
+
+        let args = ExecuteTodoArgs {
+            koi_id: todo.owner_id.clone(),
+            todo_id: todo.id.clone(),
+            assign_msg_id: None,
+            session_id: format!(
+                "koi_runtime_{}_{}",
+                todo.owner_id,
+                todo.pool_session_id.as_deref().unwrap_or("direct")
+            ),
+            extra_tool_profile: Vec::new(),
+            extra_system_context: None,
+        };
+        match execute_todo_turn(store, sink.clone(), subagent.clone(), cfg, args).await {
+            Ok(_) => activated += 1,
+            Err(e) => tracing::warn!(
+                target: "pool::coordinator",
+                todo_id = %todo.id,
+                owner_id = %todo.owner_id,
+                "activate_pending_todos: turn dispatch failed: {e}"
+            ),
+        }
+    }
+
+    Ok(activated)
+}
+
+// ─── watchdog_recover ─────────────────────────────────────────────────
+
+/// Roll back stale `busy` Kois and `in_progress` todos whose last
+/// heartbeat is older than `max_busy_secs`. Returns `(koi_count,
+/// todo_count)`. This is a pure DB pass-through (no subprocess I/O),
+/// but lives on the coordinator so hosts only need to depend on one
+/// kernel module for pool-level recovery.
+///
+/// The old desktop implementation also walked an in-process
+/// `ACTIVE_KOI_RUNS` map to detect Kois whose session handle had been
+/// abandoned. The Phase 2 subprocess model has no such map — every
+/// turn is a fresh subprocess whose lifetime is tracked by
+/// [`SubprocessSubagentRuntime`] itself — so detached-run recovery is
+/// folded into the DB rollback.
+pub async fn watchdog_recover(store: &PoolStore, max_busy_secs: i64) -> (u32, u32) {
+    let koi_count = store
+        .write(|db| Ok(db.recover_stale_busy_kois(max_busy_secs).unwrap_or(0)))
+        .await
+        .unwrap_or(0);
+    let todo_count = store
+        .write(|db| {
+            Ok(db
+                .recover_stale_in_progress_todos(max_busy_secs)
+                .unwrap_or(0))
+        })
+        .await
+        .unwrap_or(0);
+    if koi_count > 0 || todo_count > 0 {
+        tracing::warn!(
+            target: "pool::coordinator",
+            "watchdog recovered {koi_count} stale Koi, {todo_count} stale todo (threshold {max_busy_secs}s)"
+        );
+    }
+    (koi_count, todo_count)
+}
+
+// ─── assign_and_execute (direct-assign, no pool) ──────────────────────
+
+/// Combine "create a fresh todo for the Koi" + "run it". Used by the
+/// desktop's `dispatch_koi_task` command when no `pool_session_id` is
+/// provided. Pool-scoped dispatches should go through
+/// [`handle_mention`] instead, which deduplicates against existing
+/// todos.
+#[allow(clippy::too_many_arguments)]
+pub async fn assign_and_execute(
+    store: &PoolStore,
+    sink: Arc<dyn PoolEventSink>,
+    subagent: Arc<dyn SubagentRuntime>,
+    cfg: &CoordinatorConfig,
+    koi_id: &str,
+    task: &str,
+    assigned_by: &str,
+    priority: &str,
+    task_timeout_secs: Option<u32>,
+) -> anyhow::Result<KoiExecResult> {
+    let koi_id_in = koi_id.to_string();
+    let koi_def = store
+        .read(move |db| {
+            db.resolve_koi_identifier(&koi_id_in)?
+                .ok_or_else(|| anyhow::anyhow!("Koi '{}' not found", koi_id_in))
+        })
+        .await?;
+
+    let owner_id = koi_def.id.clone();
+    let task_owned = task.to_string();
+    let assigned_by_owned = assigned_by.to_string();
+    let priority_owned = priority.to_string();
+    let timeout_override = task_timeout_secs.unwrap_or(0);
+    let todo = store
+        .write(move |db| {
+            db.create_koi_todo(
+                &owner_id,
+                &task_owned,
+                "",
+                &priority_owned,
+                &assigned_by_owned,
+                None,
+                &assigned_by_owned,
+                None,
+                timeout_override,
+            )
+        })
+        .await?;
+
+    let args = ExecuteTodoArgs {
+        koi_id: koi_def.id.clone(),
+        todo_id: todo.id.clone(),
+        assign_msg_id: None,
+        session_id: format!("koi_runtime_{}_direct", koi_def.id),
+        extra_tool_profile: Vec::new(),
+        extra_system_context: None,
+    };
+    execute_todo_turn(store, sink, subagent, cfg, args).await
+}
+
 async fn find_active_todo_for_koi(
     store: &PoolStore,
     koi_id: &str,

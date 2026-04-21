@@ -904,13 +904,6 @@ fn run_impl(
                 });
             }
 
-            let startup_hooks_active = cfg!(debug_assertions)
-                && (std::env::var("PISCI_RUN_COLLAB_TRIAL").ok().as_deref() == Some("1")
-                    || std::env::var("PISCI_HEADLESS_PROMPT")
-                        .ok()
-                        .map(|s| !s.trim().is_empty())
-                        .unwrap_or(false));
-
             let startup_heartbeat_disabled =
                 std::env::var("PISCI_DISABLE_STARTUP_HEARTBEAT").ok().as_deref() == Some("1");
 
@@ -982,9 +975,8 @@ fn run_impl(
                 let app_h = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
                     {
-                        let runtime =
-                            crate::koi::runtime::KoiRuntime::from_tauri(app_h.clone(), db_arc.clone());
-                        let (stale_koi, stale_todo) = runtime.watchdog_recover(0).await;
+                        let (stale_koi, stale_todo) =
+                            crate::koi::bridge::watchdog_recover(db_arc.clone(), 0).await;
                         let stale_sessions = {
                             let db = db_arc.lock().await;
                             db.recover_stale_running_sessions(0).unwrap_or(0)
@@ -997,7 +989,13 @@ fn run_impl(
                                 stale_sessions
                             );
                         }
-                        match runtime.activate_pending_todos(None).await {
+                        match crate::koi::bridge::activate_pending_todos_arc(
+                            &app_h,
+                            db_arc.clone(),
+                            None,
+                        )
+                        .await
+                        {
                             Ok(activated) if activated > 0 => {
                                 tracing::info!(
                                     "Koi patrol startup: activated {} pending todos",
@@ -1016,10 +1014,8 @@ fn run_impl(
 
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                     loop {
-                        let runtime =
-                            crate::koi::runtime::KoiRuntime::from_tauri(app_h.clone(), db_arc.clone());
-
-                        let (stale_koi, stale_todo) = runtime.watchdog_recover(600).await;
+                        let (stale_koi, stale_todo) =
+                            crate::koi::bridge::watchdog_recover(db_arc.clone(), 600).await;
                         let stale_sessions = {
                             let db = db_arc.lock().await;
                             db.recover_stale_running_sessions(600).unwrap_or(0)
@@ -1033,7 +1029,13 @@ fn run_impl(
                             );
                         }
 
-                        match runtime.activate_pending_todos(None).await {
+                        match crate::koi::bridge::activate_pending_todos_arc(
+                            &app_h,
+                            db_arc.clone(),
+                            None,
+                        )
+                        .await
+                        {
                             Ok(activated) if activated > 0 => {
                                 tracing::info!("Koi patrol: activated {} pending todos", activated);
                             }
@@ -1355,33 +1357,6 @@ fn run_impl(
                 }
             }
 
-            #[cfg(debug_assertions)]
-            {
-                if !startup_hooks_active {
-                    tauri::async_runtime::spawn(async move {
-                        info!("=== Running Multi-Agent Integration Tests ===");
-                        match commands::test_runner::run_multi_agent_tests().await {
-                            Ok(suite) => {
-                                for r in &suite.results {
-                                    if r.passed {
-                                        info!("[PASS] {} ({}ms)", r.name, r.duration_ms);
-                                    } else {
-                                        tracing::error!(
-                                            "[FAIL] {} — {} ({}ms)",
-                                            r.name,
-                                            r.message,
-                                            r.duration_ms
-                                        );
-                                    }
-                                }
-                                info!("=== {} ===", suite.summary);
-                            }
-                            Err(e) => tracing::error!("Test runner error: {}", e),
-                        }
-                    });
-                }
-            }
-
             Ok(())
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -1512,7 +1487,6 @@ fn run_impl(
             commands::window::save_overlay_position,
             commands::window::set_app_theme,
             commands::window::set_window_theme_border,
-            commands::test_runner::run_multi_agent_tests,
             commands::collab_trial::run_collaboration_trial,
         ])
         .run(tauri::generate_context!())

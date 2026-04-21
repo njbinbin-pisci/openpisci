@@ -220,3 +220,78 @@ pub async fn execute_todo_turn(
         .ok_or_else(|| anyhow::anyhow!("desktop host has no subagent runtime wired"))?;
     coordinator::execute_todo_turn(&deps.store, deps.sink, deps.subagent, &deps.cfg, args).await
 }
+
+// ─── Patrol helpers ────────────────────────────────────────────────────
+
+/// Activate pending todos for a specific pool (or the pool-free
+/// backlog when `pool_session_id` is `None`). Returns how many turns
+/// were dispatched.
+pub async fn activate_pending_todos_arc(
+    app: &AppHandle,
+    db: Arc<Mutex<Database>>,
+    pool_session_id: Option<&str>,
+) -> anyhow::Result<u32> {
+    let deps = build_deps_from_db(app, db);
+    coordinator::activate_pending_todos(
+        &deps.store,
+        deps.sink,
+        deps.subagent,
+        &deps.cfg,
+        pool_session_id,
+    )
+    .await
+}
+
+/// Same as [`activate_pending_todos_arc`] but from a command handler
+/// that still holds a borrowed [`AppState`].
+pub async fn activate_pending_todos(
+    app: &AppHandle,
+    state: &AppState,
+    pool_session_id: Option<&str>,
+) -> anyhow::Result<u32> {
+    let deps = collect_deps(app, state)
+        .ok_or_else(|| anyhow::anyhow!("desktop host has no subagent runtime wired"))?;
+    coordinator::activate_pending_todos(
+        &deps.store,
+        deps.sink,
+        deps.subagent,
+        &deps.cfg,
+        pool_session_id,
+    )
+    .await
+}
+
+/// Watchdog recovery: roll back stale busy Kois + in_progress todos.
+/// Does not need a subagent runtime (pure DB pass-through).
+pub async fn watchdog_recover(db: Arc<Mutex<Database>>, max_busy_secs: i64) -> (u32, u32) {
+    let store = PoolStore::new(db);
+    coordinator::watchdog_recover(&store, max_busy_secs).await
+}
+
+/// Direct-assign path: create a fresh todo for `koi_id` without a pool
+/// session and run it end-to-end.
+#[allow(clippy::too_many_arguments)]
+pub async fn assign_and_execute(
+    app: &AppHandle,
+    state: &AppState,
+    koi_id: &str,
+    task: &str,
+    assigned_by: &str,
+    priority: &str,
+    task_timeout_secs: Option<u32>,
+) -> anyhow::Result<KoiExecResult> {
+    let deps = collect_deps(app, state)
+        .ok_or_else(|| anyhow::anyhow!("desktop host has no subagent runtime wired"))?;
+    coordinator::assign_and_execute(
+        &deps.store,
+        deps.sink,
+        deps.subagent,
+        &deps.cfg,
+        koi_id,
+        task,
+        assigned_by,
+        priority,
+        task_timeout_secs,
+    )
+    .await
+}
