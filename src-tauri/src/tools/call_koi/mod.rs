@@ -12,7 +12,9 @@
 pub mod event_bus;
 pub mod runtime;
 
-use crate::commands::scene::{build_registry_for_scene, load_skill_loader, SceneKind, ScenePolicy};
+use crate::commands::config::scene::{
+    build_registry_for_scene, load_skill_loader, SceneKind, ScenePolicy,
+};
 use crate::store::db::TaskSpine;
 use crate::store::AppState;
 use async_trait::async_trait;
@@ -360,7 +362,7 @@ impl CallKoiTool {
             }
             if matches!(
                 scene_policy.memory_slice_mode(),
-                crate::commands::scene::MemorySliceMode::ScopedPlusRecent
+                crate::commands::config::scene::MemorySliceMode::ScopedPlusRecent
             ) {
                 let recent_items = db
                     .list_memories_for_owner(&koi_id)

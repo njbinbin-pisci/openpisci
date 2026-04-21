@@ -4,6 +4,10 @@
 //! so desktop, kernel, and CLI hosts share one wire format (see
 //! `host::DesktopEventSink` for the per-variant Tauri event name).
 
+// Pool-domain submodules (registered as Tauri commands by `app::bootstrap`).
+pub mod board;
+pub mod koi;
+
 use std::sync::Arc;
 
 use crate::host::DesktopEventSink;

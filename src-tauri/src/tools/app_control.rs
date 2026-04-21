@@ -1,4 +1,4 @@
-use crate::commands::tools::BuiltinToolInfo;
+use crate::commands::config::tools::BuiltinToolInfo;
 use crate::skills::loader::SkillLoader;
 use crate::store::{settings::SshServerConfig, Database, Settings};
 use crate::tools::user_tool::UserToolManifest;
@@ -986,7 +986,7 @@ impl AppControlTool {
                 ))
             }
         };
-        crate::commands::window::apply_app_theme(&app, &theme)
+        crate::commands::platform::window::apply_app_theme(&app, &theme)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
         Ok(ToolResult::ok(format!(
@@ -1012,7 +1012,7 @@ impl AppControlTool {
                 ))
             }
         };
-        crate::commands::window::set_window_theme_border(app, theme.clone())
+        crate::commands::platform::window::set_window_theme_border(app, theme.clone())
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
         Ok(ToolResult::ok(format!(
@@ -1077,7 +1077,7 @@ impl AppControlTool {
                 ))
             }
         };
-        crate::commands::window::exit_minimal_mode(app)
+        crate::commands::platform::window::exit_minimal_mode(app)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
         Ok(ToolResult::ok("Exited minimal mode."))

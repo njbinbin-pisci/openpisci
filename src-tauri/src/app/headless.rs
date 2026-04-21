@@ -281,7 +281,7 @@ pub async fn run_cli_headless_request(
                 .session_id
                 .clone()
                 .unwrap_or_else(|| format!("headless_cli_{}", chrono::Utc::now().timestamp())),
-            commands::scene::SceneKind::IMHeadless,
+            commands::config::scene::SceneKind::IMHeadless,
             None,
         ),
         HeadlessCliMode::Pool => {
@@ -291,7 +291,7 @@ pub async fn run_cli_headless_request(
                     .session_id
                     .clone()
                     .unwrap_or_else(|| commands::chat::pool_pisci_session_id(&pool.id)),
-                commands::scene::SceneKind::PoolCoordinator,
+                commands::config::scene::SceneKind::PoolCoordinator,
                 Some(pool.id),
             )
         }

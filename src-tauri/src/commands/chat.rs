@@ -1,4 +1,11 @@
-use crate::commands::scene::{
+// Chat-domain submodules (registered as Tauri commands by `app::bootstrap`).
+pub mod collab_trial;
+pub mod debug;
+pub mod fish;
+pub mod gateway;
+pub mod scheduler;
+
+use crate::commands::config::scene::{
     build_registry_for_scene, load_skill_loader, CollaborationContextMode, HistorySliceMode,
     MemorySliceMode, PoolSnapshotMode, SceneKind, ScenePolicy,
 };
@@ -3853,7 +3860,7 @@ mod tests {
         SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL, SESSION_SOURCE_PISCI_HEARTBEAT_POOL,
         SESSION_SOURCE_PISCI_POOL,
     };
-    use crate::commands::scene::SceneKind;
+    use crate::commands::config::scene::SceneKind;
     use crate::store::db::ChatMessage;
     use chrono::Utc;
     use pisci_kernel::llm::{ContentBlock, LlmMessage, MessageContent};

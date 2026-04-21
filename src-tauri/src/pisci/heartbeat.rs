@@ -1,5 +1,5 @@
 use crate::commands::chat::{run_agent_headless, HeadlessRunOptions, SESSION_SOURCE_PISCI_POOL};
-use crate::commands::scene::SceneKind;
+use crate::commands::config::scene::SceneKind;
 use crate::pool::bridge;
 use crate::pool::KoiTodo;
 use crate::store::AppState;
