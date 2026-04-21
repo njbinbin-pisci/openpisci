@@ -49,13 +49,13 @@
     "withGlobalTauri": true,
     "trayIcon": {
       "id": "main",
-      "iconPath": "icons/icon.ico",
+      "iconPath": "icons/icon.png",
       "iconAsTemplate": false
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": "all",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -65,8 +65,10 @@
     ],
     "resources": [],
     "externalBin": [],
-    "copyright": "漏 2025 Pisci Team",
+    "copyright": "© 2025 Pisci Team",
     "category": "Productivity",
+    "shortDescription": "OpenPisci — Open-source AI Agent Desktop",
+    "longDescription": "OpenPisci is an open-source cross-platform AI agent desktop: chat, memory, skills, MCP tools, browser automation and pool-based multi-agent orchestration, all running locally against the LLM provider of your choice.",
     "windows": {
       "digestAlgorithm": "sha256",
       "webviewInstallMode": {
@@ -78,6 +80,29 @@
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": true,
         "compression": "lzma"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "entitlements": null,
+      "exceptionDomain": "",
+      "frameworks": [],
+      "providerShortName": null,
+      "signingIdentity": null
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libsoup-3.0-0",
+          "libjavascriptcoregtk-4.1-0",
+          "libayatana-appindicator3-1",
+          "librsvg2-2",
+          "libgtk-3-0"
+        ]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
       }
     }
   },
