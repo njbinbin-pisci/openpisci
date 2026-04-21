@@ -3,9 +3,9 @@
 // lib.rs — Tauri application library entry point.
 // main.rs calls run() from here; this allows Tauri mobile targets to work.
 
+pub mod app;
 mod browser;
 mod commands;
-mod desktop_app;
 mod fish;
 mod gateway;
 pub mod headless_cli;
@@ -35,5 +35,5 @@ pub use pisci_kernel::project_context;
 pub use pisci_kernel::scheduler;
 pub use pisci_kernel::security;
 
-pub use desktop_app::run;
+pub use app::run;
 pub use store::AppState;

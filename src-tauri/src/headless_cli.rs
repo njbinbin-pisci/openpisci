@@ -81,7 +81,7 @@ pub fn run_from_env_args() -> Result<(), String> {
             // pool-mode turns still need a live AppState + Tauri runtime.
             let response = match request.mode {
                 HeadlessCliMode::Pisci => pisci_cli::runner::run_pisci_once(request)?,
-                HeadlessCliMode::Pool => crate::desktop_app::run_headless_cli(request)?,
+                HeadlessCliMode::Pool => crate::app::run_headless_cli(request)?,
             };
             write_response(output.as_deref(), &response)
         }
