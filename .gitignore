@@ -44,9 +44,23 @@ Thumbs.db
 .tmp-gh/
 src-tauri/target-test/
 src-tauri/target-test-archive/
-examples/__pycache__/
 examples/string_utils.py
 test_output.txt
+
+# Extra local build directories (fast release / tauri fast)
+target-fast-release/
+target-tauri-fast/
+
+# Python bytecode caches (bench & harness scripts)
+__pycache__/
+*.pyc
+*.pyo
+
+# Ad-hoc `.log.err` debug dumps (complement existing *.log)
+*.log.err
+
+# Partial/intermediate benchmark outputs
+scripts/bench_compression/results/*.partial.json
 
 # Tribon M3 local reference docs (machine-specific, not for version control)
 docs/tribon/
