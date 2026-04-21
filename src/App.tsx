@@ -31,7 +31,7 @@ const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") ==
 function AppContent() {
   const dispatch = useDispatch();
   const { t } = useTranslation();
-  const { isConfigured, showOnboarding, settings } = useSelector((s: RootState) => s.settings);
+  const { showOnboarding, settings } = useSelector((s: RootState) => s.settings);
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [initialized, setInitialized] = useState(false);
   const [theme, setTheme] = useState<'violet' | 'gold'>(() => {

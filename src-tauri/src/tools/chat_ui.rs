@@ -2,13 +2,7 @@ use async_trait::async_trait;
 use pisci_kernel::agent::messages::AgentEvent;
 use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::Mutex;
-
-#[allow(dead_code)]
-pub type InteractiveResponseMap = Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<Value>>>>;
 
 pub struct ChatUiTool {
     pub app: AppHandle,

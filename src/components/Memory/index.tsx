@@ -8,7 +8,7 @@ import ConfirmDialog from "../ConfirmDialog";
 export default function Memory() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
-  const { memories, loading } = useSelector((s: RootState) => s.memory);
+  const { memories } = useSelector((s: RootState) => s.memory);
   const [newContent, setNewContent] = useState("");
   const [newCategory, setNewCategory] = useState("general");
   const [adding, setAdding] = useState(false);

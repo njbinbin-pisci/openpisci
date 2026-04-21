@@ -21,8 +21,8 @@
 use std::collections::HashMap;
 
 use crate::llm::{
-    estimate_message_tokens, estimate_request_overhead_tokens, estimate_tool_def_tokens,
-    ContentBlock, LlmMessage, MessageContent, ToolDef,
+    estimate_request_overhead_tokens, estimate_tool_def_tokens, ContentBlock, LlmMessage,
+    MessageContent, ToolDef,
 };
 
 use super::{CompactionTier, LayeredBudget, LayeredPrompt, LayeredPromptTokens};
@@ -514,13 +514,6 @@ fn is_demoted_receipt_match(minimal: &str, actual_content: &str, tool_use_id: &s
     }
     let with_hint = crate::agent::tool_receipt::with_recall_hint(minimal, tool_use_id);
     with_hint == actual_content
-}
-
-/// Re-export for parity with [`estimate_message_tokens`] inside this
-/// module (kept private to avoid widening the public API surface).
-#[allow(dead_code)]
-fn estimate_message_tokens_u32(msg: &LlmMessage) -> u32 {
-    estimate_message_tokens(msg) as u32
 }
 
 #[cfg(test)]

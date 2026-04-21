@@ -117,14 +117,12 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
 
   // WeChat binding flow
   const [wechatQr, setWechatQr] = useState<string | null>(null);
-  const [wechatQrToken, setWechatQrToken] = useState<string | null>(null);
   const [wechatBindState, setWechatBindState] = useState<"idle" | "loading" | "scan" | "scaned" | "success" | "error">("idle");
   const [wechatBindError, setWechatBindError] = useState<string | null>(null);
 
   const handleWechatBind = async () => {
     setWechatBindState("loading");
     setWechatQr(null);
-    setWechatQrToken(null);
     setWechatBindError(null);
     try {
       const result = await wechatApi.startLogin();
@@ -132,7 +130,6 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
         setWechatBindState("success");
       } else if (result.qr_data_url && result.qrcode_token) {
         setWechatQr(result.qr_data_url);
-        setWechatQrToken(result.qrcode_token);
         setWechatBindState("scan");
         // Start polling for scan status
         pollWechatStatus(result.qrcode_token);
@@ -269,18 +266,6 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
       const selected = await openFileDialog({ multiple: false, filters: exeFilter });
       if (!selected) return;
       const items = await systemApi.setRuntimePath(runtimeKey, selected as string);
-      setRuntimes(items);
-    } catch {
-      // ignore
-    } finally {
-      setRuntimesSettingKey(null);
-    }
-  }, []);
-
-  const handleClearRuntimePath = useCallback(async (runtimeKey: string) => {
-    setRuntimesSettingKey(runtimeKey);
-    try {
-      const items = await systemApi.setRuntimePath(runtimeKey, "");
       setRuntimes(items);
     } catch {
       // ignore

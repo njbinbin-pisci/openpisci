@@ -8,12 +8,6 @@ import { RootState, koiActions } from "../../../store";
 import ConfirmDialog from "../../ConfirmDialog";
 import "./KoiManager.css";
 
-const STATUS_COLORS: Record<string, string> = {
-  idle: "#22c55e",
-  busy: "#f59e0b",
-  offline: "#6b7280",
-};
-
 // ---------------------------------------------------------------------------
 // StatTooltip — hover popup for memory / todo details
 // ---------------------------------------------------------------------------
@@ -67,7 +61,6 @@ function StatTooltip({ koiId, kind, anchorRect, onMouseEnter, onMouseLeave }: St
   const vpW = window.innerWidth;
   const tooltipW = 280;
   const tooltipMaxH = 260; // inner height + 6px gap
-  const gap = 6;
 
   // Determine if we should flip above the anchor
   const flipUp = anchorRect.bottom + tooltipMaxH > vpH - 8;

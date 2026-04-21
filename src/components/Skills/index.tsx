@@ -141,14 +141,6 @@ export default function Skills() {
     }
   };
 
-  const handleUpdate = async (skillName: string, source: string) => {
-    if (!source.startsWith("http")) {
-      setError("Update requires the original URL. Re-paste the URL in the install box.");
-      return;
-    }
-    setInstallUrl(source);
-  };
-
   const handleHubSearch = useCallback(async () => {
     const q = hubQuery.trim();
     setHubSearching(true);
@@ -214,8 +206,6 @@ export default function Skills() {
       setHubInstalling(null);
     }
   };
-
-  const enabledCount = skills.filter((s) => s.enabled).length;
 
   const catalogByName = Object.fromEntries(catalog.map((c) => [c.name.toLowerCase(), c]));
   // Hide built-in pseudo skills from user-facing UI; only show user/workspace/registry skills.

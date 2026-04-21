@@ -1281,8 +1281,6 @@ pub struct HeadlessRunOptions {
 }
 
 pub(crate) const SESSION_SOURCE_IM_PREFIX: &str = "im_";
-#[allow(dead_code)]
-pub(crate) const SESSION_SOURCE_PISCI_INBOX_GLOBAL: &str = "pisci_inbox_global";
 pub(crate) const SESSION_SOURCE_PISCI_POOL: &str = "pisci_pool";
 pub(crate) const SESSION_SOURCE_PISCI_INBOX_POOL: &str = "pisci_inbox_pool";
 pub(crate) const SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL: &str = "pisci_heartbeat_global";

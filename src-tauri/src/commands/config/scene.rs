@@ -2,11 +2,11 @@ use crate::browser::SharedBrowserManager;
 use crate::host::DesktopHostTools;
 use crate::skills::loader::SkillLoader;
 use crate::store::{Database, Settings};
-#[allow(unused_imports)]
 pub use pisci_core::scene::{
-    CollaborationContextMode, EventDigestMode, HistorySliceMode, MemorySliceMode, PoolSnapshotMode,
-    RegistryProfile, SceneKind, ScenePolicy,
+    CollaborationContextMode, HistorySliceMode, MemorySliceMode, PoolSnapshotMode, SceneKind,
+    ScenePolicy,
 };
+use pisci_core::scene::RegistryProfile;
 use pisci_kernel::agent::tool::ToolRegistry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -81,7 +81,8 @@ pub fn build_registry_for_scene(
 
 #[cfg(test)]
 mod tests {
-    use super::{CollaborationContextMode, EventDigestMode, SceneKind, ScenePolicy};
+    use super::{CollaborationContextMode, SceneKind, ScenePolicy};
+    use pisci_core::scene::EventDigestMode;
 
     #[test]
     fn heartbeat_scene_policy_is_lightweight_and_disables_proactive_compaction() {

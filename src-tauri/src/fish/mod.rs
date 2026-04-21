@@ -325,9 +325,3 @@ fn load_fish_toml(path: &PathBuf) -> Result<FishDefinition> {
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))
 }
-
-/// Build a system prompt for a Fish.
-#[allow(dead_code)]
-pub fn build_fish_system_prompt(def: &FishDefinition) -> String {
-    def.agent.system_prompt.clone()
-}

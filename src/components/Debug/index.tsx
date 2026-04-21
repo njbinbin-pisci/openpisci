@@ -879,13 +879,6 @@ function UiaTestPanel() {
     }
   }, []);
 
-  const onBallMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    dragging.current = true;
-    dragOffset.current = { x: e.clientX - ballPos.x - (arenaRect?.left ?? 0), y: e.clientY - ballPos.y - (arenaRect?.top ?? 0) };
-    setDragState("idle");
-  };
-
   // Arena-level mousedown: used by UIA agent whose click may not land exactly on the ball.
   // If the click is within 60px of the ball center, treat it as a ball grab.
   const onArenaMouseDown = (e: React.MouseEvent) => {
@@ -1166,7 +1159,6 @@ function MultiAgentTestPanel() {
   const [runningTrial, setRunningTrial] = useState(false);
 
   const [trialMessages, setTrialMessages] = useState<PoolMessage[]>([]);
-  const [trialPoolId, setTrialPoolId] = useState("");
   const [trialPhase, setTrialPhase] = useState("");
   const [trialPhaseDetail, setTrialPhaseDetail] = useState("");
   const [trialKois, setTrialKois] = useState<KoiWithStats[]>([]);
@@ -1190,7 +1182,6 @@ function MultiAgentTestPanel() {
 
         if (e.payload.pool_id && !unlistenMessages) {
           const pid = e.payload.pool_id;
-          setTrialPoolId(pid);
           try {
             const msgs = await poolApi.getMessages({ session_id: pid, limit: 200 });
             setTrialMessages(msgs);
@@ -1225,7 +1216,6 @@ function MultiAgentTestPanel() {
     setRunningTrial(true);
     setTrialResult(null);
     setTrialMessages([]);
-    setTrialPoolId("");
     setTrialPhase("setup");
     setTrialPhaseDetail("");
     try {

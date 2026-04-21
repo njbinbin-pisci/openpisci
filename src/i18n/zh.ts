@@ -920,4 +920,3 @@ const zh = {
 } as const;
 
 export default zh;
-export type TranslationKeys = typeof zh;

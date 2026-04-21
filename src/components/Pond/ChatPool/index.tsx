@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { openPath } from "../../../services/tauri";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { poolApi, koiApi, PoolMessage, KoiWithStats, PoolSession } from "../../../services/tauri";
+import { poolApi, koiApi, PoolMessage, KoiWithStats } from "../../../services/tauri";
 import { RootState, poolActions, koiActions, POOL_DEFAULT_CAPACITY } from "../../../store";
 import ConfirmDialog from "../../ConfirmDialog";
 import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
