@@ -1,6 +1,6 @@
-use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use crate::skills::loader::SkillLoader;
 use async_trait::async_trait;
+use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;

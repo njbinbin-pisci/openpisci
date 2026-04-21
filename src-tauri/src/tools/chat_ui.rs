@@ -1,6 +1,6 @@
-use crate::agent::messages::AgentEvent;
-use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
+use pisci_kernel::agent::messages::AgentEvent;
+use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;

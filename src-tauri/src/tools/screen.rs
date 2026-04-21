@@ -1,9 +1,9 @@
-/// Screen capture tool with Vision AI support (Windows only)
-/// Supports full screen, specific window, region, and multi-monitor capture.
-use crate::agent::tool::{ImageData, Tool, ToolContext, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use base64::Engine;
+/// Screen capture tool with Vision AI support (Windows only)
+/// Supports full screen, specific window, region, and multi-monitor capture.
+use pisci_kernel::agent::tool::{ImageData, Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 pub struct ScreenTool;

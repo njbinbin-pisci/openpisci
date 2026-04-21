@@ -1,3 +1,8 @@
+use crate::commands::scene::{build_registry_for_scene, load_skill_loader, SceneKind, ScenePolicy};
+use crate::store::db::TaskSpine;
+use crate::store::AppState;
+use async_trait::async_trait;
+use pisci_core::project_state::build_coordination_event_digest;
 /// call_koi tool — lets Pisci or another Koi delegate a task to a persistent Koi agent.
 ///
 /// Unlike call_fish (stateless), call_koi:
@@ -6,15 +11,10 @@
 /// - Records messages in the Chat Pool (if a pool_session_id is provided)
 /// - Sets memory_owner_id so new memories are scoped to the Koi
 /// - Allows the Koi to call other Kois (excluding itself, to prevent recursion)
-use crate::agent::harness::HarnessConfig;
-use crate::agent::messages::AgentEvent;
-use crate::agent::tool::{Tool, ToolContext, ToolResult, ToolSettings};
-use crate::commands::scene::{build_registry_for_scene, load_skill_loader, SceneKind, ScenePolicy};
-use crate::llm::{LlmMessage, MessageContent};
-use crate::store::db::TaskSpine;
-use crate::store::AppState;
-use async_trait::async_trait;
-use pisci_core::project_state::build_coordination_event_digest;
+use pisci_kernel::agent::harness::HarnessConfig;
+use pisci_kernel::agent::messages::AgentEvent;
+use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult, ToolSettings};
+use pisci_kernel::llm::{LlmMessage, MessageContent};
 use serde_json::{json, Value};
 use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{AppHandle, Emitter, Manager};
@@ -609,7 +609,7 @@ impl CallKoiTool {
             flags.insert(cancel_key.clone(), cancel.clone());
         }
 
-        let client = crate::llm::build_client(
+        let client = pisci_kernel::llm::build_client(
             &provider,
             &api_key,
             if base_url.is_empty() {
@@ -656,7 +656,7 @@ impl CallKoiTool {
 
         let registry_tools = Arc::new(registry_tools);
 
-        let policy = Arc::new(crate::policy::PolicyGate::with_profile_and_flags(
+        let policy = Arc::new(pisci_kernel::policy::PolicyGate::with_profile_and_flags(
             &workspace_root,
             &policy_mode,
             tool_rate_limit_per_minute,
@@ -669,7 +669,7 @@ impl CallKoiTool {
         let notification_rx = self.notification_rx.lock().unwrap().take();
         let koi_compaction_settings = {
             let s = state.settings.lock().await;
-            crate::agent::harness::config::CompactionSettings::from_settings(&s)
+            pisci_kernel::agent::harness::config::CompactionSettings::from_settings(&s)
         };
         let agent = HarnessConfig::for_koi(
             model,

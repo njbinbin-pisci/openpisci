@@ -1,3 +1,5 @@
+use anyhow::Result;
+use async_trait::async_trait;
 /// Office COM automation tool (Windows only).
 /// Controls Excel, Word, PowerPoint, and Outlook via PowerShell COM interop.
 ///
@@ -6,9 +8,7 @@
 ///   which eliminates ALL escaping issues with $, ", ', backticks, etc.
 /// - A single PowerShell process handles the full operation (open → modify → save → quit).
 /// - Batch write operations accept JSON arrays for efficient multi-cell/multi-slide writes.
-use crate::agent::tool::{Tool, ToolContext, ToolResult};
-use anyhow::Result;
-use async_trait::async_trait;
+use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::process::Stdio;
 use std::time::Duration;

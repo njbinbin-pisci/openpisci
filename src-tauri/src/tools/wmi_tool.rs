@@ -1,8 +1,8 @@
-/// WMI (Windows Management Instrumentation) query tool.
-/// Executes WQL queries via PowerShell Get-CimInstance for structured system data.
-use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
+/// WMI (Windows Management Instrumentation) query tool.
+/// Executes WQL queries via PowerShell Get-CimInstance for structured system data.
+use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::process::Stdio;
 use std::time::Duration;

@@ -1,6 +1,3 @@
-/// Browser automation tool via Chrome DevTools Protocol (CDP).
-/// Uses Chrome for Testing (auto-downloaded) or system Chrome.
-use crate::agent::tool::{ImageData, Tool, ToolContext, ToolResult};
 use crate::browser::SharedBrowserManager;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -8,6 +5,9 @@ use base64::Engine;
 use chromiumoxide::cdp::browser_protocol::network::{CookieParam, DeleteCookiesParams};
 use futures::StreamExt;
 use once_cell::sync::Lazy;
+/// Browser automation tool via Chrome DevTools Protocol (CDP).
+/// Uses Chrome for Testing (auto-downloaded) or system Chrome.
+use pisci_kernel::agent::tool::{ImageData, Tool, ToolContext, ToolResult};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;

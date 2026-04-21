@@ -1,12 +1,12 @@
-use crate::agent::harness::HarnessConfig;
-use crate::agent::messages::AgentEvent;
-use crate::agent::tool::ToolContext;
 use crate::browser::SharedBrowserManager;
 use crate::commands::chat::{persist_task_spine_from_plan_state, render_task_state_section};
 use crate::host::DesktopHostTools;
-use crate::llm::{build_client, LlmMessage, MessageContent};
-use crate::policy::PolicyGate;
 use crate::store::{db::ScheduledTask, AppState, Database, Settings};
+use pisci_kernel::agent::harness::HarnessConfig;
+use pisci_kernel::agent::messages::AgentEvent;
+use pisci_kernel::agent::tool::ToolContext;
+use pisci_kernel::llm::{build_client, LlmMessage, MessageContent};
+use pisci_kernel::policy::PolicyGate;
 use serde::Serialize;
 use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -626,7 +626,7 @@ pub async fn execute_task(
             s.max_tokens,
             s.policy_mode.clone(),
             s.tool_rate_limit_per_minute,
-            std::sync::Arc::new(crate::agent::tool::ToolSettings::from_settings(&s)),
+            std::sync::Arc::new(pisci_kernel::agent::tool::ToolSettings::from_settings(&s)),
             s.max_iterations,
             s.builtin_tool_enabled.clone(),
             s.allow_outside_workspace,
@@ -709,7 +709,7 @@ pub async fn execute_task(
     );
     let scheduler_compaction_settings = {
         let s = settings.lock().await;
-        crate::agent::harness::config::CompactionSettings::from_settings(&s)
+        pisci_kernel::agent::harness::config::CompactionSettings::from_settings(&s)
     };
     let agent = HarnessConfig::for_scheduler(
         model,

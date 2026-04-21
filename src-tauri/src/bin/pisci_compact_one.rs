@@ -69,16 +69,15 @@ async fn main() {
         std::process::exit(2);
     }
 
-    let req: pisci_desktop_lib::agent::bench_compact::BenchRequest =
-        match serde_json::from_str(&raw) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("parse request failed: {}", e);
-                std::process::exit(2);
-            }
-        };
+    let req: pisci_kernel::agent::bench_compact::BenchRequest = match serde_json::from_str(&raw) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("parse request failed: {}", e);
+            std::process::exit(2);
+        }
+    };
 
-    match pisci_desktop_lib::agent::bench_compact::compact_one(req).await {
+    match pisci_kernel::agent::bench_compact::compact_one(req).await {
         Ok(resp) => {
             let out = serde_json::to_string(&resp).unwrap();
             println!("{}", out);

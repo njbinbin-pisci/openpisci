@@ -19,8 +19,9 @@
 use crate::{
     commands, gateway,
     headless_cli::{HeadlessCliRequest, HeadlessCliResponse},
-    scheduler, store,
+    store,
 };
+use pisci_kernel::scheduler;
 use std::sync::{Arc, Mutex as StdMutex};
 use tauri::{Emitter, Manager};
 use tracing::info;

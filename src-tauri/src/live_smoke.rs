@@ -49,13 +49,13 @@ use std::time::Duration;
 use serde_json::{json, Value as Json};
 use tokio::sync::{mpsc, Mutex};
 
-use crate::agent::harness::config::{CompactionSettings, HarnessConfig};
-use crate::agent::messages::{AgentEvent, LayeredTokenBreakdownSnapshot};
-use crate::agent::tool::{ToolContext, ToolSettings};
-use crate::llm::{LlmMessage, MessageContent};
-use crate::policy::gate::PolicyGate;
 use crate::store::db::Database;
 use crate::store::settings::Settings;
+use pisci_kernel::agent::harness::config::{CompactionSettings, HarnessConfig};
+use pisci_kernel::agent::messages::{AgentEvent, LayeredTokenBreakdownSnapshot};
+use pisci_kernel::agent::tool::{ToolContext, ToolSettings};
+use pisci_kernel::llm::{LlmMessage, MessageContent};
+use pisci_kernel::policy::gate::PolicyGate;
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key)
@@ -180,7 +180,7 @@ async fn harness_live_smoke() {
     };
 
     // ── 3. Real LLM client + tool registry (no AppHandle) ─────────────
-    let client = crate::llm::build_client_with_timeout(
+    let client = pisci_kernel::llm::build_client_with_timeout(
         &provider,
         &api_key,
         if base_url.is_empty() {

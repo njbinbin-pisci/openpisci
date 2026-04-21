@@ -1,16 +1,16 @@
+use crate::host::DesktopHostTools;
+use crate::store::AppState;
 /// Debug & E2E testing module for OpenPisci.
 ///
 /// Provides:
 /// - `run_debug_scenario`: Run a named test scenario through the real agent loop
 /// - `get_debug_report`: Collect a full diagnostic snapshot (settings, tools, recent audit, logs)
 /// - `get_log_tail`: Read the last N lines of the rolling log file
-use crate::agent::harness::HarnessConfig;
-use crate::agent::messages::AgentEvent;
-use crate::agent::tool::ToolContext;
-use crate::host::DesktopHostTools;
-use crate::llm::{build_client, LlmMessage, MessageContent};
-use crate::policy::PolicyGate;
-use crate::store::AppState;
+use pisci_kernel::agent::harness::HarnessConfig;
+use pisci_kernel::agent::messages::AgentEvent;
+use pisci_kernel::agent::tool::ToolContext;
+use pisci_kernel::llm::{build_client, LlmMessage, MessageContent};
+use pisci_kernel::policy::PolicyGate;
 use serde::{Deserialize, Serialize};
 use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{Manager, State};
@@ -1000,7 +1000,9 @@ pub async fn run_debug_scenario(
             settings.max_tokens,
             settings.policy_mode.clone(),
             settings.tool_rate_limit_per_minute,
-            Arc::new(crate::agent::tool::ToolSettings::from_settings(&settings)),
+            Arc::new(pisci_kernel::agent::tool::ToolSettings::from_settings(
+                &settings,
+            )),
             settings.max_iterations,
             settings.builtin_tool_enabled.clone(),
             settings.ssh_servers.len(),
@@ -1131,7 +1133,7 @@ pub async fn run_debug_scenario(
     );
     let debug_compaction_settings = {
         let s = state.settings.lock().await;
-        crate::agent::harness::config::CompactionSettings::from_settings(&s)
+        pisci_kernel::agent::harness::config::CompactionSettings::from_settings(&s)
     };
     let agent = HarnessConfig::for_debug(
         model,
@@ -1573,7 +1575,9 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
             settings.max_tokens,
             settings.policy_mode.clone(),
             settings.tool_rate_limit_per_minute,
-            Arc::new(crate::agent::tool::ToolSettings::from_settings(&settings)),
+            Arc::new(pisci_kernel::agent::tool::ToolSettings::from_settings(
+                &settings,
+            )),
             settings.max_iterations,
             settings.builtin_tool_enabled.clone(),
             settings.vision_enabled,
@@ -1666,7 +1670,7 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
     );
     let uia_compaction_settings = {
         let s = state.settings.lock().await;
-        crate::agent::harness::config::CompactionSettings::from_settings(&s)
+        pisci_kernel::agent::harness::config::CompactionSettings::from_settings(&s)
     };
     let agent = HarnessConfig::for_debug(
         model,

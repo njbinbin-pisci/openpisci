@@ -1,17 +1,19 @@
-use crate::agent::messages::AgentEvent;
-use crate::agent::plan::summarize_todos;
-use crate::agent::tool::ToolContext;
 use crate::commands::scene::{
     build_registry_for_scene, load_skill_loader, CollaborationContextMode, HistorySliceMode,
     MemorySliceMode, PoolSnapshotMode, SceneKind, ScenePolicy,
 };
-use crate::llm::{build_client_with_timeout, ContentBlock, LlmMessage, MessageContent, ToolDef};
-use crate::policy::PolicyGate;
-use crate::project_context::render_project_instruction_context;
 use crate::store::{
     db::ChatMessage, db::Session, db::SessionContextState, db::TaskSpine, db::TaskState, AppState,
 };
 use pisci_core::project_state::build_coordination_event_digest;
+use pisci_kernel::agent::messages::AgentEvent;
+use pisci_kernel::agent::plan::summarize_todos;
+use pisci_kernel::agent::tool::ToolContext;
+use pisci_kernel::llm::{
+    build_client_with_timeout, ContentBlock, LlmMessage, MessageContent, ToolDef,
+};
+use pisci_kernel::policy::PolicyGate;
+use pisci_kernel::project_context::render_project_instruction_context;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{atomic::AtomicBool, Arc};
@@ -45,7 +47,7 @@ struct SessionMessageContext {
 
 struct ChatPromptArtifacts {
     system_prompt: String,
-    registry: Arc<crate::agent::tool::ToolRegistry>,
+    registry: Arc<pisci_kernel::agent::tool::ToolRegistry>,
     tool_defs: Vec<ToolDef>,
 }
 
@@ -230,7 +232,7 @@ async fn build_session_message_context_from_db(
         db.get_session_state_frame_json(session_id)
             .ok()
             .flatten()
-            .and_then(|raw| crate::agent::state_frame::StateFrame::from_json_opt(&raw))
+            .and_then(|raw| pisci_kernel::agent::state_frame::StateFrame::from_json_opt(&raw))
     };
     let latest_user_text = history
         .iter()
@@ -268,7 +270,7 @@ async fn build_session_message_context_from_db(
         let insert_at = summary_offset.min(llm_messages.len());
         llm_messages.insert(
             insert_at,
-            crate::agent::state_frame::state_frame_message(&frame),
+            pisci_kernel::agent::state_frame::state_frame_message(&frame),
         );
     }
     Ok(SessionMessageContext {
@@ -328,8 +330,11 @@ fn build_context_messages_summary_only(
     let mut kept = Vec::new();
     let mut token_est = 0usize;
     for message in messages.into_iter().rev() {
-        let message_tokens =
-            crate::llm::estimate_request_input_tokens(std::slice::from_ref(&message), None, &[]);
+        let message_tokens = pisci_kernel::llm::estimate_request_input_tokens(
+            std::slice::from_ref(&message),
+            None,
+            &[],
+        );
         if token_est + message_tokens > budget {
             continue;
         }
@@ -533,7 +538,7 @@ async fn build_chat_prompt_artifacts(
     let registry = Arc::new(registry);
     // Chat budget estimation uses the same Minimal injection mode the
     // harness will actually send, so the token accounting stays honest.
-    let tool_defs = registry.to_tool_defs(crate::agent::tool::ToolDefMode::Minimal);
+    let tool_defs = registry.to_tool_defs(pisci_kernel::agent::tool::ToolDefMode::Minimal);
 
     let memory_context = {
         let db = state.db.lock().await;
@@ -796,7 +801,9 @@ pub async fn chat_send(
             settings.confirm_file_writes,
             settings.policy_mode.clone(),
             settings.tool_rate_limit_per_minute,
-            std::sync::Arc::new(crate::agent::tool::ToolSettings::from_settings(&settings)),
+            std::sync::Arc::new(pisci_kernel::agent::tool::ToolSettings::from_settings(
+                &settings,
+            )),
             settings.max_iterations,
             settings.builtin_tool_enabled.clone(),
             settings.allow_outside_workspace,
@@ -832,14 +839,14 @@ pub async fn chat_send(
         );
         let decision = gate.check_user_input(&content);
         match decision {
-            crate::policy::PolicyDecision::Deny(reason) => {
+            pisci_kernel::policy::PolicyDecision::Deny(reason) => {
                 tracing::warn!(
                     "chat_send: user input rejected by injection detection: {}",
                     reason
                 );
                 return Err(format!("Input rejected: {}", reason));
             }
-            crate::policy::PolicyDecision::Warn(reason) => {
+            pisci_kernel::policy::PolicyDecision::Warn(reason) => {
                 tracing::warn!(
                     "chat_send: potential injection detected (proceeding): {}",
                     reason
@@ -854,7 +861,7 @@ pub async fn chat_send(
                     false,
                 );
             }
-            crate::policy::PolicyDecision::Allow => {}
+            pisci_kernel::policy::PolicyDecision::Allow => {}
         }
     }
 
@@ -932,7 +939,7 @@ pub async fn chat_send(
         let mut plans = state.plan_state.lock().await;
         plans.remove(&session_id);
     }
-    crate::agent::vision::clear_selection(&session_id).await;
+    pisci_kernel::agent::vision::clear_selection(&session_id).await;
 
     {
         let db = state.db.lock().await;
@@ -962,7 +969,7 @@ pub async fn chat_send(
                 use base64::Engine;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(data);
                 let image_block = ContentBlock::Image {
-                    source: crate::llm::ImageSource {
+                    source: pisci_kernel::llm::ImageSource {
                         source_type: "base64".to_string(),
                         media_type: media.media_type.clone(),
                         data: b64,
@@ -1029,10 +1036,10 @@ pub async fn chat_send(
         let settings = state.settings.lock().await;
         (
             settings.fallback_models.clone(),
-            crate::agent::harness::config::CompactionSettings::from_settings(&settings),
+            pisci_kernel::agent::harness::config::CompactionSettings::from_settings(&settings),
         )
     };
-    let agent = crate::agent::harness::HarnessConfig::for_main_chat(
+    let agent = pisci_kernel::agent::harness::HarnessConfig::for_main_chat(
         model.clone(),
         fallback_models,
         registry,
@@ -1040,7 +1047,7 @@ pub async fn chat_send(
         prompt_artifacts.system_prompt,
         max_tokens,
         context_window,
-        crate::agent::harness::config::ConfirmFlags {
+        pisci_kernel::agent::harness::config::ConfirmFlags {
             confirm_shell,
             confirm_file_write,
         },
@@ -1411,7 +1418,9 @@ pub async fn run_agent_headless(
             settings.context_window,
             settings.policy_mode.clone(),
             settings.tool_rate_limit_per_minute,
-            std::sync::Arc::new(crate::agent::tool::ToolSettings::from_settings(&settings)),
+            std::sync::Arc::new(pisci_kernel::agent::tool::ToolSettings::from_settings(
+                &settings,
+            )),
             settings.max_iterations,
             settings.builtin_tool_enabled.clone(),
             settings.allow_outside_workspace,
@@ -1446,7 +1455,7 @@ pub async fn run_agent_headless(
         let mut plans = state.plan_state.lock().await;
         plans.remove(session_id);
     }
-    crate::agent::vision::clear_selection(session_id).await;
+    pisci_kernel::agent::vision::clear_selection(session_id).await;
 
     let pool_session_id = options.as_ref().and_then(|o| o.pool_session_id.clone());
     let context_toggles = options
@@ -1668,7 +1677,7 @@ pub async fn run_agent_headless(
         injection_budget,
     );
     let injected_context_tokens =
-        crate::llm::estimate_request_input_tokens(&[], Some(&injected_context), &[]);
+        pisci_kernel::llm::estimate_request_input_tokens(&[], Some(&injected_context), &[]);
     tracing::info!(
         "headless_context_slices scene={:?} session={} history_mode={:?} memory_mode={:?} pool_snapshot_mode={:?} event_digest_mode={:?} memory_chars={} task_state_chars={} pool_chars={} injected_chars={} injected_tokens_est={}",
         scene_kind,
@@ -1711,10 +1720,10 @@ pub async fn run_agent_headless(
         let settings = state.settings.lock().await;
         (
             settings.fallback_models.clone(),
-            crate::agent::harness::config::CompactionSettings::from_settings(&settings),
+            pisci_kernel::agent::harness::config::CompactionSettings::from_settings(&settings),
         )
     };
-    let agent = crate::agent::harness::HarnessConfig::for_main_headless(
+    let agent = pisci_kernel::agent::harness::HarnessConfig::for_main_headless(
         model,
         headless_fallback_models,
         registry,
@@ -1759,7 +1768,7 @@ pub async fn run_agent_headless(
                 use base64::Engine;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(data);
                 let image_block = ContentBlock::Image {
-                    source: crate::llm::ImageSource {
+                    source: pisci_kernel::llm::ImageSource {
                         source_type: "base64".to_string(),
                         media_type: media.media_type.clone(),
                         data: b64,
@@ -1853,8 +1862,8 @@ pub async fn run_agent_headless(
         .map(|m| {
             let text = m.content.as_text();
             let img: Option<(Vec<u8>, String)> = match &m.content {
-                crate::llm::MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| {
-                    if let crate::llm::ContentBlock::Image { source } = b {
+                pisci_kernel::llm::MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| {
+                    if let pisci_kernel::llm::ContentBlock::Image { source } = b {
                         if source.source_type == "base64" {
                             use base64::Engine;
                             let bytes = base64::engine::general_purpose::STANDARD
@@ -2587,7 +2596,7 @@ pub fn build_im_system_prompt(channel: &str, vision_capable: bool) -> String {
 
 /// Estimate token count for a string. Delegates to `llm::estimate_tokens`.
 pub fn estimate_tokens(text: &str) -> usize {
-    crate::llm::estimate_tokens(text)
+    pisci_kernel::llm::estimate_tokens(text)
 }
 
 // ---------------------------------------------------------------------------
@@ -2597,10 +2606,10 @@ pub fn estimate_tokens(text: &str) -> usize {
 /// Compute the token budget for `build_context_messages` from settings.
 /// Delegates to `llm::compute_context_budget`.
 pub fn compute_context_budget(context_window: u32, max_tokens: u32) -> usize {
-    crate::llm::compute_context_budget(context_window, max_tokens)
+    pisci_kernel::llm::compute_context_budget(context_window, max_tokens)
 }
 
-pub use crate::agent::compaction::{
+pub use pisci_kernel::agent::compaction::{
     CTX_COMPACT_AFTER, CTX_FULL_TURNS, CTX_TRIM_HEAD, CTX_TRIM_TAIL,
 };
 
@@ -2888,7 +2897,7 @@ pub fn build_context_messages(
     let mut turn_groups: Vec<Vec<LlmMessage>> = Vec::new();
     let mut token_est: usize = rolling_summary
         .map(rolling_summary_message)
-        .map(|message| crate::llm::estimate_message_tokens(&message))
+        .map(|message| pisci_kernel::llm::estimate_message_tokens(&message))
         .unwrap_or(0);
 
     // Process turns from newest to oldest; we prepend each group later.
@@ -3220,7 +3229,7 @@ fn minimal_tool_result_blocks(results_json: &str) -> Vec<ContentBlock> {
                     } else {
                         tool_name
                     };
-                    crate::agent::tool_receipt::render_receipt(
+                    pisci_kernel::agent::tool_receipt::render_receipt(
                         name,
                         &serde_json::Value::Null,
                         &full,
@@ -3239,7 +3248,8 @@ fn minimal_tool_result_blocks(results_json: &str) -> Vec<ContentBlock> {
             };
             // p11: append `[recall:<tool_use_id>]` so the agent can re-fetch
             // the original full content via the recall_tool_result tool.
-            let content = crate::agent::tool_receipt::with_recall_hint(&content, &tool_use_id);
+            let content =
+                pisci_kernel::agent::tool_receipt::with_recall_hint(&content, &tool_use_id);
             out.push(ContentBlock::ToolResult {
                 tool_use_id,
                 content,
@@ -3454,7 +3464,7 @@ pub(crate) fn sanitize_tool_use_result_pairing(mut msgs: Vec<LlmMessage>) -> Vec
     while i < msgs.len() {
         let has_tool_use = if msgs[i].role == "assistant" {
             match &msgs[i].content {
-                crate::llm::MessageContent::Blocks(blocks) => blocks
+                pisci_kernel::llm::MessageContent::Blocks(blocks) => blocks
                     .iter()
                     .any(|b| matches!(b, ContentBlock::ToolUse { .. })),
                 _ => false,
@@ -3475,7 +3485,7 @@ pub(crate) fn sanitize_tool_use_result_pairing(mut msgs: Vec<LlmMessage>) -> Vec
             .map(|next| {
                 next.role == "user"
                     && match &next.content {
-                        crate::llm::MessageContent::Blocks(blocks) => blocks
+                        pisci_kernel::llm::MessageContent::Blocks(blocks) => blocks
                             .iter()
                             .any(|b| matches!(b, ContentBlock::ToolResult { .. })),
                         _ => false,
@@ -3489,13 +3499,13 @@ pub(crate) fn sanitize_tool_use_result_pairing(mut msgs: Vec<LlmMessage>) -> Vec
                 "sanitize_tool_use_result_pairing: stripping orphaned ToolUse at index {}",
                 i
             );
-            if let crate::llm::MessageContent::Blocks(ref mut blocks) = msgs[i].content {
+            if let pisci_kernel::llm::MessageContent::Blocks(ref mut blocks) = msgs[i].content {
                 blocks.retain(|b| !matches!(b, ContentBlock::ToolUse { .. }));
             }
             // If the message is now empty, remove it
             let is_empty = match &msgs[i].content {
-                crate::llm::MessageContent::Blocks(blocks) => blocks.is_empty(),
-                crate::llm::MessageContent::Text(t) => t.trim().is_empty(),
+                pisci_kernel::llm::MessageContent::Blocks(blocks) => blocks.is_empty(),
+                pisci_kernel::llm::MessageContent::Text(t) => t.trim().is_empty(),
             };
             if is_empty {
                 msgs.remove(i);
@@ -3513,8 +3523,8 @@ pub(crate) fn sanitize_tool_use_result_pairing(mut msgs: Vec<LlmMessage>) -> Vec
 pub async fn auto_extract_memories(
     db_arc: Arc<tokio::sync::Mutex<crate::store::Database>>,
     session_id: String,
-    messages: Vec<crate::llm::LlmMessage>,
-    client: Box<dyn crate::llm::LlmClient>,
+    messages: Vec<pisci_kernel::llm::LlmMessage>,
+    client: Box<dyn pisci_kernel::llm::LlmClient>,
     model: String,
     max_tokens: u32,
     owner_id: String,
@@ -3559,10 +3569,10 @@ pub async fn auto_extract_memories(
         conv_summary
     );
 
-    let req = crate::llm::LlmRequest {
-        messages: vec![crate::llm::LlmMessage {
+    let req = pisci_kernel::llm::LlmRequest {
+        messages: vec![pisci_kernel::llm::LlmMessage {
             role: "user".into(),
-            content: crate::llm::MessageContent::text(&extraction_prompt),
+            content: pisci_kernel::llm::MessageContent::text(&extraction_prompt),
         }],
         system: Some("You are a memory extraction assistant. Be concise and only extract genuinely useful personal information.".into()),
         tools: vec![],
@@ -3725,34 +3735,34 @@ pub async fn get_context_preview(
     let llm_messages = session_context.llm_messages;
     let session_state = session_context.session_state;
     let llm_messages =
-        crate::agent::vision::inject_selected_context(&llm_messages, &session_id).await;
+        pisci_kernel::agent::vision::inject_selected_context(&llm_messages, &session_id).await;
 
     // Convert LlmMessages to preview-friendly structs with structured blocks
     let messages: Vec<ContextPreviewMessage> = llm_messages
         .iter()
         .map(|m| {
             let blocks: Vec<ContextPreviewBlock> = match &m.content {
-                crate::llm::MessageContent::Text(t) => {
+                pisci_kernel::llm::MessageContent::Text(t) => {
                     if t.is_empty() {
                         vec![]
                     } else {
                         vec![ContextPreviewBlock::Text { text: t.clone() }]
                     }
                 }
-                crate::llm::MessageContent::Blocks(raw_blocks) => raw_blocks
+                pisci_kernel::llm::MessageContent::Blocks(raw_blocks) => raw_blocks
                     .iter()
                     .map(|b| match b {
-                        crate::llm::ContentBlock::Text { text } => {
+                        pisci_kernel::llm::ContentBlock::Text { text } => {
                             ContextPreviewBlock::Text { text: text.clone() }
                         }
-                        crate::llm::ContentBlock::ToolUse { id, name, input } => {
+                        pisci_kernel::llm::ContentBlock::ToolUse { id, name, input } => {
                             ContextPreviewBlock::ToolUse {
                                 id: id.clone(),
                                 name: name.clone(),
                                 input: serde_json::to_string_pretty(input).unwrap_or_default(),
                             }
                         }
-                        crate::llm::ContentBlock::ToolResult {
+                        pisci_kernel::llm::ContentBlock::ToolResult {
                             tool_use_id,
                             content,
                             is_error,
@@ -3779,13 +3789,15 @@ pub async fn get_context_preview(
                                 truncated,
                             }
                         }
-                        crate::llm::ContentBlock::Image { .. } => ContextPreviewBlock::Image {
-                            note: "[image attachment]".to_string(),
-                        },
+                        pisci_kernel::llm::ContentBlock::Image { .. } => {
+                            ContextPreviewBlock::Image {
+                                note: "[image attachment]".to_string(),
+                            }
+                        }
                     })
                     .collect(),
             };
-            let tokens = crate::llm::estimate_message_tokens(m);
+            let tokens = pisci_kernel::llm::estimate_message_tokens(m);
             ContextPreviewMessage {
                 role: m.role.clone(),
                 blocks,
@@ -3795,12 +3807,13 @@ pub async fn get_context_preview(
         .collect();
 
     let messages_tokens: usize = messages.iter().map(|m| m.tokens).sum();
-    let request_overhead_tokens = crate::llm::estimate_request_overhead_tokens(
+    let request_overhead_tokens = pisci_kernel::llm::estimate_request_overhead_tokens(
         Some(&prompt_artifacts.system_prompt),
         &prompt_artifacts.tool_defs,
     );
-    let total_input_budget = crate::llm::compute_total_input_budget(context_window, max_tokens);
-    let total_tokens = crate::llm::estimate_request_input_tokens(
+    let total_input_budget =
+        pisci_kernel::llm::compute_total_input_budget(context_window, max_tokens);
+    let total_tokens = pisci_kernel::llm::estimate_request_input_tokens(
         &llm_messages,
         Some(&prompt_artifacts.system_prompt),
         &prompt_artifacts.tool_defs,
@@ -3841,9 +3854,9 @@ mod tests {
         SESSION_SOURCE_PISCI_POOL,
     };
     use crate::commands::scene::SceneKind;
-    use crate::llm::{ContentBlock, LlmMessage, MessageContent};
     use crate::store::db::ChatMessage;
     use chrono::Utc;
+    use pisci_kernel::llm::{ContentBlock, LlmMessage, MessageContent};
     use serde_json::json;
 
     fn make_chat_message(

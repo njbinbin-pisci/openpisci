@@ -332,7 +332,7 @@ async fn install_skill_from_content(
             let enrich_skill = skill.clone();
             let enrich_file = skill_file.clone();
             tokio::spawn(async move {
-                let client = crate::llm::build_client(
+                let client = pisci_kernel::llm::build_client(
                     &provider,
                     &api_key,
                     if base_url.is_empty() {
@@ -1155,12 +1155,12 @@ fn extract_skill_md_from_zip(zip_bytes: &[u8]) -> anyhow::Result<String> {
 ///
 /// This runs as a background task after installation — failures are non-fatal.
 async fn enrich_triggers_with_llm(
-    client: &dyn crate::llm::LlmClient,
+    client: &dyn pisci_kernel::llm::LlmClient,
     model: &str,
     skill: &crate::skills::loader::SkillDefinition,
     skill_file: &std::path::Path,
 ) -> anyhow::Result<()> {
-    use crate::llm::{LlmMessage, LlmRequest, MessageContent};
+    use pisci_kernel::llm::{LlmMessage, LlmRequest, MessageContent};
     use tokio::time::{timeout, Duration};
 
     let existing_triggers = if skill.triggers.is_empty() {

@@ -15,14 +15,14 @@ pub struct AppState {
     pub settings: Arc<Mutex<Settings>>,
     /// Current visible execution plan per session
     pub plan_state:
-        Arc<Mutex<std::collections::HashMap<String, Vec<crate::agent::plan::PlanTodoItem>>>>,
+        Arc<Mutex<std::collections::HashMap<String, Vec<pisci_kernel::agent::plan::PlanTodoItem>>>>,
     /// Active agent cancellation tokens: session_id -> cancel flag
     pub cancel_flags:
         Arc<Mutex<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
     /// Shared browser manager (Chrome for Testing)
     pub browser: crate::browser::SharedBrowserManager,
     /// Cron scheduler for recurring tasks
-    pub scheduler: Arc<crate::scheduler::cron::CronScheduler>,
+    pub scheduler: Arc<pisci_kernel::scheduler::cron::CronScheduler>,
     /// App handle for emitting events from scheduler tasks
     pub app_handle: AppHandle,
     /// Pending permission confirmation channels: request_id -> oneshot sender
@@ -42,7 +42,7 @@ impl AppState {
     /// Synchronous construction — scheduler must be provided after async init.
     pub fn new_sync(
         app: &AppHandle,
-        scheduler: crate::scheduler::cron::CronScheduler,
+        scheduler: pisci_kernel::scheduler::cron::CronScheduler,
     ) -> Result<Self> {
         let app_dir = app
             .path()
@@ -56,7 +56,7 @@ impl AppState {
     /// config + database root without mutating the desktop app's default state.
     pub fn new_sync_with_app_dir(
         app: &AppHandle,
-        scheduler: crate::scheduler::cron::CronScheduler,
+        scheduler: pisci_kernel::scheduler::cron::CronScheduler,
         app_dir: std::path::PathBuf,
     ) -> Result<Self> {
         std::fs::create_dir_all(&app_dir)?;

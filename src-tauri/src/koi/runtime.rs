@@ -440,7 +440,7 @@ impl KoiRuntime {
         workspace_override: Option<&str>,
         await_completion: bool,
     ) -> anyhow::Result<String> {
-        use crate::agent::tool::{Tool, ToolContext, ToolSettings};
+        use pisci_kernel::agent::tool::{Tool, ToolContext, ToolSettings};
 
         if let Some(app) = self.try_get_app_handle() {
             let state = app.state::<crate::store::AppState>();

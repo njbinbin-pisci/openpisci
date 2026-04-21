@@ -1,8 +1,8 @@
-/// COM/OLE/Shell tool for Windows — clipboard, shell operations, special folders.
-/// Windows only.
-use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
+/// COM/OLE/Shell tool for Windows — clipboard, shell operations, special folders.
+/// Windows only.
+use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 pub struct ComTool;

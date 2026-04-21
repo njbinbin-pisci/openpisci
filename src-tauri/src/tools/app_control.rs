@@ -1,9 +1,9 @@
-use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use crate::commands::tools::BuiltinToolInfo;
 use crate::skills::loader::SkillLoader;
 use crate::store::{settings::SshServerConfig, Database, Settings};
 use crate::tools::user_tool::UserToolManifest;
 use async_trait::async_trait;
+use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -1,8 +1,8 @@
-/// Windows UI Automation tool (Windows only)
-/// Supports 25+ actions for element interaction, keyboard control, and window management.
-use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
+/// Windows UI Automation tool (Windows only)
+/// Supports 25+ actions for element interaction, keyboard control, and window management.
+use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 
 pub struct UiaTool;

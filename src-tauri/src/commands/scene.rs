@@ -1,4 +1,3 @@
-use crate::agent::tool::ToolRegistry;
 use crate::browser::SharedBrowserManager;
 use crate::host::DesktopHostTools;
 use crate::skills::loader::SkillLoader;
@@ -8,6 +7,7 @@ pub use pisci_core::scene::{
     CollaborationContextMode, EventDigestMode, HistorySliceMode, MemorySliceMode, PoolSnapshotMode,
     RegistryProfile, SceneKind, ScenePolicy,
 };
+use pisci_kernel::agent::tool::ToolRegistry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

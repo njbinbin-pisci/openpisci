@@ -19,21 +19,5 @@ mod skills;
 pub mod store;
 mod tools;
 
-// -- Re-exports from the kernel ------------------------------------------
-//
-// These modules physically live in `pisci-kernel` but many call sites in
-// the desktop crate still refer to them via `crate::agent::...`,
-// `crate::llm::...`, `crate::memory::...`, etc. The `pub use` bindings
-// below make those paths resolve transparently so that moving code to the
-// kernel does not require touching hundreds of `use` statements across
-// the desktop codebase.
-pub use pisci_kernel::agent;
-pub use pisci_kernel::llm;
-pub use pisci_kernel::memory;
-pub use pisci_kernel::policy;
-pub use pisci_kernel::project_context;
-pub use pisci_kernel::scheduler;
-pub use pisci_kernel::security;
-
 pub use app::run;
 pub use store::AppState;

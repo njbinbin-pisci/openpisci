@@ -1,8 +1,8 @@
-/// PowerShell structured query tool.
-/// Returns JSON output for AI to parse directly, unlike shell.rs which returns raw text.
-use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use anyhow::Result;
 use async_trait::async_trait;
+/// PowerShell structured query tool.
+/// Returns JSON output for AI to parse directly, unlike shell.rs which returns raw text.
+use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::process::Stdio;
 use std::time::Duration;

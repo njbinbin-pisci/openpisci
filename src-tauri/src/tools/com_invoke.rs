@@ -1,3 +1,5 @@
+use anyhow::Result;
+use async_trait::async_trait;
 /// COM Invoke Tool — instantiate any COM/ActiveX object and call methods via PowerShell.
 ///
 /// Why PowerShell instead of native Rust COM?
@@ -5,9 +7,7 @@
 /// - PowerShell's New-Object -ComObject is fully dynamic: any ProgID, any method, any property.
 /// - 32-bit COM objects (WOW6432Node) require a 32-bit host process — we use SysWOW64\powershell.exe.
 /// - This mirrors exactly what a human would do to automate legacy Windows software.
-use crate::agent::tool::{Tool, ToolContext, ToolResult};
-use anyhow::Result;
-use async_trait::async_trait;
+use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
 use std::process::Stdio;
 use std::time::Duration;

@@ -1,15 +1,15 @@
+use crate::store::AppState;
+use async_trait::async_trait;
 /// call_fish tool — lets the main agent delegate a sub-task to a Fish sub-agent.
 ///
 /// Stateless: each call creates a fresh AgentLoop with only a system prompt +
 /// the task as a single user message. No session is created, no DB writes.
 /// While the Fish runs, FishProgress events are forwarded to the parent session
 /// so the user can see real-time progress in the main Chat view.
-use crate::agent::harness::HarnessConfig;
-use crate::agent::messages::AgentEvent;
-use crate::agent::tool::{Tool, ToolContext, ToolResult, ToolSettings};
-use crate::llm::{LlmMessage, MessageContent};
-use crate::store::AppState;
-use async_trait::async_trait;
+use pisci_kernel::agent::harness::HarnessConfig;
+use pisci_kernel::agent::messages::AgentEvent;
+use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult, ToolSettings};
+use pisci_kernel::llm::{LlmMessage, MessageContent};
 use serde_json::{json, Value};
 use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{AppHandle, Emitter, Manager};
@@ -203,7 +203,7 @@ impl CallFishTool {
             content: MessageContent::text(&task),
         }];
 
-        let client = crate::llm::build_client(
+        let client = pisci_kernel::llm::build_client(
             &provider,
             &api_key,
             if base_url.is_empty() {
@@ -232,7 +232,7 @@ impl CallFishTool {
             .build_registry(),
         );
 
-        let policy = Arc::new(crate::policy::PolicyGate::with_profile_and_flags(
+        let policy = Arc::new(pisci_kernel::policy::PolicyGate::with_profile_and_flags(
             &workspace_root,
             &policy_mode,
             tool_rate_limit_per_minute,
@@ -244,7 +244,7 @@ impl CallFishTool {
         // literal does not leak here.
         let fish_compaction_settings = {
             let s = state.settings.lock().await;
-            crate::agent::harness::config::CompactionSettings::from_settings(&s)
+            pisci_kernel::agent::harness::config::CompactionSettings::from_settings(&s)
         };
         let agent = HarnessConfig::for_fish(
             model,
