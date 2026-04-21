@@ -1,8 +1,13 @@
 # 🐟 OpenPisci
 
-**Open-source Windows AI Agent Desktop**
+**Open-source AI Agent Desktop**
 
-OpenPisci is a local-first AI Agent desktop application for Windows, built with Tauri 2 + Rust + React. **Pisci** is the main agent, **Koi** are persistent collaboration agents, and **Fish** are stateless temporary sub-agents.
+OpenPisci is a local-first AI Agent desktop application built with Tauri 2 + Rust + React. As of `v0.7.0`, the project has been substantially refactored into a layered architecture: `pisci-core` (pure collaboration/domain logic), `pisci-kernel` (OS/UI-neutral runtime kernel), `pisci-desktop` (Tauri desktop shell), and `pisci-cli` (headless runner). **Pisci** is the main agent, **Koi** are persistent collaboration agents, and **Fish** are stateless temporary sub-agents.
+
+**Current platform status**
+- **Windows**: primary supported desktop release target
+- **macOS / Linux**: native build + CI packaging support landed in `v0.7.0`
+- **iOS / Android**: not supported yet
 
 [中文](./README_CN.md) | English
 
@@ -17,12 +22,15 @@ OpenPisci is a local-first AI Agent desktop application for Windows, built with 
 
 ### 🤖 Powerful Agent Capabilities
 - **Multi-LLM support**: Claude (Anthropic), GPT (OpenAI), DeepSeek, Qwen, Zhipu, Kimi, MiniMax, and any OpenAI-compatible endpoint
+- **Streaming responses**: optionally stream model output token-by-token in the main chat UI
 - **Automatic memory extraction**: After each conversation, an LLM pass extracts 0–3 key facts and stores them as long-term memories; relevant memories are injected automatically in future sessions
 - **Active memory**: The agent can call the `memory_store` tool mid-conversation to save important information
 - **Task decomposition**: Complex tasks are broken down and executed step-by-step via HostAgent
 - **Crash recovery**: Checkpoints are written every iteration; the agent resumes from the last checkpoint after a crash
 - **Heartbeat mechanism**: Configurable periodic heartbeat for proactive task checking
 - **Loop detection**: Four detectors (GenericRepeat / KnownPollNoProgress / PingPong / GlobalCircuitBreaker) prevent the agent from getting stuck in infinite loops
+- **MCP integration**: scene-aware MCP tool registration lets the main chat and task scenes connect to external tool servers through the Model Context Protocol
+- **Workspace-wide hard lints**: Rust workspace lints run under `-D warnings` to keep dead code / unused imports / debugging leftovers from creeping back in
 
 ### 🐟 Pisci / Koi / Fish: Three Layers of Agents
 
@@ -89,7 +97,7 @@ A typical pond project follows this mechanism:
    - Koi may suggest that a project looks ready, but they do not get to unilaterally declare it finished
    - Pisci reviews the overall state, confirms with the user, and only then archives the pool through `pool_org(action="archive")`
 
-### 🛠️ Rich Windows Toolset
+### 🛠️ Rich Desktop Toolset
 
 | Tool | Description |
 |------|-------------|
@@ -115,6 +123,8 @@ A typical pond project follows this mechanism:
 | `plan_todo` | Maintain a visible execution plan and todo state for complex tasks |
 | User-defined tools | TypeScript plugins with custom configuration interfaces |
 | MCP tools | Connect to external tool servers via the MCP protocol |
+
+> **Platform note**: some tools are cross-platform (`file_*`, `shell`, `browser`, `ssh`, `pdf`, MCP, etc.), while some remain Windows-specific today (`uia`, `wmi`, Office COM, parts of desktop automation).
 
 ### 🐠 Fish (小鱼) Sub-Agent System
 - Define custom sub-agents via `FISH.toml` with their own persona, tool permissions, and configuration
@@ -193,12 +203,15 @@ A typical pond project follows this mechanism:
 
 ### Requirements
 
-- Windows 10 / 11 (64-bit)
-- WebView2 Runtime (pre-installed on Windows 11; download from [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/) for Windows 10)
+- **End-user installer**: Windows 10 / 11 (64-bit)
+- **Windows source build**: Windows 10 / 11 + WebView2 Runtime (pre-installed on Windows 11; download from [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/) for Windows 10)
+- **macOS / Linux source build**: supported via native toolchains; see the development setup below
 
 ### Download
 
-Go to [Releases](https://github.com/njbinbin-pisci/openpisci/releases) and download the latest installer (`.exe`).
+Go to [Releases](https://github.com/njbinbin-pisci/openpisci/releases) and download the latest installer.
+
+At the moment, Windows installers are the primary published artefact. `v0.7.0` also adds native CI packaging support for macOS (`.dmg`) and Linux (`.deb` / `AppImage`) so cross-platform desktop releases can be shipped from native runners.
 
 > **⚠️ Security Warning**: OpenPisci is an AI Agent with high-privilege capabilities including file read/write, command execution, and UI automation. It is strongly recommended to run it inside a virtual machine (VMware, VirtualBox, Hyper-V) to prevent accidental damage to your host system. The developers are not responsible for any data loss or system damage caused by running it directly on a host machine.
 
@@ -217,7 +230,10 @@ Go to [Releases](https://github.com/njbinbin-pisci/openpisci/releases) and downl
 
 - [Rust](https://rustup.rs/) stable (≥ 1.77.2)
 - [Node.js](https://nodejs.org/) 20 LTS
-- [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/) (Desktop C++ workload)
+- Platform toolchain:
+  - **Windows**: [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/) (Desktop C++ workload)
+  - **macOS**: Xcode Command Line Tools
+  - **Linux (Ubuntu/Debian)**: `libwebkit2gtk-4.1-dev`, `libsoup-3.0-dev`, `libjavascriptcoregtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libgtk-3-dev`
 
 ### Clone & Run
 
@@ -320,31 +336,42 @@ User tools are stored in: `%APPDATA%\com.pisci.desktop\user-tools\`
 
 ```
 OpenPisci
-├── src-tauri/          # Rust backend
-│   ├── src/
-│   │   ├── agent/      # Agent loop, HostAgent, message management
-│   │   ├── commands/   # Tauri IPC command layer
-│   │   ├── fish/       # Fish sub-agent system
-│   │   ├── gateway/    # IM gateways (Feishu, DingTalk, Telegram, etc.)
-│   │   ├── llm/        # LLM clients (Claude, OpenAI, DeepSeek, Qwen, etc.)
-│   │   ├── memory/     # Memory system (vector search, FTS)
-│   │   ├── policy/     # Policy gate, injection detection
-│   │   ├── scheduler/  # Cron scheduler
-│   │   ├── security/   # Encryption, key management
-│   │   ├── skills/     # Skill loader (SKILL.md format)
-│   │   ├── store/      # SQLite database, settings persistence
-│   │   └── tools/      # Tool implementations (incl. code_run, file_diff)
-│   └── Cargo.toml
-└── src/                # React frontend
-    ├── components/     # Page components
-    ├── i18n/           # Chinese / English translations
-    ├── services/       # Tauri IPC service layer
-    └── store/          # Redux state management
+├── src-tauri/
+│   ├── pisci-core/      # Pure domain logic: scenes, pool/project state, prompts, shared types
+│   ├── pisci-kernel/    # OS/UI-neutral runtime kernel: agent loop, LLM, memory, storage, neutral tools
+│   ├── pisci-cli/       # Headless CLI runner built on top of the kernel
+│   ├── src/             # Tauri desktop adapter: IPC commands, desktop integration, platform-gated tools
+│   └── Cargo.toml       # Workspace root + desktop package
+└── src/
+    ├── components/      # React UI
+    ├── services/        # Tauri IPC service layer, split by domain
+    ├── store/           # Redux state, split by domain
+    ├── i18n/            # Chinese / English translations
+    ├── utils/           # Frontend shared helpers
+    └── themes/          # Theme assets and styling support
 ```
+
+### Why `v0.7.0` matters
+
+The `v0.7.0` line is the first release after a major internal cleanup:
+
+- Collaboration/domain rules were separated from the Tauri shell.
+- The agent runtime was extracted into an OS/UI-neutral kernel, making desktop and headless execution paths cleaner.
+- Desktop-only concerns (Tauri commands, tray, updater, platform integrations) are now isolated in the desktop layer instead of leaking into core runtime code.
+- Frontend service/store modules were reorganized by domain to make the codebase easier to extend and audit.
+- Cross-platform desktop compilation and packaging were wired into CI so Windows, macOS, and Linux releases can be produced from native runners.
 
 ---
 
 ## 📋 Changelog
+
+### v0.7.0
+- **Major architecture refactor**: split the Rust codebase into `pisci-core` (pure collaboration/domain logic), `pisci-kernel` (OS/UI-neutral runtime kernel), `pisci-cli` (headless runner), and `pisci-desktop` (Tauri shell), substantially reducing cross-layer coupling.
+- **Desktop / kernel decoupling**: pool and multi-agent orchestration logic were pulled out of UI-facing codepaths, legacy runtime leftovers were removed, and the codebase is now much closer to a clean "core + adapter" structure.
+- **Streaming main-chat output**: the main chat can now stream LLM output incrementally, controlled by a user-facing setting.
+- **MCP integration completed**: scene-aware tool registry assembly now registers MCP tools where appropriate instead of leaving the integration partially wired.
+- **Stricter quality gates**: workspace lints are enforced under `-D warnings`, dead code and unused paths were cleaned up, and frontend structure was tightened to reduce drift.
+- **Cross-platform desktop packaging groundwork**: the Tauri config and GitHub Actions pipeline now support native packaging for Windows, macOS, and Linux desktop builds.
 
 ### v0.6.0
 - **Koi collaboration prompt redesigned (6-layer structure)**: Koi system prompts are now built from a fixed `Identity → Run Shape → Coordination Protocol → Context & Tools → Capabilities → Stop Gate` layering; `Run Shape` carries explicit side-effect invariants (claim / progress / complete), `Stop Gate` forbids stopping mid-todo, and handoff messages must state "what to do / where inputs are / how to report completion". Structural tests lock these guarantees in place.
