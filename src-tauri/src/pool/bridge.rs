@@ -96,16 +96,22 @@ fn resolve_headless_binary() -> PathBuf {
             return PathBuf::from(raw);
         }
     }
-    let exe_name = if cfg!(windows) {
-        "openpisci-headless.exe"
+    let (exe_name, fallback_name) = if cfg!(windows) {
+        ("openpisci-headless.exe", Some("openpisci.exe"))
     } else {
-        "openpisci-headless"
+        ("openpisci-headless", Some("openpisci"))
     };
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let candidate = dir.join(exe_name);
             if candidate.exists() {
                 return candidate;
+            }
+            if let Some(fallback) = fallback_name {
+                let fallback = dir.join(fallback);
+                if fallback.exists() {
+                    return fallback;
+                }
             }
         }
     }

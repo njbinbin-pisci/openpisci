@@ -713,7 +713,11 @@ impl HostRuntime for DesktopHost {
 /// 1. `PISCI_HEADLESS_BIN` environment variable (absolute path).
 /// 2. Sibling of the desktop executable
 ///    (`current_exe().parent().join("openpisci-headless[.exe]")`).
-/// 3. Bare command name `openpisci-headless` — defers resolution to
+/// 3. Sibling `openpisci[.exe]` binary. Production Windows bundles already
+///    ship this CLI entry point; it understands the same `rpc` subcommand,
+///    so it is a safe fallback when the dedicated headless sidecar is not
+///    present.
+/// 4. Bare command name `openpisci-headless` — defers resolution to
 ///    `PATH` at spawn time.
 fn resolve_headless_binary() -> PathBuf {
     if let Ok(raw) = std::env::var("PISCI_HEADLESS_BIN") {
@@ -722,16 +726,22 @@ fn resolve_headless_binary() -> PathBuf {
             return PathBuf::from(raw);
         }
     }
-    let exe_name = if cfg!(windows) {
-        "openpisci-headless.exe"
+    let (exe_name, fallback_name) = if cfg!(windows) {
+        ("openpisci-headless.exe", Some("openpisci.exe"))
     } else {
-        "openpisci-headless"
+        ("openpisci-headless", Some("openpisci"))
     };
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let candidate = dir.join(exe_name);
             if candidate.exists() {
                 return candidate;
+            }
+            if let Some(fallback) = fallback_name {
+                let fallback = dir.join(fallback);
+                if fallback.exists() {
+                    return fallback;
+                }
             }
         }
     }
