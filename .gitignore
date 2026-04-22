@@ -13,6 +13,7 @@ dist/
 src-tauri/target/
 src-tauri/WixTools/
 src-tauri/gen/
+src-tauri/binaries/
 
 # Runtime data
 *.db

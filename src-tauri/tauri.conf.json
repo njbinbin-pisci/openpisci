@@ -7,7 +7,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:tauri",
     "frontendDist": "../dist"
   },
   "app": {
@@ -65,7 +65,7 @@
       "icons/icon.ico"
     ],
     "resources": [],
-    "externalBin": [],
+    "externalBin": ["binaries/openpisci-headless"],
     "copyright": "© 2025 Pisci Team",
     "category": "Productivity",
     "shortDescription": "OpenPisci — Open-source AI Agent Desktop",

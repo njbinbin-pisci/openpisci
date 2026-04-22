@@ -16,6 +16,7 @@ use crate::tools::{self, RuntimeToolProfile};
 use pisci_cli::args::{
     parse_capabilities_mode, parse_mode, parse_run_request, print_usage, write_response,
 };
+use pisci_cli::rpc_server::run_rpc_loop;
 use serde::Serialize;
 
 pub use pisci_core::host::{
@@ -77,6 +78,7 @@ pub fn run_from_env_args() -> Result<(), String> {
 
     match args[0].as_str() {
         "chat" | "interactive" | "repl" => pisci_cli::interactive::run_interactive(),
+        "rpc" => run_rpc_loop(),
         "run" => {
             let request = parse_run_request(&args[1..])?;
             let output = request.output.clone();
@@ -99,6 +101,10 @@ pub fn run_from_env_args() -> Result<(), String> {
             let json = serde_json::to_string_pretty(&report)
                 .map_err(|e| format!("Serialize failed: {e}"))?;
             println!("{json}");
+            Ok(())
+        }
+        "--version" | "version" | "-v" => {
+            println!("openpisci {}", pisci_kernel::KERNEL_VERSION);
             Ok(())
         }
         "--help" | "-h" | "help" => {
