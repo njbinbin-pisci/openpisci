@@ -13,6 +13,32 @@ use tracing::{info, warn};
 
 const CLAWHUB_API: &str = "https://clawhub.ai";
 
+fn validate_koi_name(name: &str) -> anyhow::Result<()> {
+    if name.trim().is_empty() {
+        anyhow::bail!("Koi name cannot be empty.");
+    }
+    if name.chars().any(char::is_whitespace) {
+        anyhow::bail!("Koi name cannot contain spaces or other whitespace characters.");
+    }
+    if name.chars().any(is_disallowed_koi_name_char) {
+        anyhow::bail!("Koi name cannot contain emoji or other pictographic characters.");
+    }
+    Ok(())
+}
+
+fn is_disallowed_koi_name_char(ch: char) -> bool {
+    let cp = ch as u32;
+    matches!(
+        cp,
+        0x200D
+            | 0xFE0F
+            | 0x1F1E6..=0x1F1FF
+            | 0x1F300..=0x1FAFF
+            | 0x2600..=0x27BF
+            | 0x2300..=0x23FF
+    )
+}
+
 /// GET with automatic retry on 429 / 5xx (exponential back-off, max 3 retries).
 async fn clawhub_get_with_retry(
     client: &reqwest::Client,
@@ -136,8 +162,8 @@ impl Tool for AppControlTool {
          \n- 'koi_list': List all Koi agents with their id, name, role, icon, status, and description.\
          \n- 'koi_create': Create a new Koi agent. Required: name, role, system_prompt. Optional: icon (emoji), color (hex), description.\
          \n  Only create a Koi when the user explicitly requests it. Do NOT create Koi proactively.\
-         \n  IMPORTANT: The 'name' field must be plain text only — do NOT include any emoji in the name. Emoji belongs in the 'icon' field only.\
-         \n- 'koi_update': Update an existing Koi agent. Required: koi_id. Optional: name, role, icon, color, system_prompt, description. Only the provided fields are changed.\
+         \n  IMPORTANT: The 'name' field must be plain text only, with no spaces, no emoji, and no other pictographic characters. Emoji belongs in the 'icon' field only.\
+         \n- 'koi_update': Update an existing Koi agent. Required: koi_id. Optional: name, role, icon, color, system_prompt, description. Only the provided fields are changed. If 'name' is provided, it must also follow the no-spaces / no-emoji rule.\
          \n- 'koi_delete': Delete a Koi agent by id. Required: koi_id. Use with caution — this permanently removes the Koi and all its memories.\
          \
          \n\nCron format (5 fields): <min> <hour> <day> <month> <weekday>\
@@ -2133,6 +2159,9 @@ impl AppControlTool {
             Some(n) => n.trim().to_string(),
             None => return Ok(ToolResult::err("'name' is required for koi_create")),
         };
+        if let Err(e) = validate_koi_name(&name) {
+            return Ok(ToolResult::err(e.to_string()));
+        }
         let role = match input["role"].as_str().filter(|s| !s.trim().is_empty()) {
             Some(r) => r.trim().to_string(),
             None => return Ok(ToolResult::err("'role' is required for koi_create")),
@@ -2212,6 +2241,11 @@ impl AppControlTool {
         };
 
         let name = input["name"].as_str().map(|s| s.trim().to_string());
+        if let Some(ref name) = name {
+            if let Err(e) = validate_koi_name(name) {
+                return Ok(ToolResult::err(e.to_string()));
+            }
+        }
         let role = input["role"].as_str().map(|s| s.trim().to_string());
         let icon = input["icon"].as_str().map(|s| s.to_string());
         let color = input["color"].as_str().map(|s| s.to_string());

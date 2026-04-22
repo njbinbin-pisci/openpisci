@@ -18,6 +18,7 @@
 //! `--output <file>`.
 
 use pisci_cli::args::{parse_capabilities_mode, parse_run_request, print_usage, write_response};
+use pisci_cli::interactive::run_interactive;
 use pisci_cli::rpc_server::run_rpc_loop;
 use pisci_cli::runner::{resolve_app_data_dir, run_pisci_once};
 use pisci_core::host::{DisabledToolInfo, HeadlessCliMode};
@@ -135,10 +136,17 @@ fn capabilities_subcommand(args: &[String]) -> Result<(), String> {
 }
 
 fn real_main(args: &[String]) -> Result<(), String> {
-    let subcommand = args.first().map(String::as_str).unwrap_or("capabilities");
+    // No args → drop straight into the interactive REPL. Matches the
+    // user expectation that double-clicking the binary opens a usable
+    // prompt instead of exiting with an error. Scripts that want the
+    // old "print usage + exit" behaviour can pass `--help` explicitly.
+    let Some(subcommand) = args.first().map(String::as_str) else {
+        return run_interactive();
+    };
     match subcommand {
         "run" => run_subcommand(&args[1..]),
         "rpc" => run_rpc_loop(),
+        "chat" | "interactive" | "repl" => run_interactive(),
         "capabilities" | "caps" | "--capabilities" => capabilities_subcommand(&args[1..]),
         "--version" | "version" | "-v" => {
             println!("openpisci-headless {}", pisci_kernel::KERNEL_VERSION);
@@ -150,7 +158,7 @@ fn real_main(args: &[String]) -> Result<(), String> {
         }
         other => {
             eprintln!(
-                "openpisci-headless: unknown subcommand `{other}`. Available: run, rpc, capabilities, version"
+                "openpisci-headless: unknown subcommand `{other}`. Available: chat, run, rpc, capabilities, version"
             );
             Err(String::new())
         }

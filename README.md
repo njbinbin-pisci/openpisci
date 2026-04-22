@@ -213,6 +213,15 @@ Go to [Releases](https://github.com/njbinbin-pisci/openpisci/releases) and downl
 
 At the moment, Windows installers are the primary published artefact. `v0.7.0` also adds native CI packaging support for macOS (`.dmg`) and Linux (`.deb` / `AppImage`) so cross-platform desktop releases can be shipped from native runners.
 
+### Headless CLI (interactive or scripted)
+
+The same release ships two console binaries alongside the desktop app:
+
+- `pisci-desktop` (or `pisci-desktop.exe`): the GUI application.
+- `openpisci-headless` (or `openpisci-headless.exe`): a headless agent runner that does **not** require the Tauri UI.
+
+Running the headless binary without arguments now drops into an **interactive REPL** (multi-turn conversation, streamed to stdout, `:help` for commands) that shares the same `pisci.db` / `config.json` as the desktop app. Use `openpisci-headless run --prompt "..."` for scripted one-shot invocations, or `openpisci-headless capabilities` to inspect which tools are available in the current build. See `openpisci-headless --help` for the full surface.
+
 > **⚠️ Security Warning**: OpenPisci is an AI Agent with high-privilege capabilities including file read/write, command execution, and UI automation. It is strongly recommended to run it inside a virtual machine (VMware, VirtualBox, Hyper-V) to prevent accidental damage to your host system. The developers are not responsible for any data loss or system damage caused by running it directly on a host machine.
 
 ### First-time Setup

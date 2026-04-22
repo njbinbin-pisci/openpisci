@@ -343,11 +343,23 @@ impl DesktopHostTools {
     }
 
     /// Auto-populate the kernel pool seams (`event_sink`,
-    /// `plan_store`, `pool_event_sink`) from the host's [`AppHandle`]
-    /// if they are not already set. `subagent_runtime` is left as-is:
-    /// the desktop wires it explicitly at startup (see [`DesktopHost::new`])
-    /// so scene-local clones inherit the one runtime rather than
-    /// spinning up a fresh subprocess pool per call.
+    /// `plan_store`, `pool_event_sink`, `subagent_runtime`) from the
+    /// host's [`AppHandle`] if they are not already set.
+    ///
+    /// Why the `subagent_runtime` fallback matters: scene-aware callers
+    /// (see [`crate::commands::config::scene::build_registry_for_scene`])
+    /// build a fresh `DesktopHostTools` per request using
+    /// `..DesktopHostTools::default()`, which leaves
+    /// `subagent_runtime` as `None`. Without this lazy-load, the neutral
+    /// kernel tools (`pool_chat`, `pool_org`) would receive `None` and
+    /// silently drop @mention fan-out — Pisci could @-mention Kois in
+    /// `pool_chat` and they would stay idle forever because
+    /// [`pisci_kernel::pool::services::send_pool_message`] short-circuits
+    /// the coordinator call when `subagent` is `None`.
+    ///
+    /// [`DesktopHost::from_state`] still wires the runtime explicitly
+    /// at process startup; that instance is preserved here (we only
+    /// fill in when the caller left the slot empty).
     pub fn fill_pool_defaults(mut self) -> Self {
         let Some(app) = self.app_handle.as_ref() else {
             return self;
@@ -366,6 +378,20 @@ impl DesktopHostTools {
         }
         if self.plan_store.is_none() {
             self.plan_store = app.try_state::<AppState>().map(|s| s.plan_state.clone());
+        }
+        if self.subagent_runtime.is_none() {
+            let app_data_dir = self
+                .app_data_dir
+                .clone()
+                .or_else(|| app.path().app_data_dir().ok())
+                .or_else(|| Some(PathBuf::from(".pisci")));
+            let headless_bin = resolve_headless_binary();
+            let mut runtime = pisci_kernel::pool::SubprocessSubagentRuntime::new(headless_bin);
+            if let Some(dir) = app_data_dir {
+                runtime = runtime.with_app_data_dir(dir);
+            }
+            let runtime_dyn: Arc<dyn SubagentRuntime> = Arc::new(runtime);
+            self.subagent_runtime = Some(runtime_dyn);
         }
         self
     }

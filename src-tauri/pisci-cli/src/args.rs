@@ -13,6 +13,8 @@ use pisci_core::host::{HeadlessCliMode, HeadlessCliRequest, HeadlessCliResponse}
 /// Opinionated default for the usage banner printed on `--help` / bad args.
 pub const USAGE: &str = concat!(
     "Usage:\n",
+    "  openpisci-headless                                     # interactive REPL (same as `chat`)\n",
+    "  openpisci-headless chat                                # interactive REPL\n",
     "  openpisci-headless run --prompt <text> [--workspace <dir>] [--mode pisci|pool] [--output <file>]\n",
     "  openpisci-headless run --input <request.json> [--output <result.json>]\n",
     "  openpisci-headless capabilities [--mode pisci|pool]\n",

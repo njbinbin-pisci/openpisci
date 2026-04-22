@@ -5,6 +5,11 @@
 
 use tracing_subscriber::prelude::*;
 
+pub struct LoggingGuard {
+    _json_guard: tracing_appender::non_blocking::WorkerGuard,
+    _text_guard: tracing_appender::non_blocking::WorkerGuard,
+}
+
 pub fn default_app_data_dir() -> std::path::PathBuf {
     dirs::data_local_dir()
         .or_else(dirs::data_dir)
@@ -25,15 +30,19 @@ pub fn log_dir() -> std::path::PathBuf {
 /// Initialise structured logging:
 /// - STDERR: human-readable, filtered by RUST_LOG / default "info"
 /// - Rolling file: JSON, one file per day, kept up to 7 days (via tracing-appender)
+/// - Fixed file: human-readable `pisci.latest.log` for easy user bug reports
 ///
 /// Returns the `_guard` that must stay alive for the lifetime of the process
 /// to ensure the non-blocking writer flushes on drop.
-pub fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
+pub fn init_logging() -> LoggingGuard {
     let dir = log_dir();
     let _ = std::fs::create_dir_all(&dir);
 
-    let file_appender = tracing_appender::rolling::daily(&dir, "pisci.log");
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let json_file_appender = tracing_appender::rolling::daily(&dir, "pisci.log");
+    let (json_non_blocking, json_guard) = tracing_appender::non_blocking(json_file_appender);
+
+    let text_file_appender = tracing_appender::rolling::never(&dir, "pisci.latest.log");
+    let (text_non_blocking, text_guard) = tracing_appender::non_blocking(text_file_appender);
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "pisci_desktop_lib=debug,info".into());
@@ -45,19 +54,37 @@ pub fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_writer(std::io::stderr);
 
-    let file_layer = tracing_subscriber::fmt::layer()
+    let text_file_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_target(true)
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        .with_writer(text_non_blocking);
+
+    let json_file_layer = tracing_subscriber::fmt::layer()
         .json()
-        .with_writer(non_blocking)
+        .with_writer(json_non_blocking)
         .with_current_span(true)
         .with_span_list(true);
 
     tracing_subscriber::registry()
         .with(env_filter)
         .with(stderr_layer)
-        .with(file_layer)
+        .with(text_file_layer)
+        .with(json_file_layer)
         .init();
 
-    guard
+    tracing::info!(
+        log_dir = %dir.display(),
+        text_log = %dir.join("pisci.latest.log").display(),
+        "logging initialised"
+    );
+
+    LoggingGuard {
+        _json_guard: json_guard,
+        _text_guard: text_guard,
+    }
 }
 
 /// Install a panic hook that writes a crash report to the log directory and

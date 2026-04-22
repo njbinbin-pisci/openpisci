@@ -105,6 +105,13 @@ fn run_impl(
 ) {
     let _log_guard = init_logging();
     install_crash_reporter();
+    let updater_enabled = std::env::var("PISCI_ENABLE_UPDATER").ok().as_deref() == Some("1");
+
+    if !updater_enabled {
+        tracing::warn!(
+            "Updater plugin disabled at startup. Set PISCI_ENABLE_UPDATER=1 only after updater pubkey/endpoints are fully configured."
+        );
+    }
 
     let allow_multiple = {
         if headless_cli_request.is_some() {
@@ -125,8 +132,11 @@ fn run_impl(
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
+
+    if updater_enabled {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
 
     if !allow_multiple {
         builder = builder.plugin(

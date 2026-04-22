@@ -1,8 +1,13 @@
 # 🐟 OpenPisci
 
-**开源 Windows AI Agent 桌面应用**
+**开源 AI Agent 桌面应用**
 
-OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tauri 2 + Rust + React 构建。大鱼（Pisci）是主 Agent，锦鲤（Koi）是持久化协作 Agent，小鱼（Fish）是无状态临时子 Agent。
+OpenPisci 是一款本地优先的 AI Agent 桌面应用，基于 Tauri 2 + Rust + React 构建。从 `v0.7.0` 起，项目经过了大规模重构，形成清晰的分层架构：`pisci-core`（纯协作与领域逻辑）、`pisci-kernel`（与操作系统 / UI 解耦的运行时内核）、`pisci-desktop`（Tauri 桌面外壳）、`pisci-cli`（无头 CLI 运行器）。**大鱼（Pisci）** 是主 Agent，**锦鲤（Koi）** 是持久化协作 Agent，**小鱼（Fish）** 是无状态临时子 Agent。
+
+**当前平台支持**
+- **Windows**：主要的桌面发行目标
+- **macOS / Linux**：`v0.7.0` 已接入原生构建与 CI 打包
+- **iOS / Android**：暂未支持
 
 [English](./README.md) | 中文
 
@@ -17,12 +22,15 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 
 ### 🤖 强大的 Agent 能力
 - **多 LLM 支持**：Claude（Anthropic）、GPT（OpenAI）、DeepSeek、通义千问（Qwen）、智谱、Kimi、MiniMax，以及任意 OpenAI 兼容接口
+- **流式输出**：主聊天界面支持按 token 逐步流式呈现模型输出，可在设置中开关
 - **自动记忆**：对话结束后自动调用 LLM 提取关键信息存入长期记忆，下次对话自动注入相关上下文
 - **主动记忆**：Agent 在对话中可主动调用 `memory_store` 工具保存重要信息
 - **任务分解**：复杂任务自动分解为子任务并依次执行（HostAgent）
 - **崩溃恢复**：每次迭代写入 checkpoint，程序崩溃后可从断点恢复
 - **心跳机制**：可配置定时心跳，Agent 自主检查待处理任务
 - **循环检测**：四种检测器（GenericRepeat / KnownPollNoProgress / PingPong / GlobalCircuitBreaker）防止 Agent 陷入死循环
+- **MCP 集成**：按场景装配的工具注册器支持主聊天 / 任务场景按需接入 MCP（Model Context Protocol）外部工具服务器
+- **工作区级硬 Lint**：Rust 工作区统一运行在 `-D warnings` 下，防止死代码、未使用导入、调试残留重新渗入
 
 ### 🐟 Pisci / Koi / Fish：三层 Agent 架构
 
@@ -89,7 +97,7 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
    - Koi 只能建议“可由 Pisci 审查是否结束”，不能单方面宣布项目结束
    - 最终是否归档，由 Pisci 汇总后向用户确认，再执行 `pool_org(action="archive")`
 
-### 🛠️ 丰富的 Windows 工具集
+### 🛠️ 丰富的桌面工具集
 
 | 工具 | 说明 |
 |------|------|
@@ -115,6 +123,8 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 | `plan_todo` | 为复杂任务维护可视化执行计划与待办状态 |
 | 用户自定义工具 | TypeScript 插件，支持自定义配置接口 |
 | MCP 工具 | 通过 MCP 协议接入外部工具服务器 |
+
+> **平台说明**：部分工具跨平台可用（`file_*`、`shell`、`browser`、`ssh`、`pdf`、MCP 等）；另一些目前仅限 Windows（`uia`、`wmi`、Office COM 以及部分桌面自动化能力）。
 
 ### 🐠 小鱼（Fish）子 Agent 系统
 - 通过 `FISH.toml` 定义专属子 Agent，拥有独立人设、工具权限和配置
@@ -194,14 +204,26 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 
 ### 系统要求
 
-- Windows 10 / 11（64-bit）
-- WebView2 Runtime（Windows 11 已预装；Windows 10 可从 [Microsoft 官网](https://developer.microsoft.com/microsoft-edge/webview2/) 下载）
+- **终端用户安装包**：Windows 10 / 11（64 位）
+- **Windows 源码构建**：Windows 10 / 11 + WebView2 Runtime（Windows 11 已预装；Windows 10 可从 [Microsoft 官网](https://developer.microsoft.com/microsoft-edge/webview2/) 下载）
+- **macOS / Linux 源码构建**：通过原生工具链支持，详见下文的开发环境搭建
 
 ### 下载安装
 
 官网：[www.dimnuo.com](https://www.dimnuo.com)
 
-前往 [Releases](https://github.com/njbinbin-pisci/openpisci/releases) 下载最新安装包（`.exe`）。
+前往 [Releases](https://github.com/njbinbin-pisci/openpisci/releases) 下载最新安装包。
+
+当前主要发布的是 Windows 安装包。`v0.7.0` 同时在 CI 中接入了 macOS（`.dmg`）与 Linux（`.deb` / `AppImage`）的原生打包，可在各自原生构建机上产出发行物。
+
+### Headless CLI（交互 / 脚本两种用法）
+
+每个发行版除桌面应用之外还会带两个控制台二进制：
+
+- `pisci-desktop`（或 `pisci-desktop.exe`）：GUI 桌面应用。
+- `openpisci-headless`（或 `openpisci-headless.exe`）：无需 Tauri UI 的无头 Agent 运行器。
+
+直接双击或无参数运行 headless 版本会自动进入**交互式 REPL**（多轮对话、流式输出到 stdout，输入 `:help` 查看命令）；它与桌面版共享同一份 `pisci.db` / `config.json`。脚本场景可使用 `openpisci-headless run --prompt "..."` 做单轮执行，使用 `openpisci-headless capabilities` 查看当前构建启用了哪些工具。完整用法参见 `openpisci-headless --help`。
 
 > **⚠️ 安全警告**：OpenPisci 是一款具备文件读写、命令执行、UI 自动化等高权限操作能力的 AI Agent。建议在虚拟机（如 VMware、VirtualBox、Hyper-V）中运行，以防止 AI 误操作导致宿主机数据损失。开发者不对因直接在宿主机运行而造成的任何数据丢失或系统损坏承担责任。
 
@@ -220,7 +242,10 @@ OpenPisci 是一款运行在 Windows 桌面的本地优先 AI Agent，基于 Tau
 
 - [Rust](https://rustup.rs/) stable（≥ 1.77.2）
 - [Node.js](https://nodejs.org/) 20 LTS
-- [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/)（Desktop C++ 工作负载）
+- 平台工具链：
+  - **Windows**：[Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/)（Desktop C++ 工作负载）
+  - **macOS**：Xcode Command Line Tools
+  - **Linux（Ubuntu/Debian）**：`libwebkit2gtk-4.1-dev`、`libsoup-3.0-dev`、`libjavascriptcoregtk-4.1-dev`、`libayatana-appindicator3-dev`、`librsvg2-dev`、`libgtk-3-dev`
 
 ### 克隆与运行
 
@@ -323,31 +348,43 @@ tools:
 
 ```
 OpenPisci
-├── src-tauri/          # Rust 后端
-│   ├── src/
-│   │   ├── agent/      # Agent Loop、HostAgent、消息管理
-│   │   ├── commands/   # Tauri IPC 命令层
-│   │   ├── fish/       # Fish 子 Agent 系统
-│   │   ├── gateway/    # IM 网关（飞书、钉钉、Telegram 等）
-│   │   ├── llm/        # LLM 客户端（Claude、OpenAI、DeepSeek、Qwen 等）
-│   │   ├── memory/     # 记忆系统（向量搜索、FTS）
-│   │   ├── policy/     # 策略门控、注入检测
-│   │   ├── scheduler/  # Cron 调度器
-│   │   ├── security/   # 加密、密钥管理
-│   │   ├── skills/     # 技能加载器（SKILL.md 格式）
-│   │   ├── store/      # SQLite 数据库、设置持久化
-│   │   └── tools/      # 工具实现（含 code_run、file_diff 等）
-│   └── Cargo.toml
-└── src/                # React 前端
-    ├── components/     # 页面组件
-    ├── i18n/           # 中英文翻译
-    ├── services/       # Tauri IPC 服务层
-    └── store/          # Redux 状态管理
+├── src-tauri/
+│   ├── pisci-core/      # 纯领域逻辑：场景、鱼池 / 项目状态、提示词、共享类型
+│   ├── pisci-kernel/    # 与 OS / UI 解耦的运行时内核：Agent Loop、LLM、记忆、存储、中立工具
+│   ├── pisci-cli/       # 基于内核的无头 CLI 运行器
+│   ├── src/             # Tauri 桌面适配层：IPC 命令、桌面集成、平台受限工具
+│   └── Cargo.toml       # Workspace 根 + 桌面包
+└── src/
+    ├── components/      # React UI 组件
+    ├── services/        # Tauri IPC 服务层，按域拆分
+    ├── store/           # Redux 状态，按域拆分
+    ├── i18n/            # 中英文翻译
+    ├── utils/           # 前端共享工具函数
+    └── themes/          # 主题资源与样式支持
 ```
+
+### 为什么 `v0.7.0` 是一次重大升级
+
+`v0.7.0` 是一次大规模内部清理之后的首个版本：
+
+- 协作 / 领域规则从 Tauri 外壳中彻底剥离。
+- Agent 运行时抽取到与 OS / UI 无关的内核，桌面与无头两条执行路径都更干净。
+- 桌面专属关注点（Tauri 命令、托盘、更新器、平台集成）下沉到桌面层，不再渗入核心运行时。
+- 前端 services / store 模块按业务域重新组织，易于扩展与审阅。
+- 跨平台桌面构建与打包已接入 CI，Windows / macOS / Linux 三平台均可在各自的原生构建机上发布。
 
 ---
 
 ## 📋 更新日志
+
+### v0.7.0
+- **重大架构重构**：Rust 代码库拆分为 `pisci-core`（纯协作与领域逻辑）、`pisci-kernel`（与 OS / UI 解耦的运行时内核）、`pisci-cli`（无头 CLI 运行器）、`pisci-desktop`（Tauri 外壳）四层，显著降低跨层耦合。
+- **桌面 / 内核解耦**：鱼池与多 Agent 编排逻辑从面向 UI 的代码路径中剥离，清理了遗留运行时残留，整体更接近干净的"核心 + 适配器"结构。
+- **主聊天流式输出**：主聊天界面可按增量流式呈现 LLM 输出，由用户可见的设置项控制开关。
+- **MCP 集成完成**：按场景装配的工具注册器会在合适的场景按需注册 MCP 工具，不再留下"只接了一半"的状态。
+- **更严格的质量闸门**：工作区级 Lint 统一跑在 `-D warnings` 下，死代码、未使用路径等被清理干净，前端结构也同步收敛，降低漂移。
+- **Headless 交互式 CLI**：`openpisci-headless`（及桌面侧的 `openpisci`）在无参数或使用 `chat` 子命令时进入多轮交互 REPL，支持流式输出、`:help` / `:status` / `:new` / `:workspace` 等命令，并与桌面版共享 `pisci.db` / `config.json`。
+- **跨平台桌面打包铺垫**：Tauri 配置与 GitHub Actions 流水线已支持 Windows / macOS / Linux 三平台的原生桌面打包。
 
 ### v0.6.0
 - **Koi 协作提示词 6 层重构**：Koi 系统提示词现按固定顺序 `Identity → Run Shape → Coordination Protocol → Context & Tools → Capabilities → Stop Gate` 组装；`Run Shape` 显式写入 claim / progress / complete 副作用闭环，`Stop Gate` 禁止 todo 未收尾即停；交接消息强制包含"做什么 / 输入在哪 / 如何汇报完成"。结构性单测锁死这些承诺。

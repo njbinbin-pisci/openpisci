@@ -140,6 +140,28 @@ const EMPTY_FORM: KoiFormData = {
   task_timeout_secs: 0,
 };
 
+function isDisallowedKoiNameChar(ch: string): boolean {
+  const cp = ch.codePointAt(0) ?? 0;
+  return cp === 0x200d
+    || cp === 0xfe0f
+    || (cp >= 0x1f1e6 && cp <= 0x1f1ff)
+    || (cp >= 0x1f300 && cp <= 0x1faff)
+    || (cp >= 0x2600 && cp <= 0x27bf)
+    || (cp >= 0x2300 && cp <= 0x23ff);
+}
+
+function getKoiNameError(name: string, t: (key: string) => string): string | null {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  if (/\s/u.test(trimmed)) return t("koi.invalidName");
+  for (const ch of trimmed) {
+    if (isDisallowedKoiNameChar(ch)) {
+      return t("koi.invalidName");
+    }
+  }
+  return null;
+}
+
 function KoiCard({
   koi,
   t,
@@ -292,6 +314,8 @@ function KoiDialog({
 }) {
   const [form, setForm] = useState<KoiFormData>(initial);
   const [customIcon, setCustomIcon] = useState("");
+  const trimmedName = form.name.trim();
+  const nameError = getKoiNameError(form.name, t);
 
   const nameChanged = mode === "edit" && originalKoi && form.name !== originalKoi.name;
   const promptChanged = mode === "edit" && originalKoi && form.system_prompt !== originalKoi.system_prompt;
@@ -332,6 +356,10 @@ function KoiDialog({
             placeholder={t("koi.namePlaceholder")}
             autoFocus
           />
+          <p className="koi-form-help">{t("koi.nameRuleHelp")}</p>
+          {nameError && (
+            <p className="koi-form-help koi-form-warn">{nameError}</p>
+          )}
           {nameChanged && originalKoi && (
             <p className="koi-form-help koi-form-warn">
               {t("koi.editRenameWarning").replace("{{oldName}}", originalKoi.name)}
@@ -488,8 +516,11 @@ function KoiDialog({
           </button>
           <button
             className="koi-btn koi-btn-primary"
-            onClick={() => onSave(form)}
-            disabled={saving || !form.name.trim()}
+            onClick={() => {
+              if (nameError) return;
+              onSave({ ...form, name: trimmedName });
+            }}
+            disabled={saving || !trimmedName || !!nameError}
           >
             {saving
               ? t("common.creating")
@@ -613,9 +644,13 @@ export default function KoiManager() {
       setDialogMode(null);
     } catch (e) {
       const msg = String(e);
-      setError(msg.includes("数量上限") || msg.includes("limit reached")
-        ? t("koi.maxKoisReached")
-        : msg);
+      setError(
+        msg.includes("数量上限") || msg.includes("limit reached")
+          ? t("koi.maxKoisReached")
+          : msg.includes("名称不能") || msg.includes("cannot contain")
+            ? t("koi.invalidName")
+            : msg
+      );
     } finally {
       setSaving(false);
     }

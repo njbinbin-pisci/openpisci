@@ -67,12 +67,16 @@ fn current_os() -> &'static str {
 /// Tauri `AppState` so it can run pool-mode and koi-delegation turns.
 pub fn run_from_env_args() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // No args → drop into the interactive REPL so double-clicking the
+    // `openpisci` binary opens a usable prompt instead of exiting with
+    // "Missing subcommand." (which users reasonably interpret as a
+    // startup crash).
     if args.is_empty() {
-        print_usage();
-        return Err("Missing subcommand.".to_string());
+        return pisci_cli::interactive::run_interactive();
     }
 
     match args[0].as_str() {
+        "chat" | "interactive" | "repl" => pisci_cli::interactive::run_interactive(),
         "run" => {
             let request = parse_run_request(&args[1..])?;
             let output = request.output.clone();

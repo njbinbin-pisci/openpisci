@@ -5,6 +5,33 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use uuid::Uuid;
 
+fn normalize_koi_name(name: &str) -> Result<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow::anyhow!("Koi 名称不能为空"));
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err(anyhow::anyhow!("Koi 名称不能包含空格或其他空白字符"));
+    }
+    if trimmed.chars().any(is_disallowed_koi_name_char) {
+        return Err(anyhow::anyhow!("Koi 名称不能包含 emoji 或其他 pictographic 字符"));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn is_disallowed_koi_name_char(ch: char) -> bool {
+    let cp = ch as u32;
+    matches!(
+        cp,
+        0x200D
+            | 0xFE0F
+            | 0x1F1E6..=0x1F1FF
+            | 0x1F300..=0x1FAFF
+            | 0x2600..=0x27BF
+            | 0x2300..=0x23FF
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Data models
 // ---------------------------------------------------------------------------
@@ -2181,6 +2208,7 @@ impl Database {
         max_iterations: u32,
         task_timeout_secs: u32,
     ) -> Result<pisci_core::models::KoiDefinition> {
+        let name = normalize_koi_name(name)?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
@@ -2191,7 +2219,7 @@ impl Database {
         )?;
         Ok(pisci_core::models::KoiDefinition {
             id,
-            name: name.to_string(),
+            name,
             role: role.to_string(),
             icon: icon.to_string(),
             color: color.to_string(),
@@ -2214,6 +2242,7 @@ impl Database {
     ///
     /// `INSERT OR IGNORE` — calling twice is idempotent.
     pub fn upsert_koi_with_id(&self, id: &str, name: &str) -> Result<()> {
+        let name = normalize_koi_name(name)?;
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "INSERT OR IGNORE INTO kois (id, name, role, icon, color, system_prompt, description, status, created_at, updated_at, max_iterations, task_timeout_secs) \
@@ -2345,6 +2374,10 @@ impl Database {
         max_iterations: Option<u32>,
         task_timeout_secs: Option<u32>,
     ) -> Result<()> {
+        let normalized_name = match name {
+            Some(name) => Some(normalize_koi_name(name)?),
+            None => None,
+        };
         let now = Utc::now().to_rfc3339();
         // llm_provider_id: None = don't change, Some(None) = clear, Some(Some(v)) = set
         match llm_provider_id {
@@ -2363,7 +2396,7 @@ impl Database {
                      WHERE id = ?1",
                     params![
                         id,
-                        name,
+                        normalized_name.as_deref(),
                         role,
                         icon,
                         color,
@@ -2391,7 +2424,7 @@ impl Database {
                      WHERE id = ?1",
                     params![
                         id,
-                        name,
+                        normalized_name.as_deref(),
                         role,
                         icon,
                         color,
@@ -3402,7 +3435,7 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::Database;
+    use super::{is_disallowed_koi_name_char, normalize_koi_name, Database};
 
     #[test]
     fn session_context_state_defaults_and_updates_roundtrip() {
@@ -3433,5 +3466,27 @@ mod tests {
         assert_eq!(updated.rolling_summary, "summary body");
         assert_eq!(updated.rolling_summary_version, 2);
         assert!(updated.last_compacted_at.is_some());
+    }
+
+    #[test]
+    fn normalize_koi_name_rejects_spaces_and_moji() {
+        assert_eq!(normalize_koi_name("  Alpha  ").expect("trim ok"), "Alpha");
+        assert!(normalize_koi_name("Alpha Beta").is_err());
+        assert!(normalize_koi_name("Alpha🐟").is_err());
+        assert!(normalize_koi_name(" ").is_err());
+        assert!(is_disallowed_koi_name_char('🐟'));
+        assert!(!is_disallowed_koi_name_char('测'));
+    }
+
+    #[test]
+    fn create_and_update_koi_enforce_name_rules() {
+        let db = Database::open_in_memory().expect("in-memory db");
+        assert!(db
+            .create_koi("Alpha Beta", "role", "🐟", "#000", "", "", None, 0, 0)
+            .is_err());
+        let koi = db
+            .create_koi("Alpha", "role", "🐟", "#000", "", "", None, 0, 0)
+            .expect("create koi");
+        assert!(db.update_koi(&koi.id, Some("Beta 🐠"), None, None, None, None, None, None, None, None).is_err());
     }
 }
