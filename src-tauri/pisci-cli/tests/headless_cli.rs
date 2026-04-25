@@ -78,8 +78,8 @@ fn capabilities_emits_expected_schema() {
             "expected disabled tool `{required}` in {names:?}"
         );
     }
-    // Phase 1.7: pool / plan tools now live in pisci-kernel and must NOT
-    // be flagged as disabled for the CLI host.
+    // Pool / plan tools live in pisci-kernel and must NOT be flagged as
+    // disabled for the CLI host.
     for newly_enabled in ["plan_todo", "pool_org", "pool_chat"] {
         assert!(
             !names.contains(&newly_enabled),

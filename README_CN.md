@@ -218,10 +218,10 @@ OpenPisci 是一款本地优先的 AI Agent 桌面应用，基于 Tauri 2 + Rust
 
 ### Headless CLI（交互 / 脚本两种用法）
 
-每个发行版会包含桌面应用和一个无头控制台二进制：
+桌面安装包以单 GUI 主程序为中心。无头控制台二进制是可选的开发者 / 自动化资产，不是桌面应用运行时依赖：
 
 - `pisci-desktop`（或 `pisci-desktop.exe`）：GUI 桌面应用。
-- `openpisci-headless`（或 `openpisci-headless.exe`）：无需 Tauri UI 的无头 Agent 运行器。
+- `openpisci-headless`（或 `openpisci-headless.exe`）：可选的无头 Agent 运行器，用于 CLI、CI、评测和脚本自动化。
 
 直接双击或无参数运行 headless 版本会自动进入**交互式 REPL**（多轮对话、流式输出到 stdout，输入 `:help` 查看命令）；它与桌面版共享同一份 `pisci.db` / `config.json`。脚本场景可使用 `openpisci-headless run --prompt "..."` 做单轮执行，使用 `openpisci-headless capabilities` 查看当前构建启用了哪些工具。完整用法参见 `openpisci-headless --help`。
 
@@ -372,10 +372,15 @@ OpenPisci
 - 桌面专属关注点（Tauri 命令、托盘、更新器、平台集成）下沉到桌面层，不再渗入核心运行时。
 - 前端 services / store 模块按业务域重新组织，易于扩展与审阅。
 - 跨平台桌面构建与打包已接入 CI，Windows / macOS / Linux 三平台均可在各自的原生构建机上发布。
+- 源码分层不是强制多进程产品形态：桌面主聊天与 Koi 协同默认在 GUI 运行时内执行，`openpisci-headless` 保留为 CLI / 评测 / 自动化宿主。
 
 ---
 
 ## 📋 更新日志
+
+### v0.7.2
+- **桌面运行时纠偏**：Koi 协同默认恢复为 GUI 主进程内运行。源码仍按 `pisci-core` / `pisci-kernel` / `pisci-cli` / `pisci-desktop` 分层，但桌面产品的主聊天与 Koi 协同不再依赖 `openpisci-headless`。
+- **打包收敛**：GUI 安装包取消对 `openpisci-headless` sidecar 的强依赖。Headless 仍可通过 `npm run build:headless` 或 `cargo build -p pisci-cli --release --bin openpisci-headless` 单独构建。
 
 ### v0.7.0
 - **重大架构重构**：Rust 代码库拆分为 `pisci-core`（纯协作与领域逻辑）、`pisci-kernel`（与 OS / UI 解耦的运行时内核）、`pisci-cli`（无头 CLI 运行器）、`pisci-desktop`（Tauri 外壳）四层，显著降低跨层耦合。

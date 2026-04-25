@@ -30,7 +30,7 @@ use pisci_kernel::pool::store::PoolStore;
 use pisci_kernel::pool::SubprocessSubagentRuntime;
 use pisci_kernel::tools::NeutralToolsConfig;
 
-use crate::host::CliHost;
+use crate::host::{CliEventSink, CliHost};
 
 /// Resolve the app data directory for a headless run. Honours the
 /// per-request `config_dir` override first, then the
@@ -72,7 +72,33 @@ pub fn run_pisci_once(request: HeadlessCliRequest) -> Result<HeadlessCliResponse
 
     let app_data_dir = resolve_app_data_dir(Some(&request));
     let host = CliHost::new(app_data_dir.clone());
+    run_pisci_once_with_host(request, app_data_dir, host)
+}
 
+/// Same as [`run_pisci_once`], but routes progress events away from stdout.
+///
+/// JSON-RPC subprocess mode owns stdout for protocol frames, so child-side
+/// agent/pool events must never be written there.
+pub fn run_pisci_once_with_stderr_events(
+    request: HeadlessCliRequest,
+) -> Result<HeadlessCliResponse, String> {
+    if matches!(request.mode, HeadlessCliMode::Pool) {
+        return run_pool_once(request);
+    }
+
+    let app_data_dir = resolve_app_data_dir(Some(&request));
+    let host = CliHost::new_with_event_sink(
+        app_data_dir.clone(),
+        Arc::new(CliEventSink::stderr()),
+    );
+    run_pisci_once_with_host(request, app_data_dir, host)
+}
+
+fn run_pisci_once_with_host(
+    request: HeadlessCliRequest,
+    app_data_dir: PathBuf,
+    host: CliHost,
+) -> Result<HeadlessCliResponse, String> {
     let (db, settings) = headless::open_kernel_state(&app_data_dir)
         .map_err(|e| format!("Failed to initialise kernel state: {e}"))?;
 
@@ -143,9 +169,11 @@ fn resolve_headless_binary() -> PathBuf {
 /// Minimum-viable pool-mode parent runner.
 ///
 /// This is the `openpisci-headless run --mode pool` entry point. It
-/// creates (or attaches to) a pool session, posts the caller's prompt as
-/// a pool message (which may contain `@koi` mentions the kernel's
-/// coordinator will fan out into subprocess Koi turns), and optionally
+/// creates (or attaches to) a pool session, ensures the starter Kois exist
+/// for isolated headless config directories, posts the caller's prompt as
+/// a pool message (which may contain `@!KoiName` / `@!all` delegation
+/// mentions the kernel's coordinator will fan out into subprocess Koi turns),
+/// and optionally
 /// waits for completion before returning a [`PoolWaitSummary`].
 ///
 /// Scope of the MVP:
@@ -193,6 +221,12 @@ pub fn run_pool_once(request: HeadlessCliRequest) -> Result<HeadlessCliResponse,
         .map_err(|e| format!("Failed to start tokio runtime: {e}"))?;
 
     runtime.block_on(async move {
+        {
+            let db = db.lock().await;
+            db.ensure_starter_kois()
+                .map_err(|e| format!("failed to seed starter Kois: {e}"))?;
+        }
+
         let store = PoolStore::new(db.clone());
         let sink = host.pool_event_sink();
 
@@ -238,8 +272,8 @@ pub fn run_pool_once(request: HeadlessCliRequest) -> Result<HeadlessCliResponse,
                 .ok_or_else(|| "create_pool returned no pool.id".to_string())?
         };
 
-        // Post the user's prompt as a pool message. If it contains
-        // `@koi` mentions the coordinator dispatches subprocess turns.
+        // Post the user's prompt as a pool message. Forced `@!` mentions
+        // are the explicit delegation path that dispatches Koi turns.
         let caller_session = request
             .session_id
             .clone()
@@ -272,13 +306,17 @@ pub fn run_pool_once(request: HeadlessCliRequest) -> Result<HeadlessCliResponse,
         } else {
             None
         };
+        let response_text = pool_wait
+            .as_ref()
+            .map(render_pool_wait_summary)
+            .unwrap_or_default();
 
         Ok(HeadlessCliResponse {
             ok: true,
             mode: HeadlessCliMode::Pool.as_str().to_string(),
             session_id: caller_session,
             pool_id: Some(pool_id),
-            response_text: String::new(),
+            response_text,
             disabled_tools: Vec::new(),
             pool_wait,
         })
@@ -294,7 +332,7 @@ async fn wait_for_pool_idle(
     let poll = Duration::from_secs(1);
     loop {
         let pool_id_owned = pool_id.to_string();
-        let counts = store
+        let snapshot = store
             .read(move |db| {
                 let mut active = 0u32;
                 let mut done = 0u32;
@@ -311,23 +349,62 @@ async fn wait_for_pool_idle(
                         _ => active += 1,
                     }
                 }
-                Ok::<_, anyhow::Error>((active, done, cancelled, blocked))
+                let latest_messages = db
+                    .get_pool_messages(&pool_id_owned, 10, 0)?
+                    .into_iter()
+                    .map(|msg| {
+                        format!(
+                            "#{} {} ({}): {}",
+                            msg.id,
+                            msg.sender_id,
+                            msg.msg_type,
+                            msg.content.chars().take(240).collect::<String>()
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                Ok::<_, anyhow::Error>((active, done, cancelled, blocked, latest_messages))
             })
             .await
-            .unwrap_or((0, 0, 0, 0));
-        let (active, done, cancelled, blocked) = counts;
+            .unwrap_or((0, 0, 0, 0, Vec::new()));
+        let (active, done, cancelled, blocked, latest_messages) = snapshot;
         let timed_out = Instant::now() >= deadline;
         if active == 0 || timed_out {
+            let requires_supervisor_closeout = !timed_out && done > 0;
+            let closeout_status = if timed_out {
+                "timed_out"
+            } else if requires_supervisor_closeout {
+                "awaiting_supervisor_closeout"
+            } else {
+                "idle_no_work"
+            };
             return PoolWaitSummary {
                 completed: active == 0,
                 timed_out,
+                closeout_status: closeout_status.to_string(),
+                requires_supervisor_closeout,
                 active_todos: active,
                 done_todos: done,
                 cancelled_todos: cancelled,
                 blocked_todos: blocked,
-                latest_messages: Vec::new(),
+                latest_messages,
             };
         }
         tokio::time::sleep(poll).await;
     }
+}
+
+fn render_pool_wait_summary(summary: &PoolWaitSummary) -> String {
+    if summary.timed_out {
+        return format!(
+            "Pool wait timed out with {} active todo(s), {} done, {} blocked.",
+            summary.active_todos, summary.done_todos, summary.blocked_todos
+        );
+    }
+    if summary.requires_supervisor_closeout {
+        return format!(
+            "Koi work finished: {} todo(s) done. Closeout status: {}. Pisci supervisor must now review pool messages and explicitly merge or request rework.",
+            summary.done_todos, summary.closeout_status
+        );
+    }
+    "Pool is idle; no Koi work requires supervisor closeout.".to_string()
 }

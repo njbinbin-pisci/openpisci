@@ -31,6 +31,7 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 
 use crate::browser::SharedBrowserManager;
+use crate::runtime::koi::DesktopInProcessSubagentRuntime;
 use crate::skills::loader::SkillLoader;
 use crate::store::{AppState, Database, Settings};
 use crate::tools::{app_control, browser, call_fish, call_koi, chat_ui, im_send, skill_list};
@@ -315,7 +316,7 @@ pub struct DesktopHostTools {
     pub builtin_tool_enabled: Option<HashMap<String, bool>>,
     pub user_tools_dir: Option<PathBuf>,
     /// Shared agent event sink — the desktop reuses [`DesktopEventSink`]
-    /// (from `AppState.host_event_sink`) so legacy session events and
+    /// (from `AppState.host_event_sink`) so session events and
     /// kernel-emitted events travel over the same `AppHandle`.
     pub event_sink: Option<Arc<dyn EventSink>>,
     /// Shared per-session plan state backing the kernel `plan_todo`
@@ -323,9 +324,9 @@ pub struct DesktopHostTools {
     pub plan_store: Option<PlanStore>,
     /// Outlet for kernel pool events. Reuses [`DesktopEventSink`].
     pub pool_event_sink: Option<Arc<dyn PoolEventSink>>,
-    /// Host-supplied [`SubagentRuntime`]. The desktop wires a
-    /// subprocess-backed runtime (spawns `openpisci-headless run
-    /// --mode pisci`) so Koi turns execute out-of-process. `None`
+    /// Host-supplied [`SubagentRuntime`]. The desktop wires an
+    /// in-process runtime so Koi turns stay inside the GUI product
+    /// runtime. `None`
     /// leaves `assign_koi` / `resume_todo` / `replace_todo` returning
     /// a clean "not available" error rather than silently dropping
     /// work.
@@ -395,9 +396,6 @@ impl DesktopHostTools {
             return self;
         };
         self.coordinator_config = resolve_desktop_coordinator_config(Some(app));
-        // db is still required for plan-store lookup even though we no
-        // longer need it for the legacy dispatcher.
-        let _ = self.db.as_ref();
         let sink = Arc::new(DesktopEventSink::new(app.clone()));
         if self.event_sink.is_none() {
             let sink_dyn: Arc<dyn EventSink> = sink.clone();
@@ -411,17 +409,8 @@ impl DesktopHostTools {
             self.plan_store = app.try_state::<AppState>().map(|s| s.plan_state.clone());
         }
         if self.subagent_runtime.is_none() {
-            let app_data_dir = self
-                .app_data_dir
-                .clone()
-                .or_else(|| app.path().app_data_dir().ok())
-                .or_else(|| Some(PathBuf::from(".pisci")));
-            let headless_bin = resolve_headless_binary();
-            let mut runtime = pisci_kernel::pool::SubprocessSubagentRuntime::new(headless_bin);
-            if let Some(dir) = app_data_dir {
-                runtime = runtime.with_app_data_dir(dir);
-            }
-            let runtime_dyn: Arc<dyn SubagentRuntime> = Arc::new(runtime);
+            let runtime_dyn: Arc<dyn SubagentRuntime> =
+                Arc::new(DesktopInProcessSubagentRuntime::new(app.clone()));
             self.subagent_runtime = Some(runtime_dyn);
         }
         if self.gateway.is_none() {
@@ -665,25 +654,16 @@ impl DesktopHost {
             .ok()
             .or_else(|| Some(PathBuf::from(".pisci")));
         // Reuse `DesktopEventSink` for both `EventSink` and `PoolEventSink`
-        // so legacy session events and kernel pool events share a single
+        // so session events and pool events share a single
         // `AppHandle` + atomic emit path.
         let event_sink_dyn: Arc<dyn EventSink> = event_sink.clone();
         let pool_event_sink_dyn: Arc<dyn PoolEventSink> = event_sink.clone();
 
-        // Locate `openpisci-headless` for the kernel's subagent
-        // runtime. Production builds ship the headless binary
-        // alongside the desktop executable; dev runs can drop it
-        // anywhere on PATH or set `PISCI_HEADLESS_BIN`. The runtime
-        // itself tolerates a missing binary — `spawn_koi_turn` just
-        // surfaces the filesystem error up to the caller.
-        let headless_bin = resolve_headless_binary();
-        let subprocess = pisci_kernel::pool::SubprocessSubagentRuntime::new(headless_bin);
-        let subprocess = if let Some(ref dir) = app_data_dir {
-            subprocess.with_app_data_dir(dir.clone())
-        } else {
-            subprocess
-        };
-        let subagent_runtime: Arc<dyn SubagentRuntime> = Arc::new(subprocess);
+        // Desktop Koi collaboration defaults to the same GUI process.
+        // `openpisci-headless` remains an optional CLI/eval host, not a
+        // required desktop sidecar.
+        let subagent_runtime: Arc<dyn SubagentRuntime> =
+            Arc::new(DesktopInProcessSubagentRuntime::new(app.clone()));
 
         let tools = Arc::new(DesktopHostTools {
             browser: Some(state.browser.clone()),
@@ -744,8 +724,8 @@ impl HostRuntime for DesktopHost {
 
     fn pool_event_sink(&self) -> Arc<dyn PoolEventSink> {
         // `DesktopEventSink` implements both [`EventSink`] and
-        // [`PoolEventSink`] — reuse the same instance so both legacy
-        // session events and new pool events travel over the same
+        // [`PoolEventSink`] — reuse the same instance so session
+        // events and pool events travel over the same
         // `AppHandle`.
         self.event_sink.clone()
     }
@@ -753,36 +733,4 @@ impl HostRuntime for DesktopHost {
     fn subagent_runtime(&self) -> Option<Arc<dyn SubagentRuntime>> {
         self.tools.subagent_runtime.clone()
     }
-}
-
-/// Locate the `openpisci-headless` binary the kernel's
-/// [`SubprocessSubagentRuntime`] should spawn.
-///
-/// Resolution order:
-/// 1. `PISCI_HEADLESS_BIN` environment variable (absolute path).
-/// 2. Sibling of the desktop executable
-///    (`current_exe().parent().join("openpisci-headless[.exe]")`).
-/// 3. Bare command name `openpisci-headless` — defers resolution to
-///    `PATH` at spawn time.
-fn resolve_headless_binary() -> PathBuf {
-    if let Ok(raw) = std::env::var("PISCI_HEADLESS_BIN") {
-        let raw = raw.trim();
-        if !raw.is_empty() {
-            return PathBuf::from(raw);
-        }
-    }
-    let exe_name = if cfg!(windows) {
-        "openpisci-headless.exe"
-    } else {
-        "openpisci-headless"
-    };
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join(exe_name);
-            if candidate.exists() {
-                return candidate;
-            }
-        }
-    }
-    PathBuf::from(exe_name)
 }

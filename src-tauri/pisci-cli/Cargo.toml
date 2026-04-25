@@ -5,7 +5,7 @@ edition = "2021"
 description = "OpenPisci headless CLI — cross-platform agent runner with no Tauri / GUI dependency."
 
 # Published CLI binary. `pisci-desktop` owns the GUI app; this crate owns the
-# only headless/sidecar executable shipped with releases.
+# optional headless executable used for CLI, CI, evals, and automation.
 
 [[bin]]
 name = "openpisci-headless"

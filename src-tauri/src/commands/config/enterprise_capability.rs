@@ -523,9 +523,11 @@ mod tests {
 
     #[test]
     fn feishu_template_keeps_secret_as_placeholder() {
-        let mut settings = Settings::default();
-        settings.feishu_app_id = "cli_real".into();
-        settings.feishu_app_secret = "secret_real".into();
+        let settings = Settings {
+            feishu_app_id: "cli_real".into(),
+            feishu_app_secret: "secret_real".into(),
+            ..Default::default()
+        };
 
         let server = build_feishu_mcp_server(&settings);
         assert_eq!(server.name, FEISHU_ENTERPRISE_SERVER);
@@ -538,9 +540,11 @@ mod tests {
 
     #[test]
     fn upsert_mcp_server_is_idempotent() {
-        let mut settings = Settings::default();
-        settings.feishu_app_id = "cli_real".into();
-        settings.feishu_app_secret = "secret_real".into();
+        let settings = Settings {
+            feishu_app_id: "cli_real".into(),
+            feishu_app_secret: "secret_real".into(),
+            ..Default::default()
+        };
         let server = build_feishu_mcp_server(&settings);
 
         let mut servers = Vec::new();

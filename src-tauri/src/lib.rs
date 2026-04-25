@@ -16,6 +16,7 @@ mod live_smoke;
 pub mod notify;
 mod pisci;
 pub mod pool;
+pub mod runtime;
 mod skills;
 pub mod store;
 mod tools;

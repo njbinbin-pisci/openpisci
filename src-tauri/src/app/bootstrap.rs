@@ -38,10 +38,6 @@ fn build_im_session_title(msg: &gateway::InboundMessage) -> String {
     format!("{} · {}", msg.channel, label)
 }
 
-fn build_legacy_im_session_id(msg: &gateway::InboundMessage) -> String {
-    format!("im_{}_{}", msg.channel, msg.sender)
-}
-
 fn build_new_im_session_id(msg: &gateway::InboundMessage) -> String {
     format!("im_{}_{}", msg.channel, Uuid::new_v4())
 }
@@ -68,16 +64,7 @@ async fn resolve_or_create_im_binding(
     {
         existing.session_id
     } else {
-        let legacy_session_id = build_legacy_im_session_id(msg);
-        if db_lock
-            .get_session(&legacy_session_id)
-            .map_err(|e| e.to_string())?
-            .is_some()
-        {
-            legacy_session_id
-        } else {
-            build_new_im_session_id(msg)
-        }
+        build_new_im_session_id(msg)
     };
 
     let _ = db_lock
@@ -1138,27 +1125,6 @@ mod tests {
                 .expect("routing_state_json"),
             r#"{"context_token":"ctx-2","from_user_id":"wx-user-1","session_id":""}"#
         );
-    }
-
-    #[tokio::test]
-    async fn resolve_or_create_im_binding_adopts_legacy_session_id() {
-        let db = Arc::new(tokio::sync::Mutex::new(
-            store::Database::open_in_memory().expect("in-memory db"),
-        ));
-        let msg = inbound_message();
-        let legacy_session_id = format!("im_{}_{}", msg.channel, msg.sender);
-        {
-            let db_lock = db.lock().await;
-            db_lock
-                .ensure_im_session(&legacy_session_id, "legacy", "im_wechat")
-                .expect("legacy session");
-        }
-
-        let binding = resolve_or_create_im_binding(&db, &msg)
-            .await
-            .expect("binding");
-
-        assert_eq!(binding.session_id, legacy_session_id);
     }
 
     #[tokio::test]

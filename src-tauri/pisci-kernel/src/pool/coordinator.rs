@@ -1,8 +1,7 @@
 //! Kernel-owned coordinator for Koi turns.
 //!
-//! This module is the Phase 2 replacement for the old desktop
-//! [`KoiRuntime::execute_todo`] / `resume_todo` / `replace_todo` /
-//! `handle_mention` methods. It knows how to:
+//! This module owns Koi todo execution, resume/replace flows, and
+//! mention dispatch. It knows how to:
 //!
 //! 1. Claim a todo + post its `task_claimed` pool message.
 //! 2. Set up a git worktree (best-effort) and resolve the final
@@ -51,9 +50,8 @@ use super::store::PoolStore;
 /// [`CoordinatorConfig::default_task_timeout_secs`].
 pub const DEFAULT_TASK_TIMEOUT_SECS: u32 = 600;
 
-/// Embedded prompt template — same content as the old desktop
-/// `prompts/koi_execute_todo.txt` but owned by the kernel so any host
-/// (subprocess or in-process) produces the same system message.
+/// Embedded prompt template owned by the kernel so any host
+/// (in-process or subprocess) produces the same system message.
 ///
 /// Placeholders:
 /// * `{task}`    — the brief the agent was assigned.
@@ -76,8 +74,8 @@ struct MentionTarget {
 }
 
 /// Knobs every host injects when building a coordinator call. Defaults
-/// match the legacy desktop behaviour so the CLI host can use
-/// `CoordinatorConfig::default()` until it grows its own settings.
+/// provide conservative desktop-quality behaviour, while hosts can
+/// override them from user settings or CLI arguments.
 #[derive(Debug, Clone)]
 pub struct CoordinatorConfig {
     /// Absolute fallback timeout when neither the Koi, the pool, nor
@@ -98,9 +96,8 @@ impl Default for CoordinatorConfig {
     }
 }
 
-/// Outcome surfaced by [`execute_todo_turn`]. Mirrors the shape of the
-/// old desktop `KoiExecResult` so `call_koi` / `assign_koi` can format
-/// responses unchanged.
+/// Outcome surfaced by [`execute_todo_turn`] for `call_koi`,
+/// `assign_koi`, and coordinator-facing status messages.
 #[derive(Debug, Clone)]
 pub struct KoiExecResult {
     pub success: bool,
@@ -1033,10 +1030,10 @@ fn todo_source_type(actor: &str) -> &'static str {
 /// - `@!KoiName` / `@!all` is a forced delegation. It creates (or
 ///   reuses) a board todo and dispatches the Koi turn immediately.
 ///
-/// In Phase 2 turns are one-shot subprocesses, so there is no
-/// persistent inbox we can push into for busy Kois. Plain notification
-/// therefore only auto-wakes idle Kois; busy ones will observe the
-/// message on their next turn.
+/// Turns are one-shot runtime executions, so there is no persistent
+/// inbox we can push into for busy Kois. Plain notification therefore
+/// only auto-wakes idle Kois; busy ones will observe the message on
+/// their next turn.
 pub async fn handle_mention(
     store: &PoolStore,
     sink: Arc<dyn PoolEventSink>,
@@ -1261,12 +1258,10 @@ pub async fn activate_pending_todos(
 /// but lives on the coordinator so hosts only need to depend on one
 /// kernel module for pool-level recovery.
 ///
-/// The old desktop implementation also walked an in-process
-/// `ACTIVE_KOI_RUNS` map to detect Kois whose session handle had been
-/// abandoned. The Phase 2 subprocess model has no such map — every
-/// turn is a fresh subprocess whose lifetime is tracked by
-/// [`SubprocessSubagentRuntime`] itself — so detached-run recovery is
-/// folded into the DB rollback.
+/// Runtime-specific cancellation and process/task cleanup is handled by
+/// the host-provided [`SubagentRuntime`]; this watchdog only restores
+/// durable DB state so the pool can make progress after crashes or
+/// abandoned turns.
 pub async fn watchdog_recover(store: &PoolStore, max_busy_secs: i64) -> (u32, u32) {
     let koi_count = store
         .write(|db| Ok(db.recover_stale_busy_kois(max_busy_secs).unwrap_or(0)))

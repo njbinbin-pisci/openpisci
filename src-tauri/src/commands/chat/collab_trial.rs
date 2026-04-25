@@ -2,7 +2,7 @@
 ///
 /// - Creates real Koi agents in the production DB
 /// - Creates a real Pool session visible in the UI
-/// - Fans subprocess Koi turns through `koi::bridge::handle_mention` (kernel coordinator)
+/// - Fans Koi turns through `pool::bridge::handle_mention` (kernel coordinator)
 /// - All events stream to the Chat Pool and Board in real-time
 ///
 /// The user can observe the full collaboration in the Pond UI.
@@ -516,7 +516,7 @@ pub async fn run_collaboration_trial_with_state(
 
     let kickoff_preview = match &lead_results {
         Ok(()) => format!(
-            "Initial @mention dispatched to {}. Subprocess turn is running — \
+            "Initial @mention dispatched to {}. Koi turn is running — \
              results will stream via pool events.",
             lead.name
         ),

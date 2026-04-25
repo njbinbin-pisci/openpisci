@@ -73,7 +73,7 @@ def render_review(run: dict[str, Any]) -> str:
         "",
         "## Runtime Caveat",
         "",
-        "This review uses telemetry from the real `openpisci run` path plus optional post-hoc `HARNESS` breakdown on persisted session transcripts. That means the layered token numbers are diagnostic, not proof that the runtime request path and `ContextBuilder::finalize` are perfectly identical.",
+        "This review uses telemetry from the real `openpisci-headless run` path plus optional post-hoc `HARNESS` breakdown on persisted session transcripts. That means the layered token numbers are diagnostic, not proof that the runtime request path and `ContextBuilder::finalize` are perfectly identical.",
         "",
         "## Next Checks",
         "",

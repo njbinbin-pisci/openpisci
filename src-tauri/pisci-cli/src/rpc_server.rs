@@ -29,7 +29,7 @@ use pisci_core::host::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::runner::run_pisci_once;
+use crate::runner::run_pisci_once_with_stderr_events;
 
 /// Entry point for the `openpisci-headless rpc` subcommand. Blocks on
 /// stdin until the parent either sends `shutdown` or closes the pipe.
@@ -184,7 +184,7 @@ fn handle_koi_turn(params: Value, cancel: Arc<AtomicBool>) -> Result<KoiTurnOutc
         });
     }
 
-    match run_pisci_once(cli_request) {
+    match run_pisci_once_with_stderr_events(cli_request) {
         Ok(resp) => Ok(KoiTurnOutcome {
             handle,
             exit_kind: if resp.ok {

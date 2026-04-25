@@ -47,7 +47,7 @@ Use this when you entered Setup or Acting but discovered the work cannot proceed
 \n\
 ### Hard invariants (re-read every run)\n\
 - **The board is the source of truth for run state, not your narrative.** A run is incomplete as long as any todo you claimed in this run still has status `todo` or `in_progress`. You cannot text-summarize your way past that fact.\n\
-- **Production is not termination.** A deliverable that exists only in your worktree, your message text, or your reasoning is invisible to the team. The run only reaches Done after the deliverable is observable from pool_chat AND the corresponding todo has been reconciled on the board via `complete_todo` (or `blocked`/`cancel_todo`).\n\
+- **Production is not integration.** A deliverable that exists only in your worktree, your message text, or your reasoning is invisible to the main workspace. Your run only reaches Done after the deliverable is observable from pool_chat AND the corresponding todo has been reconciled on the board via `complete_todo` (or `blocked`/`cancel_todo`). Pisci, not Koi, decides whether to merge your branch or request rework.\n\
 - **The runtime safety net is visible.** If you exit the run with a claimed todo still in `in_progress`, the runtime will rewrite that todo to `needs_review` and post a `protocol_reminder` event in pool_chat under your name. That event is permanent and visible to every agent that subsequently joins the pool. Treat triggering it as a logged failure, not a free recovery path.\n"
 }
 
@@ -62,7 +62,7 @@ pool_chat is the shared channel; pool_org is the shared task board. These are th
 - Status signals (place verbatim inside your pool_chat message so Pisci can reason about project state):\n\
   - `[ProjectStatus] follow_up_needed` \u{2014} more work is required; pair with an `@!mention` of the next responsible party identified per the rule above.\n\
   - `[ProjectStatus] waiting` \u{2014} you are blocked on something specific; name what you are waiting on.\n\
-  - `[ProjectStatus] ready_for_pisci_review` \u{2014} use ONLY after your own `complete_todo` has succeeded and the project looks ready for Pisci to close.\n\
+  - `[ProjectStatus] ready_for_pisci_review` \u{2014} use ONLY after your own `complete_todo` has succeeded and your branch/result is ready for Pisci supervisor review and possible merge.\n\
 - Never unilaterally declare the project complete. If you believe the project may be done, signal `@pisci`; do not poll peer agents for agreement.\n\
 - Only Pisci or the user directly assigns work to you. Other agents use plain `@mention` for notification or `@!mention` for explicit delegation. The task board (pool_org) and chat (pool_chat) are your sources of truth; do not rely on heartbeat, trial, or other harnesses to repair missing coordination.\n"
 }
@@ -74,7 +74,7 @@ pub fn koi_context_and_tools_prompt() -> &'static str {
 - If the task is primarily discussion, analysis, review, specification, or status \u{2014} answer directly from the task and pool context; do not fabricate tool detours.\n\
 - Do not narrate intended future actions as your result. The deliverable must be observable (posted to pool_chat, written to a file, recorded as a todo transition) \u{2014} not merely described.\n\
 - Worktree discipline: if you are in a Git worktree, your [Environment] workspace IS your worktree directory (e.g. `.../.koi-worktrees/<name>-<short-id>`). Use RELATIVE paths for every file operation. Writing to absolute paths into the main project directory will corrupt the shared codebase.\n\
-- Your changes are auto-committed when the run ends; do NOT run `git add`, `git commit`, `git merge`, `git rebase`, or `git push` yourself \u{2014} branch integration is Pisci's responsibility. When your code work is done, note in pool_chat which branch is ready to merge.\n\
+- Your changes are auto-committed when the run ends; do NOT run `git add`, `git commit`, `git merge`, `git rebase`, or `git push` yourself \u{2014} branch integration is Pisci supervisor's responsibility. When your code work is done, note in pool_chat what changed, what verification passed, and that the branch is ready for Pisci review.\n\
 - If your task depends on another Koi's code, ask in pool_chat which branch it lives on so Pisci can merge it first. Stay inside your assigned scope; do not modify files outside the directories relevant to your task.\n\
 - Long output rule: if your deliverable is longer than ~500 words, write the full content to a file and post only a brief summary plus the exact file path in pool_chat. When delegating via call_koi, pass the file path, not the full content.\n\
 - Knowledge base: the workspace contains a shared `kb/` directory that persists across runs. Consult it when prior project memory is likely to matter. Write durable notes as `.md`; write structured records as `.jsonl` with `timestamp`, `author`, and `summary`.\n"
@@ -238,8 +238,8 @@ mod tests {
             );
         }
         assert!(
-            shape.contains("Production is not termination"),
-            "Run Shape must keep the 'Production is not termination' invariant"
+            shape.contains("Production is not integration"),
+            "Run Shape must keep the 'Production is not integration' invariant"
         );
         assert!(
             shape.contains("source of truth"),

@@ -38,17 +38,10 @@ fn current_os() -> &'static str {
 /// here (not in the kernel) because "which desktop tools are missing" is a
 /// host-policy decision rather than a kernel fact.
 fn headless_disabled_tools(mode: HeadlessCliMode) -> Vec<DisabledToolInfo> {
-    // `plan_todo`, `pool_org`, and `pool_chat` used to live in this list
-    // back when they were Tauri-only. Since Phase 1.7 of the pool
-    // migration they ship inside `pisci-kernel::tools` and are registered
-    // by `run_pisci_once`, so openpisci-headless can now drive them
-    // end-to-end (plan state + pool coordination over the shared SQLite
-    // DB). The only remaining limitation is that Koi turn dispatch
-    // (`assign_koi` / `resume_todo` / `replace_todo`) still requires the
-    // desktop `KoiRuntime` until Phase 2 wires a subprocess-backed
-    // `SubagentRuntime` — until then the CLI host reports the tools as
-    // available but returns a clean "dispatcher not wired" error when a
-    // caller actually tries to spawn a Koi.
+    // `plan_todo`, `pool_org`, and `pool_chat` live in
+    // `pisci-kernel::tools`, so the CLI can use them over the shared
+    // SQLite DB. Direct `call_koi`/`call_fish` remain desktop-only
+    // because they require Tauri AppState/AppHandle services.
     let common = [
         (
             "browser",

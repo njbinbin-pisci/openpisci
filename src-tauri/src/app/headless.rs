@@ -101,6 +101,10 @@ fn cli_extra_system_context(request: &HeadlessCliRequest) -> String {
                 "- You are coordinating a project pool. Use pool_org + pool_chat for visible collaboration."
                     .to_string(),
             );
+            lines.push(
+                "- When Koi todos are done, perform supervisor closeout: review pool messages/todos, then explicitly merge branches with pool_org(action=\"merge_branches\") or request rework. Koi completion alone is not final delivery."
+                    .to_string(),
+            );
             if let Some(size) = request.pool_size {
                 lines.push(format!(
                     "- Target collaboration scale: at most {} Koi unless the task clearly needs fewer.",
@@ -218,9 +222,17 @@ async fn wait_for_pool_completion(
         if active == 0 {
             match zero_since {
                 Some(since) if since.elapsed() >= idle_grace => {
+                    let requires_supervisor_closeout = done > 0;
+                    let closeout_status = if requires_supervisor_closeout {
+                        "awaiting_supervisor_closeout"
+                    } else {
+                        "idle_no_work"
+                    };
                     return Ok(PoolWaitSummary {
                         completed: true,
                         timed_out: false,
+                        closeout_status: closeout_status.to_string(),
+                        requires_supervisor_closeout,
                         active_todos: active,
                         done_todos: done,
                         cancelled_todos: cancelled,
@@ -239,6 +251,8 @@ async fn wait_for_pool_completion(
             return Ok(PoolWaitSummary {
                 completed: false,
                 timed_out: true,
+                closeout_status: "timed_out".to_string(),
+                requires_supervisor_closeout: false,
                 active_todos: active,
                 done_todos: done,
                 cancelled_todos: cancelled,

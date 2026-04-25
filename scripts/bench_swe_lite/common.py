@@ -29,12 +29,9 @@ def find_binary(stem: str, explicit: str | None = None) -> Path:
             return p
         raise FileNotFoundError(f"Binary override not found: {p}")
 
-    # Kernel refactor note:
-    # The Rust workspace root is `src-tauri/` so cargo writes binaries
-    # under `src-tauri/target/{debug,release}/`. `openpisci` still lives
-    # in the `pisci-desktop` crate (full Tauri-linked CLI runner). The new
-    # `openpisci-headless` bin belongs to `pisci-cli` and produces the same
-    # output directory. Both are discovered by this helper.
+    # The Rust workspace root is `src-tauri/`, so cargo writes binaries
+    # under `src-tauri/target/{debug,release}/`. SWE-lite uses the optional
+    # `openpisci-headless` CLI asset instead of the desktop GUI binary.
     candidates = [
         REPO_ROOT / "src-tauri" / "target" / "release" / _exe_name(stem),
         REPO_ROOT / "src-tauri" / "target" / "debug" / _exe_name(stem),
@@ -91,6 +88,9 @@ def prepare_config_dir(config_dir: Path, config_template: str | None = None) -> 
         )
     target = config_dir / "config.json"
     shutil.copy2(template, target)
+    secret_key = template.parent / ".secret_key"
+    if secret_key.exists():
+        shutil.copy2(secret_key, config_dir / ".secret_key")
     return target
 
 

@@ -5,11 +5,33 @@
 //! cancellation token; callers pass an `Option<Arc<AtomicBool>>` that
 //! ticks every 100 ms while the subprocess runs.
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Output;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::time::Duration;
+
+fn tokio_git_command() -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("git");
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+fn std_git_command() -> std::process::Command {
+    let mut cmd = std::process::Command::new("git");
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
 
 /// Run `git <args>` inside `dir` with an async cancellation check.
 ///
@@ -26,7 +48,7 @@ pub async fn run_git(
         }
     }
 
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = tokio_git_command();
     cmd.args(args).current_dir(dir).kill_on_drop(true);
 
     let cancel_flag = cancel.clone();
@@ -210,7 +232,8 @@ pub fn setup_worktree(
         .join(".koi-worktrees")
         .join(format!("{}-{}", safe_name, short_id));
 
-    let output = std::process::Command::new("git")
+    let mut cmd = std_git_command();
+    let output = cmd
         .args([
             "worktree",
             "add",
@@ -256,17 +279,17 @@ pub fn cleanup_worktree(worktree_path: &Path, koi_name: &str, task: &str) {
     };
     let commit_msg = format!("koi/{}: {}", koi_name, task_preview);
 
-    let _ = std::process::Command::new("git")
-        .args(["add", "-A"])
-        .current_dir(worktree_path)
-        .output();
-    let _ = std::process::Command::new("git")
+    let mut add = std_git_command();
+    let _ = add.args(["add", "-A"]).current_dir(worktree_path).output();
+    let mut commit = std_git_command();
+    let _ = commit
         .args(["commit", "-m", &commit_msg, "--allow-empty"])
         .current_dir(worktree_path)
         .output();
 
     let parent = worktree_path.parent().unwrap_or(worktree_path);
-    let output = std::process::Command::new("git")
+    let mut remove = std_git_command();
+    let output = remove
         .args([
             "worktree",
             "remove",
@@ -306,7 +329,35 @@ async fn list_koi_branches(
     }
     Ok(String::from_utf8_lossy(&out.stdout)
         .lines()
-        .map(|l| l.trim().trim_start_matches("* ").to_string())
+        .map(normalize_branch_list_line)
         .filter(|l| !l.is_empty())
         .collect())
+}
+
+fn normalize_branch_list_line(line: &str) -> String {
+    line.trim()
+        .trim_start_matches("* ")
+        .trim_start_matches("+ ")
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_branch_list_line;
+
+    #[test]
+    fn normalizes_current_and_linked_worktree_branch_markers() {
+        assert_eq!(
+            normalize_branch_list_line("+ koi/Coder-12345678"),
+            "koi/Coder-12345678"
+        );
+        assert_eq!(
+            normalize_branch_list_line("* koi/Reviewer-12345678"),
+            "koi/Reviewer-12345678"
+        );
+        assert_eq!(
+            normalize_branch_list_line("  koi/Architect-12345678"),
+            "koi/Architect-12345678"
+        );
+    }
 }

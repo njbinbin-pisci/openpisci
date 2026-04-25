@@ -58,7 +58,6 @@ tauri-build = { version = "2", features = [] }
 # Pure collaboration/core logic
 pisci-core = { workspace = true }
 pisci-kernel = { workspace = true }
-pisci-cli = { workspace = true }
 
 # Tauri
 tauri = { version = "2", features = ["tray-icon"] }

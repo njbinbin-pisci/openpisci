@@ -70,7 +70,7 @@ pub struct NeutralToolsConfig {
     /// the `pool_org` / `pool_chat` tools.
     pub pool_event_sink: Option<Arc<dyn PoolEventSink>>,
     /// Host-supplied [`SubagentRuntime`] used by the coordinator to
-    /// wake Kois via subprocesses for `@mention`, `assign_koi`,
+    /// wake Kois for `@mention`, `assign_koi`,
     /// `resume_todo`, and `replace_todo`. When `None`, those actions
     /// surface a clean "no subagent runtime configured" error rather
     /// than silently dropping wake-ups.

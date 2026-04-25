@@ -493,6 +493,16 @@ async fn drive_turn(
         }
     }
 
+    if response.is_some() {
+        let shutdown_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let shutdown = json!({
+            "jsonrpc": "2.0",
+            "id": shutdown_id,
+            "method": method::SHUTDOWN,
+        });
+        let _ = write_frame(&stdin, &shutdown).await;
+    }
+
     // Drain child — we always wait so stdio handles flush.
     let exit_status = {
         let mut c = child.lock().await;

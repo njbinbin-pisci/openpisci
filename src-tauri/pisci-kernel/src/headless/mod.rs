@@ -14,16 +14,15 @@
 //!      event.
 //!
 //! Scope: single-agent pisci mode. Pool orchestration and Koi delegation
-//! stay on the desktop crate because they depend on desktop-specific
-//! coordination (Tauri windows, pool scheduler, per-koi notification rx).
-//! Hosts that want to invoke `openpisci-headless run` with `mode: pool`
-//! should run through `openpisci-headless`.
+//! are driven by host-level pool runners: `pisci-cli` provides
+//! `openpisci-headless run --mode pool`, while the desktop injects an
+//! in-process Koi runtime into the kernel coordinator.
 //!
 //! This module is the shared core behind both:
 //!   - `openpisci-headless run` (in `pisci-cli`) — full kernel path,
 //!     no Tauri, no AppState.
-//!   - future desktop refactor that routes pisci-mode headless runs
-//!     through this helper instead of booting a Tauri app in headless.
+//!   - host-specific non-interactive runs that need the same kernel
+//!     single-agent turn semantics.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -130,8 +129,9 @@ pub async fn run_pisci_turn(
 ) -> Result<HeadlessCliResponse> {
     if !matches!(request.mode, HeadlessCliMode::Pisci) {
         return Err(anyhow!(
-            "run_pisci_turn only supports mode=pisci (got {:?}). Use the \
-             desktop openpisci binary for pool mode.",
+            "run_pisci_turn only supports mode=pisci (got {:?}). Use \
+             openpisci-headless run --mode pool or the desktop pool \
+             coordinator for pool mode.",
             request.mode
         ));
     }
@@ -200,7 +200,14 @@ pub async fn run_pisci_turn(
         .filter(|w| !w.trim().is_empty())
         .unwrap_or(settings_workspace);
     let session_id = match request.session_id.clone().filter(|s| !s.is_empty()) {
-        Some(id) => id,
+        Some(id) => {
+            let title = request.session_title.as_deref().unwrap_or(&id);
+            let source = request.channel.as_deref().unwrap_or("cli");
+            let db = db.lock().await;
+            db.ensure_fixed_session(&id, title, source)
+                .context("failed to ensure requested session")?
+                .id
+        }
         None => {
             let title = request.session_title.as_deref();
             let db = db.lock().await;

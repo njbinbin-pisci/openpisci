@@ -215,10 +215,10 @@ At the moment, Windows installers are the primary published artefact. `v0.7.0` a
 
 ### Headless CLI (interactive or scripted)
 
-The same release ships the desktop app and one headless console binary:
+The desktop installer is centered on a single GUI application. The headless console binary is an optional developer / automation asset, not a runtime dependency of the desktop app:
 
 - `pisci-desktop` (or `pisci-desktop.exe`): the GUI application.
-- `openpisci-headless` (or `openpisci-headless.exe`): a headless agent runner that does **not** require the Tauri UI.
+- `openpisci-headless` (or `openpisci-headless.exe`): an optional headless agent runner for CLI use, CI, evals, and scripted automation.
 
 Running the headless binary without arguments now drops into an **interactive REPL** (multi-turn conversation, streamed to stdout, `:help` for commands) that shares the same `pisci.db` / `config.json` as the desktop app. Use `openpisci-headless run --prompt "..."` for scripted one-shot invocations, or `openpisci-headless capabilities` to inspect which tools are available in the current build. See `openpisci-headless --help` for the full surface.
 
@@ -369,10 +369,15 @@ The `v0.7.0` line is the first release after a major internal cleanup:
 - Desktop-only concerns (Tauri commands, tray, updater, platform integrations) are now isolated in the desktop layer instead of leaking into core runtime code.
 - Frontend service/store modules were reorganized by domain to make the codebase easier to extend and audit.
 - Cross-platform desktop compilation and packaging were wired into CI so Windows, macOS, and Linux releases can be produced from native runners.
+- Source layering is intentionally a source-code boundary, not a forced multi-process product boundary: desktop chat and Koi collaboration run inside the GUI runtime by default, while `openpisci-headless` remains optional for CLI/eval/automation.
 
 ---
 
 ## 📋 Changelog
+
+### v0.7.2
+- **Desktop runtime correction**: restored desktop Koi collaboration to the in-process GUI runtime. Source layering remains (`pisci-core` / `pisci-kernel` / `pisci-cli` / `pisci-desktop`), but the desktop product no longer depends on `openpisci-headless` for normal chat or Koi coordination.
+- **Packaging simplification**: removed the GUI bundle's mandatory `openpisci-headless` sidecar requirement. Headless builds remain available via `npm run build:headless` or `cargo build -p pisci-cli --release --bin openpisci-headless`.
 
 ### v0.7.0
 - **Major architecture refactor**: split the Rust codebase into `pisci-core` (pure collaboration/domain logic), `pisci-kernel` (OS/UI-neutral runtime kernel), `pisci-cli` (headless runner), and `pisci-desktop` (Tauri shell), substantially reducing cross-layer coupling.

@@ -12,8 +12,9 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
@@ -71,6 +72,11 @@ impl StdioTransport {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
+        #[cfg(windows)]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
 
         let mut child = cmd
             .spawn()
@@ -372,11 +378,62 @@ impl Tool for McpProxyTool {
 
 // ─── Build proxy tools from config ───────────────────────────────────────────
 
+struct CachedMcpServer {
+    client: Arc<McpClient>,
+    tools: Vec<McpToolInfo>,
+}
+
+static MCP_SERVER_CACHE: OnceLock<Mutex<HashMap<String, Arc<CachedMcpServer>>>> = OnceLock::new();
+
+fn mcp_cache() -> &'static Mutex<HashMap<String, Arc<CachedMcpServer>>> {
+    MCP_SERVER_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn config_cache_key(config: &McpServerConfig) -> String {
+    serde_json::to_string(config).unwrap_or_else(|_| {
+        format!(
+            "{}\n{}\n{}\n{}\n{:?}\n{:?}",
+            config.name, config.transport, config.command, config.url, config.args, config.env
+        )
+    })
+}
+
+fn proxy_tools_from_cached(
+    config: &McpServerConfig,
+    cached: Arc<CachedMcpServer>,
+) -> Vec<McpProxyTool> {
+    cached
+        .tools
+        .iter()
+        .cloned()
+        .map(|t| McpProxyTool {
+            server_name: config.name.clone(),
+            tool_name: t.name.clone(),
+            tool_description: t.description.unwrap_or_default(),
+            schema: t.input_schema.unwrap_or_else(|| {
+                json!({
+                    "type": "object",
+                    "properties": {}
+                })
+            }),
+            client: cached.client.clone(),
+        })
+        .collect()
+}
+
 /// Connect to an MCP server and return proxy tools for all its tools.
 /// Returns an empty vec on connection failure (with a warning).
 pub async fn build_mcp_tools(config: &McpServerConfig) -> Vec<McpProxyTool> {
     if !config.enabled || config.name.is_empty() {
         return vec![];
+    }
+
+    let cache_key = config_cache_key(config);
+    if let Some(cached) = {
+        let cache = mcp_cache().lock().await;
+        cache.get(&cache_key).cloned()
+    } {
+        return proxy_tools_from_cached(config, cached);
     }
 
     let client = Arc::new(McpClient::new(config.clone()));
@@ -387,21 +444,12 @@ pub async fn build_mcp_tools(config: &McpServerConfig) -> Vec<McpProxyTool> {
                 config.name,
                 tools.len()
             );
-            tools
-                .into_iter()
-                .map(|t| McpProxyTool {
-                    server_name: config.name.clone(),
-                    tool_name: t.name.clone(),
-                    tool_description: t.description.unwrap_or_default(),
-                    schema: t.input_schema.unwrap_or_else(|| {
-                        json!({
-                            "type": "object",
-                            "properties": {}
-                        })
-                    }),
-                    client: client.clone(),
-                })
-                .collect()
+            let cached = Arc::new(CachedMcpServer { client, tools });
+            {
+                let mut cache = mcp_cache().lock().await;
+                cache.insert(cache_key, cached.clone());
+            }
+            proxy_tools_from_cached(config, cached)
         }
         Err(e) => {
             warn!("MCP server '{}' failed to connect: {}", config.name, e);

@@ -37,11 +37,11 @@
 默认包含三档：
 
 - `baseline_pisci`
-  - `openpisci --mode pisci`
+  - `openpisci-headless run --mode pisci`
 - `context_lite`
   - 单代理，但关闭一组上下文注入项（memory / task state / project instructions / rolling summary / state frame）
 - `experimental_pool`
-  - `openpisci --mode pool`
+  - `openpisci-headless run --mode pool`
 
 这三档不是官方 SWE-bench 的标准分组，而是为了先验证 OpenPisci 自身 harness 的收益来源。
 
@@ -50,7 +50,7 @@
 先构建二进制：
 
 ```powershell
-cargo build --bin openpisci --manifest-path src-tauri/Cargo.toml
+cargo build -p pisci-cli --bin openpisci-headless --manifest-path src-tauri/Cargo.toml
 cargo build --bin pisci_compact_one --manifest-path src-tauri/Cargo.toml
 ```
 
@@ -72,7 +72,7 @@ py -3 scripts/bench_swe_lite/run_swe_lite.py --config-template C:\path\to\config
 ```powershell
 py -3 scripts/bench_swe_lite/run_swe_lite.py --only-tasks py001_sum_even py006_jsonl_resume
 py -3 scripts/bench_swe_lite/run_swe_lite.py --profiles baseline_pisci context_lite
-py -3 scripts/bench_swe_lite/run_swe_lite.py --openpisci-bin target/debug/openpisci-headless.exe
+py -3 scripts/bench_swe_lite/run_swe_lite.py --headless-bin target/debug/openpisci-headless.exe
 ```
 
 ## 结果

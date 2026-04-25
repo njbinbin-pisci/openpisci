@@ -176,13 +176,14 @@ cargo build --release -p pisci-desktop
 ```
 
 Headless benchmark harnesses should invoke `openpisci-headless[.exe]`
-from `target/{debug,release}/` or from the bundled sidecar location.
+from `target/{debug,release}/` or from a separately published CLI asset.
 
 ## Future work
 
 * Continue hardening pool-mode orchestration (`pool_org` / `pool_chat`
-  tools plus the koi subprocess runtime) inside `openpisci-headless` so
-  the headless story stays independent from the desktop crate.
+  tools plus the optional CLI subprocess runtime) inside
+  `openpisci-headless` so the headless story stays independent from the
+  desktop crate.
 * Route pool-mode UI flows (in-app task board, Koi status) through the
   same NDJSON event contract the CLI uses, so a future headless pool
   runner can share the wire format unchanged.
@@ -203,10 +204,10 @@ verified in CI:
   `as_registry_mut` / `into_registry` without unsafe casts.
 * `openpisci-headless` now runs a true kernel-only agent loop via
   `pisci_kernel::headless::run_pisci_turn` with a `CliHost` driver.
-* Desktop `openpisci --mode pisci` no longer boots a Tauri runtime:
-  pisci-mode turns short-circuit into `pisci_cli::runner::run_pisci_once`
-  so the two headless binaries share exactly one code path. Only
-  `--mode pool` still boots `AppState` + Tauri.
+* `openpisci-headless run` drives the CLI host through
+  `pisci_cli::runner::run_pisci_once`; the desktop GUI uses its own
+  long-lived `pisci-desktop` runtime and no longer depends on a headless
+  sidecar for normal chat or Koi coordination.
 * Linux CI gained an opt-in end-to-end LLM smoke test
   (`e2e_run_returns_answer_with_real_api_key`) that skips silently when
   `OPENPISCI_TEST_API_KEY` is absent and drives a full kernel turn via
@@ -216,9 +217,8 @@ verified in CI:
   surface (capabilities schema, pool rejection, arg validation, version
   banner) against drift.
 * `pisci-desktop::headless_cli` is a thin adapter — request /
-  response / toggle schemas come from `pisci_core::host`, argument
-  parsing comes from `pisci_cli::args`. No duplicate type or parser
-  definitions remain in the desktop crate.
+  response / toggle schemas come from `pisci_core::host`. The desktop
+  crate no longer depends on `pisci-cli`.
 * `pisci-desktop 0.7.0` drops several compatibility scaffolds: the
   `tools::build_registry` shim, the `RuntimeToolProfile::Desktop`
   no-op variant, the duplicate `strip_send_markers` in

@@ -12,19 +12,92 @@ use pisci_kernel::agent::tool::ToolRegistry;
 use pisci_kernel::tools::register_mcp_tools;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::time::UNIX_EPOCH;
 use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 
 pub type SharedSkillLoader = Arc<Mutex<SkillLoader>>;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SkillDirSignature {
+    entries: usize,
+    latest_modified_ms: u128,
+}
+
+#[derive(Clone)]
+struct CachedSkillLoader {
+    signature: SkillDirSignature,
+    loader: SharedSkillLoader,
+}
+
+static SKILL_LOADER_CACHE: OnceLock<StdMutex<HashMap<PathBuf, CachedSkillLoader>>> =
+    OnceLock::new();
+
+fn skill_loader_cache() -> &'static StdMutex<HashMap<PathBuf, CachedSkillLoader>> {
+    SKILL_LOADER_CACHE.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+fn modified_ms(path: &Path) -> u128 {
+    path.metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .unwrap_or_default()
+}
+
+fn skill_dir_signature(skills_dir: &Path) -> SkillDirSignature {
+    let mut signature = SkillDirSignature::default();
+    let Ok(entries) = std::fs::read_dir(skills_dir) else {
+        return signature;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let skill_file = path.join("SKILL.md");
+        if !skill_file.exists() {
+            continue;
+        }
+        signature.entries += 1;
+        signature.latest_modified_ms = signature
+            .latest_modified_ms
+            .max(modified_ms(&path))
+            .max(modified_ms(&skill_file));
+    }
+    signature
+}
+
 pub fn load_skill_loader(app: &AppHandle) -> Option<SharedSkillLoader> {
     let app_data_dir = app.path().app_data_dir().ok()?;
-    let mut loader = SkillLoader::new(app_data_dir.join("skills"));
+    let skills_dir = app_data_dir.join("skills");
+    let signature = skill_dir_signature(&skills_dir);
+    if let Ok(cache) = skill_loader_cache().lock() {
+        if let Some(cached) = cache.get(&skills_dir) {
+            if cached.signature == signature {
+                return Some(cached.loader.clone());
+            }
+        }
+    }
+
+    let mut loader = SkillLoader::new(&skills_dir);
     if let Err(error) = loader.load_all() {
         tracing::warn!("Failed to load skills: {}", error);
     }
-    Some(Arc::new(Mutex::new(loader)))
+    let loader = Arc::new(Mutex::new(loader));
+    let signature = skill_dir_signature(&skills_dir);
+    if let Ok(mut cache) = skill_loader_cache().lock() {
+        cache.insert(
+            skills_dir,
+            CachedSkillLoader {
+                signature,
+                loader: loader.clone(),
+            },
+        );
+    }
+    Some(loader)
 }
 
 #[allow(clippy::too_many_arguments)]

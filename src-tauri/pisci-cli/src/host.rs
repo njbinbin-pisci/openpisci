@@ -15,17 +15,40 @@ use pisci_core::host::{
 };
 use serde_json::{json, Value};
 
-/// NDJSON event sink that serialises every emission to stdout.
+/// NDJSON event sink that serialises every emission to a line-oriented stream.
 pub struct CliEventSink {
-    // stdout writes need to be line-atomic; a mutex is cheap and simple.
-    out: Mutex<io::Stdout>,
+    // Writes need to be line-atomic; a mutex is cheap and simple.
+    out: Mutex<Box<dyn Write + Send>>,
 }
 
 impl Default for CliEventSink {
     fn default() -> Self {
+        Self::stdout()
+    }
+}
+
+impl CliEventSink {
+    pub fn stdout() -> Self {
         Self {
-            out: Mutex::new(io::stdout()),
+            out: Mutex::new(Box::new(io::stdout())),
         }
+    }
+
+    pub fn stderr() -> Self {
+        Self {
+            out: Mutex::new(Box::new(io::stderr())),
+        }
+    }
+
+    fn write_line(&self, value: &Value) {
+        let mut out = match self.out.lock() {
+            Ok(guard) => guard,
+            // A poisoned output lock means another thread panicked while
+            // writing; recover best-effort so we still surface the event.
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let _ = writeln!(out, "{}", value);
+        let _ = out.flush();
     }
 }
 
@@ -47,19 +70,6 @@ impl EventSink for CliEventSink {
             "payload": payload,
         });
         self.write_line(&line);
-    }
-}
-
-impl CliEventSink {
-    fn write_line(&self, value: &Value) {
-        let mut out = match self.out.lock() {
-            Ok(guard) => guard,
-            // A poisoned stdout lock means another thread panicked while
-            // writing; recover best-effort so we still surface the event.
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let _ = writeln!(out, "{}", value);
-        let _ = out.flush();
     }
 }
 
@@ -162,8 +172,15 @@ pub struct CliHost {
 
 impl CliHost {
     pub fn new(app_data_dir: std::path::PathBuf) -> Self {
+        Self::new_with_event_sink(app_data_dir, std::sync::Arc::new(CliEventSink::default()))
+    }
+
+    pub fn new_with_event_sink(
+        app_data_dir: std::path::PathBuf,
+        event_sink: std::sync::Arc<CliEventSink>,
+    ) -> Self {
         Self {
-            event_sink: std::sync::Arc::new(CliEventSink::default()),
+            event_sink,
             notifier: std::sync::Arc::new(CliNotifier),
             host_tools: std::sync::Arc::new(CliHostTools),
             secrets: std::sync::Arc::new(CliSecretsStore),

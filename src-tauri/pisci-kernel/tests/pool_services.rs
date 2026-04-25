@@ -460,6 +460,56 @@ async fn forced_mention_creates_todo_and_dispatches_execution() {
 }
 
 #[tokio::test]
+async fn forced_all_mention_creates_todos_and_dispatches_each_koi() {
+    let store = build_store();
+    let sink = make_sink();
+    let pool_id = create_test_pool(&store, &sink).await;
+    let caller = pisci_caller("sess-1");
+    let requests: Arc<StdMutex<Vec<KoiTurnRequest>>> = Arc::new(StdMutex::new(Vec::new()));
+    let requests_cl = requests.clone();
+    let subagent = Arc::new(StubSubagentRuntime::new(move |request| {
+        requests_cl.lock().unwrap().push(request.clone());
+        StubOutcome::Completed("done".into())
+    })) as Arc<dyn pisci_core::host::SubagentRuntime>;
+    let cfg = CoordinatorConfig::default();
+
+    services::send_pool_message(
+        &store,
+        sink_arc(&sink),
+        Some(subagent),
+        &cfg,
+        &caller,
+        SendPoolMessageArgs {
+            pool_id: pool_id.clone(),
+            sender_id: "pisci".into(),
+            content: "@!all split this implementation and report progress.".into(),
+            reply_to_message_id: None,
+        },
+    )
+    .await
+    .expect("send_pool_message");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut requested_kois: Vec<String> = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.koi_id.clone())
+        .collect();
+    requested_kois.sort();
+    assert_eq!(requested_kois, vec!["koi-alpha", "koi-beta"]);
+
+    let todos = store
+        .read(|db| db.list_koi_todos(None))
+        .await
+        .expect("list todos");
+    let mut todo_owners: Vec<String> = todos.into_iter().map(|todo| todo.owner_id).collect();
+    todo_owners.sort();
+    assert_eq!(todo_owners, vec!["koi-alpha", "koi-beta"]);
+}
+
+#[tokio::test]
 async fn delete_todo_can_batch_delete_cancelled_items_in_pool() {
     let store = build_store();
     let sink = make_sink();

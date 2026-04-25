@@ -4,7 +4,6 @@ pub mod browser;
 pub mod call_fish;
 pub mod call_koi;
 pub mod chat_ui;
-pub mod dpi;
 pub mod im_send;
 #[cfg(target_os = "windows")]
 pub mod office;
@@ -78,12 +77,11 @@ const WINDOWS_ORIENTED_TOOLS: &[(&str, &str)] = &[
 ];
 
 // Tools disabled in headless pisci mode. `pool_org` / `pool_chat` /
-// `plan_todo` are intentionally **not** in this list: starting from
-// Phase 1.7 they live in `pisci-kernel::tools` and are registered by
-// every headless run so a Koi turn spawned as a standalone
-// `openpisci-headless` process can still coordinate through the pool
-// database. `call_koi` remains desktop-only (it needs the in-process
-// Tauri `KoiRuntime`, which the CLI host does not host).
+// `plan_todo` are intentionally **not** in this list: they live in
+// `pisci-kernel::tools` and are registered by every headless run so
+// CLI/eval pool runs can still coordinate through the pool database.
+// `call_koi` remains desktop-only because it needs the in-process Tauri
+// runtime, which the CLI host does not host.
 const HEADLESS_PISCI_DISABLED_TOOLS: &[(&str, &str)] = &[
     (
         "call_koi",

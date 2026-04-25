@@ -1288,39 +1288,19 @@ pub struct HeadlessRunOptions {
 
 pub(crate) const SESSION_SOURCE_IM_PREFIX: &str = "im_";
 pub(crate) const SESSION_SOURCE_PISCI_POOL: &str = "pisci_pool";
-pub(crate) const SESSION_SOURCE_PISCI_INBOX_POOL: &str = "pisci_inbox_pool";
 pub(crate) const SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL: &str = "pisci_heartbeat_global";
-pub(crate) const SESSION_SOURCE_PISCI_HEARTBEAT_POOL: &str = "pisci_heartbeat_pool";
 pub(crate) const SESSION_SOURCE_PISCI_INTERNAL: &str = "pisci_internal";
 
 pub(crate) fn pool_pisci_session_id(pool_id: &str) -> String {
     format!("pisci_pool_{}", pool_id)
 }
 
-fn normalize_session_source_compat(source: &str) -> &str {
-    match source {
-        SESSION_SOURCE_PISCI_POOL => SESSION_SOURCE_PISCI_POOL,
-        SESSION_SOURCE_PISCI_INBOX_POOL | SESSION_SOURCE_PISCI_HEARTBEAT_POOL => {
-            SESSION_SOURCE_PISCI_POOL
-        }
-        "heartbeat" => SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL,
-        "heartbeat_pool" => SESSION_SOURCE_PISCI_POOL,
-        other => other,
-    }
-}
-
 fn is_pool_scoped_session_source(source: &str) -> bool {
-    matches!(
-        normalize_session_source_compat(source),
-        SESSION_SOURCE_PISCI_POOL
-    )
+    source == SESSION_SOURCE_PISCI_POOL
 }
 
 fn is_heartbeat_session_source(source: &str) -> bool {
-    matches!(
-        normalize_session_source_compat(source),
-        SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL | SESSION_SOURCE_PISCI_HEARTBEAT_POOL
-    )
+    source == SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL
 }
 
 fn derive_headless_session_source(channel: &str, pool_session_id: Option<&str>) -> String {
@@ -1363,24 +1343,21 @@ pub(crate) fn validate_headless_session_scope(
     desired_source: &str,
     pool_session_id: Option<&str>,
 ) -> Result<(), String> {
-    let actual = normalize_session_source_compat(actual_source);
-    let desired = normalize_session_source_compat(desired_source);
-
-    if actual != desired {
+    if actual_source != desired_source {
         return Err(format!(
             "Session source mismatch: session is '{}' but this run requires '{}'",
             actual_source, desired_source
         ));
     }
 
-    if pool_session_id.is_some() && !is_pool_scoped_session_source(actual) {
+    if pool_session_id.is_some() && !is_pool_scoped_session_source(actual_source) {
         return Err(format!(
             "Pool-scoped run cannot reuse non-pool session source '{}'",
             actual_source
         ));
     }
 
-    if pool_session_id.is_none() && is_pool_scoped_session_source(actual) {
+    if pool_session_id.is_none() && is_pool_scoped_session_source(actual_source) {
         return Err(format!(
             "Non-pool run cannot reuse pool-scoped session source '{}'",
             actual_source
@@ -2393,7 +2370,8 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 - Monitor blocked tasks with `pool_org(action="get_todos")`. If a task is stuck, unblock or reassign it.
 - Task status flow: `todo` → `in_progress` → `done` / `cancelled` / `blocked`. Only Pisci and the task owner can change status. Other Koi must @pisci to request task changes.
 - When the project is complete, ensure all remaining todos are either completed or cancelled before even considering archive.
-- **Project completion flow**: When all tasks are done, summarize results for the user and leave the pool active by default. Only archive if the user explicitly asks you to archive/close the project. Do not treat silence, review readiness, or heartbeat scans as archive approval. Only Pisci can archive a project — Koi should @pisci when they believe all work is finished.
+- **Supervisor closeout flow**: When all Koi todos are done, do NOT treat the project as delivered yet. First read pool messages/todos, review the reported branch/worktree results, and explicitly choose one of: (a) call `pool_org(action="merge_branches", pool_id=...)` if the Koi output is acceptable, (b) use `@!mention` / `replace_todo` / `resume_todo` to request rework, or (c) explain why no merge is needed. Koi cannot merge their own branches; Pisci owns integration into the main workspace.
+- **Project completion flow**: After supervisor closeout, summarize results for the user and leave the pool active by default. Only archive if the user explicitly asks you to archive/close the project. Do not treat silence, review readiness, or heartbeat scans as archive approval. Only Pisci can archive a project — Koi should @pisci when they believe all work is finished.
 - **Koi cannot archive**: If a Koi's final message says "ready to archive" or "all done", treat it as a signal to review and confirm with the user, not an automatic archive trigger.
 - **No fixed completion role**: A reviewer, architect, tester, or any other Koi can provide input, but none of them alone decides project completion. You decide based on overall pool state and then the user confirms.
 - Prefer these internal status signals from Koi pool_chat updates when assessing progress: `[ProjectStatus] follow_up_needed`, `[ProjectStatus] waiting`, `[ProjectStatus] ready_for_pisci_review`. Treat them as structured hints, not final authority.
@@ -2407,7 +2385,7 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 - Before assigning parallel tasks, analyze dependencies. If Task B needs Task A's output, mark the dependency explicitly and assign sequentially.
 - When assigning file-editing tasks to multiple Koi, ensure they work on DIFFERENT files or directories. Never assign two Koi to edit the same file simultaneously.
 - If the project has a `project_dir`, a Git repo is automatically initialized. Each Koi works in its own Git worktree/branch named `koi/<name>-<id>`, so file conflicts are structurally prevented at the filesystem level.
-- **You are responsible for merging Koi branches into master.** Koi cannot and should not merge themselves. Call `pool_org(action="merge_branches", pool_id=...)` to merge all completed `koi/*` branches into master.
+- **You are responsible for merging Koi branches into the main workspace.** Koi cannot and should not merge themselves. Call `pool_org(action="merge_branches", pool_id=...)` only after you have reviewed the completed Koi results and decided integration is appropriate.
 - **When to call merge_branches:**
   (a) A Koi posts in pool_chat that their branch is ready to merge (look for phrases like "ready to merge", "branch koi/xxx is ready").
   (b) A milestone is reached where multiple Koi have finished their parallel tasks and the next task depends on their combined output.
@@ -4001,8 +3979,7 @@ mod tests {
         build_context_messages, build_main_chat_system_prompt, collapse_superseded_tool_failures,
         derive_headless_session_source, extract_tool_minimals_from_history,
         main_chat_requests_collaboration_context, minimal_tool_result_blocks,
-        resolve_headless_scene_kind, validate_headless_session_scope, HeadlessRunOptions,
-        SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL, SESSION_SOURCE_PISCI_HEARTBEAT_POOL,
+        resolve_headless_scene_kind, HeadlessRunOptions, SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL,
         SESSION_SOURCE_PISCI_POOL,
     };
     use crate::commands::config::scene::SceneKind;
@@ -4150,7 +4127,7 @@ mod tests {
         assert_eq!(
             resolve_headless_scene_kind(
                 "heartbeat",
-                SESSION_SOURCE_PISCI_HEARTBEAT_POOL,
+                SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL,
                 Some(&heartbeat)
             ),
             SceneKind::HeartbeatSupervisor
@@ -4169,16 +4146,6 @@ mod tests {
             resolve_headless_scene_kind("feishu", "im_feishu", None),
             SceneKind::IMHeadless
         );
-    }
-
-    #[test]
-    fn validate_headless_session_scope_accepts_shared_pool_sessions() {
-        validate_headless_session_scope(
-            SESSION_SOURCE_PISCI_HEARTBEAT_POOL,
-            SESSION_SOURCE_PISCI_POOL,
-            Some("pool-1"),
-        )
-        .expect("legacy heartbeat-pool sessions should remain reusable for shared pool runs");
     }
 
     #[test]

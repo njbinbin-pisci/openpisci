@@ -169,9 +169,11 @@ mod tests {
 
     #[test]
     fn resolves_settings_placeholders_in_args_and_env() {
-        let mut settings = Settings::default();
-        settings.feishu_app_id = "cli_123".into();
-        settings.feishu_app_secret = "secret_456".into();
+        let settings = Settings {
+            feishu_app_id: "cli_123".into(),
+            feishu_app_secret: "secret_456".into(),
+            ..Default::default()
+        };
 
         let config = McpServerConfig {
             name: "feishu-enterprise".into(),

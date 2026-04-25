@@ -302,6 +302,15 @@ pub struct DisabledToolInfo {
 pub struct PoolWaitSummary {
     pub completed: bool,
     pub timed_out: bool,
+    /// High-level lifecycle state after waiting:
+    /// - `idle_no_work`: no active or completed Koi tasks were observed.
+    /// - `awaiting_supervisor_closeout`: Koi tasks are done, but their
+    ///   isolated worktree branches still need Pisci review/merge/返工.
+    /// - `timed_out`: active work remained when the wait budget elapsed.
+    #[serde(default)]
+    pub closeout_status: String,
+    #[serde(default)]
+    pub requires_supervisor_closeout: bool,
     pub active_todos: u32,
     pub done_todos: u32,
     pub cancelled_todos: u32,
@@ -613,9 +622,10 @@ impl PoolEventSink for NullPoolEventSink {
 // ─── Subagent runtime ──────────────────────────────────────────────────
 //
 // `SubagentRuntime` abstracts how a Koi turn is actually executed:
-//   * Desktop + CLI in 0.8.0: spawn `openpisci-headless run --mode pisci`
-//     as a child process and stream NDJSON back (subprocess isolation,
-//     crash containment, identical code path for both hosts).
+//   * Desktop: run Koi turns in the GUI process through a host-provided
+//     in-process runtime.
+//   * CLI/eval: optionally spawn `openpisci-headless rpc` children when
+//     stronger subprocess isolation is desired.
 //   * Tests: `StubSubagentRuntime` that returns a scripted outcome.
 //
 // The runtime is driven by the kernel pool coordinator (Phase 2.1) and
@@ -688,9 +698,10 @@ pub enum KoiTurnExit {
     Crashed,
 }
 
-/// Abstraction over how a Koi turn is materialised. Subprocess-backed in
-/// 0.8.0; stub-backed in tests; potentially remote-backed later. The
-/// coordinator never calls `fork`, `Command` or `tokio::spawn` directly.
+/// Abstraction over how a Koi turn is materialised. Desktop uses an
+/// in-process implementation, CLI/eval can opt into subprocess
+/// isolation, and tests use a stub. The coordinator never calls `fork`,
+/// `Command` or `tokio::spawn` directly.
 #[async_trait]
 pub trait SubagentRuntime: Send + Sync {
     async fn spawn_koi_turn(&self, request: KoiTurnRequest) -> anyhow::Result<KoiTurnHandle>;
@@ -702,9 +713,8 @@ pub trait SubagentRuntime: Send + Sync {
 //
 // `PoolRunRequest` / `PoolRunResponse` are the kernel-level contract for
 // "run one pool coordinator turn (or loop until idle) against this pool".
-// Both the headless CLI `openpisci-headless pool` and the desktop
-// `openpisci --mode pool` drive the same function in Phase 3 — no host
-// owns its own copy of the loop.
+// CLI and desktop hosts can both drive this contract while keeping their
+// runtime choice (subprocess or in-process) outside the kernel model.
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolRunRequest {

@@ -4,9 +4,9 @@ OpenPisci 面向自动化与 benchmark 只发布一个 headless 入口：
 
 | 二进制               | 所属 crate  | 用途                                      |
 |----------------------|-------------|-------------------------------------------|
-| `openpisci-headless` | `pisci-cli` | 无需 Tauri UI 的 kernel 驱动 CLI / sidecar |
+| `openpisci-headless` | `pisci-cli` | 无需 Tauri UI 的 kernel 驱动 CLI / 评测 / 自动化宿主 |
 
-`openpisci-headless` 支持 `chat`、`run`、`rpc`、`capabilities`、`version` 等子命令。
+`openpisci-headless` 支持 `chat`、`run`、`rpc`、`capabilities`、`version` 等子命令。它不是桌面 GUI 的必需 sidecar；桌面主聊天与默认 Koi 协同运行在 `pisci-desktop` 主进程内。
 
 ## 构建
 
@@ -16,7 +16,7 @@ OpenPisci 面向自动化与 benchmark 只发布一个 headless 入口：
 cargo build -p pisci-cli --bin openpisci-headless
 ```
 
-构建产物写入 `target/{debug,release}/`。Tauri 发布包会把 release 版复制到 `src-tauri/binaries/` 作为 sidecar。
+构建产物写入 `target/{debug,release}/`。GUI 打包不会强制复制或绑定该二进制；需要 CLI / CI / 评测资产时可以单独发布它。
 
 ## 运行模式
 

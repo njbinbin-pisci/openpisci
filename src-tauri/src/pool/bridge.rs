@@ -11,14 +11,13 @@
 //! borrowed `State<_>`).
 //!
 //! Implementation notes:
-//!   * We build a fresh `SubprocessSubagentRuntime` per call via
+//!   * We build a fresh desktop in-process [`SubagentRuntime`] per call via
 //!     `DesktopHost::from_state` / `build_deps_from_db`. The runtime
-//!     itself is cheap (an `Arc<Mutex<HashMap<_,_>>>`) and the subprocess
-//!     spawn only happens when the kernel actually fans out a turn.
+//!     itself is cheap; Koi work runs inside the GUI product process by
+//!     default instead of requiring an `openpisci-headless` sidecar.
 //!   * All helpers return kernel-shaped results so command handlers can
 //!     serialise them back to the frontend unchanged.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use pisci_core::host::{HostRuntime, PoolEventSink, SubagentRuntime};
@@ -30,6 +29,7 @@ use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 
 use crate::host::{DesktopEventSink, DesktopHost};
+use crate::runtime::koi::DesktopInProcessSubagentRuntime;
 use crate::store::AppState;
 
 /// Bundle of kernel-side dependencies the coordinator needs.
@@ -59,9 +59,6 @@ async fn collect_deps(app: &AppHandle, state: &AppState) -> Option<Deps> {
 /// background `tokio::spawn` tasks where the borrowed `AppState` can't
 /// cross the spawn boundary.
 ///
-/// This duplicates the binary-resolution policy from
-/// [`DesktopHost::from_state`] — if that policy ever needs to change,
-/// both paths must be kept in sync.
 async fn build_deps_from_db(app: &AppHandle, db: Arc<Mutex<Database>>) -> Deps {
     let sink: Arc<dyn PoolEventSink> = Arc::new(DesktopEventSink::new(app.clone()));
     let subagent = build_subagent_runtime(app);
@@ -86,43 +83,7 @@ async fn resolve_coordinator_config(app: &AppHandle) -> CoordinatorConfig {
 }
 
 fn build_subagent_runtime(app: &AppHandle) -> Arc<dyn SubagentRuntime> {
-    use tauri::Manager;
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .ok()
-        .or_else(|| Some(PathBuf::from(".pisci")));
-    let headless_bin = resolve_headless_binary();
-    let subprocess = pisci_kernel::pool::SubprocessSubagentRuntime::new(headless_bin);
-    let subprocess = if let Some(ref dir) = app_data_dir {
-        subprocess.with_app_data_dir(dir.clone())
-    } else {
-        subprocess
-    };
-    Arc::new(subprocess)
-}
-
-fn resolve_headless_binary() -> PathBuf {
-    if let Ok(raw) = std::env::var("PISCI_HEADLESS_BIN") {
-        let raw = raw.trim();
-        if !raw.is_empty() {
-            return PathBuf::from(raw);
-        }
-    }
-    let exe_name = if cfg!(windows) {
-        "openpisci-headless.exe"
-    } else {
-        "openpisci-headless"
-    };
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join(exe_name);
-            if candidate.exists() {
-                return candidate;
-            }
-        }
-    }
-    PathBuf::from(exe_name)
+    Arc::new(DesktopInProcessSubagentRuntime::new(app.clone()))
 }
 
 // ─── Mention dispatch ──────────────────────────────────────────────────

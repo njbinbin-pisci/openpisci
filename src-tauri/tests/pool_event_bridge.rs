@@ -51,6 +51,8 @@ fn sample_wait_summary() -> PoolWaitSummary {
     PoolWaitSummary {
         completed: true,
         timed_out: false,
+        closeout_status: "awaiting_supervisor_closeout".into(),
+        requires_supervisor_closeout: true,
         active_todos: 0,
         done_todos: 3,
         cancelled_todos: 0,

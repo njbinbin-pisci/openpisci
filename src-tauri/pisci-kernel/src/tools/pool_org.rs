@@ -112,13 +112,13 @@ impl Tool for PoolOrgTool {
          - 'replace_todo': Replace an existing todo with a new owner/task (requires todo_id, new_owner_id, task, reason). This cancels the original todo so it cannot be resumed, creates a replacement todo, and notifies the new owner. Pisci should decide when to use this. \
          - 'delete_todo': Permanently delete todo rows from the board. Use `todo_id` for a single delete, or `pool_id` plus `delete_status` / `delete_owner_id` for filtered batch cleanup (for example deleting all cancelled todos in one pool). Pisci-only. \
          - 'update_todo_status': Update a todo's status (requires todo_id, status). Pisci can change any; Koi can only change their own. Valid statuses: todo, in_progress, blocked. This changes task-board state, but teammates still need an explicit `pool_chat` update if they should react. \
-         - 'merge_branches': Merge all Koi worktree branches back into main (requires pool_id with project_dir). \
+         - 'merge_branches': Pisci-only supervisor closeout action. Merge all Koi worktree branches back into the main workspace after reviewing completed Koi results (requires pool_id with project_dir). \
          \
          Workflow: ALWAYS call 'list' first to see all existing pools. \
          Then use 'find_related' to search for related projects by keywords. \
          Only call 'create' if no existing pool covers the requested work — \
          if an active or paused pool is related, add tasks to it instead of creating a new pool. \
-         After creating a new pool, use 'assign_koi' or pool_chat `@!mention` to kick off work. \
+         After creating a new pool, use 'assign_koi' or pool_chat `@!mention` to kick off work. When todos are done, Pisci must explicitly review and either call 'merge_branches' or request rework; Koi completion alone is not final delivery. \
          During heartbeat/routine checks: NEVER create new pools — only manage existing ones."
     }
 

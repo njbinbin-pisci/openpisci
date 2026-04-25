@@ -2,16 +2,16 @@
 //!
 //! The desktop (Tauri) and CLI hosts used to each carry their own copy of
 //! pool-CRUD, org-spec management, todo board, and message fan-out logic.
-//! Starting in 0.8.0 everything lives here in the kernel; hosts only
+//! Pool orchestration lives here in the kernel; hosts only
 //! provide:
 //!
 //! * a [`pisci_core::host::PoolEventSink`] to surface events to their UI
 //!   transport (Tauri `emit`, NDJSON stdout, websocket, …)
-//! * a [`pisci_core::host::SubagentRuntime`] that knows how to spawn
-//!   Koi turns as subprocesses. The kernel ships two implementations:
-//!   [`subagent::SubprocessSubagentRuntime`] for production (child
-//!   process running `openpisci-headless run --mode pisci`) and
-//!   [`subagent::StubSubagentRuntime`] for unit/integration tests.
+//! * a [`pisci_core::host::SubagentRuntime`] that knows how to run Koi
+//!   turns. Desktop hosts provide an in-process implementation; the
+//!   kernel keeps [`subagent::SubprocessSubagentRuntime`] for CLI/eval or
+//!   explicit isolation, plus [`subagent::StubSubagentRuntime`] for
+//!   unit/integration tests.
 //!
 //! Module layout:
 //!
@@ -29,8 +29,8 @@
 //!   protocol
 //! * [`coordinator`] — kernel-owned Koi-turn orchestration
 //!   (execute/resume/replace todos, handle `@mention` fan-out). Used
-//!   by the services layer and, once `openpisci-headless run --mode
-//!   pool` lands, directly from the CLI pool driver.
+//!   by the services layer, the desktop pool bridge, and the CLI pool
+//!   driver.
 //! * [`services`] — the business functions that tools call. Every mutating
 //!   service emits zero or more [`PoolEvent`]s through the supplied sink
 //!   before returning.

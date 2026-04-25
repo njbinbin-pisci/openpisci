@@ -20,6 +20,8 @@ name = "experimental_pool"
 mode = "pool"
 wait_for_completion = true
 wait_timeout_secs = 900
+supervisor_closeout = true
+supervisor_timeout_secs = 600
 pool_size = 3
 
 [[tasks]]

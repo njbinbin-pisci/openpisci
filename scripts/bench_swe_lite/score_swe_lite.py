@@ -96,7 +96,7 @@ def render_summary(run: dict[str, Any]) -> str:
         "",
         f"- Run ID: `{run.get('run_id', '-')}`",
         f"- Manifest: `{run.get('manifest_path', '-')}`",
-        f"- OpenPisci: `{run.get('openpisci_bin', '-')}`",
+        f"- Headless CLI: `{run.get('headless_bin', '-')}`",
         f"- HARNESS Binary: `{run.get('pisci_compact_bin', '-')}`",
         "",
         "## Profile Summary",

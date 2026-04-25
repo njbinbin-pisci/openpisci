@@ -65,7 +65,7 @@
       "icons/icon.ico"
     ],
     "resources": [],
-    "externalBin": ["binaries/openpisci-headless"],
+    "externalBin": [],
     "copyright": "© 2025 Pisci Team",
     "category": "Productivity",
     "shortDescription": "OpenPisci — Open-source AI Agent Desktop",

@@ -522,17 +522,6 @@ impl ScreenTool {
         Ok(pixels)
     }
 
-    #[allow(dead_code)]
-    fn encode_and_return(
-        &self,
-        rgba: &[u8],
-        width: u32,
-        height: u32,
-        input: &Value,
-    ) -> Result<ToolResult> {
-        self.encode_and_return_with_offset(rgba, width, height, input, 0, 0)
-    }
-
     /// Encode pixels to image, optionally overlay a coordinate grid, and return as ToolResult.
     /// `origin_x/origin_y`: screen coordinates of the image's top-left corner.
     /// When grid=true, labels show absolute screen coords (origin + image offset).

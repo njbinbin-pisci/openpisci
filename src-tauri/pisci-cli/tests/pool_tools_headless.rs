@@ -1,5 +1,5 @@
 //! Confirms that the `openpisci-headless` tool surface includes the pool
-//! and plan tools after Phase 1.7.
+//! and plan tools.
 //!
 //! Rather than spawn the binary, we rebuild the same
 //! `NeutralToolsConfig` the CLI runner feeds into

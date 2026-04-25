@@ -771,15 +771,12 @@ impl Channel for FeishuChannel {
 #[derive(Debug)]
 struct FeishuFrame {
     seq_id: u64,
-    #[allow(dead_code)]
-    log_id: u64,
+    _log_id: u64,
     service: i32,
     method: i32, // 0 = Control, 1 = Data
     headers: Vec<(String, String)>,
-    #[allow(dead_code)]
-    payload_encoding: String,
-    #[allow(dead_code)]
-    payload_type: String,
+    _payload_encoding: String,
+    _payload_type: String,
     payload: Vec<u8>,
 }
 
@@ -1155,12 +1152,12 @@ fn proto_decode_frame(buf: &[u8]) -> Result<FeishuFrame> {
 
     Ok(FeishuFrame {
         seq_id,
-        log_id,
+        _log_id: log_id,
         service,
         method,
         headers,
-        payload_encoding,
-        payload_type,
+        _payload_encoding: payload_encoding,
+        _payload_type: payload_type,
         payload,
     })
 }
