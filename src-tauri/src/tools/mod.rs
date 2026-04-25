@@ -6,9 +6,12 @@ pub mod call_koi;
 pub mod chat_ui;
 pub mod dpi;
 pub mod im_send;
+#[cfg(target_os = "windows")]
 pub mod office;
+#[cfg(target_os = "windows")]
 pub mod powershell;
 pub mod skill_list;
+#[cfg(target_os = "windows")]
 pub mod wmi_tool;
 
 // `plan_todo`, `pool_org`, `pool_chat` now live entirely in
