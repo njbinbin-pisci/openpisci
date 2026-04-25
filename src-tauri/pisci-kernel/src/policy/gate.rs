@@ -467,8 +467,14 @@ mod tests {
     #[test]
     fn denies_path_outside_workspace() {
         let g = gate();
+        #[cfg(target_os = "windows")]
         assert!(matches!(
             g.check_path("C:\\Windows\\System32\\cmd.exe"),
+            PolicyDecision::Deny(_)
+        ));
+        #[cfg(not(target_os = "windows"))]
+        assert!(matches!(
+            g.check_path("/etc/passwd"),
             PolicyDecision::Deny(_)
         ));
     }
