@@ -343,9 +343,10 @@ pub struct DesktopHostTools {
     ///     uses it to push raw outbound messages from the agent.
     ///   * MCP enterprise-capability subprocesses receive credentials
     ///     via env-var placeholders; they do *not* share this Arc.
+    ///
     /// CLI / headless callers leave it `None`; the affected tools then
-    /// either degrade gracefully (UI-only notifications) or refuse to
-    /// register at all (`im_send_message`).
+    /// degrade gracefully (UI-only notifications) or refuse to register
+    /// at all (`im_send_message`).
     pub gateway: Option<Arc<crate::gateway::GatewayManager>>,
 }
 

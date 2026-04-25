@@ -127,6 +127,10 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Prepare Tauri sidecar
+        working-directory: .
+        run: npm run prepare:sidecar
+
       # Tauri 2 on Linux needs webkit2gtk + libsoup dev headers so the
       # `wry` / `tao` crates find their system dependencies. macOS pulls
       # everything from the platform SDK so no extra install is needed.
@@ -170,6 +174,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      - name: Prepare Tauri sidecar
+        working-directory: .
+        run: npm run prepare:sidecar
 
       - name: Rust format check
         run: cargo fmt --check

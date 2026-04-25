@@ -140,7 +140,9 @@ impl Tool for ShellTool {
         }
 
         let timeout_secs = input["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
+        #[cfg(target_os = "windows")]
         let interpreter = input["interpreter"].as_str().unwrap_or("powershell");
+        #[cfg(target_os = "windows")]
         let elevated = input["elevated"].as_bool().unwrap_or(false);
 
         // Elevated path: use UAC ShellExecute runas + temp file bridge
@@ -330,6 +332,7 @@ fn build_windows_cmd(interpreter: &str, command: &str) -> Command {
 
 /// Detect whether a command failed due to insufficient privileges.
 /// Checks common Windows permission error patterns in exit code, stdout, and stderr.
+#[cfg(target_os = "windows")]
 fn is_permission_error(exit_code: i32, stdout: &str, stderr: &str) -> bool {
     // Non-zero exit code required — don't auto-elevate successful commands
     if exit_code == 0 {

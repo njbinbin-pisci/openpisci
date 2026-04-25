@@ -394,14 +394,13 @@ async fn plain_mention_wakes_idle_koi_without_creating_todo() {
 
     tokio::time::sleep(Duration::from_millis(25)).await;
 
-    let requests = requests.lock().unwrap();
+    let requests = requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 1, "expected one notification wake-up");
     assert_eq!(requests[0].koi_id, "koi-alpha");
     assert!(
         requests[0].todo_id.is_none(),
         "plain @mention must not pre-create a todo"
     );
-    drop(requests);
 
     let todos = store
         .read(|db| db.list_koi_todos(Some("koi-alpha")))
@@ -445,14 +444,13 @@ async fn forced_mention_creates_todo_and_dispatches_execution() {
 
     tokio::time::sleep(Duration::from_millis(25)).await;
 
-    let requests = requests.lock().unwrap();
+    let requests = requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 1, "expected one delegated wake-up");
     assert_eq!(requests[0].koi_id, "koi-alpha");
     assert!(
         requests[0].todo_id.is_some(),
         "forced @!mention must dispatch against a todo"
     );
-    drop(requests);
 
     let todos = store
         .read(|db| db.list_koi_todos(Some("koi-alpha")))

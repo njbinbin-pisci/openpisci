@@ -17,9 +17,10 @@ use serde::{Deserialize, Serialize};
 /// Severity of a notification. Determines default UI duration and
 /// whether the request should escalate beyond the main UI when no
 /// explicit targets are provided.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NotificationLevel {
+    #[default]
     Info,
     Warning,
     Error,
@@ -56,12 +57,6 @@ impl NotificationLevel {
             "critical" | "crit" => Some(NotificationLevel::Critical),
             _ => None,
         }
-    }
-}
-
-impl Default for NotificationLevel {
-    fn default() -> Self {
-        NotificationLevel::Info
     }
 }
 
