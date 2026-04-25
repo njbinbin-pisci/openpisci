@@ -505,7 +505,7 @@ impl CallKoiTool {
             let (provider, model, api_key, base_url, max_tokens) =
                 if let Some(ref pid) = koi_def.llm_provider_id {
                     if let Some(p) = settings.find_llm_provider(pid) {
-                        let key = p.api_key.clone();
+                        let key = p.effective_api_key().to_string();
                         let mt = if p.max_tokens > 0 {
                             p.max_tokens
                         } else {
@@ -783,6 +783,10 @@ impl CallKoiTool {
         // soft-fence retry path in KoiRuntime).
         let managed_externally = self.managed_externally;
         let await_completion = self.await_completion;
+        let koi_timeout_secs = {
+            let settings = state.settings.lock().await;
+            settings.koi_timeout_secs.max(60) as u64
+        };
         let app_bg = state.app_handle.clone();
         let db_bg = state.db.clone();
         let cancel_flags_bg = state.cancel_flags.clone();
@@ -795,15 +799,16 @@ impl CallKoiTool {
 
         let run_future = async move {
             let run_result = match tokio::time::timeout(
-                std::time::Duration::from_secs(600),
+                std::time::Duration::from_secs(koi_timeout_secs),
                 agent.run(llm_messages, event_tx, cancel, koi_ctx),
             )
             .await
             {
                 Ok(result) => result,
                 Err(_) => Err(anyhow::anyhow!(
-                    "Koi '{}' timed out after 10 minutes on task: {}",
+                    "Koi '{}' timed out after {} seconds on task: {}",
                     koi_name_bg,
+                    koi_timeout_secs,
                     task_bg
                 )),
             };

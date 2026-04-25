@@ -275,7 +275,7 @@ pub fn build_client_with_timeout(
     read_timeout_secs: u32,
 ) -> Box<dyn LlmClient> {
     match provider {
-        "openai" | "custom" => Box::new(openai::OpenAiClient::with_timeout(
+        "openai" | "custom" | "ollama" => Box::new(openai::OpenAiClient::with_timeout(
             api_key,
             base_url.unwrap_or("https://api.openai.com/v1"),
             read_timeout_secs,

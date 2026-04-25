@@ -206,6 +206,11 @@ impl SubprocessSubagentRuntime {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        #[cfg(windows)]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
         if let Some(dir) = &self.app_data_dir {
             cmd.env("OPENPISCI_CONFIG_DIR", dir);
         }

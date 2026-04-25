@@ -4,8 +4,23 @@ import { useTranslation } from "react-i18next";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { RootState, settingsActions } from "../../store";
-import { settingsApi, gatewayApi, systemApi, wechatApi, Settings as SettingsData, ChannelInfo, RuntimeCheckItem, SshServerConfig, LlmProviderConfig } from "../../services/tauri";
+import {
+  settingsApi,
+  gatewayApi,
+  systemApi,
+  wechatApi,
+  enterpriseCapabilityApi,
+  Settings as SettingsData,
+  ChannelInfo,
+  RuntimeCheckItem,
+  SshServerConfig,
+  LlmProviderConfig,
+  EnterpriseCapabilityStatus,
+  EnterpriseCapabilityTestResult,
+} from "../../services/tauri";
 import { setLanguage } from "../../i18n";
+
+type EnterprisePlatformId = "feishu" | "wecom" | "dingtalk";
 
 const DEFAULT_SETTINGS: SettingsData = {
   anthropic_api_key: "",
@@ -27,11 +42,9 @@ const DEFAULT_SETTINGS: SettingsData = {
   feishu_app_secret: "",
   feishu_domain: "feishu",
   feishu_enabled: false,
-  wecom_corp_id: "",
-  wecom_agent_secret: "",
-  wecom_agent_id: "",
+  wecom_bot_id: "",
+  wecom_bot_secret: "",
   wecom_enabled: false,
-  wecom_inbox_file: "",
   wechat_enabled: false,
   wechat_gateway_token: "",
   wechat_gateway_port: 18789,
@@ -40,6 +53,10 @@ const DEFAULT_SETTINGS: SettingsData = {
   wechat_bot_id: "",
   dingtalk_app_key: "",
   dingtalk_app_secret: "",
+  dingtalk_robot_code: "",
+  dingtalk_corp_id: "",
+  dingtalk_agent_id: "",
+  dingtalk_mcp_url: "",
   dingtalk_enabled: false,
   telegram_bot_token: "",
   telegram_enabled: false,
@@ -96,9 +113,10 @@ const DEFAULT_SETTINGS: SettingsData = {
 interface SettingsProps {
   theme: 'violet' | 'gold';
   setTheme: (t: 'violet' | 'gold') => void;
+  onOpenTools?: () => void;
 }
 
-export default function Settings({ theme, setTheme }: SettingsProps) {
+export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const { settings } = useSelector((s: RootState) => s.settings);
@@ -115,6 +133,11 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
   const [runtimesLoading, setRuntimesLoading] = useState(false);
   const [runtimesSettingKey, setRuntimesSettingKey] = useState<string | null>(null);
   const [defaultWorkspace, setDefaultWorkspace] = useState<string>("");
+  const [capabilityStatus, setCapabilityStatus] = useState<Partial<Record<EnterprisePlatformId, EnterpriseCapabilityStatus>>>({});
+  const [capabilityLoading, setCapabilityLoading] = useState<Partial<Record<EnterprisePlatformId, boolean>>>({});
+  const [capabilityTesting, setCapabilityTesting] = useState<Partial<Record<EnterprisePlatformId, boolean>>>({});
+  const [capabilityTest, setCapabilityTest] = useState<Partial<Record<EnterprisePlatformId, EnterpriseCapabilityTestResult | null>>>({});
+  const [capabilityMsg, setCapabilityMsg] = useState<Partial<Record<EnterprisePlatformId, string | null>>>({});
 
   // WeChat binding flow
   const [wechatQr, setWechatQr] = useState<string | null>(null);
@@ -215,6 +238,21 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
     gatewayApi.list().then((r) => setGatewayStatus(r.channels)).catch(() => setGatewayStatus([]));
   }, [settings]);
 
+  const refreshCapabilityStatus = useCallback(async (platform: EnterprisePlatformId) => {
+    try {
+      const status = await enterpriseCapabilityApi.status(platform);
+      setCapabilityStatus((prev) => ({ ...prev, [platform]: status }));
+    } catch (e) {
+      setCapabilityMsg((prev) => ({ ...prev, [platform]: t("settings.enterpriseCapabilityStatusFailed", { error: String(e) }) }));
+    }
+  }, [t]);
+
+  useEffect(() => {
+    (["feishu", "wecom", "dingtalk"] as EnterprisePlatformId[]).forEach((platform) => {
+      refreshCapabilityStatus(platform);
+    });
+  }, [refreshCapabilityStatus, settings]);
+
   const handleGatewayConnect = async () => {
     setGatewayConnecting(true);
     setGatewayMsg(null);
@@ -229,6 +267,39 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
       setGatewayMsg(t("settings.channelFailed", { error: String(e) }));
     } finally {
       setGatewayConnecting(false);
+    }
+  };
+
+  const handleEnableCapability = async (platform: EnterprisePlatformId) => {
+    setCapabilityLoading((prev) => ({ ...prev, [platform]: true }));
+    setCapabilityMsg((prev) => ({ ...prev, [platform]: null }));
+    setCapabilityTest((prev) => ({ ...prev, [platform]: null }));
+    try {
+      const status = await enterpriseCapabilityApi.enable(platform);
+      setCapabilityStatus((prev) => ({ ...prev, [platform]: status }));
+      setCapabilityMsg((prev) => ({ ...prev, [platform]: t("settings.enterpriseCapabilityEnabled") }));
+    } catch (e) {
+      setCapabilityMsg((prev) => ({ ...prev, [platform]: t("settings.enterpriseCapabilityEnableFailed", { error: String(e) }) }));
+    } finally {
+      setCapabilityLoading((prev) => ({ ...prev, [platform]: false }));
+    }
+  };
+
+  const handleTestCapability = async (platform: EnterprisePlatformId) => {
+    setCapabilityTesting((prev) => ({ ...prev, [platform]: true }));
+    setCapabilityMsg((prev) => ({ ...prev, [platform]: null }));
+    try {
+      const result = await enterpriseCapabilityApi.test(platform);
+      setCapabilityStatus((prev) => ({ ...prev, [platform]: result.status }));
+      setCapabilityTest((prev) => ({ ...prev, [platform]: result }));
+      setCapabilityMsg((prev) => ({ ...prev, [platform]: result.success
+        ? t("settings.enterpriseCapabilityTestSuccess", { count: result.tools.length })
+        : t("settings.enterpriseCapabilityTestFailed", { error: result.error ?? "unknown" })
+      }));
+    } catch (e) {
+      setCapabilityMsg((prev) => ({ ...prev, [platform]: t("settings.enterpriseCapabilityTestFailed", { error: String(e) }) }));
+    } finally {
+      setCapabilityTesting((prev) => ({ ...prev, [platform]: false }));
     }
   };
 
@@ -317,6 +388,9 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
       dispatch(settingsActions.setConfigured(updated.is_configured ?? !!(updated.anthropic_api_key || updated.openai_api_key || updated.deepseek_api_key || updated.qwen_api_key)));
       // 立即切换语言
       if (updated.language) setLanguage(updated.language as "zh" | "en");
+      (["feishu", "wecom", "dingtalk"] as EnterprisePlatformId[]).forEach((platform) => {
+        refreshCapabilityStatus(platform);
+      });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -328,6 +402,134 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
 
   const update = <K extends keyof SettingsData>(key: K, value: SettingsData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const capabilityStatusMessage = (platform: EnterprisePlatformId, status?: EnterpriseCapabilityStatus | null) => {
+    if (!status) return t("settings.enterpriseCapabilityLoading");
+    if (!status.configured) {
+      return platform === "dingtalk"
+        ? t("settings.dingtalkMcpUrlMissing")
+        : t("settings.enterpriseCapabilityStatusNeedsConfig");
+    }
+    if (platform === "wecom") return t("settings.wecomEnterpriseStatusReady");
+    if (!status.mcp_configured) return t("settings.enterpriseCapabilityStatusReadyToEnable");
+    if (!status.mcp_enabled) return t("settings.enterpriseCapabilityStatusDisabled");
+    return t("settings.enterpriseCapabilityStatusActive");
+  };
+
+  const capabilityDiagnostics = (platform: EnterprisePlatformId, test?: EnterpriseCapabilityTestResult | null) => {
+    if (!test) return [];
+    if (test.success) {
+      if (platform === "wecom") return [t("settings.wecomEnterpriseTestSuccessHint")];
+      if (platform === "dingtalk") return [t("settings.dingtalkEnterpriseTestSuccessHint")];
+      return [t("settings.feishuEnterpriseTestSuccessHint")];
+    }
+    if (platform === "wecom") return [t("settings.wecomEnterpriseTestFailedHint")];
+    if (platform === "dingtalk") return [t("settings.dingtalkEnterpriseTestFailedHint")];
+    return [t("settings.feishuEnterpriseTestFailedHint")];
+  };
+
+  const capabilityMissingCredentialsMessage = (platform: EnterprisePlatformId, status: EnterpriseCapabilityStatus) => {
+    if (!status.missing_credentials.length) return null;
+    if (platform === "wecom") return t("settings.wecomEnterpriseMissingCreds");
+    if (platform === "dingtalk") return t("settings.dingtalkMcpUrlMissing");
+    if (platform === "feishu") return t("settings.feishuEnterpriseMissingCreds");
+    return t("settings.enterpriseCapabilityMissingCreds", { fields: status.missing_credentials.join(", ") });
+  };
+
+  const renderEnterpriseCapabilityPanel = (
+    platform: EnterprisePlatformId,
+    title: string,
+    description: string,
+    options: { showOpenTools?: boolean; showEnable?: boolean } = {}
+  ) => {
+    const status = capabilityStatus[platform];
+    const loading = !!capabilityLoading[platform];
+    const testing = !!capabilityTesting[platform];
+    const test = capabilityTest[platform];
+    const msg = capabilityMsg[platform];
+    const diagnostics = capabilityDiagnostics(platform, test);
+    const showEnable = options.showEnable !== false;
+    return (
+      <>
+        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 12, marginBottom: 4 }}>
+          {t("settings.imCapabilityLabel")}
+        </div>
+        <div style={{ padding: "10px 12px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-secondary)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{title}</div>
+              <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0", lineHeight: 1.6 }}>{description}</p>
+            </div>
+            <span style={{
+              fontSize: 11,
+              padding: "2px 8px",
+              borderRadius: 999,
+              color: status?.enabled ? "#28a745" : status?.configured ? "#ffc107" : "#dc3545",
+              background: "rgba(255,255,255,0.04)",
+              whiteSpace: "nowrap",
+            }}>
+              {status?.enabled
+                ? t("settings.enterpriseCapabilityStatusEnabled")
+                : status?.configured
+                  ? t("settings.enterpriseCapabilityStatusReady")
+                  : t("settings.enterpriseCapabilityStatusMissing")}
+            </span>
+          </div>
+          <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "8px 0 0", lineHeight: 1.6 }}>
+            {capabilityStatusMessage(platform, status)}
+          </p>
+          {status?.missing_credentials.length ? (
+            <p style={{ fontSize: 12, color: "#dc3545", margin: "6px 0 0", lineHeight: 1.5 }}>
+              {capabilityMissingCredentialsMessage(platform, status)}
+            </p>
+          ) : null}
+          {msg && (
+            <div style={{
+              marginTop: 8,
+              fontSize: 12,
+              lineHeight: 1.5,
+              padding: "6px 8px",
+              borderRadius: 6,
+              color: test?.success ? "#28a745" : msg.includes("失败") || msg.toLowerCase().includes("failed") ? "#dc3545" : "var(--text-primary)",
+              background: test?.success ? "rgba(40,167,69,0.12)" : "rgba(255,255,255,0.04)",
+            }}>
+              {msg}
+            </div>
+          )}
+          {diagnostics.length ? (
+            <ul style={{ margin: "8px 0 0 18px", padding: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
+              {diagnostics.map((item, idx) => (
+                <li key={idx}>{item}</li>
+              ))}
+            </ul>
+          ) : null}
+          {test?.tools?.length ? (
+            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "8px 0 0", lineHeight: 1.5 }}>
+              {t("settings.enterpriseCapabilityToolsPreview", {
+                count: test.tools.length,
+                tools: test.tools.slice(0, 5).map(tool => tool.name).join(", "),
+              })}
+            </p>
+          ) : null}
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            {showEnable && (
+              <button className="btn btn-secondary" type="button" onClick={() => handleEnableCapability(platform)} disabled={loading || !status?.configured}>
+                {loading ? t("common.loading") : t("settings.enterpriseCapabilityEnable")}
+              </button>
+            )}
+            <button className="btn btn-secondary" type="button" onClick={() => handleTestCapability(platform)} disabled={testing || !status?.configured}>
+              {testing ? t("settings.enterpriseCapabilityTesting") : t("settings.enterpriseCapabilityTest")}
+            </button>
+            {options.showOpenTools && onOpenTools && (
+              <button className="btn btn-secondary" type="button" onClick={onOpenTools}>
+                {t("settings.enterpriseCapabilityOpenTools")}
+              </button>
+            )}
+          </div>
+        </div>
+      </>
+    );
   };
 
   return (
@@ -493,6 +695,7 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
                 <label className="label">{t("settings.customApiKey")}</label>
                 <input className="input" type={showKeys ? "text" : "password"} value={form.openai_api_key ?? ""}
                   onChange={(e) => update("openai_api_key", e.target.value)} placeholder="API Key" />
+                <p className="field-hint" style={{ marginTop: 4 }}>{t("settings.customApiKeyHint")}</p>
               </div>
               <div className="form-group">
                 <label className="label">{t("settings.customBaseUrl")}</label>
@@ -1051,8 +1254,11 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
           <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 4, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
             {t("settings.imChannels")}
           </h2>
-          <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
+          <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
             {t("settings.imChannelsDesc")}
+          </p>
+          <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16, padding: "8px 10px", background: "var(--bg-secondary)", borderRadius: 6, lineHeight: 1.6 }}>
+            {t("settings.imLayerExplain")}
           </p>
 
           {gatewayStatus.length > 0 && (
@@ -1083,6 +1289,9 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
             </div>
             {form.feishu_enabled && (
               <>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 4, marginBottom: 6 }}>
+                  {t("settings.imCredsLabel")}
+                </div>
                 <div className="form-group">
                   <label className="label">{t("settings.feishuAppId")}</label>
                   <input className="input" value={form.feishu_app_id} onChange={(e) => update("feishu_app_id", e.target.value)} placeholder="cli_xxxxxxxxxxxxxxxx" />
@@ -1090,6 +1299,9 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
                 <div className="form-group">
                   <label className="label">{t("settings.feishuAppSecret")}</label>
                   <input className="input" type={showKeys ? "text" : "password"} value={form.feishu_app_secret} onChange={(e) => update("feishu_app_secret", e.target.value)} placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 12, marginBottom: 6 }}>
+                  {t("settings.imChannelLabel")}
                 </div>
                 <div className="form-group">
                   <label className="label">{t("settings.feishuDomain")}</label>
@@ -1099,6 +1311,12 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
                   </select>
                 </div>
                 <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0" }}>{t("settings.feishuHelp")}</p>
+                {renderEnterpriseCapabilityPanel(
+                  "feishu",
+                  t("settings.feishuEnterpriseTitle"),
+                  t("settings.feishuEnterpriseDesc"),
+                  { showOpenTools: true }
+                )}
               </>
             )}
           </div>
@@ -1180,24 +1398,27 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
             </div>
             {form.wecom_enabled && (
               <>
-                <div className="form-group">
-                  <label className="label">{t("settings.wecomCorpId")}</label>
-                  <input className="input" value={form.wecom_corp_id} onChange={(e) => update("wecom_corp_id", e.target.value)} placeholder="ww xxxxxxxxxxxxxxxx" />
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 4, marginBottom: 6 }}>
+                  {t("settings.imCredsLabel")}
                 </div>
                 <div className="form-group">
-                  <label className="label">{t("settings.wecomAgentId")}</label>
-                  <input className="input" value={form.wecom_agent_id} onChange={(e) => update("wecom_agent_id", e.target.value)} placeholder="1000002" />
+                  <label className="label">{t("settings.wecomBotId")}</label>
+                  <input className="input" value={form.wecom_bot_id ?? ""} onChange={(e) => update("wecom_bot_id", e.target.value)} placeholder="BOTID" />
                 </div>
                 <div className="form-group">
-                  <label className="label">{t("settings.wecomAgentSecret")}</label>
-                  <input className="input" type={showKeys ? "text" : "password"} value={form.wecom_agent_secret} onChange={(e) => update("wecom_agent_secret", e.target.value)} placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+                  <label className="label">{t("settings.wecomBotSecret")}</label>
+                  <input className="input" type={showKeys ? "text" : "password"} value={form.wecom_bot_secret ?? ""} onChange={(e) => update("wecom_bot_secret", e.target.value)} placeholder="SECRET" />
                 </div>
-                <div className="form-group">
-                  <label className="label">{t("settings.wecomInboxFile")} <span style={{ fontSize: 11, color: "var(--text-muted)" }}>({t("common.optional")})</span></label>
-                  <input className="input" value={form.wecom_inbox_file ?? ""} onChange={(e) => update("wecom_inbox_file", e.target.value)} placeholder="C:\pisci\wecom_inbox.jsonl" />
-                  <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{t("settings.wecomInboxFileHelp")}</p>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 12, marginBottom: 4 }}>
+                  {t("settings.imChannelLabel")}
                 </div>
-                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0" }}>{t("settings.wecomHelp")}</p>
+                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0", whiteSpace: "pre-line" }}>{t("settings.wecomHelp")}</p>
+                {renderEnterpriseCapabilityPanel(
+                  "wecom",
+                  t("settings.wecomEnterpriseTitle"),
+                  t("settings.wecomEnterpriseDesc"),
+                  { showEnable: false }
+                )}
               </>
             )}
           </div>
@@ -1213,6 +1434,9 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
             </div>
             {form.dingtalk_enabled && (
               <>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 4, marginBottom: 6 }}>
+                  {t("settings.imCredsLabel")}
+                </div>
                 <div className="form-group">
                   <label className="label">{t("settings.dingtalkAppKey")}</label>
                   <input className="input" value={form.dingtalk_app_key} onChange={(e) => update("dingtalk_app_key", e.target.value)} placeholder="dingxxxxxxxxxxxxxxxx" />
@@ -1221,7 +1445,40 @@ export default function Settings({ theme, setTheme }: SettingsProps) {
                   <label className="label">{t("settings.dingtalkAppSecret")}</label>
                   <input className="input" type={showKeys ? "text" : "password"} value={form.dingtalk_app_secret} onChange={(e) => update("dingtalk_app_secret", e.target.value)} placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
                 </div>
-                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0" }}>{t("settings.dingtalkHelp")}</p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div className="form-group">
+                    <label className="label">{t("settings.dingtalkCorpId")} <span style={{ fontSize: 11, color: "var(--text-muted)" }}>({t("common.optional")})</span></label>
+                    <input className="input" value={form.dingtalk_corp_id ?? ""} onChange={(e) => update("dingtalk_corp_id", e.target.value)} placeholder="dingxxxxxxxxxxxx" />
+                  </div>
+                  <div className="form-group">
+                    <label className="label">{t("settings.dingtalkAgentId")} <span style={{ fontSize: 11, color: "var(--text-muted)" }}>({t("common.optional")})</span></label>
+                    <input className="input" value={form.dingtalk_agent_id ?? ""} onChange={(e) => update("dingtalk_agent_id", e.target.value)} placeholder="123456789" />
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 12, marginBottom: 6 }}>
+                  {t("settings.imChannelLabel")}
+                </div>
+                <div className="form-group">
+                  <label className="label">{t("settings.dingtalkRobotCode")}</label>
+                  <input className="input" value={form.dingtalk_robot_code ?? ""} onChange={(e) => update("dingtalk_robot_code", e.target.value)} placeholder="dingxxxxxxxxxxxxxxxx" />
+                </div>
+                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 0", whiteSpace: "pre-line" }}>{t("settings.dingtalkHelp")}</p>
+                <div className="form-group" style={{ marginTop: 12 }}>
+                  <label className="label">{t("settings.dingtalkMcpUrl")}</label>
+                  <input className="input" value={form.dingtalk_mcp_url ?? ""} onChange={(e) => update("dingtalk_mcp_url", e.target.value)} placeholder="https://mcp-gw.dingtalk.com/..." />
+                  <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "6px 0 0", lineHeight: 1.6 }}>
+                    {t("settings.dingtalkMcpUrlHelp")}
+                  </p>
+                  <button className="btn btn-secondary" type="button" style={{ marginTop: 8, fontSize: 12 }} onClick={() => openUrl("https://mcp.dingtalk.com/")}>
+                    {t("settings.dingtalkOpenMcpMarketplace")}
+                  </button>
+                </div>
+                {renderEnterpriseCapabilityPanel(
+                  "dingtalk",
+                  t("settings.dingtalkEnterpriseTitle"),
+                  t("settings.dingtalkEnterpriseDesc"),
+                  { showOpenTools: true }
+                )}
               </>
             )}
           </div>

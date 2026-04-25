@@ -250,9 +250,9 @@ function ContextUsageRing({
   const dashOffset = circumference * (1 - displayPct / 100);
   let color = "var(--accent, #4a9eff)";
   if (pct >= 100) color = "#dc3545";
-  else if (pct >= 80) color = "#ff6b6b";
-  else if (pct >= 60) color = "#f0a020";
-  else if (pct >= 40) color = "#c9b458";
+  else if (pct >= 80) color = "var(--context-usage-hot, var(--accent-hover, var(--accent)))";
+  else if (pct >= 60) color = "var(--context-usage-warn, var(--accent))";
+  else if (pct >= 40) color = "var(--context-usage-caution, var(--accent))";
   // p8 — optional per-layer breakdown appended to the tooltip as a
   // stacked summary. We roll the five layered-prompt slots (persona
   // / scene / memory / project / platform_hint) into a single "system"
@@ -439,6 +439,8 @@ export default function Chat() {
   const seedContextUsage = useCallback((sessionId: string) => {
     invoke<{
       total_tokens: number;
+      request_view_tokens?: number;
+      idle_indicator_tokens?: number;
       total_input_budget: number;
       rolling_summary_version: number;
       total_input_tokens: number;
@@ -449,7 +451,10 @@ export default function Chat() {
         dispatch(chatActions.setContextUsage({
           sessionId,
           usage: {
-            estimatedInputTokens: preview.total_tokens,
+            estimatedInputTokens:
+              preview.idle_indicator_tokens
+              ?? preview.request_view_tokens
+              ?? preview.total_tokens,
             totalInputBudget: preview.total_input_budget,
             triggerThreshold: trigger,
             cumulativeInputTokens: preview.total_input_tokens,
@@ -822,7 +827,12 @@ export default function Chat() {
           dispatch(chatActions.setRunning({ sessionId: boundSessionId, running: false }));
           dispatch(chatActions.freezeStreaming(boundSessionId));
           dispatch(chatActions.removeOptimisticMessages(boundSessionId));
-          seedContextUsage(boundSessionId);
+          // Keep the last live ContextUsage snapshot after a run finishes.
+          // During a run the ring shows "the request we just sent / were about
+          // to send"; seeding from get_context_preview here would immediately
+          // switch semantics to "the next recovered turn from DB", which can
+          // jump upward right after the final summary is persisted.
+          // We only reseed from preview on session switch / resume.
           sessionsApi.getMessages(boundSessionId, CHAT_INITIAL_SIZE).then((messages) => {
             console.log('[Chat] done: reloaded', messages.length, 'messages for', boundSessionId);
             dispatch(chatActions.setMessagesWithFrozen({ sessionId: boundSessionId, messages }));

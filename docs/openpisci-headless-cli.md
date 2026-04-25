@@ -1,30 +1,22 @@
 # OpenPisci Headless CLI
 
-OpenPisci 提供两个面向自动化与 benchmark 的 headless 入口，两者由不同 crate 拥有：
+OpenPisci 面向自动化与 benchmark 只发布一个 headless 入口：
 
-| 二进制              | 所属 crate        | 用途                                                      |
-|---------------------|-------------------|-----------------------------------------------------------|
-| `openpisci`         | `pisci-desktop`   | 成熟的完整 headless runner（复用桌面 `AppState`）         |
-| `openpisci-headless`| `pisci-cli`       | 纯 kernel 驱动的 CLI demo；当前只暴露 `capabilities/version`，随 commands 层迁移会接管 `openpisci` 的 `run` 路径 |
+| 二进制               | 所属 crate  | 用途                                      |
+|----------------------|-------------|-------------------------------------------|
+| `openpisci-headless` | `pisci-cli` | 无需 Tauri UI 的 kernel 驱动 CLI / sidecar |
 
-`openpisci` 当前支持两个子命令：
-
-- `openpisci run`
-- `openpisci capabilities`
+`openpisci-headless` 支持 `chat`、`run`、`rpc`、`capabilities`、`version` 等子命令。
 
 ## 构建
 
 在仓库 `src-tauri/` 目录下：
 
 ```powershell
-# 传统完整 headless runner（仍由 pisci-desktop 构建）：
-cargo build --bin openpisci
-
-# 纯 kernel 版本：
 cargo build -p pisci-cli --bin openpisci-headless
 ```
 
-两者均写入 `src-tauri/target/{debug,release}/`。`bench_swe_lite` 的 `find_binary` 会优先命中该目录。
+构建产物写入 `target/{debug,release}/`。Tauri 发布包会把 release 版复制到 `src-tauri/binaries/` 作为 sidecar。
 
 ## 运行模式
 
@@ -58,20 +50,20 @@ cargo build -p pisci-cli --bin openpisci-headless
 ### 查看能力矩阵
 
 ```powershell
-target\debug\openpisci.exe capabilities --mode pisci
-target\debug\openpisci.exe capabilities --mode pool
+target\debug\openpisci-headless.exe capabilities --mode pisci
+target\debug\openpisci-headless.exe capabilities --mode pool
 ```
 
 ### 直接运行
 
 ```powershell
-target\debug\openpisci.exe run --prompt "请总结当前仓库结构" --workspace C:\repo --mode pisci
+target\debug\openpisci-headless.exe run --prompt "请总结当前仓库结构" --workspace C:\repo --mode pisci
 ```
 
 ### 从 JSON 文件运行
 
 ```powershell
-target\debug\openpisci.exe run --input request.json --output result.json
+target\debug\openpisci-headless.exe run --input request.json --output result.json
 ```
 
 ## `run` 请求协议

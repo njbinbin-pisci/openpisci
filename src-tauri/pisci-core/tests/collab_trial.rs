@@ -66,6 +66,7 @@ fn sample_pool() -> PoolSession {
         status: "active".into(),
         project_dir: Some("C:/demo".into()),
         task_timeout_secs: 0,
+        origin_im_binding_key: None,
         last_active_at: Some(now),
         created_at: now,
         updated_at: now,
@@ -325,11 +326,11 @@ fn collab_trial_main_chat_and_koi_scene_policies_keep_expected_context_sources()
 }
 
 #[test]
-fn collab_trial_short_lived_headless_scenes_disable_proactive_compaction() {
+fn collab_trial_only_pool_coordinator_disables_proactive_compaction() {
     let pool = ScenePolicy::for_kind(SceneKind::PoolCoordinator);
     let im = ScenePolicy::for_kind(SceneKind::IMHeadless);
     assert_eq!(pool.effective_auto_compact_threshold(100_000), 0);
-    assert_eq!(im.effective_auto_compact_threshold(100_000), 0);
+    assert_eq!(im.effective_auto_compact_threshold(100_000), 100_000);
 }
 
 #[test]

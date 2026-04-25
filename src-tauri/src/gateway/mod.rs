@@ -12,6 +12,7 @@ pub mod wecom;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
@@ -25,10 +26,14 @@ pub struct InboundMessage {
     pub sender_name: Option<String>,
     pub content: String,
     pub reply_target: String,
+    #[serde(default)]
+    pub conversation_key: Option<String>,
     pub is_group: bool,
     pub group_name: Option<String>,
     pub timestamp: u64,
     pub media: Option<MediaAttachment>,
+    #[serde(default)]
+    pub routing_state: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +43,8 @@ pub struct OutboundMessage {
     pub content: String,
     pub reply_to: Option<String>,
     pub media: Option<MediaAttachment>,
+    #[serde(default)]
+    pub routing_state: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +95,27 @@ pub struct GatewayManager {
     channels: RwLock<ChannelMap>,
     inbound_tx: mpsc::Sender<InboundMessage>,
     inbound_rx: Mutex<Option<mpsc::Receiver<InboundMessage>>>,
+}
+
+impl InboundMessage {
+    pub fn effective_conversation_key(&self) -> String {
+        self.conversation_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                if self.reply_target.trim().is_empty() {
+                    self.sender.clone()
+                } else {
+                    self.reply_target.clone()
+                }
+            })
+    }
+
+    pub fn binding_key(&self) -> String {
+        format!("{}::{}", self.channel, self.effective_conversation_key())
+    }
 }
 
 impl GatewayManager {

@@ -26,7 +26,7 @@ use pisci_core::models::KoiTodo;
 use pisci_kernel::pool::coordinator::{self, CoordinatorConfig, KoiExecResult};
 use pisci_kernel::pool::store::PoolStore;
 use pisci_kernel::store::Database;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 
 use crate::host::{DesktopEventSink, DesktopHost};
@@ -42,15 +42,16 @@ struct Deps {
 
 /// Build [`Deps`] by going through `DesktopHost::from_state`. Used by
 /// command bodies that still hold the Tauri `State<'_, AppState>`.
-fn collect_deps(app: &AppHandle, state: &AppState) -> Option<Deps> {
+async fn collect_deps(app: &AppHandle, state: &AppState) -> Option<Deps> {
     let host = DesktopHost::from_state(app.clone(), state);
     let sink = host.pool_event_sink();
     let subagent = host.subagent_runtime()?;
+    let cfg = resolve_coordinator_config(app).await;
     Some(Deps {
         store: PoolStore::new(state.db.clone()),
         sink,
         subagent,
-        cfg: CoordinatorConfig::default(),
+        cfg,
     })
 }
 
@@ -61,15 +62,27 @@ fn collect_deps(app: &AppHandle, state: &AppState) -> Option<Deps> {
 /// This duplicates the binary-resolution policy from
 /// [`DesktopHost::from_state`] — if that policy ever needs to change,
 /// both paths must be kept in sync.
-fn build_deps_from_db(app: &AppHandle, db: Arc<Mutex<Database>>) -> Deps {
+async fn build_deps_from_db(app: &AppHandle, db: Arc<Mutex<Database>>) -> Deps {
     let sink: Arc<dyn PoolEventSink> = Arc::new(DesktopEventSink::new(app.clone()));
     let subagent = build_subagent_runtime(app);
+    let cfg = resolve_coordinator_config(app).await;
     Deps {
         store: PoolStore::new(db),
         sink,
         subagent,
-        cfg: CoordinatorConfig::default(),
+        cfg,
     }
+}
+
+async fn resolve_coordinator_config(app: &AppHandle) -> CoordinatorConfig {
+    let mut cfg = CoordinatorConfig::default();
+    if let Some(state) = app.try_state::<AppState>() {
+        let secs = state.settings.lock().await.koi_timeout_secs;
+        if secs > 0 {
+            cfg.default_task_timeout_secs = secs;
+        }
+    }
+    cfg
 }
 
 fn build_subagent_runtime(app: &AppHandle) -> Arc<dyn SubagentRuntime> {
@@ -96,22 +109,16 @@ fn resolve_headless_binary() -> PathBuf {
             return PathBuf::from(raw);
         }
     }
-    let (exe_name, fallback_name) = if cfg!(windows) {
-        ("openpisci-headless.exe", Some("openpisci.exe"))
+    let exe_name = if cfg!(windows) {
+        "openpisci-headless.exe"
     } else {
-        ("openpisci-headless", Some("openpisci"))
+        "openpisci-headless"
     };
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let candidate = dir.join(exe_name);
             if candidate.exists() {
                 return candidate;
-            }
-            if let Some(fallback) = fallback_name {
-                let fallback = dir.join(fallback);
-                if fallback.exists() {
-                    return fallback;
-                }
             }
         }
     }
@@ -130,6 +137,7 @@ pub async fn handle_mention(
     content: &str,
 ) -> anyhow::Result<()> {
     let deps = collect_deps(app, state)
+        .await
         .ok_or_else(|| anyhow::anyhow!("desktop host has no subagent runtime wired"))?;
     coordinator::handle_mention(
         &deps.store,
@@ -152,7 +160,7 @@ pub async fn handle_mention_arc(
     pool_session_id: &str,
     content: &str,
 ) -> anyhow::Result<()> {
-    let deps = build_deps_from_db(app, db);
+    let deps = build_deps_from_db(app, db).await;
     coordinator::handle_mention(
         &deps.store,
         deps.sink,
@@ -174,6 +182,7 @@ pub async fn resume_todo(
     triggered_by: &str,
 ) -> anyhow::Result<KoiTodo> {
     let deps = collect_deps(app, state)
+        .await
         .ok_or_else(|| anyhow::anyhow!("desktop host has no subagent runtime wired"))?;
     coordinator::resume_blocked_todo(
         &deps.store,
@@ -198,6 +207,7 @@ pub async fn replace_todo(
     task_timeout_secs: Option<u32>,
 ) -> anyhow::Result<KoiTodo> {
     let deps = collect_deps(app, state)
+        .await
         .ok_or_else(|| anyhow::anyhow!("desktop host has no subagent runtime wired"))?;
     coordinator::replace_blocked_todo(
         &deps.store,
@@ -223,6 +233,7 @@ pub async fn execute_todo_turn(
     args: coordinator::ExecuteTodoArgs,
 ) -> anyhow::Result<KoiExecResult> {
     let deps = collect_deps(app, state)
+        .await
         .ok_or_else(|| anyhow::anyhow!("desktop host has no subagent runtime wired"))?;
     coordinator::execute_todo_turn(&deps.store, deps.sink, deps.subagent, &deps.cfg, args).await
 }
@@ -237,7 +248,7 @@ pub async fn activate_pending_todos_arc(
     db: Arc<Mutex<Database>>,
     pool_session_id: Option<&str>,
 ) -> anyhow::Result<u32> {
-    let deps = build_deps_from_db(app, db);
+    let deps = build_deps_from_db(app, db).await;
     coordinator::activate_pending_todos(
         &deps.store,
         deps.sink,
@@ -256,6 +267,7 @@ pub async fn activate_pending_todos(
     pool_session_id: Option<&str>,
 ) -> anyhow::Result<u32> {
     let deps = collect_deps(app, state)
+        .await
         .ok_or_else(|| anyhow::anyhow!("desktop host has no subagent runtime wired"))?;
     coordinator::activate_pending_todos(
         &deps.store,
@@ -287,6 +299,7 @@ pub async fn assign_and_execute(
     task_timeout_secs: Option<u32>,
 ) -> anyhow::Result<KoiExecResult> {
     let deps = collect_deps(app, state)
+        .await
         .ok_or_else(|| anyhow::anyhow!("desktop host has no subagent runtime wired"))?;
     coordinator::assign_and_execute(
         &deps.store,

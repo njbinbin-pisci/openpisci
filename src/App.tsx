@@ -247,7 +247,7 @@ function AppContent() {
         {activeTab === "skills" && <Skills />}
         {activeTab === "scheduler" && <Scheduler />}
         {activeTab === "audit" && <AuditLog />}
-        {activeTab === "settings" && <Settings theme={theme} setTheme={setTheme} />}
+        {activeTab === "settings" && <Settings theme={theme} setTheme={setTheme} onOpenTools={() => setActiveTab("tools")} />}
         {activeTab === "about" && <About />}
         {activeTab === "debug" && <DebugPanel />}
       </main>

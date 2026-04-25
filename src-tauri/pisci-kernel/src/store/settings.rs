@@ -75,6 +75,18 @@ impl Default for LlmProviderConfig {
     }
 }
 
+impl LlmProviderConfig {
+    /// Returns the API key value to pass to provider clients.
+    pub fn effective_api_key(&self) -> &str {
+        if self.api_key.trim().is_empty()
+            && is_local_ollama_openai_provider(&self.provider, &self.base_url)
+        {
+            return "ollama";
+        }
+        &self.api_key
+    }
+}
+
 /// A pre-configured SSH server entry.
 /// The password / private_key is stored encrypted on disk (same hex-AES scheme as API keys).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -101,6 +113,30 @@ pub struct SshServerConfig {
 
 fn default_ssh_port() -> u16 {
     22
+}
+
+fn has_local_ollama_prefix(url: &str, prefix: &str) -> bool {
+    url.strip_prefix(prefix)
+        .map(|rest| rest.is_empty() || rest.starts_with('/'))
+        .unwrap_or(false)
+}
+
+/// Ollama's local OpenAI-compatible API ignores bearer tokens, but OpenAI-style
+/// clients still expect a non-empty API key value.
+pub fn is_local_ollama_openai_provider(provider: &str, base_url: &str) -> bool {
+    let provider = provider.trim().to_ascii_lowercase();
+    if provider != "custom" && provider != "ollama" {
+        return false;
+    }
+
+    let url = base_url.trim().trim_end_matches('/').to_ascii_lowercase();
+    [
+        "http://localhost:11434",
+        "http://127.0.0.1:11434",
+        "http://[::1]:11434",
+    ]
+    .iter()
+    .any(|prefix| has_local_ollama_prefix(&url, prefix))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +211,19 @@ pub struct Settings {
     pub tool_rate_limit_per_minute: u32,
 
     // ── IM Gateway ──────────────────────────────────────────────────────────
+    //
+    // Layered architecture (see `pisci-core::scene::SceneKind::IMHeadless`
+    // and `crate::tools::mcp`):
+    //   * Credential layer  — `*_app_id` / `*_bot_id` / `*_app_secret` are
+    //     the application-level credentials shared by the IM channel and
+    //     by any enterprise-capability MCP that uses the same platform.
+    //   * Channel layer    — `*_enabled` flips the WebSocket / Stream
+    //     long-connection on or off; channels only carry message
+    //     transport.
+    //   * Capability layer — enterprise APIs (org chart, calendar, group
+    //     chat, …) live in `mcp_servers` (see below) and reference the
+    //     credentials above through `${settings:*}` placeholders so users
+    //     never duplicate secrets between the channel and the MCP.
     /// Feishu App ID
     #[serde(default)]
     pub feishu_app_id: String,
@@ -188,15 +237,12 @@ pub struct Settings {
     #[serde(default)]
     pub feishu_enabled: bool,
 
-    /// WeCom (企业微信) Corp ID
+    /// WeCom smart robot Bot ID (long-connection mode)
     #[serde(default)]
-    pub wecom_corp_id: String,
-    /// WeCom Agent Secret
+    pub wecom_bot_id: String,
+    /// WeCom smart robot Secret (long-connection mode)
     #[serde(default)]
-    pub wecom_agent_secret: String,
-    /// WeCom Agent ID
-    #[serde(default)]
-    pub wecom_agent_id: String,
+    pub wecom_bot_secret: String,
     /// WeCom enabled
     #[serde(default)]
     pub wecom_enabled: bool,
@@ -207,6 +253,18 @@ pub struct Settings {
     /// DingTalk App Secret
     #[serde(default)]
     pub dingtalk_app_secret: String,
+    /// DingTalk robot code
+    #[serde(default)]
+    pub dingtalk_robot_code: String,
+    /// DingTalk Corp ID (kept for official OpenClaw-compatible config)
+    #[serde(default)]
+    pub dingtalk_corp_id: String,
+    /// DingTalk Agent ID (kept for official OpenClaw-compatible config)
+    #[serde(default)]
+    pub dingtalk_agent_id: String,
+    /// DingTalk official MCP Marketplace / AIHub URL (Streamable HTTP/SSE)
+    #[serde(default)]
+    pub dingtalk_mcp_url: String,
     /// DingTalk enabled
     #[serde(default)]
     pub dingtalk_enabled: bool,
@@ -256,10 +314,6 @@ pub struct Settings {
     pub webhook_auth_token: String,
     #[serde(default)]
     pub webhook_enabled: bool,
-
-    /// Optional local relay inbox file for WeCom inbound bridging
-    #[serde(default)]
-    pub wecom_inbox_file: String,
 
     /// WeChat (iLink Bot HTTP server) enabled
     #[serde(default)]
@@ -520,7 +574,7 @@ pub fn default_heartbeat_prompt() -> String {
      - 若项目卡住无进展：介入协调。\n\n\
      ⚠️ 重要：在心跳巡查中，**绝对不要创建新的项目池**。\n\
      如果需要追加工作，应在现有项目池中用 pool_org(action=\"create_todo\") 创建任务，\n\
-     或通过 pool_chat @mention 分配给相关 Koi。\n\
+     或通过 pool_chat @!mention 分配给相关 Koi。\n\
      只有用户明确要求启动新项目时，才能创建新的项目池。\n\n\
      ## 2. Koi 状态检查\n\
      查看是否有 Koi 异常（长时间 busy 但无活跃 todo）。如有，在对应 pool_chat 通知或分配新任务。\n\n\
@@ -591,12 +645,15 @@ impl Default for Settings {
             feishu_app_secret: String::new(),
             feishu_domain: default_feishu_domain(),
             feishu_enabled: false,
-            wecom_corp_id: String::new(),
-            wecom_agent_secret: String::new(),
-            wecom_agent_id: String::new(),
+            wecom_bot_id: String::new(),
+            wecom_bot_secret: String::new(),
             wecom_enabled: false,
             dingtalk_app_key: String::new(),
             dingtalk_app_secret: String::new(),
+            dingtalk_robot_code: String::new(),
+            dingtalk_corp_id: String::new(),
+            dingtalk_agent_id: String::new(),
+            dingtalk_mcp_url: String::new(),
             dingtalk_enabled: false,
             telegram_bot_token: String::new(),
             telegram_enabled: false,
@@ -613,7 +670,6 @@ impl Default for Settings {
             webhook_outbound_url: String::new(),
             webhook_auth_token: String::new(),
             webhook_enabled: false,
-            wecom_inbox_file: String::new(),
             wechat_enabled: false,
             wechat_gateway_token: String::new(),
             wechat_gateway_port: default_wechat_gateway_port(),
@@ -696,8 +752,9 @@ impl Settings {
             Self::try_decrypt_field(&store, &mut settings.zhipu_api_key);
             Self::try_decrypt_field(&store, &mut settings.kimi_api_key);
             Self::try_decrypt_field(&store, &mut settings.feishu_app_secret);
-            Self::try_decrypt_field(&store, &mut settings.wecom_agent_secret);
+            Self::try_decrypt_field(&store, &mut settings.wecom_bot_secret);
             Self::try_decrypt_field(&store, &mut settings.dingtalk_app_secret);
+            Self::try_decrypt_field(&store, &mut settings.dingtalk_robot_code);
             Self::try_decrypt_field(&store, &mut settings.telegram_bot_token);
             Self::try_decrypt_field(&store, &mut settings.matrix_access_token);
             Self::try_decrypt_field(&store, &mut settings.webhook_auth_token);
@@ -732,8 +789,9 @@ impl Settings {
             Self::encrypt_field(&store, &mut clone.zhipu_api_key);
             Self::encrypt_field(&store, &mut clone.kimi_api_key);
             Self::encrypt_field(&store, &mut clone.feishu_app_secret);
-            Self::encrypt_field(&store, &mut clone.wecom_agent_secret);
+            Self::encrypt_field(&store, &mut clone.wecom_bot_secret);
             Self::encrypt_field(&store, &mut clone.dingtalk_app_secret);
+            Self::encrypt_field(&store, &mut clone.dingtalk_robot_code);
             Self::encrypt_field(&store, &mut clone.telegram_bot_token);
             Self::encrypt_field(&store, &mut clone.matrix_access_token);
             Self::encrypt_field(&store, &mut clone.webhook_auth_token);
@@ -789,12 +847,19 @@ impl Settings {
             || !self.minimax_api_key.trim().is_empty()
             || !self.zhipu_api_key.trim().is_empty()
             || !self.kimi_api_key.trim().is_empty()
+            || is_local_ollama_openai_provider(&self.provider, &self.custom_base_url)
     }
 
-    /// Returns the active API key for the configured provider
+    /// Returns the active API key value to pass to the configured provider.
     pub fn active_api_key(&self) -> &str {
         match self.provider.as_str() {
-            "openai" | "custom" => &self.openai_api_key,
+            "custom" | "ollama"
+                if self.openai_api_key.trim().is_empty()
+                    && is_local_ollama_openai_provider(&self.provider, &self.custom_base_url) =>
+            {
+                "ollama"
+            }
+            "openai" | "custom" | "ollama" => &self.openai_api_key,
             "deepseek" => &self.deepseek_api_key,
             "qwen" | "tongyi" => &self.qwen_api_key,
             "minimax" => &self.minimax_api_key,

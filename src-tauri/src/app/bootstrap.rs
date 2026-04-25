@@ -9,40 +9,121 @@
 //!   Koi patrol, startup skill sync, startup Koi seed, stale-state
 //!   recovery)
 //! - register all `tauri::command` entry points via `generate_handler!`
-//! - if invoked from `openpisci-headless`, dispatch the request to
-//!   [`super::headless::run_cli_headless_request`] and exit
 //!
 //! Extracted from the old monolithic `desktop_app.rs`; no behaviour
 //! changes vs. that file — only the helper functions were moved out to
 //! [`super::logging`], [`super::markers`] and [`super::headless`].
 
-use crate::{
-    commands, gateway,
-    headless_cli::{HeadlessCliRequest, HeadlessCliResponse},
-    store,
-};
+use crate::{commands, gateway, store};
 use pisci_kernel::scheduler;
-use std::sync::{Arc, Mutex as StdMutex};
+use serde_json::Value;
+use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tracing::info;
+use uuid::Uuid;
 
-use super::headless::{persist_headless_cli_result, run_cli_headless_request, CliResultSink};
 use super::logging::{init_logging, install_crash_reporter};
 use super::markers::{extract_send_marker, guess_mime_from_path};
 
-fn clone_state(state: &store::AppState, app_handle: &tauri::AppHandle) -> store::AppState {
-    store::AppState {
-        db: state.db.clone(),
-        settings: state.settings.clone(),
-        plan_state: state.plan_state.clone(),
-        browser: state.browser.clone(),
-        cancel_flags: state.cancel_flags.clone(),
-        confirmation_responses: state.confirmation_responses.clone(),
-        interactive_responses: state.interactive_responses.clone(),
-        app_handle: app_handle.clone(),
-        scheduler: state.scheduler.clone(),
-        gateway: state.gateway.clone(),
-        pisci_heartbeat_cursor: state.pisci_heartbeat_cursor.clone(),
+fn build_im_session_title(msg: &gateway::InboundMessage) -> String {
+    let label = if msg.is_group {
+        msg.group_name
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .or(msg.sender_name.as_deref())
+            .unwrap_or(&msg.sender)
+    } else {
+        msg.sender_name.as_deref().unwrap_or(&msg.sender)
+    };
+    format!("{} · {}", msg.channel, label)
+}
+
+fn build_legacy_im_session_id(msg: &gateway::InboundMessage) -> String {
+    format!("im_{}_{}", msg.channel, msg.sender)
+}
+
+fn build_new_im_session_id(msg: &gateway::InboundMessage) -> String {
+    format!("im_{}_{}", msg.channel, Uuid::new_v4())
+}
+
+async fn resolve_or_create_im_binding(
+    db: &Arc<tokio::sync::Mutex<store::Database>>,
+    msg: &gateway::InboundMessage,
+) -> Result<store::db::ImSessionBinding, String> {
+    let source = format!("im_{}", msg.channel);
+    let title = build_im_session_title(msg);
+    let binding_key = msg.binding_key();
+    let external_conversation_key = msg.effective_conversation_key();
+    let routing_state_json = msg
+        .routing_state
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| e.to_string())?;
+
+    let db_lock = db.lock().await;
+    let session_id = if let Some(existing) = db_lock
+        .get_im_session_binding(&binding_key)
+        .map_err(|e| e.to_string())?
+    {
+        existing.session_id
+    } else {
+        let legacy_session_id = build_legacy_im_session_id(msg);
+        if db_lock
+            .get_session(&legacy_session_id)
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
+            legacy_session_id
+        } else {
+            build_new_im_session_id(msg)
+        }
+    };
+
+    let _ = db_lock
+        .ensure_im_session(&session_id, &title, &source)
+        .map_err(|e| e.to_string())?;
+    let _ = db_lock.rename_session(&session_id, &title);
+
+    db_lock
+        .upsert_im_session_binding(&store::db::ImSessionBindingUpsert {
+            binding_key,
+            channel: msg.channel.clone(),
+            external_conversation_key,
+            session_id,
+            peer_id: msg.sender.clone(),
+            peer_name: msg.sender_name.clone(),
+            is_group: msg.is_group,
+            group_name: msg.group_name.clone(),
+            latest_reply_target: msg.reply_target.clone(),
+            routing_state_json,
+        })
+        .map_err(|e| e.to_string())
+}
+
+async fn resolve_im_outbound_route(
+    db: &Arc<tokio::sync::Mutex<store::Database>>,
+    session_id: &str,
+    channel: &str,
+    fallback_recipient: &str,
+    fallback_routing_state: Option<Value>,
+) -> (String, Option<Value>) {
+    let db_lock = db.lock().await;
+    match db_lock.get_im_session_binding_by_session(session_id, channel) {
+        Ok(Some(binding)) => {
+            let recipient = if binding.latest_reply_target.trim().is_empty() {
+                fallback_recipient.to_string()
+            } else {
+                binding.latest_reply_target
+            };
+            let routing_state = binding
+                .routing_state_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .or(fallback_routing_state);
+            (recipient, routing_state)
+        }
+        _ => (fallback_recipient.to_string(), fallback_routing_state),
     }
 }
 
@@ -85,24 +166,10 @@ fn open_path(path: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    run_impl(None, None);
+    run_impl();
 }
 
-pub(crate) fn run_headless_cli(request: HeadlessCliRequest) -> Result<HeadlessCliResponse, String> {
-    let sink: CliResultSink = Arc::new(StdMutex::new(None));
-    run_impl(Some(request), Some(sink.clone()));
-    let result = sink
-        .lock()
-        .map_err(|_| "Failed to read headless CLI result.".to_string())?
-        .take()
-        .unwrap_or_else(|| Err("Headless CLI exited without producing a result.".to_string()));
-    result
-}
-
-fn run_impl(
-    headless_cli_request: Option<HeadlessCliRequest>,
-    cli_result_sink: Option<CliResultSink>,
-) {
+fn run_impl() {
     let _log_guard = init_logging();
     install_crash_reporter();
     let updater_enabled = std::env::var("PISCI_ENABLE_UPDATER").ok().as_deref() == Some("1");
@@ -113,19 +180,10 @@ fn run_impl(
         );
     }
 
-    let allow_multiple = {
-        if headless_cli_request.is_some() {
-            true
-        } else {
-            let config_path = store::settings::Settings::default_config_path();
-            store::settings::Settings::load(&config_path)
-                .map(|s| s.allow_multiple_instances)
-                .unwrap_or(false)
-        }
-    };
-
-    let setup_cli_request = headless_cli_request.clone();
-    let setup_cli_sink = cli_result_sink.clone();
+    let config_path = store::settings::Settings::default_config_path();
+    let allow_multiple = store::settings::Settings::load(&config_path)
+        .map(|s| s.allow_multiple_instances)
+        .unwrap_or(false);
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -154,21 +212,12 @@ fn run_impl(
 
     builder
         .setup(move |app| {
-            let cli_request = setup_cli_request.clone();
-            let cli_sink = setup_cli_sink.clone();
             let app_handle = app.handle().clone();
 
             let state = tauri::async_runtime::block_on(async {
                 let scheduler = scheduler::cron::CronScheduler::new().await?;
                 scheduler.start().await?;
-                if let Some(app_dir) = cli_request
-                    .as_ref()
-                    .and_then(HeadlessCliRequest::app_data_dir_override)
-                {
-                    store::AppState::new_sync_with_app_dir(&app_handle, scheduler, app_dir)
-                } else {
-                    store::AppState::new_sync(&app_handle, scheduler)
-                }
+                store::AppState::new_sync(&app_handle, scheduler)
             })?;
             let managed_state = store::AppState {
                 db: state.db.clone(),
@@ -229,7 +278,7 @@ fn run_impl(
                 }
             }
 
-            if cli_request.is_none() {
+            {
                 let gateway = state.gateway.clone();
                 let db = state.db.clone();
                 let settings = state.settings.clone();
@@ -281,16 +330,21 @@ fn run_impl(
                                 tracing::warn!("Failed to enter unattended IM mode: {}", e);
                             }
 
-                            let session_id = format!("im_{}_{}", msg.channel, msg.sender);
-                            let session_title = format!(
-                                "{} · {}",
-                                msg.channel,
-                                msg.sender_name.as_deref().unwrap_or(&msg.sender)
-                            );
-                            let source = format!("im_{}", msg.channel);
+                            let binding = match resolve_or_create_im_binding(&db, &msg).await {
+                                Ok(binding) => binding,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to resolve IM session binding for channel={} sender={}: {}",
+                                        msg.channel,
+                                        msg.sender,
+                                        e
+                                    );
+                                    continue;
+                                }
+                            };
+                            let session_id = binding.session_id.clone();
                             {
                                 let db_lock = db.lock().await;
-                                let _ = db_lock.ensure_im_session(&session_id, &session_title, &source);
                                 let _ = db_lock.append_message(&session_id, "user", &msg.content);
                                 let _ = db_lock.update_session_status(&session_id, "running");
                             }
@@ -413,17 +467,27 @@ fn run_impl(
                                         })
                                     });
 
+                                let (recipient, routing_state) = resolve_im_outbound_route(
+                                    &state_ref.db,
+                                    &session_id,
+                                    &msg.channel,
+                                    &msg.reply_target,
+                                    msg.routing_state.clone(),
+                                )
+                                .await;
+
                                 let outbound = gateway::OutboundMessage {
                                     channel: msg.channel.clone(),
-                                    recipient: msg.reply_target.clone(),
+                                    recipient: recipient.clone(),
                                     content: clean_text,
                                     reply_to: Some(msg.id.clone()),
                                     media,
+                                    routing_state,
                                 };
                                 info!(
                                     "Sending IM reply via channel={} recipient={} len={}",
                                     msg.channel,
-                                    msg.reply_target,
+                                    recipient,
                                     outbound.content.len()
                                 );
                                 match gw.send(&outbound).await {
@@ -445,7 +509,7 @@ fn run_impl(
             let startup_heartbeat_disabled =
                 std::env::var("PISCI_DISABLE_STARTUP_HEARTBEAT").ok().as_deref() == Some("1");
 
-            if cli_request.is_none() && !startup_heartbeat_disabled {
+            if !startup_heartbeat_disabled {
                 let settings_arc = state.settings.clone();
                 let db_arc = state.db.clone();
                 let plan_state_arc = state.plan_state.clone();
@@ -508,7 +572,7 @@ fn run_impl(
                 });
             }
 
-            if cli_request.is_none() {
+            {
                 let db_arc = state.db.clone();
                 let app_h = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
@@ -720,7 +784,7 @@ fn run_impl(
                 });
             }
 
-            if cli_request.is_none() {
+            {
                 if let Some(tray) = app.tray_by_id("main") {
                     use tauri::menu::{Menu, MenuItem};
                     if let (Ok(show_i), Ok(quit_i)) = (
@@ -744,31 +808,6 @@ fn run_impl(
             }
 
             info!("OpenPisci started");
-
-            if let Some(request) = cli_request {
-                if let Some(main) = app.get_webview_window("main") {
-                    let _ = main.hide();
-                }
-                if let Some(overlay) = app.get_webview_window("overlay") {
-                    let _ = overlay.hide();
-                }
-                let state_ref = clone_state(&state, &app_handle);
-                let app_for_cli = app_handle.clone();
-                let cli_output = request.output.clone();
-                tauri::async_runtime::spawn(async move {
-                    let result =
-                        run_cli_headless_request(state_ref, app_for_cli.clone(), request).await;
-                    let _ = persist_headless_cli_result(cli_output.as_deref(), &result);
-                    let exit_code = if result.is_ok() { 0 } else { 1 };
-                    if let Some(sink) = cli_sink {
-                        if let Ok(mut slot) = sink.lock() {
-                            *slot = Some(result);
-                        }
-                    }
-                    app_for_cli.exit(exit_code);
-                });
-                return Ok(());
-            }
 
             #[cfg(debug_assertions)]
             {
@@ -953,6 +992,10 @@ fn run_impl(
             commands::config::mcp::list_mcp_servers,
             commands::config::mcp::save_mcp_servers,
             commands::config::mcp::test_mcp_server,
+            commands::config::enterprise_capability::list_enterprise_capability_templates,
+            commands::config::enterprise_capability::get_enterprise_capability_status,
+            commands::config::enterprise_capability::enable_enterprise_capability,
+            commands::config::enterprise_capability::test_enterprise_capability,
             // chat/
             commands::chat::create_session,
             commands::chat::list_sessions,
@@ -1033,4 +1076,114 @@ fn run_impl(
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pisci Desktop");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_im_outbound_route, resolve_or_create_im_binding};
+    use crate::{gateway, store};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn inbound_message() -> gateway::InboundMessage {
+        gateway::InboundMessage {
+            id: "msg-1".to_string(),
+            channel: "wechat".to_string(),
+            sender: "wx-user-1".to_string(),
+            sender_name: Some("Alice".to_string()),
+            content: "hello".to_string(),
+            reply_target: "wx-user-1|ctx-1".to_string(),
+            conversation_key: Some("dm:wx-user-1".to_string()),
+            is_group: false,
+            group_name: None,
+            timestamp: 1,
+            media: None,
+            routing_state: Some(json!({
+                "context_token": "ctx-1",
+                "session_id": "",
+                "from_user_id": "wx-user-1",
+            })),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_or_create_im_binding_reuses_existing_session_and_updates_route() {
+        let db = Arc::new(tokio::sync::Mutex::new(
+            store::Database::open_in_memory().expect("in-memory db"),
+        ));
+
+        let first = resolve_or_create_im_binding(&db, &inbound_message())
+            .await
+            .expect("first binding");
+
+        let mut followup = inbound_message();
+        followup.id = "msg-2".to_string();
+        followup.reply_target = "wx-user-1|ctx-2".to_string();
+        followup.routing_state = Some(json!({
+            "context_token": "ctx-2",
+            "session_id": "",
+            "from_user_id": "wx-user-1",
+        }));
+
+        let second = resolve_or_create_im_binding(&db, &followup)
+            .await
+            .expect("second binding");
+
+        assert_eq!(second.session_id, first.session_id);
+        assert_eq!(second.latest_reply_target, "wx-user-1|ctx-2");
+        assert_eq!(
+            second
+                .routing_state_json
+                .as_deref()
+                .expect("routing_state_json"),
+            r#"{"context_token":"ctx-2","from_user_id":"wx-user-1","session_id":""}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_or_create_im_binding_adopts_legacy_session_id() {
+        let db = Arc::new(tokio::sync::Mutex::new(
+            store::Database::open_in_memory().expect("in-memory db"),
+        ));
+        let msg = inbound_message();
+        let legacy_session_id = format!("im_{}_{}", msg.channel, msg.sender);
+        {
+            let db_lock = db.lock().await;
+            db_lock
+                .ensure_im_session(&legacy_session_id, "legacy", "im_wechat")
+                .expect("legacy session");
+        }
+
+        let binding = resolve_or_create_im_binding(&db, &msg)
+            .await
+            .expect("binding");
+
+        assert_eq!(binding.session_id, legacy_session_id);
+    }
+
+    #[tokio::test]
+    async fn resolve_im_outbound_route_prefers_persisted_binding_state() {
+        let db = Arc::new(tokio::sync::Mutex::new(
+            store::Database::open_in_memory().expect("in-memory db"),
+        ));
+        let msg = inbound_message();
+        let binding = resolve_or_create_im_binding(&db, &msg)
+            .await
+            .expect("binding");
+
+        let (recipient, routing_state) = resolve_im_outbound_route(
+            &db,
+            &binding.session_id,
+            &binding.channel,
+            "fallback-user",
+            Some(json!({ "context_token": "fallback" })),
+        )
+        .await;
+
+        assert_eq!(recipient, "wx-user-1|ctx-1");
+        assert_eq!(
+            routing_state.expect("routing state")["context_token"],
+            "ctx-1"
+        );
+    }
 }

@@ -17,7 +17,7 @@
 //! stay on the desktop crate because they depend on desktop-specific
 //! coordination (Tauri windows, pool scheduler, per-koi notification rx).
 //! Hosts that want to invoke `openpisci-headless run` with `mode: pool`
-//! should fall back to the existing desktop CLI.
+//! should run through `openpisci-headless`.
 //!
 //! This module is the shared core behind both:
 //!   - `openpisci-headless run` (in `pisci-cli`) — full kernel path,

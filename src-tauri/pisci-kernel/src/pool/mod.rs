@@ -62,7 +62,7 @@ pub mod store;
 pub mod subagent;
 
 pub use model::{
-    AssignKoiArgs, CallerContext, CreatePoolArgs, CreateTodoArgs, ReplaceTodoArgs,
+    AssignKoiArgs, CallerContext, CreatePoolArgs, CreateTodoArgs, DeleteTodoArgs, ReplaceTodoArgs,
     SendPoolMessageArgs, UpdateOrgSpecArgs, UpdateTodoStatusArgs,
 };
 pub use store::PoolStore;

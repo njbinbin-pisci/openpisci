@@ -1,5 +1,8 @@
 use crate::commands::chat::{run_agent_headless, HeadlessRunOptions, SESSION_SOURCE_PISCI_POOL};
 use crate::commands::config::scene::SceneKind;
+use crate::notify::{
+    dispatch_notification, NotificationLevel, NotificationRequest, NotificationTarget, NotifierDeps,
+};
 use crate::pool::bridge;
 use crate::pool::KoiTodo;
 use crate::store::AppState;
@@ -7,8 +10,6 @@ pub use pisci_core::heartbeat::{
     build_pool_heartbeat_message, collect_pool_attention, PoolAttention,
 };
 use pisci_core::project_state::ProjectDecision;
-use serde_json::json;
-use tauri::Emitter;
 use tracing::warn;
 
 const HEARTBEAT_SOURCE: &str = crate::commands::chat::SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL;
@@ -166,7 +167,7 @@ pub async fn dispatch_heartbeat(
                 attention.assessment.decision,
                 ProjectDecision::EscalateToHuman
             ) {
-                emit_auto_escalation_toast(state, &attention);
+                emit_auto_escalation_toast(state, &attention).await;
             }
 
             let heartbeat_message = build_pool_heartbeat_message(base_prompt, &attention);
@@ -209,31 +210,53 @@ pub async fn dispatch_heartbeat(
 /// before Pisci's own turn so the user is alerted even if Pisci itself fails
 /// or takes a long time to respond. Pisci is still expected to call
 /// `app_control(notify_user, ...)` itself to add a diagnostic summary.
-fn emit_auto_escalation_toast(state: &AppState, attention: &PoolAttention) {
+///
+/// When the pool was created from an IM conversation
+/// (`pool_sessions.origin_im_binding_key`), the same notification is
+/// fanned out to that IM channel so users who interact with Pisci
+/// remotely don't miss escalations while the desktop UI is closed.
+async fn emit_auto_escalation_toast(state: &AppState, attention: &PoolAttention) {
     let reasons = if attention.assessment.attention_reasons.is_empty() {
         attention.assessment.summary.clone()
     } else {
         attention.assessment.attention_reasons.join("; ")
     };
     let preview: String = reasons.chars().take(240).collect();
-    let toast_id = format!(
-        "auto_escalate_{}_{}",
-        attention.pool_id, attention.latest_message_id
-    );
-    let payload = json!({
-        "id": toast_id,
-        "title": format!("需要人工决策 · {}", attention.pool_name),
-        "message": preview,
-        "level": "critical",
-        "pool_id": attention.pool_id,
-        "duration_ms": 0,
-        "source": "heartbeat_auto",
-        "ts": chrono::Utc::now().timestamp_millis(),
-    });
-    if let Err(err) = state.app_handle.emit("pisci_toast", payload) {
+    let title = format!("需要人工决策 · {}", attention.pool_name);
+
+    let origin_binding = {
+        let db = state.db.lock().await;
+        match db.get_pool_session(&attention.pool_id) {
+            Ok(Some(pool)) => pool.origin_im_binding_key,
+            Ok(None) => None,
+            Err(err) => {
+                warn!(
+                    "auto-escalation: failed to load pool {} for IM origin lookup: {}",
+                    attention.pool_id, err
+                );
+                None
+            }
+        }
+    };
+
+    let mut request = NotificationRequest::new(title, preview)
+        .with_level(NotificationLevel::Critical)
+        .with_source("heartbeat_auto")
+        .with_pool(attention.pool_id.clone())
+        .with_duration_ms(0)
+        .add_target(NotificationTarget::Ui);
+    if let Some(binding_key) = origin_binding {
+        request = request.add_target(NotificationTarget::im_binding(binding_key));
+    }
+
+    let deps = NotifierDeps::from_state(state);
+    let outcomes = dispatch_notification(&deps, request).await;
+    for outcome in outcomes.iter().filter(|o| !o.delivered) {
         warn!(
-            "Failed to emit auto-escalation pisci_toast for pool {}: {}",
-            attention.pool_id, err
+            "auto-escalation: failed to deliver to {} for pool {}: {}",
+            outcome.target.to_token(),
+            attention.pool_id,
+            outcome.detail
         );
     }
 }

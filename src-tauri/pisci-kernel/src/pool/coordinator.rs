@@ -60,6 +60,20 @@ pub const DEFAULT_TASK_TIMEOUT_SECS: u32 = 600;
 /// * `{name}`    — Koi display name (`KoiDefinition::name`).
 /// * `{todo_id}` — short 8-char prefix so the agent can quote it back.
 pub const KOI_EXECUTE_TODO_PROMPT: &str = include_str!("./koi_execute_todo.tmpl");
+pub const KOI_ACTIVATE_FOR_MESSAGES_PROMPT: &str =
+    include_str!("../../../prompts/koi_activate_for_messages.txt");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MentionMode {
+    Notify,
+    Delegate,
+}
+
+#[derive(Debug, Clone)]
+struct MentionTarget {
+    koi: KoiDefinition,
+    mode: MentionMode,
+}
 
 /// Knobs every host injects when building a coordinator call. Defaults
 /// match the legacy desktop behaviour so the CLI host can use
@@ -404,9 +418,36 @@ fn render_execute_prompt(koi: &KoiDefinition, todo: &KoiTodo) -> String {
         .replace("{todo_id}", &short)
 }
 
+fn render_activation_prompt(
+    koi: &KoiDefinition,
+    pool_id: &str,
+    sender_id: &str,
+    content: &str,
+) -> String {
+    KOI_ACTIVATE_FOR_MESSAGES_PROMPT
+        .replace("{pool_id}", pool_id)
+        .replace("{name}", &koi.name)
+        .replace("{sender_id}", sender_id)
+        .replace("{message}", content)
+}
+
 fn koi_timeout_for_todo(koi: &KoiDefinition, todo_timeout_secs: u32, default_secs: u32) -> u32 {
     if todo_timeout_secs > 0 {
         todo_timeout_secs
+    } else if koi.task_timeout_secs > 0 {
+        koi.task_timeout_secs
+    } else {
+        default_secs
+    }
+}
+
+fn koi_timeout_for_activation(
+    koi: &KoiDefinition,
+    pool: Option<&PoolSession>,
+    default_secs: u32,
+) -> u32 {
+    if let Some(pool) = pool.filter(|pool| pool.task_timeout_secs > 0) {
+        pool.task_timeout_secs
     } else if koi.task_timeout_secs > 0 {
         koi.task_timeout_secs
     } else {
@@ -982,16 +1023,20 @@ fn todo_source_type(actor: &str) -> &'static str {
 
 // ─── handle_mention ───────────────────────────────────────────────────
 
-/// Fan-out when a pool chat message mentions one or more Kois. Creates
-/// a todo for each targeted Koi (if they don't already have one for
-/// this pool) and fires `execute_todo_turn` for each so they wake up.
+/// Fan-out when a pool chat message mentions one or more Kois.
 ///
-/// In Phase 1 this code lived in `KoiRuntime::handle_mention` and
-/// reached for in-memory mpsc session channels to inject notifications
-/// into busy Koi runs. Because Phase 2 turns each Koi run into a
-/// one-shot subprocess, there are no persistent sessions to inject
-/// into; every mention simply spawns a fresh subagent turn (deduped
-/// against existing `todo` / `in_progress` todos for the same Koi).
+/// Semantics:
+/// - `@KoiName` / `@all` is a notification. It does not create todos.
+///   If the target Koi is currently idle, we wake a short coordination
+///   turn so it can inspect the pool and decide whether any todo or
+///   handoff is needed.
+/// - `@!KoiName` / `@!all` is a forced delegation. It creates (or
+///   reuses) a board todo and dispatches the Koi turn immediately.
+///
+/// In Phase 2 turns are one-shot subprocesses, so there is no
+/// persistent inbox we can push into for busy Kois. Plain notification
+/// therefore only auto-wakes idle Kois; busy ones will observe the
+/// message on their next turn.
 pub async fn handle_mention(
     store: &PoolStore,
     sink: Arc<dyn PoolEventSink>,
@@ -1003,85 +1048,109 @@ pub async fn handle_mention(
 ) -> anyhow::Result<()> {
     let kois = store.read(|db| db.list_kois()).await.unwrap_or_default();
 
-    let mention_all = content.contains("@all");
-    let sender_id_owned = sender_id.to_string();
-    for koi in &kois {
-        if koi.status == "offline" || koi.id == sender_id_owned {
-            continue;
-        }
-        let mention = format!("@{}", koi.name);
-        if !mention_all && !content.contains(&mention) {
-            continue;
-        }
+    for target in parse_mention_targets(&kois, sender_id, content) {
+        match target.mode {
+            MentionMode::Notify => {
+                if target.koi.status != "idle" {
+                    continue;
+                }
 
-        // Ensure there's an active todo for this Koi. Reuse an existing
-        // `todo` / `in_progress` one; otherwise synthesise a todo from
-        // the mention content.
-        let existing = find_active_todo_for_koi(store, &koi.id, pool_session_id).await;
-        let (todo, synthesised) = match existing {
-            Some(t) => (t, false),
-            None => {
-                let owner = koi.id.clone();
-                let title: String = content.chars().take(120).collect();
-                let desc = content.to_string();
-                let assigned_by = sender_id.to_string();
-                let pool_id = pool_session_id.to_string();
-                let todo = store
-                    .write(move |db| {
-                        db.create_koi_todo(
-                            &owner,
-                            &title,
-                            &desc,
-                            "medium",
-                            &assigned_by,
-                            Some(&pool_id),
-                            "mention",
-                            None,
-                            0,
-                        )
-                    })
-                    .await?;
-                sink.as_ref().emit_pool(&PoolEvent::TodoChanged {
-                    pool_id: pool_session_id.to_string(),
-                    action: TodoChangeAction::Created,
-                    todo: (&todo).into(),
+                let store_cl = store.clone();
+                let subagent_cl = subagent.clone();
+                let cfg_cl = cfg.clone();
+                let koi = target.koi.clone();
+                let sender_id = sender_id.to_string();
+                let pool_session_id = pool_session_id.to_string();
+                let content = content.to_string();
+                tokio::spawn(async move {
+                    if let Err(e) = execute_notification_turn(
+                        &store_cl,
+                        subagent_cl,
+                        &cfg_cl,
+                        &koi,
+                        &sender_id,
+                        &pool_session_id,
+                        &content,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            target: "pool::coordinator",
+                            koi_id = %koi.id,
+                            pool_id = %pool_session_id,
+                            "notification mention dispatch failed: {e}"
+                        );
+                    }
                 });
-                (todo, true)
             }
-        };
+            MentionMode::Delegate => {
+                let existing =
+                    find_active_todo_for_koi(store, &target.koi.id, pool_session_id).await;
+                let (todo, synthesised) = match existing {
+                    Some(t) => (t, false),
+                    None => {
+                        let owner = target.koi.id.clone();
+                        let title: String = content.chars().take(120).collect();
+                        let desc = content.to_string();
+                        let assigned_by = sender_id.to_string();
+                        let pool_id = pool_session_id.to_string();
+                        let todo = store
+                            .write(move |db| {
+                                db.create_koi_todo(
+                                    &owner,
+                                    &title,
+                                    &desc,
+                                    "medium",
+                                    &assigned_by,
+                                    Some(&pool_id),
+                                    "mention",
+                                    None,
+                                    0,
+                                )
+                            })
+                            .await?;
+                        sink.as_ref().emit_pool(&PoolEvent::TodoChanged {
+                            pool_id: pool_session_id.to_string(),
+                            action: TodoChangeAction::Created,
+                            todo: (&todo).into(),
+                        });
+                        (todo, true)
+                    }
+                };
 
-        // Only spawn a turn when the todo is not already being worked
-        // on — if it's `in_progress` somebody else is already on it.
-        if !synthesised && todo.status == "in_progress" {
-            continue;
+                if !synthesised && todo.status == "in_progress" {
+                    continue;
+                }
+
+                let store_cl = store.clone();
+                let subagent_cl = subagent.clone();
+                let cfg_cl = cfg.clone();
+                let owner_id = target.koi.id.clone();
+                let todo_id = todo.id.clone();
+                let session_id = format!("koi_runtime_{}_{}", target.koi.id, pool_session_id);
+                let sink_cl = sink.clone();
+                tokio::spawn(async move {
+                    let args = ExecuteTodoArgs {
+                        koi_id: owner_id.clone(),
+                        todo_id: todo_id.clone(),
+                        assign_msg_id: None,
+                        session_id,
+                        extra_tool_profile: Vec::new(),
+                        extra_system_context: None,
+                    };
+                    if let Err(e) =
+                        execute_todo_turn(&store_cl, sink_cl, subagent_cl, &cfg_cl, args).await
+                    {
+                        tracing::warn!(
+                            target: "pool::coordinator",
+                            koi_id = %owner_id,
+                            todo_id = %todo_id,
+                            "delegated mention dispatch failed: {e}"
+                        );
+                    }
+                });
+            }
         }
-
-        let store_cl = store.clone();
-        let subagent_cl = subagent.clone();
-        let cfg_cl = cfg.clone();
-        let owner_id = koi.id.clone();
-        let todo_id = todo.id.clone();
-        let session_id = format!("koi_runtime_{}_{}", koi.id, pool_session_id);
-        let sink_cl = sink.clone();
-        tokio::spawn(async move {
-            let args = ExecuteTodoArgs {
-                koi_id: owner_id.clone(),
-                todo_id: todo_id.clone(),
-                assign_msg_id: None,
-                session_id,
-                extra_tool_profile: Vec::new(),
-                extra_system_context: None,
-            };
-            if let Err(e) = execute_todo_turn(&store_cl, sink_cl, subagent_cl, &cfg_cl, args).await
-            {
-                tracing::warn!(
-                    target: "pool::coordinator",
-                    koi_id = %owner_id,
-                    todo_id = %todo_id,
-                    "handle_mention dispatch failed: {e}"
-                );
-            }
-        });
     }
 
     Ok(())
@@ -1277,6 +1346,76 @@ pub async fn assign_and_execute(
         extra_system_context: None,
     };
     execute_todo_turn(store, sink, subagent, cfg, args).await
+}
+
+async fn execute_notification_turn(
+    store: &PoolStore,
+    subagent: Arc<dyn SubagentRuntime>,
+    cfg: &CoordinatorConfig,
+    koi: &KoiDefinition,
+    sender_id: &str,
+    pool_session_id: &str,
+    content: &str,
+) -> anyhow::Result<()> {
+    let pool_lookup = pool_session_id.to_string();
+    let pool = store
+        .read(move |db| db.get_pool_session(&pool_lookup))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Pool '{}' not found", pool_session_id))?;
+    let timeout_secs = cfg
+        .default_task_timeout_secs
+        .max(koi_timeout_for_activation(
+            koi,
+            Some(&pool),
+            cfg.default_task_timeout_secs,
+        ));
+    let request = KoiTurnRequest {
+        pool_id: pool.id.clone(),
+        koi_id: koi.id.clone(),
+        session_id: format!("koi_notify_{}_{}", koi.id, pool_session_id),
+        todo_id: None,
+        system_prompt: format!(
+            "{}\n\n{}",
+            koi.system_prompt,
+            render_activation_prompt(koi, pool_session_id, sender_id, content)
+        ),
+        user_prompt: format!("Pool notification from {}:\n\n{}", sender_id, content),
+        workspace: pool.project_dir.clone(),
+        task_timeout_secs: Some(timeout_secs),
+        extra_tool_profile: Vec::new(),
+        extra_system_context: None,
+    };
+    let _ = run_subagent_turn(subagent, request, timeout_secs).await?;
+    Ok(())
+}
+
+fn parse_mention_targets(
+    kois: &[KoiDefinition],
+    sender_id: &str,
+    content: &str,
+) -> Vec<MentionTarget> {
+    let notify_all = content.contains("@all");
+    let delegate_all = content.contains("@!all");
+    kois.iter()
+        .filter(|koi| koi.status != "offline" && koi.id != sender_id)
+        .filter_map(|koi| {
+            let delegate = delegate_all || content.contains(&format!("@!{}", koi.name));
+            let notify = notify_all || content.contains(&format!("@{}", koi.name));
+            if delegate {
+                Some(MentionTarget {
+                    koi: koi.clone(),
+                    mode: MentionMode::Delegate,
+                })
+            } else if notify {
+                Some(MentionTarget {
+                    koi: koi.clone(),
+                    mode: MentionMode::Notify,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 async fn find_active_todo_for_koi(

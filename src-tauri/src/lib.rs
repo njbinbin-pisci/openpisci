@@ -13,6 +13,7 @@ pub mod host;
 
 #[cfg(test)]
 mod live_smoke;
+pub mod notify;
 mod pisci;
 pub mod pool;
 mod skills;

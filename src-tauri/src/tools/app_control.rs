@@ -1,9 +1,12 @@
 use crate::commands::config::tools::BuiltinToolInfo;
+use crate::gateway::GatewayManager;
+use crate::notify::{dispatch_notification, NotifierDeps};
 use crate::skills::loader::SkillLoader;
 use crate::store::{settings::SshServerConfig, Database, Settings};
 use crate::tools::user_tool::UserToolManifest;
 use async_trait::async_trait;
 use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult};
+use pisci_kernel::notify::{NotificationLevel, NotificationRequest, NotificationTarget};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -90,6 +93,11 @@ pub struct AppControlTool {
     pub settings: Arc<Mutex<Settings>>,
     pub app_data_dir: PathBuf,
     pub app_handle: Option<AppHandle>,
+    /// Shared IM gateway. Carrying it on the tool (rather than re-reading
+    /// from `AppState` each call) means `notify_user` can fan a toast out
+    /// to IM targets when the agent passes `targets: ["im_binding:..."]`,
+    /// without coupling the tool to Tauri-specific state plumbing.
+    pub gateway: Option<Arc<GatewayManager>>,
 }
 
 impl AppControlTool {
@@ -136,9 +144,10 @@ impl Tool for AppControlTool {
          \n- 'ui_enter_minimal_mode': Hide main window and show the floating overlay.\
          \n- 'ui_exit_minimal_mode': Exit minimal mode and restore the main window.\
          \n- 'window_move': Move the main or overlay window. Required: window_target (main|overlay). Use x+y or position_preset=bottom_right.\
-         \n- 'notify_user': Show a toast notification in the main UI window to surface a situation to the human user.\
+         \n- 'notify_user': Surface a notification to the human. Defaults to a desktop toast, but can also fan out to one or more IM conversations.\
          \n  Required: message. Optional: title (default 'Pisci'), level (info|warning|error|critical, default 'info'),\
-         \n  pool_id (to link the toast to a specific pool), duration_ms (0 = persistent until dismissed).\
+         \n  pool_id (to link the toast to a specific pool), duration_ms (0 = persistent until dismissed),\
+         \n  targets (array of tokens; defaults to ['ui']). Target tokens: 'ui', 'im_binding:<binding_key>', 'im_session:<session_id>'.\
          \n  Use sparingly. Typical cases: human escalation after unrecoverable failures, Pisci needs an explicit user decision,\
          \n  or a long-running project reached a milestone the user should know about. Do NOT use for chatty progress updates.\
          \
@@ -161,7 +170,7 @@ impl Tool for AppControlTool {
          \n\nACTIONS — Koi Agents:\
          \n- 'koi_list': List all Koi agents with their id, name, role, icon, status, and description.\
          \n- 'koi_create': Create a new Koi agent. Required: name, role, system_prompt. Optional: icon (emoji), color (hex), description.\
-         \n  Only create a Koi when the user explicitly requests it. Do NOT create Koi proactively.\
+         \n  Only create a Koi when the user explicitly requests it, or when a confirmed pool-based multi-agent project is missing a specialist role needed to complete the user's requested work. Do NOT create speculative or duplicate Koi proactively.\
          \n  IMPORTANT: The 'name' field must be plain text only, with no spaces, no emoji, and no other pictographic characters. Emoji belongs in the 'icon' field only.\
          \n- 'koi_update': Update an existing Koi agent. Required: koi_id. Optional: name, role, icon, color, system_prompt, description. Only the provided fields are changed. If 'name' is provided, it must also follow the no-spaces / no-emoji rule.\
          \n- 'koi_delete': Delete a Koi agent by id. Required: koi_id. Use with caution — this permanently removes the Koi and all its memories.\
@@ -227,12 +236,14 @@ impl Tool for AppControlTool {
                 "feishu_app_secret": { "type": "string" },
                 "feishu_domain": { "type": "string" },
                 "feishu_enabled": { "type": "boolean" },
-                "wecom_corp_id": { "type": "string" },
-                "wecom_agent_secret": { "type": "string" },
-                "wecom_agent_id": { "type": "string" },
+                "wecom_bot_id": { "type": "string" },
+                "wecom_bot_secret": { "type": "string" },
                 "wecom_enabled": { "type": "boolean" },
                 "dingtalk_app_key": { "type": "string" },
                 "dingtalk_app_secret": { "type": "string" },
+                "dingtalk_robot_code": { "type": "string" },
+                "dingtalk_corp_id": { "type": "string" },
+                "dingtalk_agent_id": { "type": "string" },
                 "dingtalk_enabled": { "type": "boolean" },
                 "telegram_bot_token": { "type": "string" },
                 "telegram_enabled": { "type": "boolean" },
@@ -249,7 +260,6 @@ impl Tool for AppControlTool {
                 "webhook_outbound_url": { "type": "string" },
                 "webhook_auth_token": { "type": "string" },
                 "webhook_enabled": { "type": "boolean" },
-                "wecom_inbox_file": { "type": "string" },
                 "wechat_enabled": { "type": "boolean" },
                 "wechat_gateway_token": { "type": "string" },
                 "wechat_gateway_port": { "type": "integer" },
@@ -287,7 +297,12 @@ impl Tool for AppControlTool {
                 "message": { "type": "string", "description": "Toast body text for notify_user" },
                 "level": { "type": "string", "enum": ["info", "warning", "error", "critical"], "description": "Toast severity for notify_user (default 'info')" },
                 "pool_id": { "type": "string", "description": "Optional pool id to associate a notify_user toast with a specific project" },
-                "duration_ms": { "type": "integer", "description": "Auto-dismiss duration in ms for notify_user. 0 = persistent until the user closes it (use for level=critical)." }
+                "duration_ms": { "type": "integer", "description": "Auto-dismiss duration in ms for notify_user. 0 = persistent until the user closes it (use for level=critical)." },
+                "targets": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "notify_user target list. Each entry is a token: 'ui' (desktop toast), 'im_binding:<binding_key>' (specific IM conversation), or 'im_session:<session_id>' (whichever IM channel/conversation last spoke to this Pisci session). Defaults to ['ui'] if omitted."
+                }
             }
         })
     }
@@ -543,10 +558,14 @@ impl AppControlTool {
              - dingtalk_enabled: {dingtalk_enabled}\n\
              - dingtalk_app_key: {dingtalk_app_key}\n\
              - dingtalk_app_secret: {dingtalk_app_secret}\n\
+             - dingtalk_robot_code: {dingtalk_robot_code}\n\
+             - dingtalk_corp_id: {dingtalk_corp_id}\n\
+             - dingtalk_agent_id: {dingtalk_agent_id}\n\
              - wechat_enabled: {wechat_enabled}\n\
              - wechat_gateway_port: {wechat_gateway_port}\n\
              - wecom_enabled: {wecom_enabled}\n\
-             - wecom_corp_id: {wecom_corp_id}\n\
+             - wecom_bot_id: {wecom_bot_id}\n\
+             - wecom_bot_secret: {wecom_bot_secret}\n\
              - telegram_enabled: {telegram_enabled}\n\
              - telegram_bot_token: {telegram_bot_token}\
              {ssh_section}",
@@ -580,10 +599,14 @@ impl AppControlTool {
             dingtalk_enabled = s.dingtalk_enabled,
             dingtalk_app_key = configured(&s.dingtalk_app_key),
             dingtalk_app_secret = configured(&s.dingtalk_app_secret),
+            dingtalk_robot_code = configured(&s.dingtalk_robot_code),
+            dingtalk_corp_id = configured(&s.dingtalk_corp_id),
+            dingtalk_agent_id = configured(&s.dingtalk_agent_id),
             wechat_enabled = s.wechat_enabled,
             wechat_gateway_port = s.wechat_gateway_port,
             wecom_enabled = s.wecom_enabled,
-            wecom_corp_id = configured(&s.wecom_corp_id),
+            wecom_bot_id = configured(&s.wecom_bot_id),
+            wecom_bot_secret = configured(&s.wecom_bot_secret),
             telegram_enabled = s.telegram_enabled,
             telegram_bot_token = configured(&s.telegram_bot_token),
             ssh_section = if s.ssh_servers.is_empty() {
@@ -676,12 +699,14 @@ impl AppControlTool {
         apply_str!(feishu_app_secret, "feishu_app_secret");
         apply_str!(feishu_domain, "feishu_domain");
         apply_bool!(feishu_enabled, "feishu_enabled");
-        apply_str!(wecom_corp_id, "wecom_corp_id");
-        apply_str!(wecom_agent_secret, "wecom_agent_secret");
-        apply_str!(wecom_agent_id, "wecom_agent_id");
+        apply_str!(wecom_bot_id, "wecom_bot_id");
+        apply_str!(wecom_bot_secret, "wecom_bot_secret");
         apply_bool!(wecom_enabled, "wecom_enabled");
         apply_str!(dingtalk_app_key, "dingtalk_app_key");
         apply_str!(dingtalk_app_secret, "dingtalk_app_secret");
+        apply_str!(dingtalk_robot_code, "dingtalk_robot_code");
+        apply_str!(dingtalk_corp_id, "dingtalk_corp_id");
+        apply_str!(dingtalk_agent_id, "dingtalk_agent_id");
         apply_bool!(dingtalk_enabled, "dingtalk_enabled");
         apply_str!(telegram_bot_token, "telegram_bot_token");
         apply_bool!(telegram_enabled, "telegram_enabled");
@@ -698,7 +723,6 @@ impl AppControlTool {
         apply_str!(webhook_outbound_url, "webhook_outbound_url");
         apply_str!(webhook_auth_token, "webhook_auth_token");
         apply_bool!(webhook_enabled, "webhook_enabled");
-        apply_str!(wecom_inbox_file, "wecom_inbox_file");
         apply_bool!(wechat_enabled, "wechat_enabled");
         apply_str!(wechat_gateway_token, "wechat_gateway_token");
         if let Some(v) = input["wechat_gateway_port"].as_u64() {
@@ -1195,71 +1219,93 @@ impl AppControlTool {
             .filter(|s| !s.is_empty())
             .unwrap_or("Pisci")
             .to_string();
-        let level = match input["level"].as_str().map(str::trim).unwrap_or("info") {
-            "" | "info" => "info",
-            "warning" | "warn" => "warning",
-            "error" => "error",
-            "critical" => "critical",
-            other => {
+        let level_raw = input["level"].as_str().map(str::trim).unwrap_or("info");
+        let level = match NotificationLevel::parse_lenient(level_raw) {
+            Some(l) => l,
+            None => {
                 return Ok(ToolResult::err(format!(
                     "Invalid level '{}'. Use info|warning|error|critical",
-                    other
+                    level_raw
                 )))
             }
-        }
-        .to_string();
+        };
         let pool_id = input["pool_id"]
             .as_str()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        let default_duration_ms: i64 = match level.as_str() {
-            "critical" => 0,
-            "error" => 12_000,
-            "warning" => 8_000,
-            _ => 5_000,
-        };
-        let duration_ms = input["duration_ms"].as_i64().unwrap_or(default_duration_ms);
+        let duration_ms = input["duration_ms"].as_i64();
 
-        let app = match &self.app_handle {
-            Some(app) => app.clone(),
-            None => {
-                return Ok(ToolResult::err(
-                    "UI notifications are unavailable in this context",
-                ))
+        let mut targets: Vec<NotificationTarget> = Vec::new();
+        if let Some(arr) = input["targets"].as_array() {
+            for entry in arr {
+                let token = match entry.as_str() {
+                    Some(s) => s,
+                    None => {
+                        return Ok(ToolResult::err(
+                            "'targets' entries must be strings (e.g. 'ui', 'im_binding:wechat::dm:user-1')",
+                        ));
+                    }
+                };
+                match NotificationTarget::parse_token(token) {
+                    Ok(t) => targets.push(t),
+                    Err(err) => return Ok(ToolResult::err(err)),
+                }
             }
-        };
+        }
 
-        let id = format!(
-            "toast_{}_{}",
-            chrono::Utc::now().timestamp_millis(),
-            uuid::Uuid::new_v4().simple()
+        let mut request = NotificationRequest::new(title.clone(), message.clone())
+            .with_level(level)
+            .with_source("pisci")
+            .with_targets(targets);
+        if let Some(pid) = pool_id.as_ref() {
+            request = request.with_pool(pid.clone());
+        }
+        if let Some(dur) = duration_ms {
+            request = request.with_duration_ms(dur);
+        }
+
+        let deps = NotifierDeps::new(
+            self.app_handle.clone(),
+            self.gateway.clone(),
+            Some(self.db.clone()),
         );
-        let payload = json!({
-            "id": id,
-            "title": title,
-            "message": message,
-            "level": level,
-            "pool_id": pool_id,
-            "duration_ms": duration_ms,
-            "source": "pisci",
-            "ts": chrono::Utc::now().timestamp_millis(),
-        });
-
-        app.emit("pisci_toast", payload)
-            .map_err(|e| anyhow::anyhow!("Failed to emit pisci_toast: {}", e))?;
+        let outcomes = dispatch_notification(&deps, request).await;
 
         info!(
-            "notify_user: level={} title={:?} message_len={}",
-            level,
+            "notify_user: level={} title={:?} message_len={} targets={} delivered={}",
+            level.as_str(),
             title,
-            message.chars().count()
+            message.chars().count(),
+            outcomes.len(),
+            outcomes.iter().filter(|o| o.delivered).count(),
         );
 
-        Ok(ToolResult::ok(format!(
-            "Toast delivered to main UI (level='{}', duration_ms={}).",
-            level, duration_ms
-        )))
+        let summary = outcomes
+            .iter()
+            .map(|o| {
+                format!(
+                    "{} -> {} ({})",
+                    o.target.to_token(),
+                    if o.delivered { "ok" } else { "failed" },
+                    o.detail
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+
+        if outcomes.iter().any(|o| !o.delivered) {
+            Ok(ToolResult::err(format!(
+                "Some notification targets failed: {}",
+                summary
+            )))
+        } else {
+            Ok(ToolResult::ok(format!(
+                "Notification dispatched to {} target(s): {}",
+                outcomes.len(),
+                summary
+            )))
+        }
     }
 
     // ── Built-in Tools ────────────────────────────────────────────────────────
@@ -2067,6 +2113,13 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
             name: "app_control".into(),
             description: "Manage Pisci app settings and system state.".into(),
             icon: "🎛️".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "im_send_message".into(),
+            description:
+                "Send Markdown messages to IM conversations through the connected channel.".into(),
+            icon: "💬".into(),
             windows_only: false,
         },
         BuiltinToolInfo {

@@ -50,6 +50,7 @@ struct SessionMessageContext {
     llm_messages: Vec<LlmMessage>,
     session_state: Option<SessionContextState>,
     latest_user_text: String,
+    tool_minimals: HashMap<String, String>,
 }
 
 struct ChatPromptArtifacts {
@@ -223,6 +224,7 @@ async fn build_session_message_context_from_db(
     let history = db
         .get_messages_latest(session_id, 2000)
         .map_err(|e| e.to_string())?;
+    let tool_minimals = extract_tool_minimals_from_history(&history);
     let session_state = db
         .get_session_context_state(session_id)
         .map_err(|e| e.to_string())?;
@@ -284,6 +286,7 @@ async fn build_session_message_context_from_db(
         llm_messages,
         session_state,
         latest_user_text,
+        tool_minimals,
     })
 }
 
@@ -2028,6 +2031,11 @@ fn collaboration_protocol_prompt() -> &'static str {
 fn main_chat_overlay_prompt() -> &'static str {
     "\n\n## Main Chat Overlay\n\
 - You are interacting directly with the user.\n\
+- Route the task deliberately before acting:\n\
+  - Use `pool_org` + `pool_chat` when the work is complex, spans multiple domains, or has a high quality bar that benefits from explicit implementation/review/QA collaboration.\n\
+  - For complex multi-role work, inspect existing pools and the current Koi roster first. Reuse a related active/paused pool when one exists; otherwise create a pool. If the current Koi roster is missing a needed specialist role, add the minimum additional Koi required before delegating work.\n\
+  - Use `call_fish` for simple, self-contained, result-heavy work where intermediate steps are not important to preserve in your own context (especially web search, file search, scanning, collection, and aggregation).\n\
+  - Do the work yourself when it is still simple enough for one agent but the user benefits from your own detailed reasoning, synthesis, or judgment process being preserved in the main chat.\n\
 - When multi-agent collaboration is appropriate, create or reuse a pool and coordinate through `pool_org` + `pool_chat`.\n\
 - Keep normal user-chat reasoning separate from pool-local coordination details unless the user asks for them.\n"
 }
@@ -2296,11 +2304,13 @@ You have access to specialized Fish sub-agents via the `call_fish` tool. Fish ag
 - The task involves many intermediate steps whose details are NOT relevant to the final answer (e.g. scanning hundreds of files, batch processing, data collection)
 - The task is self-contained and can be described in a single instruction
 - You want to keep your own context clean — Fish results are summarized, so intermediate tool calls, retries, and exploration do NOT pollute your conversation history
+- Prefer Fish for simple result-first work such as web search, file search, broad repository scanning, inventorying, extraction, and aggregation
 
 **When NOT to use call_fish:**
 - The task requires back-and-forth with the user (Fish cannot interact with the user)
 - You need to build on intermediate results across multiple dependent steps that require your judgment
 - The task is simple enough that one or two tool calls will suffice
+- The user would benefit from seeing your own detailed reasoning or analytical process in the main conversation
 
 **Best practices:**
 1. First call `call_fish(action="list")` to see which Fish are available and what they specialize in
@@ -2325,6 +2335,7 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 **MANDATORY trigger conditions — you MUST start a project pool when:**
 - The user explicitly says "organize a team", "let agents collaborate", "set up a project", "team development", or similar
 - The work has 2+ distinct roles (e.g., frontend + backend, coder + tester, architect + implementer)
+- The task is complex, multi-domain, and quality-sensitive enough that explicit review, quality control, or specialist cross-checking should be separate from implementation
 - The work is expected to take sustained effort across multiple sessions
 - The user asks you to "assign tasks to Koi" or "use the kanban board"
 
@@ -2340,17 +2351,18 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 **2. Set up the project pool using `pool_org` — do this in the SAME turn**
 - `pool_org(action="list")` — see existing pools and available Koi agents
 - `pool_org(action="create", name="<project name>", org_spec="<markdown>")` — create a new project pool with a comprehensive organization spec
+- Before assigning work, check whether the existing Koi roster covers the specialist roles the project needs. If not, use `app_control(action="koi_create", ...)` to add only the minimum missing Koi needed for this project. Avoid speculative or duplicate Koi creation.
 - The org_spec should define: project goals, Koi role assignments, collaboration rules, activation conditions, and success metrics
 
 **3. Communicate with Koi agents via @mention — also in the SAME turn**
-- Use `pool_chat(action="send", pool_id=..., content="@KoiName your task description...")` to assign work. The @mention system automatically activates the Koi and assigns the task.
-- You can @mention multiple Koi in one message, or use `@all` to broadcast to all agents.
-- Example: `pool_chat(action="send", pool_id="abc", sender_id="pisci", content="@Architect Design the database schema for user authentication. When done, hand off to @Coder for implementation.")`
-- After the Koi completes, its result @mentions cascade automatically — if Architect writes "@Coder please implement", Coder is activated without your intervention.
+- Use plain `@KoiName` / `@all` only for notification. Use `@!KoiName` / `@!all` when you are explicitly delegating concrete work that should create or wake an active task.
+- A plain notification may wake an idle Koi so it can inspect the pool and decide what to do, but it does NOT automatically create a todo.
+- Example forced delegation: `pool_chat(action="send", pool_id="abc", content="@!Architect Design the database schema for user authentication. When done, hand off to @!Coder for implementation.")`
+- After a Koi completes, task handoffs should also use `@!mention` — for example if Architect writes `@!Coder please implement`, Coder is activated for the delegated work.
 - Use `pool_chat(action="read", pool_id=...)` or `pool_org(action="get_todos", pool_id=...)` to monitor progress.
-- Koi agents are fully autonomous: they communicate via pool_chat, share results, and collaborate with each other through @mentions. Do NOT micromanage their approach.
+- Koi agents are fully autonomous: they communicate via pool_chat, share results, and collaborate through mentions. Do NOT micromanage their approach.
 - Every Koi may declare a free-form `role` plus a detailed description. Use both fields to understand their specialization before assigning work.
-- **IMPORTANT**: Do NOT use `pool_org(action="assign_koi")` for normal task assignment. Use @mention in pool_chat instead — this is the natural communication channel that all agents share.
+- **IMPORTANT**: Do NOT use `pool_org(action="assign_koi")` for normal task assignment. Use `@!mention` in pool_chat instead — this is the natural communication channel that all agents share.
 
 **4. Evolve the org_spec as the project progresses**
 - `pool_org(action="read", pool_id=...)` — review current org_spec
@@ -2363,7 +2375,7 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 
 **CRITICAL — Before creating a new project pool:**
 1. ALWAYS call `pool_org(action="list")` first to see all existing pools.
-2. If there is an active or paused pool that is related to the user's request, DO NOT create a new pool. Instead, add a new task to the existing pool via pool_chat @mention or `pool_org(action="create_todo", pool_id="...")`.
+2. If there is an active or paused pool that is related to the user's request, DO NOT create a new pool. Instead, add a new task to the existing pool via pool_chat `@!mention` or `pool_org(action="create_todo", pool_id="...")`.
 3. Only create a new pool when the work is genuinely a separate, independent project with no overlap with existing pools.
 4. When in doubt, ask the user: "Should I add this to the existing project '<name>', or start a new project?"
 
@@ -2372,7 +2384,7 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 - Each Koi has full capabilities — do not micromanage their approach
 - The pool chat room and kanban board are observation windows for the user, not control surfaces
 - Prefer fewer, well-defined Koi roles over many fragmented ones
-- All agent communication flows through pool_chat @mentions — this is how Koi hand off work, ask questions, and collaborate naturally
+- All agent communication flows through pool_chat mentions — plain `@mention` for notification, `@!mention` for active handoff/delegation
 - **Never create a new project for work that belongs to an existing unfinished project**
 
 **5. Task Lifecycle Management**
@@ -3274,6 +3286,72 @@ fn minimal_tool_result_blocks(results_json: &str) -> Vec<ContentBlock> {
     out
 }
 
+fn extract_tool_minimals_from_history(history: &[ChatMessage]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for msg in history {
+        if let Some(results_json) = msg.tool_results_json.as_deref() {
+            extract_tool_minimals_from_results_json(results_json, &mut out);
+        }
+    }
+    out
+}
+
+fn extract_tool_minimals_from_results_json(results_json: &str, out: &mut HashMap<String, String>) {
+    let raw: serde_json::Value = match serde_json::from_str(results_json) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let Some(arr) = raw.as_array() else {
+        return;
+    };
+    for item in arr {
+        let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if kind != "tool_result" {
+            continue;
+        }
+        let Some(tool_use_id) = item.get("tool_use_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if tool_use_id.is_empty() {
+            continue;
+        }
+        let full = item
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let is_error = item
+            .get("is_error")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let tool_name = item.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
+        let demoted = item
+            .get("content_minimal")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                pisci_kernel::agent::tool_receipt::render_receipt(
+                    if tool_name.is_empty() {
+                        "unknown"
+                    } else {
+                        tool_name
+                    },
+                    &serde_json::Value::Null,
+                    &full,
+                    is_error,
+                    None,
+                )
+            });
+        let content = if demoted.is_empty() {
+            trim_tool_result(&full, CTX_TRIM_HEAD, CTX_TRIM_TAIL)
+        } else {
+            demoted
+        };
+        out.insert(tool_use_id.to_string(), content);
+    }
+}
+
 /// Extract a representative text string from blocks for token estimation.
 fn blocks_to_token_text(blocks: &[ContentBlock]) -> String {
     blocks
@@ -3681,6 +3759,8 @@ pub struct ContextPreview {
     pub messages: Vec<ContextPreviewMessage>,
     pub messages_tokens: usize,
     pub total_tokens: usize,
+    pub request_view_tokens: usize,
+    pub idle_indicator_tokens: usize,
     pub model: String,
     pub context_budget: usize,
     pub total_input_budget: usize,
@@ -3741,10 +3821,11 @@ pub async fn get_context_preview(
         enable_project_instructions,
     )
     .await?;
-    let llm_messages = session_context.llm_messages;
+    let base_llm_messages = session_context.llm_messages;
+    let tool_minimals = session_context.tool_minimals;
     let session_state = session_context.session_state;
     let llm_messages =
-        pisci_kernel::agent::vision::inject_selected_context(&llm_messages, &session_id).await;
+        pisci_kernel::agent::vision::inject_selected_context(&base_llm_messages, &session_id).await;
 
     // Convert LlmMessages to preview-friendly structs with structured blocks
     let messages: Vec<ContextPreviewMessage> = llm_messages
@@ -3822,16 +3903,77 @@ pub async fn get_context_preview(
     );
     let total_input_budget =
         pisci_kernel::llm::compute_total_input_budget(context_window, max_tokens);
+    let message_budget = total_input_budget.saturating_sub(request_overhead_tokens);
+    let request_view_messages = pisci_kernel::agent::loop_::build_request_view_messages(
+        &base_llm_messages,
+        &tool_minimals,
+        pisci_kernel::agent::compaction::CTX_PRESERVE_RECENT_TURNS,
+        pisci_kernel::agent::compaction::CTX_KEEP_RECENT_TOOL_CARRIERS,
+        message_budget,
+    );
+    let request_view_messages =
+        pisci_kernel::agent::vision::inject_selected_context(&request_view_messages, &session_id)
+            .await;
     let total_tokens = pisci_kernel::llm::estimate_request_input_tokens(
         &llm_messages,
         Some(&prompt_artifacts.system_prompt),
         &prompt_artifacts.tool_defs,
     );
+    let request_view_tokens = pisci_kernel::llm::estimate_request_input_tokens(
+        &request_view_messages,
+        Some(&prompt_artifacts.system_prompt),
+        &prompt_artifacts.tool_defs,
+    );
+    let trigger_threshold = ((total_input_budget as f64) * 0.60).round() as usize;
+    let mut idle_indicator_tokens = request_view_tokens;
+
+    // Idle-session indicator should reflect the compacted request shape users
+    // just experienced during the last run, not the raw DB replay. The live
+    // agent keeps an in-memory compacted timeline plus rolling summary/state
+    // frame, but only the summary/frame persist. On resume, rebuilding from
+    // DB can therefore briefly re-inflate the estimate for a few giant turns.
+    // If we already have a rolling summary and the replayed request is still
+    // above the proactive compaction trigger, estimate the "post-refresh"
+    // compacted view using the existing summary-only history slice.
+    if session_state
+        .as_ref()
+        .is_some_and(|state| state.rolling_summary_version > 0)
+        && request_view_tokens > trigger_threshold
+    {
+        let compacted_context = build_session_message_context_from_db(
+            &state.db,
+            &session_id,
+            budget,
+            HistorySliceMode::SummaryOnly,
+            &crate::headless_cli::HeadlessContextToggles::default(),
+        )
+        .await?;
+        let compacted_request_messages = pisci_kernel::agent::loop_::build_request_view_messages(
+            &compacted_context.llm_messages,
+            &compacted_context.tool_minimals,
+            pisci_kernel::agent::compaction::CTX_PRESERVE_RECENT_TURNS,
+            pisci_kernel::agent::compaction::CTX_KEEP_RECENT_TOOL_CARRIERS,
+            message_budget,
+        );
+        let compacted_request_messages = pisci_kernel::agent::vision::inject_selected_context(
+            &compacted_request_messages,
+            &session_id,
+        )
+        .await;
+        let compacted_tokens = pisci_kernel::llm::estimate_request_input_tokens(
+            &compacted_request_messages,
+            Some(&prompt_artifacts.system_prompt),
+            &prompt_artifacts.tool_defs,
+        );
+        idle_indicator_tokens = compacted_tokens.min(request_view_tokens);
+    }
 
     Ok(ContextPreview {
         messages,
         messages_tokens,
         total_tokens,
+        request_view_tokens,
+        idle_indicator_tokens,
         model,
         context_budget: budget,
         total_input_budget,
@@ -3856,7 +3998,8 @@ pub async fn get_context_preview(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_context_messages, collapse_superseded_tool_failures, derive_headless_session_source,
+        build_context_messages, build_main_chat_system_prompt, collapse_superseded_tool_failures,
+        derive_headless_session_source, extract_tool_minimals_from_history,
         main_chat_requests_collaboration_context, minimal_tool_result_blocks,
         resolve_headless_scene_kind, validate_headless_session_scope, HeadlessRunOptions,
         SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL, SESSION_SOURCE_PISCI_HEARTBEAT_POOL,
@@ -4049,6 +4192,42 @@ mod tests {
     }
 
     #[test]
+    fn main_prompt_preserves_pisci_routing_heuristics() {
+        let prompt = build_main_chat_system_prompt("", "", false);
+        for required in [
+            "Use `pool_org` + `pool_chat` when the work is complex, spans multiple domains, or has a high quality bar",
+            "inspect existing pools and the current Koi roster first",
+            "If the current Koi roster is missing a needed specialist role, add the minimum additional Koi required before delegating work",
+            "Use `call_fish` for simple, self-contained, result-heavy work",
+            "Do the work yourself when it is still simple enough for one agent but the user benefits from your own detailed reasoning",
+            "Prefer Fish for simple result-first work such as web search, file search",
+        ] {
+            assert!(
+                prompt.contains(required),
+                "main prompt lost routing heuristic literal: {}",
+                required
+            );
+        }
+    }
+
+    #[test]
+    fn main_prompt_requires_pool_for_quality_sensitive_multi_role_work() {
+        let prompt = build_main_chat_system_prompt("", "", false);
+        assert!(
+            prompt.contains(
+                "The task is complex, multi-domain, and quality-sensitive enough that explicit review, quality control, or specialist cross-checking should be separate from implementation"
+            ),
+            "main prompt must force pool routing for quality-sensitive multi-role work"
+        );
+        assert!(
+            prompt.contains(
+                "Before assigning work, check whether the existing Koi roster covers the specialist roles the project needs"
+            ),
+            "main prompt must require checking the Koi roster before delegating complex multi-role work"
+        );
+    }
+
+    #[test]
     fn minimal_blocks_use_content_minimal_when_present() {
         // New-format row: tool_results_json carries both `content` (full) and
         // `content_minimal` (rule-based receipt). The middle-tier reader must
@@ -4105,6 +4284,28 @@ mod tests {
         } else {
             panic!("expected a ToolResult block");
         }
+    }
+
+    #[test]
+    fn extract_tool_minimals_reads_persisted_receipts_from_history() {
+        let mut msg = make_chat_message("s-tool", "user", "", 1);
+        msg.tool_results_json = Some(
+            serde_json::to_string(&vec![json!({
+                "type": "tool_result",
+                "tool_use_id": "tool-1",
+                "content": "very long full output",
+                "is_error": false,
+                "tool_name": "shell",
+                "content_minimal": "ran shell command"
+            })])
+            .expect("json"),
+        );
+
+        let minimals = extract_tool_minimals_from_history(&[msg]);
+        assert_eq!(
+            minimals.get("tool-1").map(String::as_str),
+            Some("ran shell command")
+        );
     }
 
     #[test]

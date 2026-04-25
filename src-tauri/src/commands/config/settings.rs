@@ -124,16 +124,13 @@ pub async fn save_settings(state: State<'_, AppState>, updates: Value) -> Result
         settings.feishu_enabled = v;
     }
     // WeCom
-    if let Some(v) = updates["wecom_corp_id"].as_str() {
-        settings.wecom_corp_id = v.to_string();
+    if let Some(v) = updates["wecom_bot_id"].as_str() {
+        settings.wecom_bot_id = v.to_string();
     }
-    if let Some(v) = updates["wecom_agent_secret"].as_str() {
+    if let Some(v) = updates["wecom_bot_secret"].as_str() {
         if !v.is_empty() {
-            settings.wecom_agent_secret = v.to_string();
+            settings.wecom_bot_secret = v.to_string();
         }
-    }
-    if let Some(v) = updates["wecom_agent_id"].as_str() {
-        settings.wecom_agent_id = v.to_string();
     }
     if let Some(v) = updates["wecom_enabled"].as_bool() {
         settings.wecom_enabled = v;
@@ -146,6 +143,20 @@ pub async fn save_settings(state: State<'_, AppState>, updates: Value) -> Result
         if !v.is_empty() {
             settings.dingtalk_app_secret = v.to_string();
         }
+    }
+    if let Some(v) = updates["dingtalk_robot_code"].as_str() {
+        if !v.is_empty() {
+            settings.dingtalk_robot_code = v.to_string();
+        }
+    }
+    if let Some(v) = updates["dingtalk_corp_id"].as_str() {
+        settings.dingtalk_corp_id = v.to_string();
+    }
+    if let Some(v) = updates["dingtalk_agent_id"].as_str() {
+        settings.dingtalk_agent_id = v.to_string();
+    }
+    if let Some(v) = updates["dingtalk_mcp_url"].as_str() {
+        settings.dingtalk_mcp_url = v.to_string();
     }
     if let Some(v) = updates["dingtalk_enabled"].as_bool() {
         settings.dingtalk_enabled = v;
@@ -207,11 +218,6 @@ pub async fn save_settings(state: State<'_, AppState>, updates: Value) -> Result
     if let Some(v) = updates["webhook_enabled"].as_bool() {
         settings.webhook_enabled = v;
     }
-    // WeCom relay inbox
-    if let Some(v) = updates["wecom_inbox_file"].as_str() {
-        settings.wecom_inbox_file = v.to_string();
-    }
-
     // Email (SMTP / IMAP)
     if let Some(v) = updates["smtp_host"].as_str() {
         settings.smtp_host = v.to_string();

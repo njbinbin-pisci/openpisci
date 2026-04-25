@@ -32,6 +32,13 @@ pub struct PoolSession {
     pub project_dir: Option<String>,
     #[serde(default)]
     pub task_timeout_secs: u32,
+    /// `binding_key` of the IM conversation that originally requested
+    /// this pool, when applicable. Allows pool-level events (heartbeat
+    /// alerts, decision requests) to fan out to the originating IM
+    /// session in addition to the desktop UI. `None` for pools created
+    /// from the desktop chat or via CLI/headless paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_im_binding_key: Option<String>,
     pub last_active_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

@@ -72,7 +72,7 @@ py -3 scripts/bench_swe_lite/run_swe_lite.py --config-template C:\path\to\config
 ```powershell
 py -3 scripts/bench_swe_lite/run_swe_lite.py --only-tasks py001_sum_even py006_jsonl_resume
 py -3 scripts/bench_swe_lite/run_swe_lite.py --profiles baseline_pisci context_lite
-py -3 scripts/bench_swe_lite/run_swe_lite.py --openpisci-bin src-tauri/target/debug/openpisci.exe
+py -3 scripts/bench_swe_lite/run_swe_lite.py --openpisci-bin target/debug/openpisci-headless.exe
 ```
 
 ## 结果

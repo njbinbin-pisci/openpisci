@@ -1,5 +1,4 @@
-//! Shared CLI argument parsing for the `openpisci` / `openpisci-headless`
-//! binaries.
+//! Shared CLI argument parsing for the `openpisci-headless` binary.
 //!
 //! Both bins accept the same schema (`capabilities` + `run`) with the same
 //! flag surface. Centralising the parser here lets the desktop binary and

@@ -33,7 +33,7 @@ use tokio::sync::Mutex;
 use crate::browser::SharedBrowserManager;
 use crate::skills::loader::SkillLoader;
 use crate::store::{AppState, Database, Settings};
-use crate::tools::{app_control, browser, call_fish, call_koi, chat_ui, skill_list};
+use crate::tools::{app_control, browser, call_fish, call_koi, chat_ui, im_send, skill_list};
 
 #[cfg(target_os = "windows")]
 use crate::tools::{com_invoke, com_tool, office, powershell, screen, uia, wmi_tool};
@@ -332,6 +332,35 @@ pub struct DesktopHostTools {
     pub subagent_runtime: Option<Arc<dyn SubagentRuntime>>,
     /// Coordinator configuration (task timeout, worktree usage).
     pub coordinator_config: CoordinatorConfig,
+    /// IM gateway shared by every tool that needs the `wecom` /
+    /// `feishu` / `dingtalk` / … long-running connection.
+    ///
+    /// Layered architecture (see `Settings::feishu_app_id` doc, the
+    /// runtime arrows in `分层企业能力架构.plan.md`):
+    ///   * `app_control(notify_user, targets=[…])` fans toasts out to
+    ///     IM targets through the same connection the channel maintains.
+    ///   * `im_send_message` (registered below in [`HostTools::register`])
+    ///     uses it to push raw outbound messages from the agent.
+    ///   * MCP enterprise-capability subprocesses receive credentials
+    ///     via env-var placeholders; they do *not* share this Arc.
+    /// CLI / headless callers leave it `None`; the affected tools then
+    /// either degrade gracefully (UI-only notifications) or refuse to
+    /// register at all (`im_send_message`).
+    pub gateway: Option<Arc<crate::gateway::GatewayManager>>,
+}
+
+fn resolve_desktop_coordinator_config(app: Option<&AppHandle>) -> CoordinatorConfig {
+    let mut cfg = CoordinatorConfig::default();
+    if let Some(app) = app {
+        if let Some(state) = app.try_state::<AppState>() {
+            if let Ok(settings) = state.settings.try_lock() {
+                if settings.koi_timeout_secs > 0 {
+                    cfg.default_task_timeout_secs = settings.koi_timeout_secs;
+                }
+            }
+        }
+    }
+    cfg
 }
 
 impl DesktopHostTools {
@@ -364,6 +393,7 @@ impl DesktopHostTools {
         let Some(app) = self.app_handle.as_ref() else {
             return self;
         };
+        self.coordinator_config = resolve_desktop_coordinator_config(Some(app));
         // db is still required for plan-store lookup even though we no
         // longer need it for the legacy dispatcher.
         let _ = self.db.as_ref();
@@ -392,6 +422,9 @@ impl DesktopHostTools {
             }
             let runtime_dyn: Arc<dyn SubagentRuntime> = Arc::new(runtime);
             self.subagent_runtime = Some(runtime_dyn);
+        }
+        if self.gateway.is_none() {
+            self.gateway = app.try_state::<AppState>().map(|s| s.gateway.clone());
         }
         self
     }
@@ -483,6 +516,20 @@ impl HostTools for DesktopHostTools {
                     settings: settings.clone(),
                     app_data_dir: dir.clone(),
                     app_handle: self.app_handle.clone(),
+                    gateway: self.gateway.clone(),
+                }));
+            }
+        }
+        // `im_send_message` lives in the *tool* layer of the layered IM
+        // architecture: it lets the agent push outbound IM messages
+        // through the same `GatewayManager` the inbound channel already
+        // owns. Registered whenever a gateway is available; the
+        // `builtin_tool_enabled` map can disable it per-deployment.
+        if self.is_enabled("im_send_message") {
+            if let Some(ref gateway) = self.gateway {
+                registry.register(Box::new(im_send::ImSendMessageTool {
+                    gateway: Some(gateway.clone()),
+                    db: self.db.clone(),
                 }));
             }
         }
@@ -656,7 +703,8 @@ impl DesktopHost {
             plan_store: Some(state.plan_state.clone()),
             pool_event_sink: Some(pool_event_sink_dyn),
             subagent_runtime: Some(subagent_runtime),
-            coordinator_config: Default::default(),
+            coordinator_config: resolve_desktop_coordinator_config(Some(&app)),
+            gateway: Some(state.gateway.clone()),
         });
         let secrets = Arc::new(DesktopSecretsStore::new(state.settings.clone()));
         Self {
@@ -713,11 +761,7 @@ impl HostRuntime for DesktopHost {
 /// 1. `PISCI_HEADLESS_BIN` environment variable (absolute path).
 /// 2. Sibling of the desktop executable
 ///    (`current_exe().parent().join("openpisci-headless[.exe]")`).
-/// 3. Sibling `openpisci[.exe]` binary. Production Windows bundles already
-///    ship this CLI entry point; it understands the same `rpc` subcommand,
-///    so it is a safe fallback when the dedicated headless sidecar is not
-///    present.
-/// 4. Bare command name `openpisci-headless` — defers resolution to
+/// 3. Bare command name `openpisci-headless` — defers resolution to
 ///    `PATH` at spawn time.
 fn resolve_headless_binary() -> PathBuf {
     if let Ok(raw) = std::env::var("PISCI_HEADLESS_BIN") {
@@ -726,22 +770,16 @@ fn resolve_headless_binary() -> PathBuf {
             return PathBuf::from(raw);
         }
     }
-    let (exe_name, fallback_name) = if cfg!(windows) {
-        ("openpisci-headless.exe", Some("openpisci.exe"))
+    let exe_name = if cfg!(windows) {
+        "openpisci-headless.exe"
     } else {
-        ("openpisci-headless", Some("openpisci"))
+        "openpisci-headless"
     };
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let candidate = dir.join(exe_name);
             if candidate.exists() {
                 return candidate;
-            }
-            if let Some(fallback) = fallback_name {
-                let fallback = dir.join(fallback);
-                if fallback.exists() {
-                    return fallback;
-                }
             }
         }
     }

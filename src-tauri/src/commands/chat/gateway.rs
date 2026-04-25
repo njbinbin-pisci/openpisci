@@ -58,7 +58,11 @@ pub async fn connect_gateway_channels(state: State<'_, AppState>) -> Result<Gate
         let config = DingtalkConfig {
             app_key: settings.dingtalk_app_key.clone(),
             app_secret: settings.dingtalk_app_secret.clone(),
-            robot_code: None,
+            robot_code: if settings.dingtalk_robot_code.is_empty() {
+                None
+            } else {
+                Some(settings.dingtalk_robot_code.clone())
+            },
         };
         let ch = Box::new(DingtalkChannel::new(config));
         state.gateway.register_channel(ch).await;
@@ -142,16 +146,13 @@ pub async fn connect_gateway_channels(state: State<'_, AppState>) -> Result<Gate
     }
 
     // 企业微信
-    if settings.wecom_enabled && !settings.wecom_corp_id.is_empty() {
+    if settings.wecom_enabled
+        && !settings.wecom_bot_id.is_empty()
+        && !settings.wecom_bot_secret.is_empty()
+    {
         let config = crate::gateway::wecom::WecomConfig {
-            corp_id: settings.wecom_corp_id.clone(),
-            agent_secret: settings.wecom_agent_secret.clone(),
-            agent_id: settings.wecom_agent_id.clone(),
-            inbox_file: if settings.wecom_inbox_file.is_empty() {
-                None
-            } else {
-                Some(settings.wecom_inbox_file.clone())
-            },
+            bot_id: settings.wecom_bot_id.clone(),
+            bot_secret: settings.wecom_bot_secret.clone(),
         };
         let ch = Box::new(crate::gateway::wecom::WecomChannel::new(config));
         state.gateway.register_channel(ch).await;
@@ -395,6 +396,8 @@ pub async fn diagnose_gateway_channels(
             configured: !s.dingtalk_app_key.is_empty() && !s.dingtalk_app_secret.is_empty(),
             message: if s.dingtalk_app_key.is_empty() || s.dingtalk_app_secret.is_empty() {
                 "missing dingtalk app credentials".into()
+            } else if s.dingtalk_robot_code.is_empty() {
+                "stream receive ready; add robot_code to enable official proactive send APIs".into()
             } else {
                 "ok".into()
             },
@@ -402,16 +405,11 @@ pub async fn diagnose_gateway_channels(
         GatewayDiagnosticItem {
             channel: "wecom".into(),
             enabled: s.wecom_enabled,
-            configured: !s.wecom_corp_id.is_empty()
-                && !s.wecom_agent_secret.is_empty()
-                && !s.wecom_agent_id.is_empty(),
-            message: if s.wecom_corp_id.is_empty()
-                || s.wecom_agent_secret.is_empty()
-                || s.wecom_agent_id.is_empty()
-            {
-                "missing wecom app credentials".into()
+            configured: !s.wecom_bot_id.is_empty() && !s.wecom_bot_secret.is_empty(),
+            message: if s.wecom_bot_id.is_empty() || s.wecom_bot_secret.is_empty() {
+                "missing wecom bot_id / bot_secret".into()
             } else {
-                "ok".into()
+                "wecom long-connection ready".into()
             },
         },
         GatewayDiagnosticItem {

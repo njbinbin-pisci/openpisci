@@ -1,9 +1,9 @@
-/// WeChat iLink Bot HTTP API server.
+/// WeChat iLink channel.
 ///
-/// The `@tencent-weixin/openclaw-weixin` plugin communicates with a backend via
-/// a simple HTTP JSON API (not WebSocket).  This module implements that server
-/// so that the plugin can be pointed at OpenPisci instead of a full OpenClaw
-/// instance.
+/// In the direct QR-bind flow used by Pisci, we talk to Tencent iLink directly
+/// by long-polling `getupdates` with the bound `bot_token`. For compatibility
+/// with the older OpenClaw plugin contract, we still keep a local HTTP server
+/// fallback when no `bot_token` is configured.
 ///
 /// Endpoints implemented (all POST, path prefix `/ilink/bot/`):
 ///   getupdates   – long-poll for new messages (35 s server-side timeout)
@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -53,6 +54,14 @@ struct WechatState {
     notify: Notify,
     /// Opaque cursor returned to the plugin so it can detect missed messages.
     sync_buf: Mutex<String>,
+    /// Latest reply routing context keyed by WeChat peer id.
+    reply_contexts: Mutex<HashMap<String, ReplyContext>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ReplyContext {
+    context_token: String,
+    session_id: String,
 }
 
 impl WechatState {
@@ -61,7 +70,46 @@ impl WechatState {
             pending: Mutex::new(Vec::new()),
             notify: Notify::new(),
             sync_buf: Mutex::new(String::new()),
+            reply_contexts: Mutex::new(HashMap::new()),
         })
+    }
+
+    async fn remember_reply_context(&self, user_id: &str, session_id: &str, context_token: &str) {
+        if user_id.is_empty() {
+            return;
+        }
+
+        let mut reply_contexts = self.reply_contexts.lock().await;
+        let entry = reply_contexts.entry(user_id.to_string()).or_default();
+        if !session_id.is_empty() {
+            entry.session_id = session_id.to_string();
+        }
+        if !context_token.is_empty() {
+            entry.context_token = context_token.to_string();
+        }
+    }
+
+    async fn resolve_reply_context(&self, user_id: &str, context_token: &str) -> ReplyContext {
+        if user_id.is_empty() {
+            return ReplyContext::default();
+        }
+
+        let reply_contexts = self.reply_contexts.lock().await;
+        if let Some(cached) = reply_contexts.get(user_id) {
+            ReplyContext {
+                context_token: if context_token.is_empty() {
+                    cached.context_token.clone()
+                } else {
+                    context_token.to_string()
+                },
+                session_id: cached.session_id.clone(),
+            }
+        } else {
+            ReplyContext {
+                context_token: context_token.to_string(),
+                session_id: String::new(),
+            }
+        }
     }
 }
 
@@ -94,10 +142,14 @@ impl Channel for WechatChannel {
     async fn connect(&mut self) -> Result<()> {
         self.shutdown.store(false, Ordering::Relaxed);
         self.status = ChannelStatus::Connected;
-        info!(
-            "WeChat iLink HTTP server ready (will listen on 127.0.0.1:{})",
-            self.config.port
-        );
+        if self.config.bot_token.is_empty() {
+            info!(
+                "WeChat compatibility HTTP server ready (will listen on 127.0.0.1:{})",
+                self.config.port
+            );
+        } else {
+            info!("WeChat iLink direct listener ready (bot token configured)");
+        }
         Ok(())
     }
 
@@ -132,17 +184,47 @@ impl Channel for WechatChannel {
             } else {
                 (msg.recipient.clone(), String::new())
             };
+            let routing_state = msg.routing_state.as_ref();
+            let routing_context_token = routing_state
+                .and_then(|value| value["context_token"].as_str())
+                .unwrap_or("");
+            let routing_session_id = routing_state
+                .and_then(|value| value["session_id"].as_str())
+                .unwrap_or("");
+            let effective_context_token = if context_token.is_empty() {
+                routing_context_token
+            } else {
+                &context_token
+            };
 
-            let body = json!({
-                "msg": {
-                    "to_user_id": to_user_id,
-                    "context_token": context_token,
-                    "item_list": [{
-                        "type": 1,
-                        "text_item": { "text": msg.content }
-                    }]
-                }
-            });
+            let reply_context = self
+                .state
+                .resolve_reply_context(&to_user_id, effective_context_token)
+                .await;
+            let effective_session_id = if reply_context.session_id.is_empty() {
+                routing_session_id.to_string()
+            } else {
+                reply_context.session_id.clone()
+            };
+            if context_token.is_empty() && !reply_context.context_token.is_empty() {
+                info!(
+                    "WeChat sendmessage reusing cached context_token for {}",
+                    to_user_id
+                );
+            }
+            if reply_context.context_token.is_empty() {
+                warn!(
+                    "WeChat sendmessage to {} has no context_token; delivery may be dropped",
+                    to_user_id
+                );
+            }
+
+            let body = build_sendmessage_body(
+                &to_user_id,
+                &effective_session_id,
+                &reply_context.context_token,
+                &msg.content,
+            );
 
             let client = reqwest::Client::new();
             match client
@@ -150,23 +232,53 @@ impl Channel for WechatChannel {
                 .header("Authorization", format!("Bearer {}", self.config.bot_token))
                 .header("AuthorizationType", "ilink_bot_token")
                 .header("Content-Type", "application/json")
+                .header("X-WECHAT-UIN", build_wechat_uin())
+                .header("iLink-App-ClientVersion", "1")
                 .json(&body)
                 .timeout(std::time::Duration::from_secs(10))
                 .send()
                 .await
             {
                 Ok(resp) if resp.status().is_success() => {
+                    let payload: Value = match resp.json().await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let msg = format!("WeChat sendmessage parse error: {}", e);
+                            warn!("{}", msg);
+                            return Err(anyhow::anyhow!(msg));
+                        }
+                    };
+                    let ret = payload["ret"].as_i64().unwrap_or(0);
+                    let errcode = payload["errcode"].as_i64().unwrap_or(0);
+                    if ret != 0 || errcode != 0 {
+                        let errmsg = payload["errmsg"].as_str().unwrap_or("unknown error");
+                        let msg = format!(
+                            "WeChat sendmessage rejected: ret={}, errcode={}, errmsg={}",
+                            ret, errcode, errmsg
+                        );
+                        warn!("{}", msg);
+                        return Err(anyhow::anyhow!(msg));
+                    }
                     info!("WeChat sendmessage OK to {}", to_user_id);
+                    self.state
+                        .remember_reply_context(
+                            &to_user_id,
+                            &effective_session_id,
+                            &reply_context.context_token,
+                        )
+                        .await;
                 }
                 Ok(resp) => {
-                    warn!(
-                        "WeChat sendmessage HTTP {}: {}",
-                        resp.status(),
-                        resp.text().await.unwrap_or_default()
-                    );
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    let msg = format!("WeChat sendmessage HTTP {}: {}", status, text);
+                    warn!("{}", msg);
+                    return Err(anyhow::anyhow!(msg));
                 }
                 Err(e) => {
-                    warn!("WeChat sendmessage error: {}", e);
+                    let msg = format!("WeChat sendmessage error: {}", e);
+                    warn!("{}", msg);
+                    return Err(anyhow::anyhow!(msg));
                 }
             }
         } else {
@@ -181,6 +293,16 @@ impl Channel for WechatChannel {
     }
 
     async fn listen(&self, tx: mpsc::Sender<InboundMessage>) -> Result<()> {
+        if !self.config.bot_token.is_empty() {
+            return listen_ilink_updates(
+                self.config.clone(),
+                self.shutdown.clone(),
+                self.state.clone(),
+                tx,
+            )
+            .await;
+        }
+
         let bind_addr = format!("127.0.0.1:{}", self.config.port);
         let listener = TcpListener::bind(&bind_addr).await.map_err(|e| {
             anyhow::anyhow!("WeChat HTTP server: failed to bind {}: {}", bind_addr, e)
@@ -235,6 +357,95 @@ impl Channel for WechatChannel {
         self.state.notify.notify_waiters();
         info!("WeChat HTTP server: shutdown flag set");
     }
+}
+
+async fn listen_ilink_updates(
+    config: WechatConfig,
+    shutdown: Arc<AtomicBool>,
+    state: Arc<WechatState>,
+    tx: mpsc::Sender<InboundMessage>,
+) -> Result<()> {
+    let client = reqwest::Client::new();
+    let base = if config.base_url.is_empty() {
+        "https://ilinkai.weixin.qq.com".to_string()
+    } else {
+        config.base_url.trim_end_matches('/').to_string()
+    };
+    let url = format!("{}/ilink/bot/getupdates", base);
+    let mut cursor = String::new();
+
+    info!("WeChat direct long-poll listener started against {}", base);
+
+    while !shutdown.load(Ordering::Relaxed) {
+        let body = json!({
+            "get_updates_buf": cursor,
+            "base_info": {
+                "channel_version": "2.0.0"
+            }
+        });
+
+        let response = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", config.bot_token))
+            .header("AuthorizationType", "ilink_bot_token")
+            .header("Content-Type", "application/json")
+            .header("X-WECHAT-UIN", build_wechat_uin())
+            .header("iLink-App-ClientVersion", "1")
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(38))
+            .send()
+            .await;
+
+        let payload: Value = match response {
+            Ok(resp) if resp.status().is_success() => match resp.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("WeChat getupdates: failed to parse JSON: {}", e);
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    continue;
+                }
+            },
+            Ok(resp) => {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                warn!("WeChat getupdates HTTP {}: {}", status, text);
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                continue;
+            }
+            Err(e) => {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                warn!("WeChat getupdates error: {}", e);
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                continue;
+            }
+        };
+
+        if payload["errcode"].as_i64() == Some(-14) || payload["ret"].as_i64() == Some(-14) {
+            warn!("WeChat session expired; please bind/login again");
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            continue;
+        }
+
+        if let Some(next_cursor) = payload["get_updates_buf"].as_str() {
+            cursor = next_cursor.to_string();
+        }
+
+        cache_reply_contexts_from_payload(&state, &payload).await;
+        for inbound in extract_inbound_messages(&payload) {
+            let sender = inbound.sender.clone();
+            let preview = inbound.content.chars().take(60).collect::<String>();
+            info!("WeChat inbound from {}: {}", sender, preview);
+            if tx.send(inbound).await.is_err() {
+                warn!("WeChat inbound consumer dropped");
+                return Ok(());
+            }
+        }
+    }
+
+    info!("WeChat direct long-poll listener stopped");
+    Ok(())
 }
 
 // ── HTTP connection handler ───────────────────────────────────────────────────
@@ -377,19 +588,9 @@ async fn handle_getupdates(
     // Check for inbound messages embedded in the getupdates request.
     // The plugin sends user messages as part of the getupdates body when
     // `msgs` is present (push-style variant).
-    if let Some(msgs) = body["msgs"].as_array() {
-        for msg in msgs {
-            if let Some(inbound) = weixin_message_to_inbound(msg) {
-                let _ = tx.send(inbound).await;
-            }
-        }
-    }
-
-    // Also handle the single `msg` field variant.
-    if body["msg"].is_object() {
-        if let Some(inbound) = weixin_message_to_inbound(&body["msg"]) {
-            let _ = tx.send(inbound).await;
-        }
+    cache_reply_contexts_from_payload(state, body).await;
+    for inbound in extract_inbound_messages(body) {
+        let _ = tx.send(inbound).await;
     }
 
     // Wait for a reply to become available (or timeout / shutdown).
@@ -438,6 +639,76 @@ async fn handle_getupdates(
 }
 
 // ── Message conversion helpers ────────────────────────────────────────────────
+
+fn extract_inbound_messages(payload: &Value) -> Vec<InboundMessage> {
+    let mut out = Vec::new();
+    if let Some(msgs) = payload["msgs"].as_array() {
+        out.extend(msgs.iter().filter_map(weixin_message_to_inbound));
+    }
+    if payload["msg"].is_object() {
+        if let Some(inbound) = weixin_message_to_inbound(&payload["msg"]) {
+            out.push(inbound);
+        }
+    }
+    out
+}
+
+async fn cache_reply_contexts_from_payload(state: &Arc<WechatState>, payload: &Value) {
+    if let Some(msgs) = payload["msgs"].as_array() {
+        for msg in msgs {
+            cache_reply_context_from_message(state, msg).await;
+        }
+    }
+    if payload["msg"].is_object() {
+        cache_reply_context_from_message(state, &payload["msg"]).await;
+    }
+}
+
+async fn cache_reply_context_from_message(state: &Arc<WechatState>, msg: &Value) {
+    if msg["message_type"].as_u64().unwrap_or(0) != 1 {
+        return;
+    }
+
+    let from_user = msg["from_user_id"].as_str().unwrap_or("");
+    if from_user.is_empty() {
+        return;
+    }
+
+    let session_id = msg["session_id"].as_str().unwrap_or("");
+    let context_token = msg["context_token"].as_str().unwrap_or("");
+    if session_id.is_empty() && context_token.is_empty() {
+        return;
+    }
+
+    state
+        .remember_reply_context(from_user, session_id, context_token)
+        .await;
+}
+
+fn build_sendmessage_body(
+    to_user_id: &str,
+    session_id: &str,
+    context_token: &str,
+    text: &str,
+) -> Value {
+    json!({
+        "msg": {
+            "to_user_id": to_user_id,
+            "client_id": uuid::Uuid::new_v4().to_string(),
+            "session_id": session_id,
+            "message_type": 2,
+            "message_state": 2,
+            "context_token": context_token,
+            "item_list": [{
+                "type": 1,
+                "text_item": { "text": text }
+            }]
+        },
+        "base_info": {
+            "channel_version": "2.0.0"
+        }
+    })
+}
 
 /// Convert an `OutboundMessage` (Agent → channel) into a `WeixinMessage` JSON
 /// value that the plugin can deliver to the WeChat user.
@@ -504,17 +775,27 @@ fn weixin_message_to_inbound(msg: &Value) -> Option<InboundMessage> {
         id: msg_id,
         channel: "wechat".to_string(),
         sender: from_user.clone(),
-        sender_name: Some(from_user),
+        sender_name: Some(from_user.clone()),
         content: text,
         reply_target,
+        conversation_key: Some(if session_id.is_empty() {
+            format!("dm:{}", from_user)
+        } else {
+            format!("group:{}", session_id)
+        }),
         is_group: !session_id.is_empty(),
         group_name: if session_id.is_empty() {
             None
         } else {
-            Some(session_id)
+            Some(session_id.clone())
         },
         timestamp: msg["create_time_ms"].as_u64().unwrap_or_else(now_ms),
         media: None,
+        routing_state: Some(json!({
+            "context_token": context_token,
+            "session_id": session_id,
+            "from_user_id": from_user,
+        })),
     })
 }
 
@@ -585,4 +866,85 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn build_wechat_uin() -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(now_ms().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_inbound_messages_from_getupdates_payload() {
+        let payload = json!({
+            "ret": 0,
+            "msgs": [{
+                "message_id": 123,
+                "from_user_id": "wx-user-1",
+                "session_id": "",
+                "message_type": 1,
+                "create_time_ms": 1700000000_u64,
+                "context_token": "ctx-1",
+                "item_list": [{
+                    "type": 1,
+                    "text_item": { "text": "hello from wechat" }
+                }]
+            }],
+            "get_updates_buf": "cursor-2"
+        });
+
+        let messages = extract_inbound_messages(&payload);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].channel, "wechat");
+        assert_eq!(messages[0].sender, "wx-user-1");
+        assert_eq!(messages[0].content, "hello from wechat");
+        assert_eq!(messages[0].reply_target, "wx-user-1|ctx-1");
+    }
+
+    #[test]
+    fn build_sendmessage_body_includes_context_and_base_info() {
+        let body = build_sendmessage_body("wx-user-1", "session-1", "ctx-1", "hello");
+        assert_eq!(body["msg"]["to_user_id"], "wx-user-1");
+        assert_eq!(body["msg"]["session_id"], "session-1");
+        assert_eq!(body["msg"]["context_token"], "ctx-1");
+        assert_eq!(body["msg"]["message_type"], 2);
+        assert_eq!(body["msg"]["message_state"], 2);
+        assert_eq!(body["msg"]["item_list"][0]["text_item"]["text"], "hello");
+        assert_eq!(body["base_info"]["channel_version"], "2.0.0");
+        assert!(body["msg"]["client_id"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn caches_last_non_empty_context_token_per_user() {
+        let state = WechatState::new();
+
+        cache_reply_context_from_message(
+            &state,
+            &json!({
+                "from_user_id": "wx-user-1",
+                "session_id": "session-1",
+                "message_type": 1,
+                "context_token": "ctx-1",
+            }),
+        )
+        .await;
+
+        cache_reply_context_from_message(
+            &state,
+            &json!({
+                "from_user_id": "wx-user-1",
+                "session_id": "session-1",
+                "message_type": 1,
+                "context_token": "",
+            }),
+        )
+        .await;
+
+        let resolved = state.resolve_reply_context("wx-user-1", "").await;
+        assert_eq!(resolved.context_token, "ctx-1");
+        assert_eq!(resolved.session_id, "session-1");
+    }
 }

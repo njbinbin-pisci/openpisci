@@ -81,7 +81,7 @@ fn default_trial_scenario() -> TrialScenario {
         kickoff_phase: "lead".into(),
         kickoff_detail: "Pisci starts the collaboration by assigning the first specialist."
             .into(),
-        kickoff_message: "@Architect Design a small \"string utility\" module with 3 functions: \
+        kickoff_message: "@!Architect Design a small \"string utility\" module with 3 functions: \
              1) reverse_words(s) - reverses word order in a sentence \
              2) count_vowels(s) - counts vowels in a string \
              3) to_title_case(s) - converts a string to title case. \
@@ -92,7 +92,7 @@ fn default_trial_scenario() -> TrialScenario {
         workflow: vec![
             "Pisci assigns the initial design task to Architect.".into(),
             "Architect produces a specification, then hands off implementation to Coder.".into(),
-            "Coder implements based on the specification, then hands off to @Reviewer.".into(),
+            "Coder implements based on the specification, then hands off to @!Reviewer.".into(),
             "Reviewer requests follow-up work or signals `[ProjectStatus] ready_for_pisci_review` for Pisci to assess."
                 .into(),
         ],
@@ -128,8 +128,8 @@ fn default_trial_scenario() -> TrialScenario {
             system_prompt:
                 "You are a software developer collaborating inside a multi-agent project. Given a specification or concrete handoff, produce a practical implementation summary or implementation-ready output that helps the project advance. \
                  Focus on correctness, actionable detail, and clear handoff notes. \
-                 When implementation is ready for review, hand off to Reviewer with `[ProjectStatus] follow_up_needed` and an explicit @mention. \
-                 If more work is needed first, signal `[ProjectStatus] follow_up_needed` and @mention the next actor. \
+                 When implementation is ready for review, hand off to Reviewer with `[ProjectStatus] follow_up_needed` and an explicit @!mention. \
+                 If more work is needed first, signal `[ProjectStatus] follow_up_needed` and @!mention the next actor. \
                  Only use `[ProjectStatus] ready_for_pisci_review` after reviewer-level verification is truly complete."
                     .into(),
             description: "Implementation, coding, development".into(),
@@ -145,8 +145,8 @@ fn default_trial_scenario() -> TrialScenario {
             system_prompt:
                 "You are a reviewer collaborating inside a multi-agent project. Given prior work, provide constructive feedback, identify risks, and state clearly whether follow-up is needed. \
                  Be specific and actionable. \
-                 If more work is needed, signal `[ProjectStatus] follow_up_needed` and @mention the responsible specialist. \
-                 If the work looks acceptable, signal `[ProjectStatus] ready_for_pisci_review` and @mention Pisci rather than declaring the project finished yourself."
+                 If more work is needed, signal `[ProjectStatus] follow_up_needed` and @!mention the responsible specialist. \
+                 If the work looks acceptable, signal `[ProjectStatus] ready_for_pisci_review` and @pisci rather than declaring the project finished yourself."
                     .into(),
             description: "Review, quality assurance, feedback".into(),
             max_iterations: 0,

@@ -16,6 +16,7 @@
 //! live in [`crate::commands::chat`] and [`crate::commands::pool`].
 
 pub mod audit;
+pub mod enterprise_capability;
 pub mod mcp;
 pub mod memory;
 pub mod scene;

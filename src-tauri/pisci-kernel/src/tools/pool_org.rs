@@ -15,7 +15,7 @@
 use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use crate::pool::coordinator::CoordinatorConfig;
 use crate::pool::model::{
-    AssignKoiArgs, CallerContext, CreatePoolArgs, CreateTodoArgs, ReplaceTodoArgs,
+    AssignKoiArgs, CallerContext, CreatePoolArgs, CreateTodoArgs, DeleteTodoArgs, ReplaceTodoArgs,
     UpdateOrgSpecArgs, UpdateTodoStatusArgs,
 };
 use crate::pool::{services, PoolStore};
@@ -47,6 +47,21 @@ impl PoolOrgTool {
             .flatten()
             .map(|s| s.source)
             .filter(|s| !s.is_empty())
+    }
+
+    /// If the caller's session is bound to an IM conversation, return
+    /// the matching `binding_key`. Used to seed
+    /// `pool_sessions.origin_im_binding_key` when an IM-driven Pisci
+    /// session creates a pool, so pool-level events later fan out to
+    /// the originating IM channel.
+    async fn lookup_origin_im_binding(&self, session_id: &str) -> Option<String> {
+        let sid = session_id.to_string();
+        self.store
+            .read(move |db| db.find_im_session_binding_for_session(&sid))
+            .await
+            .ok()
+            .flatten()
+            .map(|b| b.binding_key)
     }
 
     fn caller<'a>(&'a self, ctx: &'a ToolContext, source: Option<&'a str>) -> CallerContext<'a> {
@@ -89,12 +104,13 @@ impl Tool for PoolOrgTool {
          - 'find_related': Search for existing projects by keywords. \
          - 'get_messages': Read recent messages for a project pool (requires pool_id, optional limit). \
          - 'get_todos': Read koi_todos associated with a project pool (requires pool_id). \
-         - 'create_todo': Create a new todo for yourself (requires pool_id, title; optional description, priority). Use this when you receive real work via @mention or self-identify a task. \
+         - 'create_todo': Create a new todo for yourself (requires pool_id, title; optional description, priority). Use this when you receive real work via `@!mention` or self-identify a task. \
          - 'claim_todo': Claim an existing unclaimed todo (requires todo_id). Marks it in_progress and assigns it to you. \
          - 'complete_todo': Mark a todo as done (requires todo_id, summary). The summary is a concise description of what was accomplished — it becomes the visible result in the pool chat. Pisci can complete any todo; Koi can only complete their own. Completing a todo does NOT hand off the next step automatically. \
          - 'cancel_todo': Cancel a todo (requires todo_id, optional reason). Pisci can cancel any todo; Koi can only cancel their own — to cancel someone else's, @pisci in pool_chat. \
          - 'resume_todo': Resume a blocked or needs_review todo (requires todo_id). This restarts execution for the existing task from its current project context. Pisci should decide when to use this. \
          - 'replace_todo': Replace an existing todo with a new owner/task (requires todo_id, new_owner_id, task, reason). This cancels the original todo so it cannot be resumed, creates a replacement todo, and notifies the new owner. Pisci should decide when to use this. \
+         - 'delete_todo': Permanently delete todo rows from the board. Use `todo_id` for a single delete, or `pool_id` plus `delete_status` / `delete_owner_id` for filtered batch cleanup (for example deleting all cancelled todos in one pool). Pisci-only. \
          - 'update_todo_status': Update a todo's status (requires todo_id, status). Pisci can change any; Koi can only change their own. Valid statuses: todo, in_progress, blocked. This changes task-board state, but teammates still need an explicit `pool_chat` update if they should react. \
          - 'merge_branches': Merge all Koi worktree branches back into main (requires pool_id with project_dir). \
          \
@@ -102,7 +118,7 @@ impl Tool for PoolOrgTool {
          Then use 'find_related' to search for related projects by keywords. \
          Only call 'create' if no existing pool covers the requested work — \
          if an active or paused pool is related, add tasks to it instead of creating a new pool. \
-         After creating a new pool, use 'assign_koi' or pool_chat @mention to kick off work. \
+         After creating a new pool, use 'assign_koi' or pool_chat `@!mention` to kick off work. \
          During heartbeat/routine checks: NEVER create new pools — only manage existing ones."
     }
 
@@ -112,7 +128,7 @@ impl Tool for PoolOrgTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["create", "read", "update", "list", "assign_koi", "pause", "resume", "archive", "find_related", "get_messages", "get_todos", "create_todo", "claim_todo", "complete_todo", "cancel_todo", "resume_todo", "replace_todo", "update_todo_status", "merge_branches"],
+                    "enum": ["create", "read", "update", "list", "assign_koi", "pause", "resume", "archive", "find_related", "get_messages", "get_todos", "create_todo", "claim_todo", "complete_todo", "cancel_todo", "resume_todo", "replace_todo", "delete_todo", "update_todo_status", "merge_branches"],
                     "description": "Action to perform"
                 },
                 "project_dir": {
@@ -178,6 +194,14 @@ impl Tool for PoolOrgTool {
                     "enum": ["todo", "in_progress", "blocked"],
                     "description": "For update_todo_status: the new status"
                 },
+                "delete_status": {
+                    "type": "string",
+                    "description": "For delete_todo batch cleanup: optional status filter (for example cancelled, done, blocked, todo, in_progress, needs_review)"
+                },
+                "delete_owner_id": {
+                    "type": "string",
+                    "description": "For delete_todo batch cleanup: optional Koi owner filter (ID or name)"
+                },
                 "reason": {
                     "type": "string",
                     "description": "For cancel_todo/replace_todo: optional reason for cancellation, or the required reason explaining why a task is being replaced"
@@ -210,11 +234,13 @@ impl Tool for PoolOrgTool {
 
         match action {
             "create" => {
+                let origin_binding = self.lookup_origin_im_binding(&ctx.session_id).await;
                 let args = CreatePoolArgs {
                     name: input["name"].as_str().unwrap_or("").to_string(),
                     project_dir: input["project_dir"].as_str().map(str::to_string),
                     org_spec: input["org_spec"].as_str().map(str::to_string),
                     task_timeout_secs: input["task_timeout_secs"].as_u64().unwrap_or(0) as u32,
+                    origin_im_binding_key: origin_binding,
                 };
                 match services::create_pool(&self.store, &*self.sink, &caller, args).await {
                     Ok(v) => Ok(ToolResult::ok(Self::summary_of(&v))),
@@ -442,6 +468,18 @@ impl Tool for PoolOrgTool {
                     Err(e) => Ok(ToolResult::err(e.to_string())),
                 }
             }
+            "delete_todo" => {
+                let args = DeleteTodoArgs {
+                    todo_id: input["todo_id"].as_str().map(str::to_string),
+                    pool_id: input["pool_id"].as_str().map(str::to_string),
+                    status: input["delete_status"].as_str().map(str::to_string),
+                    owner_id: input["delete_owner_id"].as_str().map(str::to_string),
+                };
+                match services::delete_todo(&self.store, &*self.sink, &caller, args).await {
+                    Ok(v) => Ok(ToolResult::ok(Self::summary_of(&v))),
+                    Err(e) => Ok(ToolResult::err(e.to_string())),
+                }
+            }
             "update_todo_status" => {
                 let args = UpdateTodoStatusArgs {
                     todo_id: input["todo_id"].as_str().unwrap_or("").to_string(),
@@ -460,7 +498,7 @@ impl Tool for PoolOrgTool {
                 }
             }
             _ => Ok(ToolResult::err(format!(
-                "Unknown action '{}'. Use: create, read, update, list, assign_koi, pause, resume, archive, find_related, get_messages, get_todos, create_todo, claim_todo, complete_todo, cancel_todo, resume_todo, replace_todo, update_todo_status, merge_branches",
+                "Unknown action '{}'. Use: create, read, update, list, assign_koi, pause, resume, archive, find_related, get_messages, get_todos, create_todo, claim_todo, complete_todo, cancel_todo, resume_todo, replace_todo, delete_todo, update_todo_status, merge_branches",
                 action
             ))),
         }

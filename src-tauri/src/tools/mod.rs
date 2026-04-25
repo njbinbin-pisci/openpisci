@@ -5,6 +5,7 @@ pub mod call_fish;
 pub mod call_koi;
 pub mod chat_ui;
 pub mod dpi;
+pub mod im_send;
 pub mod office;
 pub mod powershell;
 pub mod skill_list;

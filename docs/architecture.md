@@ -93,14 +93,10 @@ environment:
     [`pisci_kernel::headless::run_pisci_turn`]. It boots a `CliHost`,
     opens the kernel DB/settings under `OPENPISCI_CONFIG_DIR`, registers
     only neutral tools, and streams `AgentEvent`s as NDJSON on stdout.
-    `pool` mode is rejected and must use the desktop `openpisci` binary.
-* `pisci_cli::runner::run_pisci_once(request)` — shared helper that both
-  `openpisci-headless` and the desktop `openpisci` binary dispatch into
-  whenever `mode == Pisci`, guaranteeing that a single code path owns
-  tool registration, event-sink wiring, timeout semantics, and response
-  shape. Heavyweight pool / koi delegation runs still live in
-  `pisci-desktop`'s Tauri-backed `run_headless_cli`, because they need
-  `AppState` and per-koi notification channels.
+* `pisci_cli::runner::run_pisci_once(request)` — shared helper for
+  `openpisci-headless` pisci-mode runs, guaranteeing that a single code
+  path owns tool registration, event-sink wiring, timeout semantics, and
+  response shape.
 
 ### `pisci-desktop` — Tauri host adapter
 
@@ -179,20 +175,14 @@ cargo build -p pisci-cli --release --bin openpisci-headless
 cargo build --release -p pisci-desktop
 ```
 
-`bench_swe_lite` continues to look for `openpisci[.exe]` under
-`src-tauri/target/{debug,release}/` — that binary still ships with
-`pisci-desktop` because pool orchestration and koi delegation need Tauri
-`AppState`. Single-turn `pisci`-mode runs now have a fully independent
-kernel path available via `pisci-cli`'s `openpisci-headless run`.
+Headless benchmark harnesses should invoke `openpisci-headless[.exe]`
+from `target/{debug,release}/` or from the bundled sidecar location.
 
 ## Future work
 
-* Migrate pool-mode orchestration (`pool_org` / `pool_chat` tools plus
-  the koi notification rx) into a kernel-level scheduler so
-  `openpisci-headless` can accept `--mode pool` without depending on
-  Tauri. Today pool runs must still invoke `pisci-desktop`'s `openpisci`
-  binary — the *only* remaining hard dependency of the headless story on
-  the desktop crate.
+* Continue hardening pool-mode orchestration (`pool_org` / `pool_chat`
+  tools plus the koi subprocess runtime) inside `openpisci-headless` so
+  the headless story stays independent from the desktop crate.
 * Route pool-mode UI flows (in-app task board, Koi status) through the
   same NDJSON event contract the CLI uses, so a future headless pool
   runner can share the wire format unchanged.

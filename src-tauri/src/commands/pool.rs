@@ -204,8 +204,8 @@ pub async fn update_pool_session_config(
 /// Dispatch a task to a Koi agent via the KoiRuntime.
 /// This is the unified entry point for programmatic task assignment from the UI.
 ///
-/// When a pool_session_id is provided, posts the task as a @mention message
-/// in the pool and wakes the Koi to read and decide autonomously.
+/// When a pool_session_id is provided, posts the task as a forced `@!mention`
+/// in the pool and wakes the Koi with a concrete delegated task.
 /// Without a pool, falls back to direct assign_and_execute (no pool context
 /// for the agent to read).
 #[tauri::command]
@@ -232,11 +232,11 @@ pub async fn dispatch_koi_task(
 
         let mention_content = if let Some(timeout_secs) = timeout_secs.filter(|v| *v > 0) {
             format!(
-                "@{} [Priority: {}] [Execution timeout: {}s] {}",
+                "@!{} [Priority: {}] [Execution timeout: {}s] {}",
                 koi_name, priority, timeout_secs, task
             )
         } else {
-            format!("@{} [Priority: {}] {}", koi_name, priority, task)
+            format!("@!{} [Priority: {}] {}", koi_name, priority, task)
         };
         {
             let db = state.db.lock().await;
@@ -262,7 +262,7 @@ pub async fn dispatch_koi_task(
 
         Ok(json!({
             "success": true,
-            "reply": format!("Task posted to pool. @{} has been notified.", koi_name),
+            "reply": format!("Task posted to pool. @!{} has been delegated work.", koi_name),
             "result_message_id": null,
         }))
     } else {

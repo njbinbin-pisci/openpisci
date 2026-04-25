@@ -45,6 +45,12 @@ pub struct CreatePoolArgs {
     pub project_dir: Option<String>,
     pub org_spec: Option<String>,
     pub task_timeout_secs: u32,
+    /// Optional IM binding (`im_session_bindings.binding_key`) that
+    /// originated this pool — set when an IM-driven Pisci session
+    /// requests the pool. Pool-level events (heartbeat alerts,
+    /// decision requests) fan out to this binding alongside the UI
+    /// toast.
+    pub origin_im_binding_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -87,6 +93,14 @@ pub struct ReplaceTodoArgs {
     pub task: String,
     pub reason: String,
     pub timeout_secs: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DeleteTodoArgs {
+    pub todo_id: Option<String>,
+    pub pool_id: Option<String>,
+    pub status: Option<String>,
+    pub owner_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]

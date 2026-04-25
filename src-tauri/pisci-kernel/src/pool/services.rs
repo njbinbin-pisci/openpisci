@@ -111,6 +111,16 @@ fn check_todo_ownership(todo: &KoiTodo, caller: &CallerContext<'_>) -> anyhow::R
     )
 }
 
+fn check_pisci_only(caller: &CallerContext<'_>, action: &str) -> anyhow::Result<()> {
+    if caller.is_pisci() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Permission denied. Action '{}' is restricted to pisci because it permanently deletes shared board history.",
+        action
+    )
+}
+
 fn short(id: &str) -> &str {
     &id[..8.min(id.len())]
 }
@@ -174,6 +184,19 @@ pub async fn create_pool(
         let spec = org_spec_trimmed.to_string();
         store
             .write(move |db| db.update_pool_org_spec(&id, &spec))
+            .await?;
+    }
+
+    if let Some(binding_key) = args
+        .origin_im_binding_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let id = session.id.clone();
+        let key = binding_key.to_string();
+        store
+            .write(move |db| db.set_pool_origin_im_binding(&id, Some(&key)))
             .await?;
     }
 
@@ -643,11 +666,11 @@ pub async fn assign_koi(
 
     let mention = if args.timeout_secs > 0 {
         format!(
-            "@{} [Priority: {}] [Execution timeout: {}s] {}",
+            "@!{} [Priority: {}] [Execution timeout: {}s] {}",
             koi_name, priority, args.timeout_secs, task
         )
     } else {
-        format!("@{} [Priority: {}] {}", koi_name, priority, task)
+        format!("@!{} [Priority: {}] {}", koi_name, priority, task)
     };
 
     // Pre-create the kanban todo so the board shows the work before
@@ -736,7 +759,7 @@ pub async fn assign_koi(
         "todo": pisci_core::host::TodoSnapshot::from(&todo),
         "mention_message": msg,
         "summary": format!(
-            "Task posted to pool, kanban todo created, and @{} has been notified.",
+            "Task posted to pool, kanban todo created, and @!{} has been delegated work.",
             koi_name
         ),
     }))
@@ -1059,6 +1082,165 @@ pub async fn cancel_todo(
             short(&refreshed.id),
             refreshed.title,
             reason
+        ),
+    }))
+}
+
+pub async fn delete_todo(
+    store: &PoolStore,
+    sink: &dyn PoolEventSink,
+    caller: &CallerContext<'_>,
+    args: DeleteTodoArgs,
+) -> anyhow::Result<Value> {
+    check_pisci_only(caller, "delete_todo")?;
+
+    let todo_id = args
+        .todo_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if let Some(todo_id) = todo_id {
+        let todo = find_todo_by_prefix(store, &todo_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Todo '{}' not found", todo_id))?;
+        let delete_id = todo.id.clone();
+        store
+            .write(move |db| db.delete_koi_todo(&delete_id))
+            .await?;
+        emit_todo(
+            sink,
+            todo.pool_session_id.as_deref(),
+            TodoChangeAction::Deleted,
+            &todo,
+        );
+        return Ok(json!({
+            "deleted_count": 1,
+            "deleted_todos": [pisci_core::host::TodoSnapshot::from(&todo)],
+            "summary": format!(
+                "Deleted todo '{}' ({}).",
+                short(&todo.id),
+                todo.title
+            ),
+        }));
+    }
+
+    let pool_id_hint = args
+        .pool_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "'todo_id' is required for single delete, or provide 'pool_id' for batch delete."
+            )
+        })?
+        .to_string();
+    let status_filter = args
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let owner_hint = args
+        .owner_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if status_filter.is_none() && owner_hint.is_none() {
+        anyhow::bail!(
+            "Batch delete requires at least one filter. Provide 'delete_status' and/or 'delete_owner_id'."
+        );
+    }
+
+    let owner_filter = if let Some(owner_hint) = owner_hint {
+        Some(
+            store
+                .read(move |db| {
+                    Ok(db
+                        .resolve_koi_identifier(&owner_hint)?
+                        .map(|k| k.id)
+                        .unwrap_or(owner_hint))
+                })
+                .await?,
+        )
+    } else {
+        None
+    };
+    let session = resolve_pool(store, caller, &pool_id_hint, "delete_todo").await?;
+    let resolved_pool_id = session.id.clone();
+    let status_filter_cl = status_filter.clone();
+    let owner_filter_cl = owner_filter.clone();
+    let todos_to_delete = store
+        .read(move |db| {
+            let all = db.list_koi_todos(None)?;
+            Ok(all
+                .into_iter()
+                .filter(|todo| todo.pool_session_id.as_deref() == Some(resolved_pool_id.as_str()))
+                .filter(|todo| {
+                    status_filter_cl
+                        .as_deref()
+                        .map(|status| todo.status == status)
+                        .unwrap_or(true)
+                })
+                .filter(|todo| {
+                    owner_filter_cl
+                        .as_deref()
+                        .map(|owner_id| todo.owner_id == owner_id)
+                        .unwrap_or(true)
+                })
+                .collect::<Vec<_>>())
+        })
+        .await?;
+
+    if todos_to_delete.is_empty() {
+        return Ok(json!({
+            "deleted_count": 0,
+            "deleted_todos": [],
+            "summary": format!(
+                "No todos matched the delete filter in pool '{}'.",
+                short(&session.id)
+            ),
+        }));
+    }
+
+    let delete_ids: Vec<String> = todos_to_delete.iter().map(|todo| todo.id.clone()).collect();
+    store
+        .write(move |db| {
+            for id in delete_ids {
+                db.delete_koi_todo(&id)?;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await?;
+    for todo in &todos_to_delete {
+        emit_todo(
+            sink,
+            todo.pool_session_id.as_deref(),
+            TodoChangeAction::Deleted,
+            todo,
+        );
+    }
+
+    Ok(json!({
+        "deleted_count": todos_to_delete.len(),
+        "deleted_todos": todos_to_delete
+            .iter()
+            .map(pisci_core::host::TodoSnapshot::from)
+            .collect::<Vec<_>>(),
+        "summary": format!(
+            "Deleted {} todo(s) from pool '{}'{}{}.",
+            todos_to_delete.len(),
+            session.name,
+            status_filter
+                .as_deref()
+                .map(|status| format!(" with status '{}'", status))
+                .unwrap_or_default(),
+            owner_filter
+                .as_deref()
+                .map(|owner_id| format!(" for owner '{}'", owner_id))
+                .unwrap_or_default(),
         ),
     }))
 }

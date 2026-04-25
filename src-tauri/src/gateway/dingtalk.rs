@@ -13,8 +13,14 @@ use tracing::{info, warn};
 pub struct DingtalkConfig {
     pub app_key: String,
     pub app_secret: String,
-    /// robot_code is only needed for outbound batchSend; for Stream mode the app_key is the robot code.
+    /// Robot code for official proactive send APIs. Recommended by DingTalk docs.
     pub robot_code: Option<String>,
+}
+
+enum DingtalkRecipient<'a> {
+    SessionWebhook(&'a str),
+    Group(&'a str),
+    User(&'a str),
 }
 
 struct TokenCache {
@@ -44,6 +50,14 @@ impl DingtalkChannel {
             token_cache: Arc::new(RwLock::new(None)),
             shutdown: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    fn robot_code(&self) -> &str {
+        self.config
+            .robot_code
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(self.config.app_key.as_str())
     }
 
     async fn get_access_token(&self) -> Result<String> {
@@ -93,24 +107,153 @@ impl DingtalkChannel {
         Ok(token)
     }
 
-    async fn send_text(&self, conversation_id: &str, text: &str) -> Result<()> {
+    fn parse_recipient<'a>(&self, recipient: &'a str) -> DingtalkRecipient<'a> {
+        if let Some(value) = recipient.strip_prefix("sessionWebhook:") {
+            DingtalkRecipient::SessionWebhook(value)
+        } else if let Some(value) = recipient.strip_prefix("group:") {
+            DingtalkRecipient::Group(value)
+        } else if let Some(value) = recipient.strip_prefix("user:") {
+            DingtalkRecipient::User(value)
+        } else {
+            DingtalkRecipient::User(recipient)
+        }
+    }
+
+    async fn send_user_text(&self, user_id: &str, text: &str) -> Result<()> {
         let token = self.get_access_token().await?;
-        let robot_code = self
-            .config
-            .robot_code
-            .as_deref()
-            .unwrap_or(self.config.app_key.as_str());
-        self.http
+        let resp = self
+            .http
             .post("https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend")
             .header("x-acs-dingtalk-access-token", &token)
             .json(&json!({
-                "robotCode": robot_code,
-                "userIds": [conversation_id],
+                "robotCode": self.robot_code(),
+                "userIds": [user_id],
                 "msgKey": "sampleText",
                 "msgParam": serde_json::to_string(&json!({"content": text}))?,
             }))
             .send()
             .await?;
+        ensure_dingtalk_send_ok(resp).await
+    }
+
+    async fn send_group_text(&self, open_conversation_id: &str, text: &str) -> Result<()> {
+        let token = self.get_access_token().await?;
+        let resp = self
+            .http
+            .post("https://api.dingtalk.com/v1.0/robot/groupMessages/send")
+            .header("x-acs-dingtalk-access-token", &token)
+            .json(&json!({
+                "robotCode": self.robot_code(),
+                "openConversationId": open_conversation_id,
+                "msgKey": "sampleText",
+                "msgParam": serde_json::to_string(&json!({"content": text}))?,
+            }))
+            .send()
+            .await?;
+        ensure_dingtalk_send_ok(resp).await
+    }
+
+    async fn send_via_session_webhook(&self, session_webhook: &str, text: &str) -> Result<()> {
+        let resp = self
+            .http
+            .post(session_webhook)
+            .json(&json!({
+                "msgtype": "text",
+                "text": { "content": text }
+            }))
+            .send()
+            .await?;
+        ensure_dingtalk_send_ok(resp).await
+    }
+
+    async fn send_message(&self, recipient: &str, text: &str) -> Result<()> {
+        match self.parse_recipient(recipient) {
+            DingtalkRecipient::SessionWebhook(url) if !url.trim().is_empty() => {
+                self.send_via_session_webhook(url, text).await
+            }
+            DingtalkRecipient::Group(open_conversation_id)
+                if !open_conversation_id.trim().is_empty() =>
+            {
+                self.send_group_text(open_conversation_id, text).await
+            }
+            DingtalkRecipient::User(user_id) if !user_id.trim().is_empty() => {
+                self.send_user_text(user_id, text).await
+            }
+            _ => Err(anyhow::anyhow!("DingTalk recipient is empty")),
+        }
+    }
+
+    async fn handle_stream_callback_frame(
+        &self,
+        frame: &serde_json::Value,
+        message_id: &str,
+        tx: &mpsc::Sender<InboundMessage>,
+    ) -> Result<()> {
+        let data_str = frame["data"].as_str().unwrap_or("{}");
+        let data = serde_json::from_str::<serde_json::Value>(data_str)
+            .map_err(|e| anyhow::anyhow!("Invalid DingTalk callback payload JSON: {}", e))?;
+
+        if data["msgtype"].as_str() != Some("text") {
+            return Ok(());
+        }
+
+        let sender_user_id = data["senderStaffId"]
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                data["senderId"]
+                    .as_str()
+                    .filter(|value| !value.trim().is_empty())
+            })
+            .unwrap_or_default()
+            .to_string();
+        let sender_nick = data["senderNick"].as_str().map(String::from);
+        let conversation_id = data["conversationId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let session_webhook = data["sessionWebhook"].as_str();
+        let msg_id = data["msgId"].as_str().unwrap_or(message_id).to_string();
+        let text_content = data["text"]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let is_group = data["conversationType"].as_str() == Some("2");
+        let group_name = data["conversationTitle"].as_str().map(String::from);
+        let create_at = data["createAt"].as_u64().unwrap_or(0);
+
+        if text_content.is_empty() || sender_user_id.is_empty() {
+            return Ok(());
+        }
+
+        let inbound = InboundMessage {
+            id: msg_id,
+            channel: "dingtalk".to_string(),
+            sender: sender_user_id.clone(),
+            sender_name: sender_nick,
+            content: text_content,
+            reply_target: build_reply_target(
+                session_webhook,
+                is_group,
+                &conversation_id,
+                &sender_user_id,
+            ),
+            conversation_key: Some(if is_group {
+                format!("conversation:{}", conversation_id)
+            } else {
+                format!("user:{}", sender_user_id)
+            }),
+            is_group,
+            group_name,
+            timestamp: create_at,
+            media: None,
+            routing_state: None,
+        };
+
+        if tx.send(inbound).await.is_err() {
+            return Err(anyhow::anyhow!("DingTalk inbound consumer dropped"));
+        }
         Ok(())
     }
 }
@@ -127,7 +270,7 @@ impl Channel for DingtalkChannel {
         match self.get_access_token().await {
             Ok(_) => {
                 self.status = ChannelStatus::Connected;
-                info!("DingTalk channel connected (Stream mode)");
+                info!("DingTalk channel connected (official Stream mode)");
                 Ok(())
             }
             Err(e) => {
@@ -145,18 +288,12 @@ impl Channel for DingtalkChannel {
     }
 
     async fn send(&self, msg: &OutboundMessage) -> Result<()> {
-        self.send_text(&msg.recipient, &msg.content).await
+        self.send_message(&msg.recipient, &msg.content).await
     }
 
     /// DingTalk Stream mode: establish a WebSocket long connection to receive robot messages.
-    ///
-    /// Protocol:
-    /// 1. POST /v1.0/gateway/connections/open → get endpoint + ticket (ticket valid 90s, one-time)
-    /// 2. Connect wss://{endpoint}?ticket={ticket}
-    /// 3. Receive CALLBACK frames with topic /v1.0/im/bot/messages/get
-    /// 4. Reply ACK for each received frame
     async fn listen(&self, tx: mpsc::Sender<InboundMessage>) -> Result<()> {
-        info!("DingTalk listener started (Stream mode WebSocket)");
+        info!("DingTalk listener started (official Stream mode WebSocket)");
 
         let config = self.config.clone();
         let http = self.http.clone();
@@ -170,7 +307,7 @@ impl Channel for DingtalkChannel {
                 info!("DingTalk: shutdown flag set, listener exiting");
                 return Ok(());
             }
-            // Step 1: Register stream connection to get endpoint + ticket
+
             let (ws_endpoint, ticket) = match get_stream_connection(&http, &config).await {
                 Ok(v) => {
                     backoff = std::time::Duration::from_secs(1);
@@ -184,7 +321,6 @@ impl Channel for DingtalkChannel {
                 }
             };
 
-            // Step 2: Connect WebSocket
             let ws_url = format!("{}?ticket={}", ws_endpoint, ticket);
             info!("DingTalk: connecting to Stream WebSocket: {}", ws_endpoint);
 
@@ -209,7 +345,6 @@ impl Channel for DingtalkChannel {
                                         String::from_utf8_lossy(&b).into_owned()
                                     }
                                     tokio_tungstenite::tungstenite::Message::Ping(data) => {
-                                        // Respond to server pings
                                         let _ = ws_sink
                                             .send(tokio_tungstenite::tungstenite::Message::Pong(
                                                 data,
@@ -234,7 +369,6 @@ impl Channel for DingtalkChannel {
                                         .unwrap_or("")
                                         .to_string();
 
-                                    // Always ACK received frames
                                     let ack = json!({
                                         "code": 200,
                                         "headers": {
@@ -250,65 +384,24 @@ impl Channel for DingtalkChannel {
                                         ))
                                         .await;
 
-                                    // Only process robot message callbacks
                                     if frame_type == "CALLBACK"
                                         && topic == "/v1.0/im/bot/messages/get"
                                     {
-                                        // data field is a JSON string
-                                        let data_str = frame["data"].as_str().unwrap_or("{}");
-                                        if let Ok(data) =
-                                            serde_json::from_str::<serde_json::Value>(data_str)
+                                        match self
+                                            .handle_stream_callback_frame(&frame, &message_id, &tx)
+                                            .await
                                         {
-                                            let sender_id = data["senderId"]
-                                                .as_str()
-                                                .unwrap_or_default()
-                                                .to_string();
-                                            let sender_nick =
-                                                data["senderNick"].as_str().map(String::from);
-                                            let conv_id = data["conversationId"]
-                                                .as_str()
-                                                .unwrap_or_default()
-                                                .to_string();
-                                            let msg_id = data["msgId"]
-                                                .as_str()
-                                                .unwrap_or(&message_id)
-                                                .to_string();
-                                            let text_content = data["text"]["content"]
-                                                .as_str()
-                                                .unwrap_or_default()
-                                                .trim()
-                                                .to_string();
-                                            let is_group =
-                                                data["conversationType"].as_str() == Some("2");
-                                            let group_name = data["conversationTitle"]
-                                                .as_str()
-                                                .map(String::from);
-                                            let create_at = data["createAt"].as_u64().unwrap_or(0);
-
-                                            if text_content.is_empty() {
-                                                continue;
-                                            }
-
-                                            let inbound = InboundMessage {
-                                                id: msg_id,
-                                                channel: "dingtalk".to_string(),
-                                                sender: sender_id.clone(),
-                                                sender_name: sender_nick,
-                                                content: text_content,
-                                                // For single chat reply to sender; for group reply to conversation
-                                                reply_target: if is_group {
-                                                    conv_id
-                                                } else {
-                                                    sender_id
-                                                },
-                                                is_group,
-                                                group_name,
-                                                timestamp: create_at / 1000,
-                                                media: None,
-                                            };
-
-                                            if tx.send(inbound).await.is_err() {
+                                            Ok(()) => {}
+                                            Err(e)
+                                                if e.to_string().contains("consumer dropped") =>
+                                            {
                                                 return Ok(());
+                                            }
+                                            Err(e) => {
+                                                warn!(
+                                                    "DingTalk: failed to process callback frame: {}",
+                                                    e
+                                                );
                                             }
                                         }
                                     }
@@ -323,7 +416,6 @@ impl Channel for DingtalkChannel {
                                 break;
                             }
                             Err(_) => {
-                                // poll interval elapsed — check shutdown, then maybe ping
                                 if shutdown.load(Ordering::Relaxed) {
                                     info!("DingTalk: shutdown requested, closing WebSocket");
                                     let _ = ws_sink
@@ -340,7 +432,7 @@ impl Channel for DingtalkChannel {
                                 }
                             }
                         }
-                        // Check shutdown after every message
+
                         if shutdown.load(Ordering::Relaxed) {
                             info!("DingTalk: shutdown after message, closing WebSocket");
                             let _ = ws_sink
@@ -383,6 +475,46 @@ impl Channel for DingtalkChannel {
     }
 }
 
+async fn ensure_dingtalk_send_ok(resp: reqwest::Response) -> Result<()> {
+    let status = resp.status();
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("Invalid JSON from DingTalk send API: {}", e))?;
+
+    if !status.is_success() {
+        return Err(anyhow::anyhow!("DingTalk send HTTP {}: {}", status, body));
+    }
+    if let Some(code) = body["errcode"].as_i64().or(body["code"].as_i64()) {
+        if code != 0 {
+            return Err(anyhow::anyhow!(
+                "DingTalk send error {}: {}",
+                code,
+                body["errmsg"]
+                    .as_str()
+                    .or(body["message"].as_str())
+                    .unwrap_or("unknown")
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn build_reply_target(
+    session_webhook: Option<&str>,
+    is_group: bool,
+    conversation_id: &str,
+    sender_user_id: &str,
+) -> String {
+    if let Some(webhook) = session_webhook.filter(|value| !value.trim().is_empty()) {
+        format!("sessionWebhook:{}", webhook)
+    } else if is_group {
+        format!("group:{}", conversation_id)
+    } else {
+        format!("user:{}", sender_user_id)
+    }
+}
+
 /// Register a DingTalk Stream connection and return (endpoint, ticket).
 async fn get_stream_connection(http: &Client, config: &DingtalkConfig) -> Result<(String, String)> {
     let resp = http
@@ -408,16 +540,55 @@ async fn get_stream_connection(http: &Client, config: &DingtalkConfig) -> Result
         .await
         .map_err(|e| anyhow::anyhow!("Invalid JSON from DingTalk Stream API: {}", e))?;
 
-    // The API returns HTTP 200 with endpoint/ticket directly (no code field)
     let endpoint = body["endpoint"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Missing endpoint in DingTalk Stream response: {:?}", body))?
         .to_string();
-
     let ticket = body["ticket"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Missing ticket in DingTalk Stream response: {:?}", body))?
         .to_string();
 
     Ok((endpoint, ticket))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefers_session_webhook_reply_target() {
+        let target = build_reply_target(
+            Some("https://oapi.dingtalk.com/robot/sendBySession?session=abc"),
+            true,
+            "cid",
+            "user123",
+        );
+        assert_eq!(
+            target,
+            "sessionWebhook:https://oapi.dingtalk.com/robot/sendBySession?session=abc"
+        );
+    }
+
+    #[test]
+    fn parses_recipient_kinds() {
+        let channel = DingtalkChannel::new(DingtalkConfig {
+            app_key: "app".into(),
+            app_secret: "secret".into(),
+            robot_code: Some("robot".into()),
+        });
+
+        assert!(matches!(
+            channel.parse_recipient("sessionWebhook:https://example.com"),
+            DingtalkRecipient::SessionWebhook(_)
+        ));
+        assert!(matches!(
+            channel.parse_recipient("group:cid123"),
+            DingtalkRecipient::Group("cid123")
+        ));
+        assert!(matches!(
+            channel.parse_recipient("user:u123"),
+            DingtalkRecipient::User("u123")
+        ));
+    }
 }

@@ -1,9 +1,17 @@
-You have been @mentioned in pool_chat (pool_id: "{pool_id}"). You are {name}.
+You have been notified via pool_chat (pool_id: "{pool_id}"). You are {name}.
 
-Read pool_chat(action="read") and pool_org(action="get_todos", pool_id="{pool_id}") to see the current pool state, then pick exactly ONE trajectory from the Run Shape section of your system prompt — Observer, Actor, or Waiter — and execute it through to its terminal phase as defined there.
+Sender: {sender_id}
+Message:
+{message}
 
-Heads-up before you choose:
-- Your name "{name}" may appear inside future plans, conditionals ("after X is done, ask @{name}"), acknowledgements, or status recaps that are NOT a live handoff. Decide actionability from the latest pool evidence, not from counting name occurrences.
-- Do not post acknowledgement-only messages. Post pool_chat only when you have something genuinely new or actionable.
+This was a plain `@mention`, not a forced `@!mention`.
 
-Before you stop, the Stop Gate at the end of your system prompt is a board state check, not a self-narrative checklist — re-perform it via `pool_org(action="get_todos")`. The runtime will rewrite any of your todos still in `in_progress` to `needs_review` and post a `protocol_reminder` under your name in pool_chat; that trace is permanent.
+Treat this run as triage/coordination only:
+- Read `pool_chat(action="read")` and `pool_org(action="get_todos", pool_id="{pool_id}")` to inspect the latest state.
+- Decide whether the message is actually actionable right now, or merely informational / future-looking / a status recap.
+- If it is only informational, do nothing and stop.
+- If work should exist on the board, create or update the right todo(s), or notify the right teammate with `@!Name` when you are explicitly delegating concrete work.
+- Do NOT claim a todo, do NOT start implementation, and do NOT perform file-writing / shell-mutating work in this notification run. Plain `@mention` is for awareness and routing, not immediate forced execution.
+- Do not post acknowledgement-only messages. Post to pool_chat only when you have something genuinely new or actionable.
+
+Before you stop, re-check `pool_org(action="get_todos")` so the board reflects whatever routing decision you made.

@@ -1,14 +1,11 @@
 [package]
 name = "pisci-cli"
-version = "0.7.0"
+version = "0.7.2"
 edition = "2021"
 description = "OpenPisci headless CLI — cross-platform agent runner with no Tauri / GUI dependency."
 
-# Two binaries for the time being:
-#   * `openpisci-headless` — thin kernel demo binary owned by this crate.
-#   * `openpisci` (in pisci-desktop) — full headless runner that still
-#     requires a live Tauri `AppState`. Ownership migrates here once the
-#     commands layer is refactored to consume `HostRuntime` directly.
+# Published CLI binary. `pisci-desktop` owns the GUI app; this crate owns the
+# only headless/sidecar executable shipped with releases.
 
 [[bin]]
 name = "openpisci-headless"

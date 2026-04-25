@@ -949,14 +949,20 @@ async fn parse_and_dispatch_event(
     let inbound = InboundMessage {
         id: message_id,
         channel: "feishu".to_string(),
-        sender: sender_open_id,
+        sender: sender_open_id.clone(),
         sender_name: None,
         content: text_content,
         reply_target,
+        conversation_key: Some(if chat_type == "group" {
+            format!("chat:{}", chat_id)
+        } else {
+            format!("user:{}", sender_open_id)
+        }),
         is_group: chat_type == "group",
         group_name: None,
         timestamp: 0,
         media,
+        routing_state: None,
     };
 
     if tx.send(inbound).await.is_err() {

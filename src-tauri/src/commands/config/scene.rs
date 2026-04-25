@@ -1,12 +1,13 @@
 use crate::browser::SharedBrowserManager;
+use crate::commands::config::mcp::resolve_settings_placeholders_in_mcp_config;
 use crate::host::DesktopHostTools;
 use crate::skills::loader::SkillLoader;
 use crate::store::{Database, Settings};
+use pisci_core::scene::RegistryProfile;
 pub use pisci_core::scene::{
     CollaborationContextMode, HistorySliceMode, MemorySliceMode, PoolSnapshotMode, SceneKind,
     ScenePolicy,
 };
-use pisci_core::scene::RegistryProfile;
 use pisci_kernel::agent::tool::ToolRegistry;
 use pisci_kernel::tools::register_mcp_tools;
 use std::collections::HashMap;
@@ -41,12 +42,24 @@ pub async fn build_registry_for_scene(
     let policy = ScenePolicy::for_kind(scene);
 
     // Snapshot MCP server configs before the Settings mutex is moved into
-    // `DesktopHostTools`. Only scenes that opt-in (main-chat / koi task)
-    // actually touch MCP — everyone else skips the I/O.
+    // `DesktopHostTools`. Only scenes that opt-in (main-chat / koi task /
+    // IM headless) actually touch MCP — everyone else skips the I/O.
+    //
+    // Per the layered IM architecture (credentials shared, channel and
+    // capability independent), MCP servers hosting enterprise APIs
+    // (DingTalk / Feishu / WeCom CLI) often need the *same* application
+    // credentials the IM channel already has. We expand `${settings:*}`
+    // placeholders inside each server's `env` map so users don't need to
+    // duplicate bot_id/app_secret values into the MCP config — the
+    // single source of truth is Settings → IM → application credentials.
     let mcp_servers = if policy.allow_mcp_tools {
         if let Some(ref settings_arc) = settings {
             let guard = settings_arc.lock().await;
-            guard.mcp_servers.clone()
+            guard
+                .mcp_servers
+                .iter()
+                .map(|server| resolve_settings_placeholders_in_mcp_config(server, &guard))
+                .collect()
         } else {
             Vec::new()
         }

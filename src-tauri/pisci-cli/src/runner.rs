@@ -1,11 +1,9 @@
 //! Shared helpers for running a single pisci-mode agent turn, and
 //! bootstrapping a pool-mode parent, from any headless host.
 //!
-//! Both `openpisci-headless` (pure CLI) and `openpisci` (desktop CLI
-//! fallback, for callers that want to bypass the Tauri boot when the
-//! request is pisci-only) dispatch into [`run_pisci_once`] so the two
-//! entry points are guaranteed to stream through the exact same kernel
-//! code path — same tool registry, same event sink wiring, same timeout
+//! `openpisci-headless` dispatches into [`run_pisci_once`] for pisci-mode
+//! requests so every headless single-agent run uses the same kernel code
+//! path — same tool registry, same event sink wiring, same timeout
 //! semantics.
 //!
 //! [`run_pool_once`] is the minimum-viable headless parent for
@@ -227,6 +225,7 @@ pub fn run_pool_once(request: HeadlessCliRequest) -> Result<HeadlessCliResponse,
                     project_dir: request.workspace.clone(),
                     org_spec: None,
                     task_timeout_secs: request.task_timeout_secs.unwrap_or(600),
+                    origin_im_binding_key: None,
                 },
             )
             .await

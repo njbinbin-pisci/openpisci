@@ -450,7 +450,7 @@ const SUMMARY_KEEP_RECENT_RATIO: f64 = 0.60; // keep newest 60% of budget intact
 /// of the context budget) AND `CTX_TRIM_MIN_SIZE` (the absolute minimum worth
 /// trimming). Using `min` ensures we never trim a result that is already within
 /// the budget share, and never trim one that is too small to benefit from it.
-fn compact_trim_tool_results(messages: &mut [LlmMessage], single_limit: usize) -> bool {
+pub fn compact_trim_tool_results(messages: &mut [LlmMessage], single_limit: usize) -> bool {
     // Effective threshold: trim only if the result exceeds the budget share AND
     // is large enough that trimming makes sense (> head + tail + 100 chars).
     let trim_threshold = single_limit.max(CTX_TRIM_MIN_SIZE);
@@ -567,7 +567,7 @@ fn is_compaction_summary_text(text: &str) -> bool {
 /// - If `tool_minimals` lacks an entry for a given `tool_use_id`, the original
 ///   full content is kept. Callers that need a hard ceiling on tokens should
 ///   follow up with `compact_trim_tool_results` on the returned vector.
-pub(crate) fn build_request_messages(
+pub fn build_request_messages(
     messages: &[LlmMessage],
     tool_minimals: &HashMap<String, String>,
     recent_full_turns: usize,
@@ -629,6 +629,27 @@ pub(crate) fn build_request_messages(
             MessageContent::Text(_) => out.push(msg.clone()),
         }
     }
+    out
+}
+
+/// Build the same request-view message slice the live agent uses before an
+/// LLM call: demote older tool results to receipts, then hard-trim oversized
+/// single results against the current message budget.
+pub fn build_request_view_messages(
+    messages: &[LlmMessage],
+    tool_minimals: &HashMap<String, String>,
+    recent_full_turns: usize,
+    recent_tool_carriers: usize,
+    message_budget_tokens: usize,
+) -> Vec<LlmMessage> {
+    let mut out = build_request_messages(
+        messages,
+        tool_minimals,
+        recent_full_turns,
+        recent_tool_carriers,
+    );
+    let single_limit = (message_budget_tokens as f64 * CONTEXT_SINGLE_RESULT_SHARE * 4.0) as usize;
+    compact_trim_tool_results(&mut out, single_limit);
     out
 }
 

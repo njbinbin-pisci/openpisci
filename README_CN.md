@@ -218,7 +218,7 @@ OpenPisci 是一款本地优先的 AI Agent 桌面应用，基于 Tauri 2 + Rust
 
 ### Headless CLI（交互 / 脚本两种用法）
 
-每个发行版除桌面应用之外还会带两个控制台二进制：
+每个发行版会包含桌面应用和一个无头控制台二进制：
 
 - `pisci-desktop`（或 `pisci-desktop.exe`）：GUI 桌面应用。
 - `openpisci-headless`（或 `openpisci-headless.exe`）：无需 Tauri UI 的无头 Agent 运行器。
@@ -383,7 +383,7 @@ OpenPisci
 - **主聊天流式输出**：主聊天界面可按增量流式呈现 LLM 输出，由用户可见的设置项控制开关。
 - **MCP 集成完成**：按场景装配的工具注册器会在合适的场景按需注册 MCP 工具，不再留下"只接了一半"的状态。
 - **更严格的质量闸门**：工作区级 Lint 统一跑在 `-D warnings` 下，死代码、未使用路径等被清理干净，前端结构也同步收敛，降低漂移。
-- **Headless 交互式 CLI**：`openpisci-headless`（及桌面侧的 `openpisci`）在无参数或使用 `chat` 子命令时进入多轮交互 REPL，支持流式输出、`:help` / `:status` / `:new` / `:workspace` 等命令，并与桌面版共享 `pisci.db` / `config.json`。
+- **Headless 交互式 CLI**：`openpisci-headless` 在无参数或使用 `chat` 子命令时进入多轮交互 REPL，支持流式输出、`:help` / `:status` / `:new` / `:workspace` 等命令，并与桌面版共享 `pisci.db` / `config.json`。
 - **跨平台桌面打包铺垫**：Tauri 配置与 GitHub Actions 流水线已支持 Windows / macOS / Linux 三平台的原生桌面打包。
 
 ### v0.6.0

@@ -639,7 +639,7 @@ impl KoiRuntime {
              If the deliverable is NOT yet visible in pool_chat, post it FIRST via \
              `pool_chat(action=\"send\")` (include file path(s) and a brief summary), then \
              call complete_todo. If a follow-up by another agent is needed, the same post must \
-             include `[ProjectStatus] follow_up_needed` and an `@mention` of the next \
+             include `[ProjectStatus] follow_up_needed` and an `@!mention` of the next \
              responsible party (identify them per the Coordination Protocol \u{2014} from \
              `org_spec`, the task description, or the @mention chain; never default to a \
              fixed role name).\n\n\

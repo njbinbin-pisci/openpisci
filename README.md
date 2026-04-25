@@ -215,7 +215,7 @@ At the moment, Windows installers are the primary published artefact. `v0.7.0` a
 
 ### Headless CLI (interactive or scripted)
 
-The same release ships two console binaries alongside the desktop app:
+The same release ships the desktop app and one headless console binary:
 
 - `pisci-desktop` (or `pisci-desktop.exe`): the GUI application.
 - `openpisci-headless` (or `openpisci-headless.exe`): a headless agent runner that does **not** require the Tauri UI.

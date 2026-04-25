@@ -1,5 +1,5 @@
 //! Host traits — the contract between `pisci-kernel` (OS/UI-neutral runtime)
-//! and the concrete hosts that embed it (Tauri desktop, `openpisci` CLI,
+//! and the concrete hosts that embed it (Tauri desktop, `openpisci-headless` CLI,
 //! future server process, …).
 //!
 //! The kernel always consumes these traits behind `Arc<dyn Trait>` pointers

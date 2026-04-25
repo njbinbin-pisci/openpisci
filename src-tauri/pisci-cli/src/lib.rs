@@ -4,7 +4,7 @@
 //! environment: events are serialised as JSON lines to stdout, confirmation /
 //! interactive prompts fall back to deterministic defaults, and no
 //! platform-specific tools are registered. It exists so that the
-//! `openpisci` binary no longer needs Tauri at runtime.
+//! `openpisci-headless` binary no longer needs Tauri at runtime.
 //!
 //! The concrete `CliHost` and its `EventSink` / `Notifier` implementations
 //! live in submodules; the binary under `src/bin/openpisci.rs` wires them up

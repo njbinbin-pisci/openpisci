@@ -34,7 +34,7 @@ Use this when concrete actionable work has been handed to you. The trajectory ha
 2. **Acting.** Produce the deliverable using whatever tools fit (file_write, code_run, shell, browser, file_read, analysis in your reasoning, etc.). The Acting phase ends the moment the deliverable exists in any concrete form.\n\
 3. **Reconciling.** Mandatory after Acting and the most commonly skipped phase. Before the run may end you MUST complete ALL of:\n\
    a. Post a pool_chat message that makes the deliverable observable to the rest of the team. For file outputs include the path(s) and a brief summary; for non-file outputs (analysis, decision, spec) include the content directly in the post.\n\
-   b. If continuation by another agent is needed, identify that agent from the project's `org_spec`, your task description, or recent pool_chat history \u{2014} do NOT default to a fixed role and do NOT assume a `Reviewer`/`Coder`/`Architect` exists. If you cannot confidently identify the next actor, state that explicitly in pool_chat and let Pisci route. When the next actor is identified, pair the deliverable post with `[ProjectStatus] follow_up_needed` and an `@mention` of that agent.\n\
+   b. If continuation by another agent is needed, identify that agent from the project's `org_spec`, your task description, or recent pool_chat history \u{2014} do NOT default to a fixed role and do NOT assume a `Reviewer`/`Coder`/`Architect` exists. If you cannot confidently identify the next actor, state that explicitly in pool_chat and let Pisci route. When the next actor is identified, pair the deliverable post with `[ProjectStatus] follow_up_needed` and an `@!mention` of that agent.\n\
    c. If no continuation is needed and the project may be ready to close, post `[ProjectStatus] ready_for_pisci_review @pisci`. Do NOT @mention peer agents to confirm completion.\n\
    d. Call `pool_org(action=\"complete_todo\", todo_id=..., summary=...)` on the todo you claimed in Setup. `complete_todo` is the wire signal that moves the run from Reconciling toward Done; nothing else replaces it \u{2014} not a chat post, not a successful test, not your reasoning that the work is done.\n\
 4. **Done.** Only after Reconciling steps a, b/c, and d have all completed may you stop.\n\
@@ -55,16 +55,16 @@ pub fn koi_coordination_protocol_prompt() -> &'static str {
     "## Coordination Protocol\n\
 pool_chat is the shared channel; pool_org is the shared task board. These are the only load-bearing surfaces \u{2014} coordination that is not visible here does not exist for other agents.\n\
 - `pool_chat(action=\"read\")` to see history; `pool_chat(action=\"send\")` to post. `pool_org(action=\"get_todos\")` to see the board.\n\
-- @mention another agent ONLY when you are genuinely handing them concrete actionable work. Do NOT @mention peers just to acknowledge, agree, thank, or declare the project done \u{2014} those messages create noise and can trigger reply loops.\n\
-- **Handoff messages must propagate the protocol, not just the task.** When you @mention another agent to hand off work, your message MUST include three things, not one: (1) WHAT to do (the deliverable you expect), (2) WHERE the inputs are (file path, spec link, prior message reference), and (3) HOW to report completion \u{2014} name the expected next reporting target (return to you, hand to a third party identified from `org_spec`, or signal `@pisci`) and the `[ProjectStatus]` signal expected at completion. A handoff that says only \"do X\" silently transfers the cognitive load of figuring out completion semantics to the receiver, and receivers commonly drop the protocol when their attention is consumed by production. Treat your handoff message as the receiver's task brief.\n\
+- Use plain `@mention` / `@all` only for notification. Use `@!mention` / `@!all` only when you are explicitly delegating concrete actionable work that should wake the receiver right now.\n\
+- **Handoff messages must propagate the protocol, not just the task.** When you `@!mention` another agent to hand off work, your message MUST include three things, not one: (1) WHAT to do (the deliverable you expect), (2) WHERE the inputs are (file path, spec link, prior message reference), and (3) HOW to report completion \u{2014} name the expected next reporting target (return to you, hand to a third party identified from `org_spec`, or signal `@pisci`) and the `[ProjectStatus]` signal expected at completion. A handoff that says only \"do X\" silently transfers the cognitive load of figuring out completion semantics to the receiver, and receivers commonly drop the protocol when their attention is consumed by production. Treat your handoff message as the receiver's task brief.\n\
 - Identify the next responsible party from project context, not from a fixed role catalogue. Inputs in priority order: (1) the project's `org_spec` (which agent owns this kind of work), (2) the latest task description in pool_chat, (3) the most recent @mention chain. If multiple inputs disagree, prefer org_spec. If no input identifies the next party with confidence, do NOT guess and do NOT default to any role name \u{2014} state the ambiguity in pool_chat and let Pisci route.\n\
 - Not every @mention of your name is a live handoff. If your name appears inside a future plan, a conditional (\"after X is done, ask @you\"), or a status recap, it is not work for you right now. Decide actionability from the latest pool evidence.\n\
 - Status signals (place verbatim inside your pool_chat message so Pisci can reason about project state):\n\
-  - `[ProjectStatus] follow_up_needed` \u{2014} more work is required; pair with an @mention of the next responsible party identified per the rule above.\n\
+  - `[ProjectStatus] follow_up_needed` \u{2014} more work is required; pair with an `@!mention` of the next responsible party identified per the rule above.\n\
   - `[ProjectStatus] waiting` \u{2014} you are blocked on something specific; name what you are waiting on.\n\
   - `[ProjectStatus] ready_for_pisci_review` \u{2014} use ONLY after your own `complete_todo` has succeeded and the project looks ready for Pisci to close.\n\
 - Never unilaterally declare the project complete. If you believe the project may be done, signal `@pisci`; do not poll peer agents for agreement.\n\
-- Only Pisci or the user directly assigns work to you. Other agents request via @mention. The task board (pool_org) and chat (pool_chat) are your sources of truth; do not rely on heartbeat, trial, or other harnesses to repair missing coordination.\n"
+- Only Pisci or the user directly assigns work to you. Other agents use plain `@mention` for notification or `@!mention` for explicit delegation. The task board (pool_org) and chat (pool_chat) are your sources of truth; do not rely on heartbeat, trial, or other harnesses to repair missing coordination.\n"
 }
 
 pub fn koi_context_and_tools_prompt() -> &'static str {
@@ -83,7 +83,9 @@ pub fn koi_context_and_tools_prompt() -> &'static str {
 pub fn koi_capabilities_prompt() -> &'static str {
     "## Optional Capabilities\n\
 - Skills: call `skill_list` only when a skill is likely to materially help. If a matching skill exists, `file_read` its SKILL.md and follow it as a method in service of the actual task \u{2014} skill discovery does not replace execution.\n\
-- Sub-task delegation (call_fish): Fish are stateless, ephemeral workers. Use call_fish only for tasks with many mechanical intermediate steps whose details are not relevant to the final answer. Do not use call_fish for work that requires your own judgment, sustained iteration, or a single simple action. Always `call_fish(action=\"list\")` first, and write a complete self-contained task description.\n\
+- Execution routing inside a Koi run: use `call_fish` for simple, self-contained, result-heavy sub-work where intermediate steps are not worth keeping in your own context (especially search, scanning, collection, extraction, and aggregation). Do the work yourself when the task is still simple enough for one agent but your own detailed reasoning or judgment should remain visible in your run record.\n\
+- Sub-task delegation (call_fish): Fish are stateless, ephemeral workers. Use call_fish only for tasks with many mechanical intermediate steps whose details are not relevant to the final answer. Do not use call_fish for work that requires your own judgment, sustained iteration, a single simple action, or back-and-forth with the user. Always `call_fish(action=\"list\")` first, and write a complete self-contained task description.\n\
+- No nested pool rule: do NOT initiate nested multi-agent collaboration from inside a Koi run. If the task grows into multi-domain, quality-sensitive work that needs separate implementation/review/QA coordination, finish or block your current scoped task and signal `@pisci` / `[ProjectStatus] follow_up_needed` so Pisci can coordinate at the pool level.\n\
 - Memory: when you learn something project-relevant that is worth persisting beyond this run, call memory_store. Scope it correctly \u{2014} private to you vs. shared with the pool.\n"
 }
 
@@ -98,7 +100,7 @@ This is the LAST thing you read. Treat it as a state check on the board, not as 
 \n\
 2. **Visibility check.** If this run produced any deliverable, confirm by reading the latest pool_chat that the deliverable is observable there (content posted directly, or file path(s) plus a brief summary). \"I will summarize next run\" is not allowed \u{2014} the team cannot see your future runs. If it is not visible, post it now BEFORE calling `complete_todo`.\n\
 \n\
-3. **Continuation check.** If your output requires another specific agent to continue, confirm a `[ProjectStatus] follow_up_needed` post with that agent's `@mention` exists from THIS run. Identify the next responsible party from `org_spec` / task description / pool_chat history per the Coordination Protocol \u{2014} do NOT default to a role name. If your output looks like a project-ready conclusion, confirm `[ProjectStatus] ready_for_pisci_review @pisci` exists from THIS run AND was posted only after your `complete_todo` succeeded. Do NOT @mention peer agents for agreement.\n\
+3. **Continuation check.** If your output requires another specific agent to continue, confirm a `[ProjectStatus] follow_up_needed` post with that agent's `@!mention` exists from THIS run. Identify the next responsible party from `org_spec` / task description / pool_chat history per the Coordination Protocol \u{2014} do NOT default to a role name. If your output looks like a project-ready conclusion, confirm `[ProjectStatus] ready_for_pisci_review @pisci` exists from THIS run AND was posted only after your `complete_todo` succeeded. Do NOT @mention peer agents for agreement.\n\
 \n\
 **Exit is permitted only when (1) is unambiguously \"no claimed todo of mine is in todo or in_progress\" AND (2) and (3) are satisfied as applicable.** The runtime enforces (1) for you: if you exit early, the runtime rewrites the stuck todo to `needs_review` and posts a `protocol_reminder` event in pool_chat under your name. That trace is permanent and visible to every agent that subsequently joins the pool \u{2014} it is a logged failure, not a redo.\n\
 \n\
@@ -279,6 +281,29 @@ mod tests {
                 coord.contains(piece),
                 "Handoff propagation rule must enumerate '{}' as a required piece",
                 piece
+            );
+        }
+    }
+
+    #[test]
+    fn capabilities_prompt_preserves_koi_routing_rules() {
+        let prompt = sample_prompt();
+        let caps_idx = prompt
+            .find("## Optional Capabilities")
+            .expect("Optional Capabilities section");
+        let stop_idx = prompt.find("## Stop Gate").expect("Stop Gate section");
+        let caps = &prompt[caps_idx..stop_idx];
+
+        for required in [
+            "use `call_fish` for simple, self-contained, result-heavy sub-work",
+            "Do the work yourself when the task is still simple enough for one agent",
+            "do NOT initiate nested multi-agent collaboration from inside a Koi run",
+            "signal `@pisci` / `[ProjectStatus] follow_up_needed`",
+        ] {
+            assert!(
+                caps.contains(required),
+                "Optional Capabilities lost Koi routing rule: {}",
+                required
             );
         }
     }

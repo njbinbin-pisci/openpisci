@@ -136,10 +136,12 @@ impl Channel for TelegramChannel {
                             sender_name,
                             content: text,
                             reply_target: chat_id.to_string(),
+                            conversation_key: Some(format!("chat:{}", chat_id)),
                             is_group,
                             group_name,
                             timestamp: message["date"].as_u64().unwrap_or(0),
                             media: None,
+                            routing_state: None,
                         };
 
                         if tx.send(msg).await.is_err() {

@@ -7,11 +7,13 @@
 //! effect under test is `(DB rows, emitted events)`.
 
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 
-use pisci_core::host::{PoolEvent, PoolEventSink};
+use pisci_core::host::{KoiTurnRequest, PoolEvent, PoolEventSink};
 use pisci_kernel::pool::{
     self, coordinator::CoordinatorConfig, services, store::PoolStore, AssignKoiArgs, CallerContext,
-    CreatePoolArgs, CreateTodoArgs, SendPoolMessageArgs, StubSubagentRuntime,
+    CreatePoolArgs, CreateTodoArgs, DeleteTodoArgs, SendPoolMessageArgs, StubOutcome,
+    StubSubagentRuntime,
 };
 use pisci_kernel::store::Database;
 use tokio::sync::Mutex;
@@ -87,6 +89,7 @@ async fn create_test_pool(store: &PoolStore, sink: &Arc<CapturingSink>) -> Strin
             project_dir: None,
             org_spec: Some("be nice".into()),
             task_timeout_secs: 0,
+            origin_im_binding_key: None,
         },
     )
     .await
@@ -117,6 +120,52 @@ async fn create_pool_emits_pool_created_and_welcome_message() {
         vec!["pool_created", "message_appended"],
         "create_pool must emit exactly PoolCreated + MessageAppended"
     );
+}
+
+#[tokio::test]
+async fn create_pool_persists_origin_im_binding_key_when_provided() {
+    let store = build_store();
+    let sink = make_sink();
+    let caller = pisci_caller("sess-im");
+    let value = services::create_pool(
+        &store,
+        sink.as_ref(),
+        &caller,
+        CreatePoolArgs {
+            name: "IM-originated pool".into(),
+            project_dir: None,
+            org_spec: None,
+            task_timeout_secs: 0,
+            origin_im_binding_key: Some("wechat::dm:user-1".into()),
+        },
+    )
+    .await
+    .expect("create_pool");
+    let pool_id = value["pool"]["id"].as_str().unwrap().to_string();
+
+    let pool = store
+        .read(move |db| db.get_pool_session(&pool_id))
+        .await
+        .expect("read pool")
+        .expect("pool exists");
+    assert_eq!(
+        pool.origin_im_binding_key.as_deref(),
+        Some("wechat::dm:user-1")
+    );
+}
+
+#[tokio::test]
+async fn create_pool_leaves_origin_im_binding_key_none_for_desktop_callers() {
+    let store = build_store();
+    let sink = make_sink();
+    let pool_id = create_test_pool(&store, &sink).await;
+
+    let pool = store
+        .read(move |db| db.get_pool_session(&pool_id))
+        .await
+        .expect("read pool")
+        .expect("pool exists");
+    assert!(pool.origin_im_binding_key.is_none());
 }
 
 #[tokio::test]
@@ -309,4 +358,176 @@ async fn assign_koi_creates_todo_posts_mention_and_emits_events() {
     );
     // Silence the clippy lint about unused modules.
     let _ = pool::session_source::PISCI_POOL;
+}
+
+#[tokio::test]
+async fn plain_mention_wakes_idle_koi_without_creating_todo() {
+    let store = build_store();
+    let sink = make_sink();
+    let pool_id = create_test_pool(&store, &sink).await;
+    let caller = pisci_caller("sess-1");
+    let requests: Arc<StdMutex<Vec<KoiTurnRequest>>> = Arc::new(StdMutex::new(Vec::new()));
+    let requests_cl = requests.clone();
+    let subagent = Arc::new(StubSubagentRuntime::new(move |request| {
+        requests_cl.lock().unwrap().push(request.clone());
+        StubOutcome::Completed("noticed".into())
+    })) as Arc<dyn pisci_core::host::SubagentRuntime>;
+    let cfg = CoordinatorConfig::default();
+
+    services::send_pool_message(
+        &store,
+        sink_arc(&sink),
+        Some(subagent),
+        &cfg,
+        &caller,
+        SendPoolMessageArgs {
+            pool_id: pool_id.clone(),
+            sender_id: "pisci".into(),
+            content:
+                "@Alpha please review the latest status and decide whether follow-up is needed."
+                    .into(),
+            reply_to_message_id: None,
+        },
+    )
+    .await
+    .expect("send_pool_message");
+
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1, "expected one notification wake-up");
+    assert_eq!(requests[0].koi_id, "koi-alpha");
+    assert!(
+        requests[0].todo_id.is_none(),
+        "plain @mention must not pre-create a todo"
+    );
+    drop(requests);
+
+    let todos = store
+        .read(|db| db.list_koi_todos(Some("koi-alpha")))
+        .await
+        .expect("list todos");
+    assert!(
+        todos.is_empty(),
+        "plain @mention should not create board todos"
+    );
+}
+
+#[tokio::test]
+async fn forced_mention_creates_todo_and_dispatches_execution() {
+    let store = build_store();
+    let sink = make_sink();
+    let pool_id = create_test_pool(&store, &sink).await;
+    let caller = pisci_caller("sess-1");
+    let requests: Arc<StdMutex<Vec<KoiTurnRequest>>> = Arc::new(StdMutex::new(Vec::new()));
+    let requests_cl = requests.clone();
+    let subagent = Arc::new(StubSubagentRuntime::new(move |request| {
+        requests_cl.lock().unwrap().push(request.clone());
+        StubOutcome::Completed("done".into())
+    })) as Arc<dyn pisci_core::host::SubagentRuntime>;
+    let cfg = CoordinatorConfig::default();
+
+    services::send_pool_message(
+        &store,
+        sink_arc(&sink),
+        Some(subagent),
+        &cfg,
+        &caller,
+        SendPoolMessageArgs {
+            pool_id: pool_id.clone(),
+            sender_id: "pisci".into(),
+            content: "@!Alpha implement the migration and report back.".into(),
+            reply_to_message_id: None,
+        },
+    )
+    .await
+    .expect("send_pool_message");
+
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1, "expected one delegated wake-up");
+    assert_eq!(requests[0].koi_id, "koi-alpha");
+    assert!(
+        requests[0].todo_id.is_some(),
+        "forced @!mention must dispatch against a todo"
+    );
+    drop(requests);
+
+    let todos = store
+        .read(|db| db.list_koi_todos(Some("koi-alpha")))
+        .await
+        .expect("list todos");
+    assert_eq!(todos.len(), 1, "forced @!mention should create a todo");
+}
+
+#[tokio::test]
+async fn delete_todo_can_batch_delete_cancelled_items_in_pool() {
+    let store = build_store();
+    let sink = make_sink();
+    let pool_id = create_test_pool(&store, &sink).await;
+    let pisci = pisci_caller("sess-1");
+
+    let first = services::create_todo(
+        &store,
+        sink.as_ref(),
+        &pisci,
+        CreateTodoArgs {
+            pool_id: pool_id.clone(),
+            title: "cancel me".into(),
+            description: "".into(),
+            priority: "".into(),
+            timeout_secs: 0,
+        },
+    )
+    .await
+    .expect("create first");
+    let first_id = first["todo"]["id"].as_str().unwrap().to_string();
+    services::cancel_todo(&store, sink.as_ref(), &pisci, &first_id, "done elsewhere")
+        .await
+        .expect("cancel first");
+
+    services::create_todo(
+        &store,
+        sink.as_ref(),
+        &pisci,
+        CreateTodoArgs {
+            pool_id: pool_id.clone(),
+            title: "keep me".into(),
+            description: "".into(),
+            priority: "".into(),
+            timeout_secs: 0,
+        },
+    )
+    .await
+    .expect("create second");
+
+    let value = services::delete_todo(
+        &store,
+        sink.as_ref(),
+        &pisci,
+        DeleteTodoArgs {
+            todo_id: None,
+            pool_id: Some(pool_id.clone()),
+            status: Some("cancelled".into()),
+            owner_id: None,
+        },
+    )
+    .await
+    .expect("delete_todo");
+    assert_eq!(value["deleted_count"], 1);
+
+    let todos = store
+        .read(|db| {
+            let all = db.list_koi_todos(None)?;
+            Ok::<_, anyhow::Error>(
+                all.into_iter()
+                    .filter(|todo| todo.pool_session_id.as_deref() == Some(pool_id.as_str()))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .await
+        .expect("remaining todos");
+    assert_eq!(todos.len(), 1);
+    assert_eq!(todos[0].title, "keep me");
 }

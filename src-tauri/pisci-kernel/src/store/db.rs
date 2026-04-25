@@ -14,7 +14,9 @@ fn normalize_koi_name(name: &str) -> Result<String> {
         return Err(anyhow::anyhow!("Koi 名称不能包含空格或其他空白字符"));
     }
     if trimmed.chars().any(is_disallowed_koi_name_char) {
-        return Err(anyhow::anyhow!("Koi 名称不能包含 emoji 或其他 pictographic 字符"));
+        return Err(anyhow::anyhow!(
+            "Koi 名称不能包含 emoji 或其他 pictographic 字符"
+        ));
     }
     Ok(trimmed.to_string())
 }
@@ -66,6 +68,37 @@ pub struct SessionContextState {
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
     pub last_compacted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImSessionBinding {
+    pub binding_key: String,
+    pub channel: String,
+    pub external_conversation_key: String,
+    pub session_id: String,
+    pub peer_id: String,
+    pub peer_name: Option<String>,
+    pub is_group: bool,
+    pub group_name: Option<String>,
+    pub latest_reply_target: String,
+    pub routing_state_json: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub last_inbound_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImSessionBindingUpsert {
+    pub binding_key: String,
+    pub channel: String,
+    pub external_conversation_key: String,
+    pub session_id: String,
+    pub peer_id: String,
+    pub peer_name: Option<String>,
+    pub is_group: bool,
+    pub group_name: Option<String>,
+    pub latest_reply_target: String,
+    pub routing_state_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,6 +295,24 @@ fn map_session_row(r: &Row<'_>) -> rusqlite::Result<Session> {
     })
 }
 
+fn map_im_session_binding_row(r: &Row<'_>) -> rusqlite::Result<ImSessionBinding> {
+    Ok(ImSessionBinding {
+        binding_key: r.get(0)?,
+        channel: r.get(1)?,
+        external_conversation_key: r.get(2)?,
+        session_id: r.get(3)?,
+        peer_id: r.get(4)?,
+        peer_name: r.get(5)?,
+        is_group: r.get(6)?,
+        group_name: r.get(7)?,
+        latest_reply_target: r.get(8)?,
+        routing_state_json: r.get(9)?,
+        created_at: parse_datetime(r.get::<_, String>(10)?),
+        updated_at: parse_datetime(r.get::<_, String>(11)?),
+        last_inbound_at: parse_datetime(r.get::<_, String>(12)?),
+    })
+}
+
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)
@@ -312,6 +363,28 @@ impl Database {
             );
 
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS im_session_bindings (
+                binding_key TEXT PRIMARY KEY,
+                channel TEXT NOT NULL,
+                external_conversation_key TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                peer_id TEXT NOT NULL DEFAULT '',
+                peer_name TEXT,
+                is_group INTEGER NOT NULL DEFAULT 0,
+                group_name TEXT,
+                latest_reply_target TEXT NOT NULL DEFAULT '',
+                routing_state_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_inbound_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_im_session_bindings_session
+                ON im_session_bindings(session_id, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_im_session_bindings_channel_key
+                ON im_session_bindings(channel, external_conversation_key);
 
             CREATE TABLE IF NOT EXISTS memories (
                 id TEXT PRIMARY KEY,
@@ -621,12 +694,53 @@ impl Database {
             "ALTER TABLE pool_sessions ADD COLUMN last_active_at TEXT",
             "ALTER TABLE pool_sessions ADD COLUMN project_dir TEXT DEFAULT NULL",
             "ALTER TABLE pool_sessions ADD COLUMN task_timeout_secs INTEGER NOT NULL DEFAULT 0",
+            // Phase 0 — system-level IM notifications: track which (if
+            // any) IM conversation originally requested this pool so the
+            // heartbeat / decision flow can fan out beyond the desktop UI.
+            "ALTER TABLE pool_sessions ADD COLUMN origin_im_binding_key TEXT",
         ] {
             let _ = self.conn.execute(col, []);
         }
         let _ = self.conn.execute(
             "ALTER TABLE kois ADD COLUMN role TEXT NOT NULL DEFAULT ''",
             [],
+        );
+
+        // Phase 0 — scheduled tasks can opt into multi-target delivery
+        // (UI + IM bindings + IM sessions). Stored as JSON so the
+        // shape evolves without further migrations.
+        let _ = self.conn.execute(
+            "ALTER TABLE scheduled_tasks ADD COLUMN notify_targets_json TEXT",
+            [],
+        );
+
+        // Phase 0 — pending decision requests. Lays the groundwork for
+        // Phase 4's two-way IM decision flow; nothing is written today.
+        let _ = self.conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS pending_decisions (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                pool_id TEXT,
+                origin TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                options_json TEXT,
+                targets_json TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                response_json TEXT,
+                expires_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (pool_id) REFERENCES pool_sessions(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_pending_decisions_status
+                ON pending_decisions(status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_pending_decisions_pool
+                ON pending_decisions(pool_id);
+            CREATE INDEX IF NOT EXISTS idx_pending_decisions_session
+                ON pending_decisions(session_id);
+            ",
         );
 
         if let Ok(normalized) = self.normalize_identifier_references() {
@@ -922,6 +1036,82 @@ impl Database {
         source: &str,
     ) -> Result<Session> {
         self.ensure_fixed_session(session_id, title, source)
+    }
+
+    pub fn get_im_session_binding(&self, binding_key: &str) -> Result<Option<ImSessionBinding>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT binding_key, channel, external_conversation_key, session_id, peer_id,
+                    peer_name, is_group, group_name, latest_reply_target, routing_state_json,
+                    created_at, updated_at, last_inbound_at
+             FROM im_session_bindings
+             WHERE binding_key = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![binding_key], map_im_session_binding_row)?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn get_im_session_binding_by_session(
+        &self,
+        session_id: &str,
+        channel: &str,
+    ) -> Result<Option<ImSessionBinding>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT binding_key, channel, external_conversation_key, session_id, peer_id,
+                    peer_name, is_group, group_name, latest_reply_target, routing_state_json,
+                    created_at, updated_at, last_inbound_at
+             FROM im_session_bindings
+             WHERE session_id = ?1 AND channel = ?2
+             ORDER BY updated_at DESC
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![session_id, channel], map_im_session_binding_row)?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn upsert_im_session_binding(
+        &self,
+        input: &ImSessionBindingUpsert,
+    ) -> Result<ImSessionBinding> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO im_session_bindings (
+                binding_key, channel, external_conversation_key, session_id, peer_id,
+                peer_name, is_group, group_name, latest_reply_target, routing_state_json,
+                created_at, updated_at, last_inbound_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?11)
+             ON CONFLICT(binding_key) DO UPDATE SET
+                channel = excluded.channel,
+                external_conversation_key = excluded.external_conversation_key,
+                session_id = excluded.session_id,
+                peer_id = excluded.peer_id,
+                peer_name = excluded.peer_name,
+                is_group = excluded.is_group,
+                group_name = excluded.group_name,
+                latest_reply_target = excluded.latest_reply_target,
+                routing_state_json = excluded.routing_state_json,
+                updated_at = excluded.updated_at,
+                last_inbound_at = excluded.last_inbound_at",
+            params![
+                input.binding_key,
+                input.channel,
+                input.external_conversation_key,
+                input.session_id,
+                input.peer_id,
+                input.peer_name,
+                input.is_group,
+                input.group_name,
+                input.latest_reply_target,
+                input.routing_state_json,
+                now,
+            ],
+        )?;
+        self.get_im_session_binding(&input.binding_key)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "IM session binding '{}' missing after upsert",
+                    input.binding_key
+                )
+            })
     }
 
     pub fn list_sessions(&self, limit: i64, offset: i64) -> Result<Vec<Session>> {
@@ -2865,6 +3055,7 @@ impl Database {
             status: "active".to_string(),
             project_dir: project_dir.map(String::from),
             task_timeout_secs,
+            origin_im_binding_key: None,
             last_active_at: Some(now),
             created_at: now,
             updated_at: now,
@@ -2881,15 +3072,16 @@ impl Database {
                 .unwrap_or_else(|_| "active".to_string()),
             project_dir: r.get::<_, Option<String>>(4)?,
             task_timeout_secs: r.get::<_, u32>(5).unwrap_or(0),
+            origin_im_binding_key: r.get::<_, Option<String>>(6).ok().flatten(),
             last_active_at: r
-                .get::<_, Option<String>>(6)?
+                .get::<_, Option<String>>(7)?
                 .and_then(|s| s.parse::<DateTime<Utc>>().ok()),
             created_at: r
-                .get::<_, String>(7)?
+                .get::<_, String>(8)?
                 .parse::<DateTime<Utc>>()
                 .unwrap_or_else(|_| Utc::now()),
             updated_at: r
-                .get::<_, String>(8)?
+                .get::<_, String>(9)?
                 .parse::<DateTime<Utc>>()
                 .unwrap_or_else(|_| Utc::now()),
         })
@@ -2897,7 +3089,7 @@ impl Database {
 
     pub fn list_pool_sessions(&self) -> Result<Vec<pisci_core::models::PoolSession>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, org_spec, status, project_dir, task_timeout_secs, last_active_at, created_at, updated_at \
+            "SELECT id, name, org_spec, status, project_dir, task_timeout_secs, origin_im_binding_key, last_active_at, created_at, updated_at \
              FROM pool_sessions ORDER BY updated_at DESC"
         )?;
         let rows = stmt.query_map([], Self::map_pool_session)?;
@@ -2907,7 +3099,7 @@ impl Database {
 
     pub fn get_pool_session(&self, id: &str) -> Result<Option<pisci_core::models::PoolSession>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, org_spec, status, project_dir, task_timeout_secs, last_active_at, created_at, updated_at \
+            "SELECT id, name, org_spec, status, project_dir, task_timeout_secs, origin_im_binding_key, last_active_at, created_at, updated_at \
              FROM pool_sessions WHERE id = ?1"
         )?;
         let mut rows = stmt.query_map(params![id], Self::map_pool_session)?;
@@ -2926,7 +3118,7 @@ impl Database {
         }
         let like = format!("{}%", prefix);
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, org_spec, status, project_dir, task_timeout_secs, last_active_at, created_at, updated_at \
+            "SELECT id, name, org_spec, status, project_dir, task_timeout_secs, origin_im_binding_key, last_active_at, created_at, updated_at \
              FROM pool_sessions WHERE id LIKE ?1 ORDER BY updated_at DESC"
         )?;
         let rows = stmt.query_map(params![like], Self::map_pool_session)?;
@@ -3178,6 +3370,65 @@ impl Database {
         self.conn
             .execute("DELETE FROM pool_sessions WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    /// Persist (or clear) the `binding_key` of the IM conversation
+    /// that originally requested this pool. Used by the IM ↔ pool
+    /// fan-out path so heartbeat alerts can reach the same chat that
+    /// kicked off the work, even after the desktop is restarted.
+    ///
+    /// Passing `None` clears the link.
+    pub fn set_pool_origin_im_binding(
+        &self,
+        pool_id: &str,
+        binding_key: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE pool_sessions SET origin_im_binding_key = ?1, updated_at = ?2 WHERE id = ?3",
+            params![binding_key, Utc::now().to_rfc3339(), pool_id],
+        )?;
+        Ok(())
+    }
+
+    /// Channel-agnostic lookup: resolve the most recent IM binding
+    /// associated with the given Pisci `session_id`. Useful when the
+    /// caller (e.g. the pool tool) only knows the session and wants
+    /// to discover whether the conversation is rooted in IM.
+    pub fn find_im_session_binding_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ImSessionBinding>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT binding_key, channel, external_conversation_key, session_id, peer_id,
+                    peer_name, is_group, group_name, latest_reply_target, routing_state_json,
+                    created_at, updated_at, last_inbound_at
+             FROM im_session_bindings
+             WHERE session_id = ?1
+             ORDER BY updated_at DESC
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![session_id], map_im_session_binding_row)?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn set_scheduled_task_notify_targets(
+        &self,
+        task_id: &str,
+        notify_targets_json: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE scheduled_tasks SET notify_targets_json = ?1 WHERE id = ?2",
+            params![notify_targets_json, task_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_scheduled_task_notify_targets(&self, task_id: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT notify_targets_json FROM scheduled_tasks WHERE id = ?1")?;
+        let mut rows = stmt.query_map(params![task_id], |r| r.get::<_, Option<String>>(0))?;
+        Ok(rows.next().transpose()?.flatten())
     }
 
     pub fn insert_pool_message(
@@ -3435,7 +3686,9 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_disallowed_koi_name_char, normalize_koi_name, Database};
+    use super::{
+        is_disallowed_koi_name_char, normalize_koi_name, Database, ImSessionBindingUpsert,
+    };
 
     #[test]
     fn session_context_state_defaults_and_updates_roundtrip() {
@@ -3487,6 +3740,58 @@ mod tests {
         let koi = db
             .create_koi("Alpha", "role", "🐟", "#000", "", "", None, 0, 0)
             .expect("create koi");
-        assert!(db.update_koi(&koi.id, Some("Beta 🐠"), None, None, None, None, None, None, None, None).is_err());
+        assert!(db
+            .update_koi(
+                &koi.id,
+                Some("Beta 🐠"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn im_session_binding_roundtrip_and_session_lookup_work() {
+        let db = Database::open_in_memory().expect("in-memory db");
+        db.ensure_im_session("im_wechat_fixed", "wechat", "im_wechat")
+            .expect("session");
+
+        let binding = db
+            .upsert_im_session_binding(&ImSessionBindingUpsert {
+                binding_key: "wechat::dm:wx-user-1".to_string(),
+                channel: "wechat".to_string(),
+                external_conversation_key: "dm:wx-user-1".to_string(),
+                session_id: "im_wechat_fixed".to_string(),
+                peer_id: "wx-user-1".to_string(),
+                peer_name: Some("Alice".to_string()),
+                is_group: false,
+                group_name: None,
+                latest_reply_target: "wx-user-1|ctx-1".to_string(),
+                routing_state_json: Some(
+                    r#"{"context_token":"ctx-1","from_user_id":"wx-user-1"}"#.to_string(),
+                ),
+            })
+            .expect("binding");
+
+        assert_eq!(binding.session_id, "im_wechat_fixed");
+        assert_eq!(binding.latest_reply_target, "wx-user-1|ctx-1");
+
+        let by_key = db
+            .get_im_session_binding("wechat::dm:wx-user-1")
+            .expect("binding by key")
+            .expect("binding exists");
+        assert_eq!(by_key.peer_name.as_deref(), Some("Alice"));
+
+        let by_session = db
+            .get_im_session_binding_by_session("im_wechat_fixed", "wechat")
+            .expect("binding by session")
+            .expect("binding exists");
+        assert_eq!(by_session.binding_key, "wechat::dm:wx-user-1");
     }
 }

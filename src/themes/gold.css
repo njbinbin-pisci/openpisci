@@ -30,6 +30,9 @@
   --success: #7ab87a;
   --warning: #c9a84c;
   --error:   #c06060;
+  --context-usage-caution: #c9b458;
+  --context-usage-warn:    #f0a020;
+  --context-usage-hot:     #ff6b6b;
 
   /* 消息气泡 — 极微妙的金色晕染 */
   --msg-user-bg:      rgba(201, 168, 76, 0.08);

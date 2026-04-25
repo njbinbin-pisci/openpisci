@@ -188,10 +188,18 @@ impl ScenePolicy {
                 injection_budget_min_chars: 1_500,
                 auto_compact_threshold_override: Some(0),
             },
+            // IMHeadless: an agent session triggered by an inbound IM
+            // message. Per the layered architecture (credentials shared,
+            // usage independent), the IM channel only carries transport;
+            // enterprise capabilities (org/calendar/docs from WeCom CLI,
+            // Feishu CLI, DingTalk MCP, etc.) live in the *tool* layer.
+            // Therefore IM-triggered agents MUST be allowed to load MCP
+            // tools and skills — otherwise "ask Pisci over IM to look at
+            // my calendar" cannot work.
             SceneKind::IMHeadless => Self {
                 registry_profile: RegistryProfile::IMHeadless,
-                allow_skill_loader: false,
-                allow_mcp_tools: false,
+                allow_skill_loader: true,
+                allow_mcp_tools: true,
                 include_memory: true,
                 include_task_state: true,
                 include_pool_roster: false,
@@ -199,7 +207,10 @@ impl ScenePolicy {
                 include_project_instructions: false,
                 injection_budget_ratio: 0.10,
                 injection_budget_min_chars: 1_500,
-                auto_compact_threshold_override: Some(0),
+                // IM sessions should retain the same long-conversation
+                // compaction path as regular chat sessions so context can
+                // survive restarts and keep shrinking safely over time.
+                auto_compact_threshold_override: None,
             },
             SceneKind::HeartbeatSupervisor => Self {
                 registry_profile: RegistryProfile::HeartbeatSupervisor,

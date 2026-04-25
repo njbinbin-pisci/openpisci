@@ -49,7 +49,7 @@ impl Tool for PoolChatTool {
         "Communicate in the project pool chat with your team members. \
          \
          Actions: \
-         - 'send': Post a message to pool chat as yourself. Use @KoiName to get someone's attention, or @all to notify everyone. When the project needs explicit coordination, include a concrete handoff and a `[ProjectStatus] ...` signal. \
+         - 'send': Post a message to pool chat as yourself. Use plain `@KoiName` / `@all` for notification only. Use `@!KoiName` / `@!all` only when you are explicitly delegating concrete work that should create or wake active execution. When the project needs explicit coordination, include a concrete handoff and a `[ProjectStatus] ...` signal. \
          - 'read': Read recent messages from the pool chat to see what's happening. \
          - 'reply': Reply to a specific message by ID. \
          Pool chat is the visible coordination channel for the team. If another agent must act next, a board update alone is not enough — say it explicitly here."

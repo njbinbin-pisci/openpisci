@@ -38,12 +38,15 @@ export interface Settings {
   feishu_app_secret: string;
   feishu_domain: string;
   feishu_enabled: boolean;
-  wecom_corp_id: string;
-  wecom_agent_secret: string;
-  wecom_agent_id: string;
+  wecom_bot_id: string;
+  wecom_bot_secret: string;
   wecom_enabled: boolean;
   dingtalk_app_key: string;
   dingtalk_app_secret: string;
+  dingtalk_robot_code: string;
+  dingtalk_corp_id: string;
+  dingtalk_agent_id: string;
+  dingtalk_mcp_url: string;
   dingtalk_enabled: boolean;
   telegram_bot_token: string;
   telegram_enabled: boolean;
@@ -65,8 +68,6 @@ export interface Settings {
   webhook_outbound_url: string;
   webhook_auth_token: string;
   webhook_enabled: boolean;
-  // WeCom relay inbox file
-  wecom_inbox_file: string;
   // WeChat (iLink Bot HTTP server)
   wechat_enabled: boolean;
   wechat_gateway_token: string;
@@ -358,4 +359,47 @@ export const mcpApi = {
   list: () => invoke<McpServerConfig[]>("list_mcp_servers"),
   save: (servers: McpServerConfig[]) => invoke<void>("save_mcp_servers", { servers }),
   test: (config: McpServerConfig) => invoke<McpTestResult>("test_mcp_server", { config }),
+};
+
+// ---------------------------------------------------------------------------
+// Enterprise capabilities
+// ---------------------------------------------------------------------------
+
+export interface EnterpriseCapabilityTemplate {
+  platform: string;
+  title: string;
+  description: string;
+  supported: boolean;
+  mcp_server_name: string;
+}
+
+export interface EnterpriseCapabilityStatus {
+  platform: string;
+  supported: boolean;
+  configured: boolean;
+  enabled: boolean;
+  mcp_configured: boolean;
+  mcp_enabled: boolean;
+  mcp_server_name: string;
+  missing_credentials: string[];
+  message: string;
+}
+
+export interface EnterpriseCapabilityTestResult {
+  status: EnterpriseCapabilityStatus;
+  success: boolean;
+  tools: McpToolInfo[];
+  error?: string;
+  diagnostics: string[];
+}
+
+export const enterpriseCapabilityApi = {
+  listTemplates: () =>
+    invoke<EnterpriseCapabilityTemplate[]>("list_enterprise_capability_templates"),
+  status: (platform: string) =>
+    invoke<EnterpriseCapabilityStatus>("get_enterprise_capability_status", { platform }),
+  enable: (platform: string) =>
+    invoke<EnterpriseCapabilityStatus>("enable_enterprise_capability", { platform }),
+  test: (platform: string) =>
+    invoke<EnterpriseCapabilityTestResult>("test_enterprise_capability", { platform }),
 };

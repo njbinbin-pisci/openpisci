@@ -50,6 +50,7 @@ test_output.txt
 
 # Extra local build directories (fast release / tauri fast)
 target-fast-release/
+target-release-*/
 target-tauri-fast/
 
 # Python bytecode caches (bench & harness scripts)

@@ -32,6 +32,9 @@
   --success: #4ade80;
   --warning: #fbbf24;
   --error:   #f87171;
+  --context-usage-caution: #9f91ff;
+  --context-usage-warn:    #8a78ff;
+  --context-usage-hot:     #7c6af7;
 
   /* 消息气泡 */
   --msg-user-bg:      rgba(124, 106, 247, 0.12);
