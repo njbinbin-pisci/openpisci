@@ -131,6 +131,9 @@ lopdf = { version = "0.34", features = ["nom_parser"] }
 pdf-extract = "0.7"
 tauri-plugin-single-instance = "2.4.0"
 encoding_rs = "0.8.35"
+aes = "0.8.4"
+ecb = "0.1.2"
+md5 = "0.8.0"
 
 # Windows-specific (conditional)
 [target.'cfg(target_os = "windows")'.dependencies]

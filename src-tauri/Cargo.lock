@@ -1404,6 +1404,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "ecb"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a8bfa975b1aec2145850fcaa1c6fe269a16578c44705a532ae3edc92b8881c7"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3262,6 +3271,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
+name = "md5"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae960838283323069879657ca3de837e9f7bbb4c7bf6ea7f1b290d5e9476d2e0"
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4312,6 +4327,7 @@ dependencies = [
 name = "pisci-desktop"
 version = "0.7.4"
 dependencies = [
+ "aes",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -4319,6 +4335,7 @@ dependencies = [
  "chromiumoxide",
  "chrono",
  "dirs 5.0.1",
+ "ecb",
  "encoding_rs",
  "futures",
  "getrandom 0.2.17",
@@ -4328,6 +4345,7 @@ dependencies = [
  "lettre",
  "lopdf",
  "mailparse",
+ "md5 0.8.0",
  "native-tls",
  "once_cell",
  "pdf-extract",
@@ -5238,7 +5256,7 @@ dependencies = [
  "internal-russh-forked-ssh-key",
  "libcrux-ml-kem",
  "log",
- "md5",
+ "md5 0.7.0",
  "num-bigint",
  "p256",
  "p384",

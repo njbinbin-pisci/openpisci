@@ -2565,7 +2565,7 @@ pub fn build_im_system_prompt(channel: &str, vision_capable: bool) -> String {
     };
 
     // Whether this channel supports sending files back to the user
-    let can_send_file = matches!(channel, "feishu");
+    let can_send_file = matches!(channel, "feishu" | "wechat");
 
     let file_send_hint = if can_send_file {
         "### 发送 Office 文件 / 图片给用户\n\

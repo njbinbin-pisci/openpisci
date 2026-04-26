@@ -25,7 +25,8 @@
 //! falling back to HTTP, so the agent surfaces the actual gap to the
 //! user.
 
-use crate::gateway::{GatewayManager, OutboundMessage};
+use crate::app::markers::guess_mime_from_path;
+use crate::gateway::{GatewayManager, MediaAttachment, OutboundMessage};
 use crate::store::Database;
 use async_trait::async_trait;
 use pisci_kernel::agent::tool::{Tool, ToolContext, ToolResult};
@@ -46,11 +47,12 @@ impl Tool for ImSendMessageTool {
     }
 
     fn description(&self) -> &str {
-        "Send a Markdown text message to an IM conversation through the connected IM channel (WeCom / Feishu / DingTalk / WeChat / Slack / etc.). \
+        "Send a Markdown text message, and optionally one local file attachment, to an IM conversation through the connected IM channel (WeCom / Feishu / DingTalk / WeChat / Slack / etc.). \
          \n\nADDRESSING (use one of):\
          \n- 'binding_key': preferred when replying to an existing IM conversation. The binding stores the channel name, the latest reply target, and any channel-specific routing state (e.g. WeCom 'req_id', DingTalk 'sessionWebhook'). Pass the 'binding_key' you received from an inbound IM message handler.\
          \n- 'channel' + 'recipient': for proactive (unprompted) messages. 'channel' is a registered channel name ('wecom', 'feishu', 'dingtalk', 'wechat', ...). 'recipient' is the channel-native target id (WeCom userid / Feishu open_id / DingTalk staffId / etc.). Optional 'routing_state' is forwarded verbatim if you know the channel-specific shape.\
          \n\nThis tool returns an error when the requested channel is not currently connected. Channels are configured separately under Settings → IM; this tool only consumes the existing transport, it does NOT enable a channel.\
+         \n\nOptional 'file_path' sends a local file attachment when the channel supports media upload. WeChat supports image/* and generic file attachments through iLink CDN upload. \
          \n\nKeep messages short and use Markdown for emphasis where the underlying channel supports it. Avoid sending walls of debug output."
     }
 
@@ -81,6 +83,14 @@ impl Tool for ImSendMessageTool {
                 },
                 "routing_state": {
                     "description": "Optional channel-specific routing state object (forwarded as-is). Only useful when sending without a binding_key."
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "Optional absolute path to a local file to send as an attachment. Supported by channels with media upload support, including WeChat."
+                },
+                "media_type": {
+                    "type": "string",
+                    "description": "Optional MIME type override for file_path. If omitted, Pisci infers it from the file extension."
                 }
             }
         })
@@ -125,6 +135,39 @@ impl Tool for ImSendMessageTool {
             .as_str()
             .map(str::trim)
             .filter(|s| !s.is_empty());
+        let media = match input["file_path"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(path) => match std::fs::read(path) {
+                Ok(data) => {
+                    let filename = std::path::Path::new(path)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "file".to_string());
+                    let media_type = input["media_type"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| guess_mime_from_path(path));
+                    Some(MediaAttachment {
+                        media_type,
+                        url: None,
+                        data: Some(data),
+                        filename: Some(filename),
+                    })
+                }
+                Err(err) => {
+                    return Ok(ToolResult::err(format!(
+                        "failed to read file_path '{}': {}",
+                        path, err
+                    )))
+                }
+            },
+            None => None,
+        };
 
         let outbound = if let Some(key) = binding_key {
             let db = match self.db.as_ref() {
@@ -164,7 +207,7 @@ impl Tool for ImSendMessageTool {
                 recipient,
                 content: text,
                 reply_to: input["reply_to"].as_str().map(|s| s.to_string()),
-                media: None,
+                media: media.clone(),
                 routing_state,
             }
         } else {
@@ -190,7 +233,7 @@ impl Tool for ImSendMessageTool {
                 recipient,
                 content: text,
                 reply_to: input["reply_to"].as_str().map(|s| s.to_string()),
-                media: None,
+                media,
                 routing_state,
             }
         };

@@ -10,14 +10,16 @@
 ///   sendmessage  – stub (plugin never calls this; we push via getupdates)
 ///   getconfig    – returns a typing ticket stub
 ///   sendtyping   – no-op 200
-///   getuploadurl – stub (media upload not yet supported)
+///   getuploadurl – local fallback stub; direct iLink mode uses the real API
 ///
 /// The original OpenClaw Gateway WebSocket compatibility layer that was here
 /// previously is preserved in git history and can be reused for future
 /// OpenClaw iOS/Android client support.
-use super::{Channel, ChannelStatus, InboundMessage, OutboundMessage};
+use super::{Channel, ChannelStatus, InboundMessage, MediaAttachment, OutboundMessage};
 use anyhow::Result;
 use async_trait::async_trait;
+use base64::Engine;
+use ecb::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyInit};
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -28,6 +30,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex, Notify};
 use tracing::{info, warn};
+
+type Aes128EcbEnc = ecb::Encryptor<aes::Aes128>;
+
+const WECHAT_CDN_BASE_URL: &str = "https://novac2c.cdn.weixin.qq.com/c2c";
+const UPLOAD_MEDIA_TYPE_IMAGE: u8 = 1;
+const UPLOAD_MEDIA_TYPE_FILE: u8 = 3;
+const MESSAGE_ITEM_TYPE_TEXT: u8 = 1;
+const MESSAGE_ITEM_TYPE_IMAGE: u8 = 2;
+const MESSAGE_ITEM_TYPE_FILE: u8 = 4;
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -173,8 +184,6 @@ impl Channel for WechatChannel {
             } else {
                 &self.config.base_url
             };
-            let url = format!("{}/ilink/bot/sendmessage", base);
-
             // Parse recipient: "user_id|context_token" or just "user_id"
             let (to_user_id, context_token) = if let Some(idx) = msg.recipient.find('|') {
                 (
@@ -219,68 +228,33 @@ impl Channel for WechatChannel {
                 );
             }
 
-            let body = build_sendmessage_body(
+            let client = reqwest::Client::new();
+            let bodies = build_outbound_sendmessage_bodies(
+                &client,
+                base,
+                &self.config.bot_token,
                 &to_user_id,
                 &effective_session_id,
                 &reply_context.context_token,
-                &msg.content,
-            );
+                msg,
+            )
+            .await
+            .map_err(|e| {
+                warn!("WeChat media preparation failed: {}", e);
+                e
+            })?;
 
-            let client = reqwest::Client::new();
-            match client
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", self.config.bot_token))
-                .header("AuthorizationType", "ilink_bot_token")
-                .header("Content-Type", "application/json")
-                .header("X-WECHAT-UIN", build_wechat_uin())
-                .header("iLink-App-ClientVersion", "1")
-                .json(&body)
-                .timeout(std::time::Duration::from_secs(10))
-                .send()
-                .await
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    let payload: Value = match resp.json().await {
-                        Ok(v) => v,
-                        Err(e) => {
-                            let msg = format!("WeChat sendmessage parse error: {}", e);
-                            warn!("{}", msg);
-                            return Err(anyhow::anyhow!(msg));
-                        }
-                    };
-                    let ret = payload["ret"].as_i64().unwrap_or(0);
-                    let errcode = payload["errcode"].as_i64().unwrap_or(0);
-                    if ret != 0 || errcode != 0 {
-                        let errmsg = payload["errmsg"].as_str().unwrap_or("unknown error");
-                        let msg = format!(
-                            "WeChat sendmessage rejected: ret={}, errcode={}, errmsg={}",
-                            ret, errcode, errmsg
-                        );
-                        warn!("{}", msg);
-                        return Err(anyhow::anyhow!(msg));
-                    }
-                    info!("WeChat sendmessage OK to {}", to_user_id);
-                    self.state
-                        .remember_reply_context(
-                            &to_user_id,
-                            &effective_session_id,
-                            &reply_context.context_token,
-                        )
-                        .await;
-                }
-                Ok(resp) => {
-                    let status = resp.status();
-                    let text = resp.text().await.unwrap_or_default();
-                    let msg = format!("WeChat sendmessage HTTP {}: {}", status, text);
-                    warn!("{}", msg);
-                    return Err(anyhow::anyhow!(msg));
-                }
-                Err(e) => {
-                    let msg = format!("WeChat sendmessage error: {}", e);
-                    warn!("{}", msg);
-                    return Err(anyhow::anyhow!(msg));
-                }
+            for body in bodies {
+                post_sendmessage(&client, base, &self.config.bot_token, &to_user_id, &body).await?;
             }
+
+            self.state
+                .remember_reply_context(
+                    &to_user_id,
+                    &effective_session_id,
+                    &reply_context.context_token,
+                )
+                .await;
         } else {
             // No bot_token yet — queue locally (plugin will pick up via getupdates)
             let weixin_msg = outbound_to_weixin_message(msg);
@@ -685,11 +659,412 @@ async fn cache_reply_context_from_message(state: &Arc<WechatState>, msg: &Value)
         .await;
 }
 
+async fn build_outbound_sendmessage_bodies(
+    client: &reqwest::Client,
+    base_url: &str,
+    bot_token: &str,
+    to_user_id: &str,
+    session_id: &str,
+    context_token: &str,
+    msg: &OutboundMessage,
+) -> Result<Vec<Value>> {
+    let mut bodies = Vec::new();
+
+    let text = msg.content.trim();
+    if !text.is_empty() {
+        bodies.push(build_sendmessage_body(
+            to_user_id,
+            session_id,
+            context_token,
+            text,
+        ));
+    }
+
+    if let Some(media) = msg.media.as_ref() {
+        let uploaded = upload_wechat_media(client, base_url, bot_token, to_user_id, media).await?;
+        let media_item = build_media_message_item(media, &uploaded);
+        bodies.push(build_sendmessage_body_with_item(
+            to_user_id,
+            session_id,
+            context_token,
+            media_item,
+        ));
+    }
+
+    if bodies.is_empty() {
+        bodies.push(build_sendmessage_body(
+            to_user_id,
+            session_id,
+            context_token,
+            "",
+        ));
+    }
+
+    Ok(bodies)
+}
+
+async fn post_sendmessage(
+    client: &reqwest::Client,
+    base_url: &str,
+    bot_token: &str,
+    to_user_id: &str,
+    body: &Value,
+) -> Result<()> {
+    let url = format!("{}/ilink/bot/sendmessage", base_url.trim_end_matches('/'));
+    match client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", bot_token))
+        .header("AuthorizationType", "ilink_bot_token")
+        .header("Content-Type", "application/json")
+        .header("X-WECHAT-UIN", build_wechat_uin())
+        .header("iLink-App-ClientVersion", "1")
+        .json(body)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            let payload: Value = match resp.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    let msg = format!("WeChat sendmessage parse error: {}", e);
+                    warn!("{}", msg);
+                    return Err(anyhow::anyhow!(msg));
+                }
+            };
+            let ret = payload["ret"].as_i64().unwrap_or(0);
+            let errcode = payload["errcode"].as_i64().unwrap_or(0);
+            if ret != 0 || errcode != 0 {
+                let errmsg = payload["errmsg"].as_str().unwrap_or("unknown error");
+                let msg = format!(
+                    "WeChat sendmessage rejected: ret={}, errcode={}, errmsg={}",
+                    ret, errcode, errmsg
+                );
+                warn!("{}", msg);
+                return Err(anyhow::anyhow!(msg));
+            }
+            info!("WeChat sendmessage OK to {}", to_user_id);
+            Ok(())
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            let msg = format!("WeChat sendmessage HTTP {}: {}", status, text);
+            warn!("{}", msg);
+            Err(anyhow::anyhow!(msg))
+        }
+        Err(e) => {
+            let msg = format!("WeChat sendmessage error: {}", e);
+            warn!("{}", msg);
+            Err(anyhow::anyhow!(msg))
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct UploadedWechatMedia {
+    download_param: String,
+    aes_key: [u8; 16],
+    raw_size: usize,
+    encrypted_size: usize,
+}
+
+async fn upload_wechat_media(
+    client: &reqwest::Client,
+    base_url: &str,
+    bot_token: &str,
+    to_user_id: &str,
+    media: &MediaAttachment,
+) -> Result<UploadedWechatMedia> {
+    let data = media
+        .data
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("WeChat media upload requires inline attachment data"))?;
+    let media_type = if media.media_type.starts_with("image/") {
+        UPLOAD_MEDIA_TYPE_IMAGE
+    } else {
+        UPLOAD_MEDIA_TYPE_FILE
+    };
+    let mut aes_key = [0_u8; 16];
+    getrandom::getrandom(&mut aes_key)?;
+    let mut filekey = [0_u8; 16];
+    getrandom::getrandom(&mut filekey)?;
+    let filekey = hex::encode(filekey);
+    let raw_md5 = format!("{:x}", md5::compute(data));
+    let encrypted_size = aes_ecb_padded_size(data.len());
+    let aes_key_hex = hex::encode(aes_key);
+
+    let upload_url_resp = request_wechat_upload_url(
+        client,
+        base_url,
+        bot_token,
+        &filekey,
+        media_type,
+        to_user_id,
+        data.len(),
+        &raw_md5,
+        encrypted_size,
+        &aes_key_hex,
+    )
+    .await?;
+
+    let ciphertext = encrypt_aes_128_ecb(data, &aes_key)?;
+    let upload_url = build_wechat_upload_url(&upload_url_resp, &filekey)?;
+    let download_param = upload_encrypted_media_to_cdn(client, &upload_url, ciphertext).await?;
+
+    info!(
+        "WeChat media upload OK to {} filename={:?} mime={} raw={} encrypted={}",
+        to_user_id,
+        media.filename,
+        media.media_type,
+        data.len(),
+        encrypted_size
+    );
+
+    Ok(UploadedWechatMedia {
+        download_param,
+        aes_key,
+        raw_size: data.len(),
+        encrypted_size,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct WechatUploadUrlResp {
+    upload_param: Option<String>,
+    upload_full_url: Option<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn request_wechat_upload_url(
+    client: &reqwest::Client,
+    base_url: &str,
+    bot_token: &str,
+    filekey: &str,
+    media_type: u8,
+    to_user_id: &str,
+    raw_size: usize,
+    raw_md5: &str,
+    encrypted_size: usize,
+    aes_key_hex: &str,
+) -> Result<WechatUploadUrlResp> {
+    let url = format!("{}/ilink/bot/getuploadurl", base_url.trim_end_matches('/'));
+    let body = json!({
+        "filekey": filekey,
+        "media_type": media_type,
+        "to_user_id": to_user_id,
+        "rawsize": raw_size,
+        "rawfilemd5": raw_md5,
+        "filesize": encrypted_size,
+        "no_need_thumb": true,
+        "aeskey": aes_key_hex,
+        "base_info": {
+            "channel_version": "2.0.0"
+        }
+    });
+
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", bot_token))
+        .header("AuthorizationType", "ilink_bot_token")
+        .header("Content-Type", "application/json")
+        .header("X-WECHAT-UIN", build_wechat_uin())
+        .header("iLink-App-ClientVersion", "1")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("WeChat getuploadurl error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "WeChat getuploadurl HTTP {}: {}",
+            status,
+            text
+        ));
+    }
+
+    let payload: Value = resp
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("WeChat getuploadurl parse error: {}", e))?;
+    let ret = payload["ret"].as_i64().unwrap_or(0);
+    let errcode = payload["errcode"].as_i64().unwrap_or(0);
+    if ret != 0 || errcode != 0 {
+        let errmsg = payload["errmsg"].as_str().unwrap_or("unknown error");
+        return Err(anyhow::anyhow!(
+            "WeChat getuploadurl rejected: ret={}, errcode={}, errmsg={}",
+            ret,
+            errcode,
+            errmsg
+        ));
+    }
+
+    Ok(WechatUploadUrlResp {
+        upload_param: payload["upload_param"].as_str().map(str::to_string),
+        upload_full_url: payload["upload_full_url"].as_str().map(str::to_string),
+    })
+}
+
+fn build_wechat_upload_url(resp: &WechatUploadUrlResp, filekey: &str) -> Result<String> {
+    if let Some(full_url) = resp
+        .upload_full_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(full_url.to_string());
+    }
+    if let Some(upload_param) = resp
+        .upload_param
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(format!(
+            "{}/upload?encrypted_query_param={}&filekey={}",
+            WECHAT_CDN_BASE_URL,
+            urlencoding::encode(upload_param),
+            urlencoding::encode(filekey)
+        ));
+    }
+    Err(anyhow::anyhow!(
+        "WeChat getuploadurl returned no upload URL (need upload_full_url or upload_param)"
+    ))
+}
+
+async fn upload_encrypted_media_to_cdn(
+    client: &reqwest::Client,
+    upload_url: &str,
+    ciphertext: Vec<u8>,
+) -> Result<String> {
+    let mut last_error: Option<anyhow::Error> = None;
+    for attempt in 1..=3 {
+        match client
+            .post(upload_url)
+            .header("Content-Type", "application/octet-stream")
+            .body(ciphertext.clone())
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().as_u16() == 200 => {
+                if let Some(param) = resp
+                    .headers()
+                    .get("x-encrypted-param")
+                    .and_then(|value| value.to_str().ok())
+                    .filter(|value| !value.trim().is_empty())
+                {
+                    return Ok(param.to_string());
+                }
+                last_error = Some(anyhow::anyhow!(
+                    "WeChat CDN upload response missing x-encrypted-param header"
+                ));
+            }
+            Ok(resp) if resp.status().is_client_error() => {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                return Err(anyhow::anyhow!(
+                    "WeChat CDN upload client error {}: {}",
+                    status,
+                    text
+                ));
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                last_error = Some(anyhow::anyhow!(
+                    "WeChat CDN upload server error {}: {}",
+                    status,
+                    text
+                ));
+            }
+            Err(e) => {
+                last_error = Some(anyhow::anyhow!("WeChat CDN upload error: {}", e));
+            }
+        }
+
+        if attempt < 3 {
+            warn!("WeChat CDN upload attempt {} failed, retrying", attempt);
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("WeChat CDN upload failed")))
+}
+
+fn build_media_message_item(media: &MediaAttachment, uploaded: &UploadedWechatMedia) -> Value {
+    let aes_key_b64 = base64::engine::general_purpose::STANDARD.encode(uploaded.aes_key);
+    if media.media_type.starts_with("image/") {
+        json!({
+            "type": MESSAGE_ITEM_TYPE_IMAGE,
+            "image_item": {
+                "media": {
+                    "encrypt_query_param": uploaded.download_param,
+                    "aes_key": aes_key_b64,
+                    "encrypt_type": 1
+                },
+                "mid_size": uploaded.encrypted_size
+            }
+        })
+    } else {
+        let file_name = media
+            .filename
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("file");
+        json!({
+            "type": MESSAGE_ITEM_TYPE_FILE,
+            "file_item": {
+                "media": {
+                    "encrypt_query_param": uploaded.download_param,
+                    "aes_key": aes_key_b64,
+                    "encrypt_type": 1
+                },
+                "file_name": file_name,
+                "len": uploaded.raw_size.to_string()
+            }
+        })
+    }
+}
+
+fn aes_ecb_padded_size(plaintext_size: usize) -> usize {
+    ((plaintext_size + 16) / 16) * 16
+}
+
+fn encrypt_aes_128_ecb(plaintext: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
+    let mut buf = plaintext.to_vec();
+    let plain_len = buf.len();
+    buf.resize(plain_len + 16, 0);
+    let encrypted = Aes128EcbEnc::new(key.into())
+        .encrypt_padded_mut::<Pkcs7>(&mut buf, plain_len)
+        .map_err(|e| anyhow::anyhow!("WeChat AES-128-ECB encrypt failed: {}", e))?;
+    Ok(encrypted.to_vec())
+}
+
 fn build_sendmessage_body(
     to_user_id: &str,
     session_id: &str,
     context_token: &str,
     text: &str,
+) -> Value {
+    build_sendmessage_body_with_item(
+        to_user_id,
+        session_id,
+        context_token,
+        json!({
+            "type": MESSAGE_ITEM_TYPE_TEXT,
+            "text_item": { "text": text }
+        }),
+    )
+}
+
+fn build_sendmessage_body_with_item(
+    to_user_id: &str,
+    session_id: &str,
+    context_token: &str,
+    item: Value,
 ) -> Value {
     json!({
         "msg": {
@@ -699,10 +1074,7 @@ fn build_sendmessage_body(
             "message_type": 2,
             "message_state": 2,
             "context_token": context_token,
-            "item_list": [{
-                "type": 1,
-                "text_item": { "text": text }
-            }]
+            "item_list": [item]
         },
         "base_info": {
             "channel_version": "2.0.0"
@@ -869,8 +1241,12 @@ fn now_ms() -> u64 {
 }
 
 fn build_wechat_uin() -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(now_ms().to_string())
+    let mut bytes = [0_u8; 4];
+    if getrandom::getrandom(&mut bytes).is_err() {
+        return base64::engine::general_purpose::STANDARD.encode(now_ms().to_string());
+    }
+    let uin = u32::from_be_bytes(bytes).to_string();
+    base64::engine::general_purpose::STANDARD.encode(uin)
 }
 
 #[cfg(test)]
@@ -915,6 +1291,82 @@ mod tests {
         assert_eq!(body["msg"]["item_list"][0]["text_item"]["text"], "hello");
         assert_eq!(body["base_info"]["channel_version"], "2.0.0");
         assert!(body["msg"]["client_id"].as_str().is_some());
+    }
+
+    #[test]
+    fn aes_ecb_padding_matches_wechat_cdn_size_rule() {
+        assert_eq!(aes_ecb_padded_size(0), 16);
+        assert_eq!(aes_ecb_padded_size(15), 16);
+        assert_eq!(aes_ecb_padded_size(16), 32);
+        assert_eq!(aes_ecb_padded_size(17), 32);
+
+        let key = [7_u8; 16];
+        let encrypted = encrypt_aes_128_ecb(b"1234567890abcdef", &key).unwrap();
+        assert_eq!(encrypted.len(), 32);
+    }
+
+    #[test]
+    fn build_wechat_upload_url_prefers_full_url_and_falls_back_to_param() {
+        let full = build_wechat_upload_url(
+            &WechatUploadUrlResp {
+                upload_param: Some("ignored".into()),
+                upload_full_url: Some("https://cdn.example/upload?x=1".into()),
+            },
+            "filekey",
+        )
+        .unwrap();
+        assert_eq!(full, "https://cdn.example/upload?x=1");
+
+        let fallback = build_wechat_upload_url(
+            &WechatUploadUrlResp {
+                upload_param: Some("a b&c".into()),
+                upload_full_url: None,
+            },
+            "key/1",
+        )
+        .unwrap();
+        assert!(fallback.starts_with(WECHAT_CDN_BASE_URL));
+        assert!(fallback.contains("encrypted_query_param=a%20b%26c"));
+        assert!(fallback.contains("filekey=key%2F1"));
+    }
+
+    #[test]
+    fn media_message_items_match_wechat_protocol_shape() {
+        let uploaded = UploadedWechatMedia {
+            download_param: "dl-param".into(),
+            aes_key: [1_u8; 16],
+            raw_size: 42,
+            encrypted_size: 48,
+        };
+
+        let image = build_media_message_item(
+            &MediaAttachment {
+                media_type: "image/png".into(),
+                url: None,
+                data: Some(vec![1, 2, 3]),
+                filename: Some("pic.png".into()),
+            },
+            &uploaded,
+        );
+        assert_eq!(image["type"], MESSAGE_ITEM_TYPE_IMAGE);
+        assert_eq!(
+            image["image_item"]["media"]["encrypt_query_param"],
+            "dl-param"
+        );
+        assert_eq!(image["image_item"]["mid_size"], 48);
+
+        let file = build_media_message_item(
+            &MediaAttachment {
+                media_type: "application/pdf".into(),
+                url: None,
+                data: Some(vec![1, 2, 3]),
+                filename: Some("doc.pdf".into()),
+            },
+            &uploaded,
+        );
+        assert_eq!(file["type"], MESSAGE_ITEM_TYPE_FILE);
+        assert_eq!(file["file_item"]["file_name"], "doc.pdf");
+        assert_eq!(file["file_item"]["len"], "42");
     }
 
     #[tokio::test]
