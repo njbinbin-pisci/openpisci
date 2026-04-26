@@ -296,25 +296,31 @@ fn run_impl() {
                                 &msg.content[..msg.content.len().min(80)]
                             );
 
-                            if let Err(e) = crate::commands::platform::window::enter_unattended_im_mode(
-                                &app_h,
-                                &store::AppState {
-                                    db: db.clone(),
-                                    settings: settings.clone(),
-                                    plan_state: plan_state.clone(),
-                                    browser: browser.clone(),
-                                    cancel_flags: cancel_flags.clone(),
-                                    confirmation_responses: confirm_resp.clone(),
-                                    interactive_responses: interactive_resp.clone(),
-                                    app_handle: app_h.clone(),
-                                    scheduler: sched.clone(),
-                                    gateway: gateway.clone(),
-                                    pisci_heartbeat_cursor: pisci_heartbeat_cursor.clone(),
-                                },
-                            )
-                            .await
-                            {
-                                tracing::warn!("Failed to enter unattended IM mode: {}", e);
+                            let auto_minimal_mode = {
+                                let settings = settings.lock().await;
+                                settings.im_auto_minimal_mode
+                            };
+                            if auto_minimal_mode {
+                                if let Err(e) = crate::commands::platform::window::enter_unattended_im_mode(
+                                    &app_h,
+                                    &store::AppState {
+                                        db: db.clone(),
+                                        settings: settings.clone(),
+                                        plan_state: plan_state.clone(),
+                                        browser: browser.clone(),
+                                        cancel_flags: cancel_flags.clone(),
+                                        confirmation_responses: confirm_resp.clone(),
+                                        interactive_responses: interactive_resp.clone(),
+                                        app_handle: app_h.clone(),
+                                        scheduler: sched.clone(),
+                                        gateway: gateway.clone(),
+                                        pisci_heartbeat_cursor: pisci_heartbeat_cursor.clone(),
+                                    },
+                                )
+                                .await
+                                {
+                                    tracing::warn!("Failed to enter unattended IM mode: {}", e);
+                                }
                             }
 
                             let binding = match resolve_or_create_im_binding(&db, &msg).await {

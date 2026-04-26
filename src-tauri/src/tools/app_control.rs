@@ -263,6 +263,7 @@ impl Tool for AppControlTool {
                 "wechat_enabled": { "type": "boolean" },
                 "wechat_gateway_token": { "type": "string" },
                 "wechat_gateway_port": { "type": "integer" },
+                "im_auto_minimal_mode": { "type": "boolean" },
                 "smtp_host": { "type": "string" },
                 "smtp_port": { "type": "integer" },
                 "smtp_username": { "type": "string" },
@@ -563,6 +564,7 @@ impl AppControlTool {
              - dingtalk_agent_id: {dingtalk_agent_id}\n\
              - wechat_enabled: {wechat_enabled}\n\
              - wechat_gateway_port: {wechat_gateway_port}\n\
+             - im_auto_minimal_mode: {im_auto_minimal_mode}\n\
              - wecom_enabled: {wecom_enabled}\n\
              - wecom_bot_id: {wecom_bot_id}\n\
              - wecom_bot_secret: {wecom_bot_secret}\n\
@@ -604,6 +606,7 @@ impl AppControlTool {
             dingtalk_agent_id = configured(&s.dingtalk_agent_id),
             wechat_enabled = s.wechat_enabled,
             wechat_gateway_port = s.wechat_gateway_port,
+            im_auto_minimal_mode = s.im_auto_minimal_mode,
             wecom_enabled = s.wecom_enabled,
             wecom_bot_id = configured(&s.wecom_bot_id),
             wecom_bot_secret = configured(&s.wecom_bot_secret),
@@ -728,6 +731,7 @@ impl AppControlTool {
         if let Some(v) = input["wechat_gateway_port"].as_u64() {
             s.wechat_gateway_port = v as u16;
         }
+        apply_bool!(im_auto_minimal_mode, "im_auto_minimal_mode");
         apply_str!(smtp_host, "smtp_host");
         if let Some(v) = input["smtp_port"].as_u64() {
             s.smtp_port = v as u16;

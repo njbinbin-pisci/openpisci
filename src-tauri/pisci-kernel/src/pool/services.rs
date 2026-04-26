@@ -499,10 +499,10 @@ pub async fn set_pool_status(
 
 /// Append a new pool message. Enriches metadata with coordination
 /// signals + `@pisci` mentions, inserts into DB, emits
-/// `MessageAppended`, and—when `@` appears in the content and a
+/// `MessageAppended`, and—when delegated `@!` mentions appear and a
 /// `SubagentRuntime` is available—fires
-/// [`coordinator::handle_mention`] to wake the mentioned Kois as
-/// subprocess turns.
+/// [`coordinator::handle_mention`] to create/wake concrete Koi work.
+/// Plain `@` mentions remain chat-only notifications.
 pub async fn send_pool_message(
     store: &PoolStore,
     sink: Arc<dyn PoolEventSink>,

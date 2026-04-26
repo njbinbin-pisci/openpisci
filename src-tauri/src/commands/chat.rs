@@ -1422,6 +1422,13 @@ pub async fn run_agent_headless(
     if api_key.is_empty() {
         return Err("API key not configured".into());
     }
+    tracing::info!(
+        "run_agent_headless: provider={} model={} channel={} session={}",
+        provider,
+        model,
+        channel,
+        session_id
+    );
 
     if let Some(override_root) = options
         .as_ref()
@@ -1993,7 +2000,8 @@ You must be truthful, tool-grounded, and conservative about assumptions.\n\
 - Use only the tools and context available in this run.\n\
 - Prefer the smallest effective action that preserves project momentum.\n\
 - Never invent project state, agent intent, file state, or task completion.\n\
-- Safety, permissions, and consistency are enforced by the host runtime; use explicit tool actions to make state changes visible.\n"
+- Safety, permissions, and consistency are enforced by the host runtime; use explicit tool actions to make state changes visible.\n\
+- Waiting discipline: when you need to wait for an external event, background process, Koi/Fish response, file change, server startup, or user-visible state, use real elapsed time. Sleep between checks with exponential backoff (for example 1s, 2s, 4s, 8s, then cap at a reasonable interval), record the deadline or elapsed seconds, and only declare timeout after the actual elapsed time reaches a reasonable task-specific limit. Do not infer timeout from loop/turn count or from several immediate checks.\n"
 }
 
 fn collaboration_protocol_prompt() -> &'static str {
@@ -2068,6 +2076,12 @@ pub fn build_system_prompt_with_env(
     format!(
         r#"You are Pisci, a powerful Windows AI Agent. You run on the user's local Windows machine and can control the entire desktop environment.
 Today's date: {date}{workspace_line}
+
+## Waiting Discipline
+When you need to wait for an external event, background process, Koi/Fish response, file change, server startup, or user-visible state, use real elapsed time. Sleep between checks with exponential backoff (for example 1s, 2s, 4s, 8s, then cap at a reasonable interval), record the deadline or elapsed seconds, and only declare timeout after the actual elapsed time reaches a reasonable task-specific limit. Do not infer timeout from loop/turn count or from several immediate checks.
+
+## Interactive User Input
+When `chat_ui` returns `USER_INTERACTIVE_RESPONSE_JSON`, that JSON is the user's latest explicit structured choice. Treat it as authoritative and use the submitted values exactly. It overrides prior assumptions, examples, defaults, inferred preferences, and tentative plans. If the user selected a type/name/options in the card, do not substitute a different type/name/options later unless the user explicitly changes them.
 
 ## ⚡ First Step: Always Check Skills
 Before doing anything else, call `skill_list` to see all available skills.
@@ -2332,9 +2346,9 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 - The org_spec should define: project goals, Koi role assignments, collaboration rules, activation conditions, and success metrics
 
 **3. Communicate with Koi agents via @mention — also in the SAME turn**
-- Use plain `@KoiName` / `@all` only for notification. Use `@!KoiName` / `@!all` when you are explicitly delegating concrete work that should create or wake an active task.
-- A plain notification may wake an idle Koi so it can inspect the pool and decide what to do, but it does NOT automatically create a todo.
-- Example forced delegation: `pool_chat(action="send", pool_id="abc", content="@!Architect Design the database schema for user authentication. When done, hand off to @!Coder for implementation.")`
+- Use plain `@KoiName` / `@all` only for notification. Use `@!KoiName` / `@!all` when you are explicitly delegating concrete work that should create or wake an active task. A live `@!` must be at the start of the message or the start of its own line.
+- Plain notifications do NOT create todos or wake Koi execution; they are chat-only.
+- Example forced delegation: `pool_chat(action="send", pool_id="abc", content="@!Architect Design the database schema for user authentication. When done, tell Coder to continue using a fresh delegated handoff.")`
 - After a Koi completes, task handoffs should also use `@!mention` — for example if Architect writes `@!Coder please implement`, Coder is activated for the delegated work.
 - Use `pool_chat(action="read", pool_id=...)` or `pool_org(action="get_todos", pool_id=...)` to monitor progress.
 - Koi agents are fully autonomous: they communicate via pool_chat, share results, and collaborate through mentions. Do NOT micromanage their approach.
@@ -4168,6 +4182,8 @@ mod tests {
             "Use `call_fish` for simple, self-contained, result-heavy work",
             "Do the work yourself when it is still simple enough for one agent but the user benefits from your own detailed reasoning",
             "Prefer Fish for simple result-first work such as web search, file search",
+            "Sleep between checks with exponential backoff",
+            "Do not infer timeout from loop/turn count",
         ] {
             assert!(
                 prompt.contains(required),

@@ -8,6 +8,17 @@ pub struct ChatUiTool {
     pub app: AppHandle,
 }
 
+fn render_interactive_response_result(values: &Value) -> String {
+    let json = serde_json::to_string_pretty(values).unwrap_or_else(|_| format!("{:?}", values));
+    format!(
+        "USER_INTERACTIVE_RESPONSE_JSON:\n{}\n\n\
+This is the user's latest explicit structured input from the interactive card. \
+You MUST treat these values as authoritative. Override any prior defaults, assumptions, examples, or tentative plans that conflict with this response. \
+If a field is present here, use this submitted value exactly unless the user later changes it.",
+        json
+    )
+}
+
 #[async_trait]
 impl Tool for ChatUiTool {
     fn name(&self) -> &str {
@@ -18,7 +29,8 @@ impl Tool for ChatUiTool {
         "Display an interactive UI card in the chat for the user to make structured choices. \
          Use when the user needs to select from options, pick Koi team members, choose a project, \
          or confirm a complex action. Do NOT use for simple yes/no questions — just ask in text. \
-         The tool blocks until the user submits the card, then returns their selections as JSON."
+         The tool blocks until the user submits the card, then returns USER_INTERACTIVE_RESPONSE_JSON. \
+         You must treat the returned values as authoritative user input and use them exactly; do not continue with prior defaults or assumptions that conflict with the submitted response."
     }
 
     fn input_schema(&self) -> Value {
@@ -57,7 +69,10 @@ impl Tool for ChatUiTool {
                                     },
                                     "label": {
                                         "type": "string",
-                                        "description": "Label text for the field."
+                                        "description": "Label text for the field. For an action/confirm button fallback, this is display text only; semantic meaning comes from the button value."
+                                    },
+                                    "value": {
+                                        "description": "Value submitted when this block is used as a single-button action fallback."
                                     },
                                     "content": {
                                         "type": "string",
@@ -113,12 +128,16 @@ impl Tool for ChatUiTool {
                                     },
                                     "buttons": {
                                         "type": "array",
-                                        "description": "Button definitions for 'actions' block.",
+                                        "description": "Button definitions for 'actions' or 'confirm' blocks. The UI renders exactly these buttons. Each button's label is display text and value is the submitted semantic value.",
                                         "items": {
                                             "type": "object",
+                                            "required": ["label"],
                                             "properties": {
                                                 "id": { "type": "string" },
                                                 "label": { "type": "string" },
+                                                "value": {
+                                                    "description": "Semantic value submitted when the user clicks this button. If omitted, the frontend falls back to id, then label."
+                                                },
                                                 "style": {
                                                     "type": "string",
                                                     "enum": ["primary", "danger", "default"]
@@ -169,23 +188,7 @@ impl Tool for ChatUiTool {
 
         // Wait for user response with 5-minute timeout
         match tokio::time::timeout(std::time::Duration::from_secs(300), resp_rx).await {
-            Ok(Ok(values)) => {
-                let action = values
-                    .get("__action__")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("submit");
-
-                if action == "cancel" {
-                    return Ok(ToolResult::ok("User cancelled the interactive card."));
-                }
-
-                let summary = serde_json::to_string_pretty(&values)
-                    .unwrap_or_else(|_| format!("{:?}", values));
-                Ok(ToolResult::ok(format!(
-                    "User submitted the interactive card. Selections:\n{}",
-                    summary
-                )))
-            }
+            Ok(Ok(values)) => Ok(ToolResult::ok(render_interactive_response_result(&values))),
             Ok(Err(_)) => Ok(ToolResult::err(
                 "Interactive UI response channel was dropped (user may have navigated away).",
             )),
@@ -199,5 +202,25 @@ impl Tool for ChatUiTool {
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn interactive_response_result_is_authoritative_and_machine_readable() {
+        let result = render_interactive_response_result(&json!({
+            "game_type": "puzzle",
+            "project_name": "timy"
+        }));
+
+        assert!(result.contains("USER_INTERACTIVE_RESPONSE_JSON"));
+        assert!(result.contains("\"game_type\": \"puzzle\""));
+        assert!(result.contains("\"project_name\": \"timy\""));
+        assert!(result.contains("authoritative"));
+        assert!(result.contains("Override any prior defaults"));
     }
 }

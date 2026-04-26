@@ -334,6 +334,11 @@ pub struct Settings {
     #[serde(default)]
     pub wechat_bot_id: String,
 
+    /// Whether inbound IM messages should hide the main window and show the
+    /// minimal overlay while Pisci replies.
+    #[serde(default = "default_true")]
+    pub im_auto_minimal_mode: bool,
+
     // ── Email (SMTP / IMAP) ──────────────────────────────────────────────────
     /// SMTP server hostname (e.g. smtp.gmail.com)
     #[serde(default)]
@@ -676,6 +681,7 @@ impl Default for Settings {
             wechat_bot_token: String::new(),
             wechat_base_url: String::new(),
             wechat_bot_id: String::new(),
+            im_auto_minimal_mode: true,
             smtp_host: String::new(),
             smtp_port: default_smtp_port(),
             smtp_username: String::new(),

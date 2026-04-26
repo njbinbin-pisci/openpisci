@@ -532,7 +532,14 @@ export default function Chat() {
               const results = JSON.parse(rm.tool_results_json);
               for (const r of Array.isArray(results) ? results : []) {
                 if (r.tool_use_id === call.id && !r.is_error) {
-                  try { submittedValues = JSON.parse(r.content.replace(/^User submitted.*?Selections:\n/, "")); } catch { /* text result */ }
+                  try {
+                    const marker = "USER_INTERACTIVE_RESPONSE_JSON:";
+                    const content = String(r.content ?? "");
+                    const jsonText = content.includes(marker)
+                      ? content.slice(content.indexOf(marker) + marker.length).split("\n\n")[0]
+                      : content.replace(/^User submitted.*?Selections:\n/, "");
+                    submittedValues = JSON.parse(jsonText);
+                  } catch { /* text result */ }
                 }
               }
             } catch { /* ignore parse errors */ }

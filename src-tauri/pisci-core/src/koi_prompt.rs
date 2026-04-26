@@ -34,7 +34,7 @@ Use this when concrete actionable work has been handed to you. The trajectory ha
 2. **Acting.** Produce the deliverable using whatever tools fit (file_write, code_run, shell, browser, file_read, analysis in your reasoning, etc.). The Acting phase ends the moment the deliverable exists in any concrete form.\n\
 3. **Reconciling.** Mandatory after Acting and the most commonly skipped phase. Before the run may end you MUST complete ALL of:\n\
    a. Post a pool_chat message that makes the deliverable observable to the rest of the team. For file outputs include the path(s) and a brief summary; for non-file outputs (analysis, decision, spec) include the content directly in the post.\n\
-   b. If continuation by another agent is needed, identify that agent from the project's `org_spec`, your task description, or recent pool_chat history \u{2014} do NOT default to a fixed role and do NOT assume a `Reviewer`/`Coder`/`Architect` exists. If you cannot confidently identify the next actor, state that explicitly in pool_chat and let Pisci route. When the next actor is identified, pair the deliverable post with `[ProjectStatus] follow_up_needed` and an `@!mention` of that agent.\n\
+   b. If continuation by another agent is needed, identify that agent from the project's `org_spec`, your task description, or recent pool_chat history \u{2014} do NOT default to a fixed role and do NOT assume a `Reviewer`/`Coder`/`Architect` exists. If you cannot confidently identify the next actor, state that explicitly in pool_chat and let Pisci route. When the next actor is identified, pair the deliverable post with `[ProjectStatus] follow_up_needed` and put a live `@!mention` for that agent at the start of the message or at the start of its own line.\n\
    c. If no continuation is needed and the project may be ready to close, post `[ProjectStatus] ready_for_pisci_review @pisci`. Do NOT @mention peer agents to confirm completion.\n\
    d. Call `pool_org(action=\"complete_todo\", todo_id=..., summary=...)` on the todo you claimed in Setup. `complete_todo` is the wire signal that moves the run from Reconciling toward Done; nothing else replaces it \u{2014} not a chat post, not a successful test, not your reasoning that the work is done.\n\
 4. **Done.** Only after Reconciling steps a, b/c, and d have all completed may you stop.\n\
@@ -48,6 +48,7 @@ Use this when you entered Setup or Acting but discovered the work cannot proceed
 ### Hard invariants (re-read every run)\n\
 - **The board is the source of truth for run state, not your narrative.** A run is incomplete as long as any todo you claimed in this run still has status `todo` or `in_progress`. You cannot text-summarize your way past that fact.\n\
 - **Production is not integration.** A deliverable that exists only in your worktree, your message text, or your reasoning is invisible to the main workspace. Your run only reaches Done after the deliverable is observable from pool_chat AND the corresponding todo has been reconciled on the board via `complete_todo` (or `blocked`/`cancel_todo`). Pisci, not Koi, decides whether to merge your branch or request rework.\n\
+- **Waiting is measured by elapsed time, not turns.** If you need to wait for another Koi/Fish, a background process, file change, server startup, test completion, IM/user-visible event, or other external condition, sleep between checks with exponential backoff (for example 1s, 2s, 4s, 8s, then cap at a reasonable interval). Track the real deadline or elapsed seconds and only mark blocked/timeout after the actual elapsed time reaches a reasonable task-specific limit. Never declare timeout from loop count or several immediate checks.\n\
 - **The runtime safety net is visible.** If you exit the run with a claimed todo still in `in_progress`, the runtime will rewrite that todo to `needs_review` and post a `protocol_reminder` event in pool_chat under your name. That event is permanent and visible to every agent that subsequently joins the pool. Treat triggering it as a logged failure, not a free recovery path.\n"
 }
 
@@ -55,12 +56,12 @@ pub fn koi_coordination_protocol_prompt() -> &'static str {
     "## Coordination Protocol\n\
 pool_chat is the shared channel; pool_org is the shared task board. These are the only load-bearing surfaces \u{2014} coordination that is not visible here does not exist for other agents.\n\
 - `pool_chat(action=\"read\")` to see history; `pool_chat(action=\"send\")` to post. `pool_org(action=\"get_todos\")` to see the board.\n\
-- Use plain `@mention` / `@all` only for notification. Use `@!mention` / `@!all` only when you are explicitly delegating concrete actionable work that should wake the receiver right now.\n\
+- Use plain `@mention` / `@all` only for notification. Use `@!mention` / `@!all` only when you are explicitly delegating concrete actionable work that should wake the receiver right now. A live delegated `@!mention` must be at the start of the message or the start of its own line; future-plan prose such as \"when done, hand off to @!Reviewer\" is NOT live delegation and does not wake that agent.\n\
 - **Handoff messages must propagate the protocol, not just the task.** When you `@!mention` another agent to hand off work, your message MUST include three things, not one: (1) WHAT to do (the deliverable you expect), (2) WHERE the inputs are (file path, spec link, prior message reference), and (3) HOW to report completion \u{2014} name the expected next reporting target (return to you, hand to a third party identified from `org_spec`, or signal `@pisci`) and the `[ProjectStatus]` signal expected at completion. A handoff that says only \"do X\" silently transfers the cognitive load of figuring out completion semantics to the receiver, and receivers commonly drop the protocol when their attention is consumed by production. Treat your handoff message as the receiver's task brief.\n\
 - Identify the next responsible party from project context, not from a fixed role catalogue. Inputs in priority order: (1) the project's `org_spec` (which agent owns this kind of work), (2) the latest task description in pool_chat, (3) the most recent @mention chain. If multiple inputs disagree, prefer org_spec. If no input identifies the next party with confidence, do NOT guess and do NOT default to any role name \u{2014} state the ambiguity in pool_chat and let Pisci route.\n\
 - Not every @mention of your name is a live handoff. If your name appears inside a future plan, a conditional (\"after X is done, ask @you\"), or a status recap, it is not work for you right now. Decide actionability from the latest pool evidence.\n\
 - Status signals (place verbatim inside your pool_chat message so Pisci can reason about project state):\n\
-  - `[ProjectStatus] follow_up_needed` \u{2014} more work is required; pair with an `@!mention` of the next responsible party identified per the rule above.\n\
+  - `[ProjectStatus] follow_up_needed` \u{2014} more work is required; pair with a line-start `@!mention` of the next responsible party identified per the rule above.\n\
   - `[ProjectStatus] waiting` \u{2014} you are blocked on something specific; name what you are waiting on.\n\
   - `[ProjectStatus] ready_for_pisci_review` \u{2014} use ONLY after your own `complete_todo` has succeeded and your branch/result is ready for Pisci supervisor review and possible merge.\n\
 - Never unilaterally declare the project complete. If you believe the project may be done, signal `@pisci`; do not poll peer agents for agreement.\n\
@@ -100,7 +101,7 @@ This is the LAST thing you read. Treat it as a state check on the board, not as 
 \n\
 2. **Visibility check.** If this run produced any deliverable, confirm by reading the latest pool_chat that the deliverable is observable there (content posted directly, or file path(s) plus a brief summary). \"I will summarize next run\" is not allowed \u{2014} the team cannot see your future runs. If it is not visible, post it now BEFORE calling `complete_todo`.\n\
 \n\
-3. **Continuation check.** If your output requires another specific agent to continue, confirm a `[ProjectStatus] follow_up_needed` post with that agent's `@!mention` exists from THIS run. Identify the next responsible party from `org_spec` / task description / pool_chat history per the Coordination Protocol \u{2014} do NOT default to a role name. If your output looks like a project-ready conclusion, confirm `[ProjectStatus] ready_for_pisci_review @pisci` exists from THIS run AND was posted only after your `complete_todo` succeeded. Do NOT @mention peer agents for agreement.\n\
+3. **Continuation check.** If your output requires another specific agent to continue, confirm a `[ProjectStatus] follow_up_needed` post with that agent's line-start `@!mention` exists from THIS run. Identify the next responsible party from `org_spec` / task description / pool_chat history per the Coordination Protocol \u{2014} do NOT default to a role name. If your output looks like a project-ready conclusion, confirm `[ProjectStatus] ready_for_pisci_review @pisci` exists from THIS run AND was posted only after your `complete_todo` succeeded. Do NOT @mention peer agents for agreement.\n\
 \n\
 **Exit is permitted only when (1) is unambiguously \"no claimed todo of mine is in todo or in_progress\" AND (2) and (3) are satisfied as applicable.** The runtime enforces (1) for you: if you exit early, the runtime rewrites the stuck todo to `needs_review` and posts a `protocol_reminder` event in pool_chat under your name. That trace is permanent and visible to every agent that subsequently joins the pool \u{2014} it is a logged failure, not a redo.\n\
 \n\
@@ -203,6 +204,36 @@ mod tests {
             assert!(
                 gate.contains(required),
                 "Stop Gate lost required invariant literal: {}",
+                required
+            );
+        }
+    }
+
+    /// Run Shape's Hard invariants section is where the wall-clock
+    /// waiting protocol lives. The failure mode it fights is models
+    /// declaring "timeout" after a few immediate loop iterations, or
+    /// busy-spinning checks without backoff. Both literals must stay
+    /// in Run Shape (not Stop Gate, which is a board state check).
+    #[test]
+    fn run_shape_hard_invariants_contain_waiting_protocol() {
+        let prompt = sample_prompt();
+        let run_shape_idx = prompt.find("## Run Shape").expect("run shape section");
+        let coordination_idx = prompt
+            .find("## Coordination Protocol")
+            .expect("coordination protocol section");
+        assert!(
+            run_shape_idx < coordination_idx,
+            "Run Shape must precede Coordination Protocol"
+        );
+        let run_shape = &prompt[run_shape_idx..coordination_idx];
+        assert!(
+            run_shape.contains("### Hard invariants"),
+            "Run Shape must keep its Hard invariants subsection"
+        );
+        for required in ["exponential backoff", "elapsed time"] {
+            assert!(
+                run_shape.contains(required),
+                "Run Shape Hard invariants lost required waiting-protocol literal: {}",
                 required
             );
         }

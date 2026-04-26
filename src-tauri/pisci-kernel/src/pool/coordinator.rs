@@ -21,9 +21,8 @@
 //!
 //! * [`execute_todo_turn`] — the happy path called by `assign_koi` and
 //!   (indirectly) by `resume_blocked_todo` / `replace_blocked_todo`.
-//! * [`handle_mention`] — fan-out triggered when a `pool_chat` message
-//!   mentions one or more Kois. Each mentioned Koi (that isn't the
-//!   sender and isn't offline) gets its own fresh subagent turn.
+//! * [`handle_mention`] — fan-out triggered by delegated `@!` pool chat
+//!   mentions. Plain `@` messages remain chat-only notifications.
 //! * [`resume_blocked_todo`] — reactivate a `blocked` / `needs_review`
 //!   todo.
 //! * [`replace_blocked_todo`] — cancel the original and spawn a fresh
@@ -58,19 +57,10 @@ pub const DEFAULT_TASK_TIMEOUT_SECS: u32 = 600;
 /// * `{name}`    — Koi display name (`KoiDefinition::name`).
 /// * `{todo_id}` — short 8-char prefix so the agent can quote it back.
 pub const KOI_EXECUTE_TODO_PROMPT: &str = include_str!("./koi_execute_todo.tmpl");
-pub const KOI_ACTIVATE_FOR_MESSAGES_PROMPT: &str =
-    include_str!("../../../prompts/koi_activate_for_messages.txt");
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MentionMode {
-    Notify,
-    Delegate,
-}
 
 #[derive(Debug, Clone)]
 struct MentionTarget {
     koi: KoiDefinition,
-    mode: MentionMode,
 }
 
 /// Knobs every host injects when building a coordinator call. Defaults
@@ -415,36 +405,9 @@ fn render_execute_prompt(koi: &KoiDefinition, todo: &KoiTodo) -> String {
         .replace("{todo_id}", &short)
 }
 
-fn render_activation_prompt(
-    koi: &KoiDefinition,
-    pool_id: &str,
-    sender_id: &str,
-    content: &str,
-) -> String {
-    KOI_ACTIVATE_FOR_MESSAGES_PROMPT
-        .replace("{pool_id}", pool_id)
-        .replace("{name}", &koi.name)
-        .replace("{sender_id}", sender_id)
-        .replace("{message}", content)
-}
-
 fn koi_timeout_for_todo(koi: &KoiDefinition, todo_timeout_secs: u32, default_secs: u32) -> u32 {
     if todo_timeout_secs > 0 {
         todo_timeout_secs
-    } else if koi.task_timeout_secs > 0 {
-        koi.task_timeout_secs
-    } else {
-        default_secs
-    }
-}
-
-fn koi_timeout_for_activation(
-    koi: &KoiDefinition,
-    pool: Option<&PoolSession>,
-    default_secs: u32,
-) -> u32 {
-    if let Some(pool) = pool.filter(|pool| pool.task_timeout_secs > 0) {
-        pool.task_timeout_secs
     } else if koi.task_timeout_secs > 0 {
         koi.task_timeout_secs
     } else {
@@ -1023,17 +986,10 @@ fn todo_source_type(actor: &str) -> &'static str {
 /// Fan-out when a pool chat message mentions one or more Kois.
 ///
 /// Semantics:
-/// - `@KoiName` / `@all` is a notification. It does not create todos.
-///   If the target Koi is currently idle, we wake a short coordination
-///   turn so it can inspect the pool and decide whether any todo or
-///   handoff is needed.
+/// - `@KoiName` / `@all` is a chat-only notification. It does not create
+///   todos and does not start Koi execution.
 /// - `@!KoiName` / `@!all` is a forced delegation. It creates (or
 ///   reuses) a board todo and dispatches the Koi turn immediately.
-///
-/// Turns are one-shot runtime executions, so there is no persistent
-/// inbox we can push into for busy Kois. Plain notification therefore
-/// only auto-wakes idle Kois; busy ones will observe the message on
-/// their next turn.
 pub async fn handle_mention(
     store: &PoolStore,
     sink: Arc<dyn PoolEventSink>,
@@ -1046,108 +1002,69 @@ pub async fn handle_mention(
     let kois = store.read(|db| db.list_kois()).await.unwrap_or_default();
 
     for target in parse_mention_targets(&kois, sender_id, content) {
-        match target.mode {
-            MentionMode::Notify => {
-                if target.koi.status != "idle" {
-                    continue;
-                }
-
-                let store_cl = store.clone();
-                let subagent_cl = subagent.clone();
-                let cfg_cl = cfg.clone();
-                let koi = target.koi.clone();
-                let sender_id = sender_id.to_string();
-                let pool_session_id = pool_session_id.to_string();
-                let content = content.to_string();
-                tokio::spawn(async move {
-                    if let Err(e) = execute_notification_turn(
-                        &store_cl,
-                        subagent_cl,
-                        &cfg_cl,
-                        &koi,
-                        &sender_id,
-                        &pool_session_id,
-                        &content,
-                    )
-                    .await
-                    {
-                        tracing::warn!(
-                            target: "pool::coordinator",
-                            koi_id = %koi.id,
-                            pool_id = %pool_session_id,
-                            "notification mention dispatch failed: {e}"
-                        );
-                    }
+        let existing = find_active_todo_for_koi(store, &target.koi.id, pool_session_id).await;
+        let (todo, synthesised) = match existing {
+            Some(t) => (t, false),
+            None => {
+                let owner = target.koi.id.clone();
+                let title: String = content.chars().take(120).collect();
+                let desc = content.to_string();
+                let assigned_by = sender_id.to_string();
+                let pool_id = pool_session_id.to_string();
+                let todo = store
+                    .write(move |db| {
+                        db.create_koi_todo(
+                            &owner,
+                            &title,
+                            &desc,
+                            "medium",
+                            &assigned_by,
+                            Some(&pool_id),
+                            "mention",
+                            None,
+                            0,
+                        )
+                    })
+                    .await?;
+                sink.as_ref().emit_pool(&PoolEvent::TodoChanged {
+                    pool_id: pool_session_id.to_string(),
+                    action: TodoChangeAction::Created,
+                    todo: (&todo).into(),
                 });
+                (todo, true)
             }
-            MentionMode::Delegate => {
-                let existing =
-                    find_active_todo_for_koi(store, &target.koi.id, pool_session_id).await;
-                let (todo, synthesised) = match existing {
-                    Some(t) => (t, false),
-                    None => {
-                        let owner = target.koi.id.clone();
-                        let title: String = content.chars().take(120).collect();
-                        let desc = content.to_string();
-                        let assigned_by = sender_id.to_string();
-                        let pool_id = pool_session_id.to_string();
-                        let todo = store
-                            .write(move |db| {
-                                db.create_koi_todo(
-                                    &owner,
-                                    &title,
-                                    &desc,
-                                    "medium",
-                                    &assigned_by,
-                                    Some(&pool_id),
-                                    "mention",
-                                    None,
-                                    0,
-                                )
-                            })
-                            .await?;
-                        sink.as_ref().emit_pool(&PoolEvent::TodoChanged {
-                            pool_id: pool_session_id.to_string(),
-                            action: TodoChangeAction::Created,
-                            todo: (&todo).into(),
-                        });
-                        (todo, true)
-                    }
-                };
+        };
 
-                if !synthesised && todo.status == "in_progress" {
-                    continue;
-                }
-
-                let store_cl = store.clone();
-                let subagent_cl = subagent.clone();
-                let cfg_cl = cfg.clone();
-                let owner_id = target.koi.id.clone();
-                let todo_id = todo.id.clone();
-                let session_id = format!("koi_runtime_{}_{}", target.koi.id, pool_session_id);
-                let sink_cl = sink.clone();
-                tokio::spawn(async move {
-                    let args = ExecuteTodoArgs {
-                        koi_id: owner_id.clone(),
-                        todo_id: todo_id.clone(),
-                        assign_msg_id: None,
-                        session_id,
-                        extra_tool_profile: Vec::new(),
-                        extra_system_context: None,
-                    };
-                    if let Err(e) =
-                        execute_todo_turn(&store_cl, sink_cl, subagent_cl, &cfg_cl, args).await
-                    {
-                        tracing::warn!(
-                            target: "pool::coordinator",
-                            koi_id = %owner_id,
-                            todo_id = %todo_id,
-                            "delegated mention dispatch failed: {e}"
-                        );
-                    }
-                });
-            }
+        if !synthesised && todo.status == "in_progress" {
+            continue;
         }
+
+        let store_cl = store.clone();
+        let subagent_cl = subagent.clone();
+        let cfg_cl = cfg.clone();
+        let owner_id = target.koi.id.clone();
+        let todo_id = todo.id.clone();
+        let session_id = format!("koi_runtime_{}_{}", target.koi.id, pool_session_id);
+        let sink_cl = sink.clone();
+        tokio::spawn(async move {
+            let args = ExecuteTodoArgs {
+                koi_id: owner_id.clone(),
+                todo_id: todo_id.clone(),
+                assign_msg_id: None,
+                session_id,
+                extra_tool_profile: Vec::new(),
+                extra_system_context: None,
+            };
+            if let Err(e) = execute_todo_turn(&store_cl, sink_cl, subagent_cl, &cfg_cl, args).await
+            {
+                tracing::warn!(
+                    target: "pool::coordinator",
+                    koi_id = %owner_id,
+                    todo_id = %todo_id,
+                    "delegated mention dispatch failed: {e}"
+                );
+            }
+        });
     }
 
     Ok(())
@@ -1343,74 +1260,41 @@ pub async fn assign_and_execute(
     execute_todo_turn(store, sink, subagent, cfg, args).await
 }
 
-async fn execute_notification_turn(
-    store: &PoolStore,
-    subagent: Arc<dyn SubagentRuntime>,
-    cfg: &CoordinatorConfig,
-    koi: &KoiDefinition,
-    sender_id: &str,
-    pool_session_id: &str,
-    content: &str,
-) -> anyhow::Result<()> {
-    let pool_lookup = pool_session_id.to_string();
-    let pool = store
-        .read(move |db| db.get_pool_session(&pool_lookup))
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Pool '{}' not found", pool_session_id))?;
-    let timeout_secs = cfg
-        .default_task_timeout_secs
-        .max(koi_timeout_for_activation(
-            koi,
-            Some(&pool),
-            cfg.default_task_timeout_secs,
-        ));
-    let request = KoiTurnRequest {
-        pool_id: pool.id.clone(),
-        koi_id: koi.id.clone(),
-        session_id: format!("koi_notify_{}_{}", koi.id, pool_session_id),
-        todo_id: None,
-        system_prompt: format!(
-            "{}\n\n{}",
-            koi.system_prompt,
-            render_activation_prompt(koi, pool_session_id, sender_id, content)
-        ),
-        user_prompt: format!("Pool notification from {}:\n\n{}", sender_id, content),
-        workspace: pool.project_dir.clone(),
-        task_timeout_secs: Some(timeout_secs),
-        extra_tool_profile: Vec::new(),
-        extra_system_context: None,
-    };
-    let _ = run_subagent_turn(subagent, request, timeout_secs).await?;
-    Ok(())
-}
-
 fn parse_mention_targets(
     kois: &[KoiDefinition],
     sender_id: &str,
     content: &str,
 ) -> Vec<MentionTarget> {
-    let notify_all = content.contains("@all");
-    let delegate_all = content.contains("@!all");
+    let delegate_all = has_live_delegated_mention(content, "all");
     kois.iter()
         .filter(|koi| koi.status != "offline" && koi.id != sender_id)
         .filter_map(|koi| {
-            let delegate = delegate_all || content.contains(&format!("@!{}", koi.name));
-            let notify = notify_all || content.contains(&format!("@{}", koi.name));
+            let delegate = delegate_all || has_live_delegated_mention(content, &koi.name);
             if delegate {
-                Some(MentionTarget {
-                    koi: koi.clone(),
-                    mode: MentionMode::Delegate,
-                })
-            } else if notify {
-                Some(MentionTarget {
-                    koi: koi.clone(),
-                    mode: MentionMode::Notify,
-                })
+                Some(MentionTarget { koi: koi.clone() })
             } else {
                 None
             }
         })
         .collect()
+}
+
+fn has_live_delegated_mention(content: &str, name: &str) -> bool {
+    let needle = format!("@!{name}");
+    content.lines().any(|line| {
+        let line = line.trim_start();
+        line.strip_prefix(&needle)
+            .map(|rest| {
+                rest.chars()
+                    .next()
+                    .map(|ch| {
+                        ch.is_whitespace()
+                            || matches!(ch, ':' | '：' | '-' | '—' | ',' | '，' | '.')
+                    })
+                    .unwrap_or(true)
+            })
+            .unwrap_or(false)
+    })
 }
 
 async fn find_active_todo_for_koi(
@@ -1515,5 +1399,81 @@ mod tests {
         assert_eq!(todo_source_type("user"), "user");
         assert_eq!(todo_source_type("system"), "system");
         assert_eq!(todo_source_type("koi-alpha"), "koi");
+    }
+
+    fn test_koi(id: &str, name: &str, status: &str) -> KoiDefinition {
+        KoiDefinition {
+            id: id.into(),
+            name: name.into(),
+            role: "worker".into(),
+            icon: "".into(),
+            color: "".into(),
+            system_prompt: "".into(),
+            description: "".into(),
+            status: status.into(),
+            llm_provider_id: None,
+            max_iterations: 0,
+            task_timeout_secs: 0,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn plain_mentions_do_not_dispatch_koi_turns() {
+        let kois = vec![
+            test_koi("a", "Alpha", "idle"),
+            test_koi("b", "Beta", "idle"),
+        ];
+
+        assert!(parse_mention_targets(&kois, "pisci", "@all 请同步一下").is_empty());
+        assert!(parse_mention_targets(&kois, "pisci", "@Alpha 看一下").is_empty());
+    }
+
+    #[test]
+    fn delegated_mentions_dispatch_only_targeted_kois() {
+        let kois = vec![
+            test_koi("a", "Alpha", "idle"),
+            test_koi("b", "Beta", "offline"),
+            test_koi("c", "Gamma", "busy"),
+        ];
+
+        let one = parse_mention_targets(&kois, "pisci", "@!Alpha 请实现");
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].koi.id, "a");
+
+        let all = parse_mention_targets(&kois, "pisci", "@!all 请分工");
+        let ids: Vec<&str> = all.iter().map(|target| target.koi.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "c"]);
+    }
+
+    #[test]
+    fn delegated_mentions_only_dispatch_when_live_at_line_start() {
+        let kois = vec![
+            test_koi("a", "Alpha", "idle"),
+            test_koi("b", "Beta", "idle"),
+        ];
+
+        let future_plan = parse_mention_targets(
+            &kois,
+            "pisci",
+            "@!Alpha implement the module. When done, hand off review to @!Beta.",
+        );
+        let ids: Vec<&str> = future_plan
+            .iter()
+            .map(|target| target.koi.id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["a"],
+            "future delegated mentions embedded in prose must not wake downstream Kois early"
+        );
+
+        let multiline = parse_mention_targets(&kois, "pisci", "Context first\n  @!Beta: review it");
+        let ids: Vec<&str> = multiline
+            .iter()
+            .map(|target| target.koi.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["b"]);
     }
 }

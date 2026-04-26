@@ -51,6 +51,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   wechat_bot_token: "",
   wechat_base_url: "",
   wechat_bot_id: "",
+  im_auto_minimal_mode: true,
   dingtalk_app_key: "",
   dingtalk_app_secret: "",
   dingtalk_robot_code: "",
@@ -1260,6 +1261,16 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
           <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16, padding: "8px 10px", background: "var(--bg-secondary)", borderRadius: 6, lineHeight: 1.6 }}>
             {t("settings.imLayerExplain")}
           </p>
+
+          <div style={{ marginBottom: 16, padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-secondary)" }}>
+            <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, cursor: "pointer" }}>
+              <div>
+                <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }}>{t("settings.imAutoMinimalMode")}</div>
+                <div style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>{t("settings.imAutoMinimalModeHint")}</div>
+              </div>
+              <input type="checkbox" checked={form.im_auto_minimal_mode ?? true} onChange={(e) => update("im_auto_minimal_mode", e.target.checked)} />
+            </label>
+          </div>
 
           {gatewayStatus.length > 0 && (
             <div style={{ marginBottom: 16, padding: "8px 12px", background: "var(--bg-secondary)", borderRadius: 6, fontSize: 13 }}>

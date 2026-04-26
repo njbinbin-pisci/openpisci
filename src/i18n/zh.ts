@@ -754,6 +754,8 @@ const zh = {
     imChannelsDesc: "配置后可通过飞书、企业微信等 IM 向 Pisci 发送指令并接收回复。保存设置后点击「连接渠道」生效。",
     imLayerExplain:
       "凭据 + 渠道 + 能力 三层独立：每个平台填一次「应用凭据」，由「IM 长连接」承载消息收发，由「企业能力（MCP / 工具）」实现组织架构、日程、群聊等高级操作。MCP 服务器可通过 ${settings:wecom_bot_id} 等占位符复用本节凭据，无需重复填写。",
+    imAutoMinimalMode: "收到消息后自动进入极简模式",
+    imAutoMinimalModeHint: "开启后，IM 收到新消息会隐藏主窗口并显示右下角极简浮窗；关闭后只处理消息，不改变当前窗口状态。",
     imCredsLabel: "应用凭据（channel 与 capability 共享）",
     imChannelLabel: "IM 长连接（消息收发）",
     imCapabilityLabel: "企业能力（agent 工具）",

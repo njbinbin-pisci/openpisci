@@ -87,7 +87,7 @@ fn default_trial_scenario() -> TrialScenario {
              3) to_title_case(s) - converts a string to title case. \
              Write a clear, concise specification with function signatures, \
              parameter descriptions, expected behavior, and edge cases. \
-             Keep it practical. When you finish, share the spec in pool_chat, include `[ProjectStatus] follow_up_needed`, and hand off implementation to the coding specialist."
+             Keep it practical. When you finish, share the spec in pool_chat, include `[ProjectStatus] follow_up_needed`, and hand off implementation to Coder using the delegated mention syntax from your coordination protocol."
             .into(),
         workflow: vec![
             "Pisci assigns the initial design task to Architect.".into(),
@@ -112,7 +112,7 @@ fn default_trial_scenario() -> TrialScenario {
             system_prompt:
                 "You are a software architect collaborating inside a multi-agent project. Your job is to produce clear, practical technical specifications that help the next specialist move the work forward. \
                  Be concise, structured, and explicit about assumptions, interfaces, and edge cases. \
-                 Publish your design in pool_chat, then hand off clearly if another specialist should continue. \
+                 Publish your design in pool_chat, then hand off clearly with `[ProjectStatus] follow_up_needed` and @!Coder if implementation should continue. \
                  Do not decide that the project is finished yourself."
                     .into(),
             description: "Architecture, system design, technical specification".into(),
@@ -146,7 +146,7 @@ fn default_trial_scenario() -> TrialScenario {
                 "You are a reviewer collaborating inside a multi-agent project. Given prior work, provide constructive feedback, identify risks, and state clearly whether follow-up is needed. \
                  Be specific and actionable. \
                  If more work is needed, signal `[ProjectStatus] follow_up_needed` and @!mention the responsible specialist. \
-                 If the work looks acceptable, signal `[ProjectStatus] ready_for_pisci_review` and @pisci rather than declaring the project finished yourself."
+                 If the work looks acceptable, you MUST post a pool_chat message containing the exact text `[ProjectStatus] ready_for_pisci_review @pisci` before completing your review todo. Do not merely say \"ready for review\" in prose, and do not declare the project finished yourself."
                     .into(),
             description: "Review, quality assurance, feedback".into(),
             max_iterations: 0,
@@ -342,7 +342,7 @@ pub(crate) fn assess_trial_project_state(
 /// Launch a multi-agent collaboration trial.
 ///
 /// Creates 3 Koi agents for a scenario-defined workflow, a project pool,
-/// and orchestrates a realistic task flow with @mention handoffs.
+/// and orchestrates a realistic task flow with delegated @!mention handoffs.
 /// All results are observable in the Pond UI.
 #[tauri::command]
 pub async fn run_collaboration_trial(
@@ -488,9 +488,9 @@ pub async fn run_collaboration_trial_with_state(
         third.id
     );
 
-    // ─── Phase 2: Pisci posts the initial @mention in pool chat (natural communication) ──
-    // The entire workflow is driven by @mention cascading:
-    //   Pisci @lead → lead hands off to second → second hands off to third
+    // ─── Phase 2: Pisci posts the initial @!mention in pool chat (natural communication) ──
+    // The entire workflow is driven by delegated @!mention cascading:
+    //   Pisci @!lead → lead hands off to @!second → second hands off to @!third
     // No direct assign_koi calls — everything flows through pool_chat @mentions.
     status.phase = scenario.kickoff_phase.clone();
     emit(&scenario.kickoff_phase, &scenario.kickoff_detail);
@@ -509,14 +509,14 @@ pub async fn run_collaboration_trial_with_state(
         );
     }
 
-    // Wake the lead specialist via @mention — the agent reads the pool and decides autonomously.
+    // Wake the lead specialist via @!mention — the agent reads the pool and decides autonomously.
     let chain_start = std::time::Instant::now();
     let lead_results =
         bridge::handle_mention(&app_handle, state, "pisci", &pool.id, &task_message).await;
 
     let kickoff_preview = match &lead_results {
         Ok(()) => format!(
-            "Initial @mention dispatched to {}. Koi turn is running — \
+            "Initial @!mention dispatched to {}. Koi turn is running — \
              results will stream via pool events.",
             lead.name
         ),
@@ -526,7 +526,7 @@ pub async fn run_collaboration_trial_with_state(
         &mut status,
         "kickoff_dispatch",
         "Pisci",
-        format!("Kick off collaboration with @{}", lead.name),
+        format!("Kick off collaboration with @!{}", lead.name),
         lead_results.is_ok(),
         kickoff_preview.clone(),
         chain_start.elapsed().as_millis() as u64,
@@ -935,7 +935,7 @@ pub async fn run_collaboration_trial_with_state(
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_trial_koi_status, trial_koi_runtime_active};
+    use super::{default_trial_scenario, effective_trial_koi_status, trial_koi_runtime_active};
 
     #[test]
     fn active_run_slot_overrides_idle_db_status() {
@@ -954,5 +954,40 @@ mod tests {
         assert!(trial_koi_runtime_active(true, false));
         assert!(trial_koi_runtime_active(true, true));
         assert!(!trial_koi_runtime_active(false, false));
+    }
+
+    #[test]
+    fn default_trial_scenario_uses_delegated_mentions_for_live_handoffs() {
+        let scenario = default_trial_scenario();
+
+        assert!(
+            scenario.kickoff_message.contains("@!Architect"),
+            "kickoff must use delegated @!mention so the coordinator dispatches the first Koi turn"
+        );
+        assert_eq!(
+            scenario.kickoff_message.matches("@!").count(),
+            1,
+            "kickoff must delegate only to the lead Koi; mentioning downstream agents with @! here causes premature dispatch"
+        );
+        assert!(
+            scenario.lead.system_prompt.contains("@!Coder"),
+            "Architect's system prompt must preserve the downstream delegated handoff target without putting it in the kickoff message"
+        );
+        assert!(
+            scenario.second.system_prompt.contains("@!mention")
+                || scenario.second.system_prompt.contains("@!Reviewer"),
+            "Coder prompt must preserve delegated handoff guidance for Reviewer"
+        );
+        assert!(
+            scenario.third.system_prompt.contains("@pisci"),
+            "Reviewer should return readiness to Pisci without waking a peer Koi"
+        );
+        assert!(
+            scenario
+                .third
+                .system_prompt
+                .contains("[ProjectStatus] ready_for_pisci_review @pisci"),
+            "Reviewer prompt must require the exact terminal handoff signal used by project-state assessment"
+        );
     }
 }

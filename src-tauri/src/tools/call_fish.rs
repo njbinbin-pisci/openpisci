@@ -82,6 +82,11 @@ impl CallFishTool {
         self.app.state::<AppState>()
     }
 
+    fn fish_waiting_discipline_prompt() -> &'static str {
+        "\n\n## Waiting Discipline\n\
+When you need to wait for an external event, background process, Koi/Fish response, file change, server startup, test completion, or user-visible state, use real elapsed time. Sleep between checks with exponential backoff (for example 1s, 2s, 4s, 8s, then cap at a reasonable interval), record the deadline or elapsed seconds, and only declare timeout after the actual elapsed time reaches a reasonable task-specific limit. Do not infer timeout from loop/turn count or from several immediate checks."
+    }
+
     async fn list_fish(&self) -> anyhow::Result<ToolResult> {
         let registry =
             crate::fish::FishRegistry::load(self.app.path().app_data_dir().ok().as_deref());
@@ -155,7 +160,11 @@ impl CallFishTool {
                 .unwrap_or_else(|| Arc::new(AtomicBool::new(false)))
         };
 
-        let fish_system_prompt = fish_def.agent.system_prompt.clone();
+        let fish_system_prompt = format!(
+            "{}{}",
+            fish_def.agent.system_prompt,
+            Self::fish_waiting_discipline_prompt()
+        );
 
         // Read settings snapshot
         let (

@@ -75,6 +75,8 @@ export interface Settings {
   wechat_bot_token: string;
   wechat_base_url: string;
   wechat_bot_id: string;
+  /** When true, inbound IM messages switch the app into minimal overlay mode. */
+  im_auto_minimal_mode: boolean;
   // Email (SMTP / IMAP)
   smtp_host: string;
   smtp_port: number;

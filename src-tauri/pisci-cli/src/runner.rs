@@ -87,10 +87,7 @@ pub fn run_pisci_once_with_stderr_events(
     }
 
     let app_data_dir = resolve_app_data_dir(Some(&request));
-    let host = CliHost::new_with_event_sink(
-        app_data_dir.clone(),
-        Arc::new(CliEventSink::stderr()),
-    );
+    let host = CliHost::new_with_event_sink(app_data_dir.clone(), Arc::new(CliEventSink::stderr()));
     run_pisci_once_with_host(request, app_data_dir, host)
 }
 

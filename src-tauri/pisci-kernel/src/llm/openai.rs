@@ -42,6 +42,17 @@ pub fn model_supports_vision(model: &str) -> bool {
         || m.contains("abab6.5")
 }
 
+fn is_dashscope_qwen_endpoint(base_url: &str, model: &str) -> bool {
+    let url = base_url.to_lowercase();
+    let model = model.to_lowercase();
+    url.contains("dashscope.aliyuncs.com") && (model.contains("qwen") || model.contains("qvq"))
+}
+
+fn is_deepseek_thinking_model(model: &str) -> bool {
+    let model = model.to_lowercase();
+    model.contains("deepseek-v4") || model.contains("deepseek-reasoner")
+}
+
 impl OpenAiClient {
     #[allow(dead_code)]
     pub fn new(api_key: &str, base_url: &str) -> Self {
@@ -522,6 +533,25 @@ impl OpenAiClient {
             body["tool_choice"] = json!("auto");
         }
 
+        if is_dashscope_qwen_endpoint(&self.base_url, &req.model) {
+            // DashScope Qwen thinking mode requires assistant
+            // `reasoning_content` to be passed back in every later request.
+            // OpenPisci's persisted message model stores user-visible content
+            // and tool calls, not hidden reasoning traces, so leaving thinking
+            // enabled breaks resumed/IM conversations with a 400. Keep the
+            // OpenAI-compatible payload stateless until reasoning traces are a
+            // first-class persisted field.
+            body["enable_thinking"] = json!(false);
+        }
+        if is_deepseek_thinking_model(&req.model) {
+            // DeepSeek's newer thinking models default thinking on and require
+            // `reasoning_content` to be replayed after tool calls. We do not
+            // persist hidden reasoning traces yet, so disable thinking to keep
+            // multi-turn IM/headless conversations compatible with our stored
+            // OpenAI-style message history.
+            body["thinking"] = json!({ "type": "disabled" });
+        }
+
         body
     }
 }
@@ -701,5 +731,60 @@ impl LlmClient for OpenAiClient {
             input_tokens: val["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
             output_tokens: val["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request_for_model(model: &str) -> LlmRequest {
+        LlmRequest {
+            messages: vec![LlmMessage {
+                role: "user".to_string(),
+                content: MessageContent::text("hello"),
+            }],
+            system: None,
+            tools: Vec::new(),
+            model: model.to_string(),
+            max_tokens: 128,
+            stream: false,
+            vision_override: Some(false),
+        }
+    }
+
+    #[test]
+    fn dashscope_qwen_disables_thinking_mode() {
+        let client = OpenAiClient::new(
+            "test-key",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        );
+        let body = client.build_body(&request_for_model("qwen3.6-plus"));
+
+        assert_eq!(body["enable_thinking"], Value::Bool(false));
+    }
+
+    #[test]
+    fn non_dashscope_openai_payload_does_not_add_qwen_flag() {
+        let client = OpenAiClient::new("test-key", "https://api.openai.com/v1");
+        let body = client.build_body(&request_for_model("gpt-4o"));
+
+        assert!(body.get("enable_thinking").is_none());
+    }
+
+    #[test]
+    fn deepseek_disables_thinking_mode() {
+        let client = OpenAiClient::new("test-key", "https://api.deepseek.com/v1");
+        let body = client.build_body(&request_for_model("deepseek-v4-flash"));
+
+        assert_eq!(body["thinking"], json!({ "type": "disabled" }));
+    }
+
+    #[test]
+    fn ordinary_deepseek_chat_does_not_add_thinking_flag() {
+        let client = OpenAiClient::new("test-key", "https://api.deepseek.com/v1");
+        let body = client.build_body(&request_for_model("deepseek-chat"));
+
+        assert!(body.get("thinking").is_none());
     }
 }

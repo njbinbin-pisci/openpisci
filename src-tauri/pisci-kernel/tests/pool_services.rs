@@ -361,7 +361,12 @@ async fn assign_koi_creates_todo_posts_mention_and_emits_events() {
 }
 
 #[tokio::test]
-async fn plain_mention_wakes_idle_koi_without_creating_todo() {
+async fn plain_mention_is_chat_only_and_does_not_dispatch_subagent() {
+    // Post-refactor mention semantics: `@Name` is a chat-only
+    // notification. The coordinator MUST NOT spawn a Koi turn and MUST
+    // NOT pre-create a board todo. The idle Koi observes the message
+    // through the normal `MessageAppended` event on its next turn —
+    // only `@!Name` (forced delegation) wakes a runtime turn.
     let store = build_store();
     let sink = make_sink();
     let pool_id = create_test_pool(&store, &sink).await;
@@ -374,6 +379,7 @@ async fn plain_mention_wakes_idle_koi_without_creating_todo() {
     })) as Arc<dyn pisci_core::host::SubagentRuntime>;
     let cfg = CoordinatorConfig::default();
 
+    let baseline_events = sink.count();
     services::send_pool_message(
         &store,
         sink_arc(&sink),
@@ -395,11 +401,11 @@ async fn plain_mention_wakes_idle_koi_without_creating_todo() {
     tokio::time::sleep(Duration::from_millis(25)).await;
 
     let requests = requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 1, "expected one notification wake-up");
-    assert_eq!(requests[0].koi_id, "koi-alpha");
-    assert!(
-        requests[0].todo_id.is_none(),
-        "plain @mention must not pre-create a todo"
+    assert_eq!(
+        requests.len(),
+        0,
+        "plain @mention must not dispatch a Koi turn under the post-refactor semantics; \
+         only @!mention triggers execution"
     );
 
     let todos = store
@@ -408,7 +414,24 @@ async fn plain_mention_wakes_idle_koi_without_creating_todo() {
         .expect("list todos");
     assert!(
         todos.is_empty(),
-        "plain @mention should not create board todos"
+        "plain @mention must not create board todos"
+    );
+
+    let new_kinds: Vec<&'static str> = sink
+        .drain_kinds()
+        .into_iter()
+        .skip(baseline_events)
+        .collect();
+    assert!(
+        new_kinds.contains(&"message_appended"),
+        "plain @mention must still surface as a MessageAppended event so idle Kois can observe \
+         it on their next turn; got events: {:?}",
+        new_kinds
+    );
+    assert!(
+        !new_kinds.contains(&"todo_changed"),
+        "plain @mention must not emit any TodoChanged events; got events: {:?}",
+        new_kinds
     );
 }
 

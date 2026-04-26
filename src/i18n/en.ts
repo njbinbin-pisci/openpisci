@@ -754,6 +754,8 @@ const en = {
     imChannelsDesc: "Connect Pisci to messaging platforms. Save settings first, then click Connect.",
     imLayerExplain:
       "Credentials, channel, and capability are three independent layers. Fill in the per-platform application credentials once: the IM long-connection layer uses them to carry inbound/outbound messages, and the enterprise capability layer (MCP servers / tools) uses them for org chart, calendar, group chat, etc. MCP servers can reference the same credentials via ${settings:wecom_bot_id} placeholders without re-entering values.",
+    imAutoMinimalMode: "Enter minimal mode when receiving IM messages",
+    imAutoMinimalModeHint: "When enabled, inbound IM messages hide the main window and show the bottom-right minimal overlay. When disabled, messages are processed without changing the current window state.",
     imCredsLabel: "Application credentials (shared by channel and capability)",
     imChannelLabel: "IM long connection (message transport)",
     imCapabilityLabel: "Enterprise capability (agent tools)",

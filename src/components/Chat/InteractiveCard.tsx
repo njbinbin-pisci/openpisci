@@ -12,6 +12,7 @@ interface UiBlock {
   type: string;
   id?: string;
   label?: string;
+  value?: unknown;
   content?: string;
   options?: { value: string; label: string; description?: string }[];
   default?: unknown;
@@ -22,7 +23,14 @@ interface UiBlock {
   min?: number;
   max?: number;
   step?: number;
-  buttons?: { id: string; label: string; style?: string }[];
+  buttons?: UiButton[];
+}
+
+interface UiButton {
+  id?: string;
+  label: string;
+  value?: unknown;
+  style?: string;
 }
 
 interface UiDefinition {
@@ -293,43 +301,31 @@ function ActionsBlock({
   disabled,
 }: {
   block: UiBlock;
-  onAction: (id: string) => void;
+  onAction: (block: UiBlock, button: UiButton) => void;
   disabled: boolean;
 }) {
+  const buttons = block.buttons?.length
+    ? block.buttons
+    : [{
+        id: block.id,
+        label: block.label || "Submit",
+        value: block.value ?? block.id ?? block.label ?? "submit",
+        style: "primary",
+      }];
+
   return (
     <div className="ic-actions">
-      {(block.buttons || []).map((btn) => (
+      {buttons.map((btn, index) => (
         <button
-          key={btn.id}
+          key={btn.id || `${String(btn.value ?? btn.label)}-${index}`}
           type="button"
           className={`ic-btn ic-btn-${btn.style || "default"}`}
-          onClick={() => onAction(btn.id)}
+          onClick={() => onAction(block, btn)}
           disabled={disabled}
         >
           {btn.label}
         </button>
       ))}
-    </div>
-  );
-}
-
-function ConfirmBlock({
-  block,
-  onAction,
-  disabled,
-}: {
-  block: UiBlock;
-  onAction: (id: string) => void;
-  disabled: boolean;
-}) {
-  return (
-    <div className="ic-actions">
-      <button type="button" className="ic-btn ic-btn-default" onClick={() => onAction("cancel")} disabled={disabled}>
-        {block.label || "Cancel"}
-      </button>
-      <button type="button" className="ic-btn ic-btn-primary" onClick={() => onAction("confirm")} disabled={disabled}>
-        Confirm
-      </button>
     </div>
   );
 }
@@ -373,11 +369,24 @@ export default function InteractiveCard({ requestId, uiDefinition, submittedValu
     return fieldVal === block.show_when.equals;
   };
 
-  const handleAction = async (actionId: string) => {
+  const handleAction = async (block: UiBlock, button: UiButton) => {
     if (submitted || submitting) return;
     setSubmitting(true);
     try {
-      await interactiveApi.respond(requestId, { ...values, __action__: actionId });
+      const actionValue = button.value ?? button.id ?? button.label;
+      const payload: Record<string, unknown> = {
+        ...values,
+        __action__: actionValue,
+        __button__: {
+          id: button.id,
+          label: button.label,
+          value: actionValue,
+        },
+      };
+      if (block.id) {
+        payload[block.id] = actionValue;
+      }
+      await interactiveApi.respond(requestId, payload);
       setSubmitted(true);
     } catch (e) {
       console.error("[InteractiveCard] respond error:", e);
@@ -472,7 +481,6 @@ export default function InteractiveCard({ requestId, uiDefinition, submittedValu
                 />
               );
             case "confirm":
-              return <ConfirmBlock key={key} block={block} onAction={handleAction} disabled={disabled} />;
             case "actions":
               return <ActionsBlock key={key} block={block} onAction={handleAction} disabled={disabled} />;
             case "divider":
