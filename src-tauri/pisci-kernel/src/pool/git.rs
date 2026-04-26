@@ -13,24 +13,30 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::time::Duration;
 
+#[cfg(windows)]
 fn tokio_git_command() -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new("git");
-    #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
     cmd
 }
 
+#[cfg(not(windows))]
+fn tokio_git_command() -> tokio::process::Command {
+    tokio::process::Command::new("git")
+}
+
+#[cfg(windows)]
 fn std_git_command() -> std::process::Command {
     let mut cmd = std::process::Command::new("git");
-    #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
     cmd
+}
+
+#[cfg(not(windows))]
+fn std_git_command() -> std::process::Command {
+    std::process::Command::new("git")
 }
 
 /// Run `git <args>` inside `dir` with an async cancellation check.
