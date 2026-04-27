@@ -10,7 +10,7 @@
 //!    configured LLM to distill older messages into a structured summary.
 //!    One LLM call.
 //!
-//! Used by `src-tauri/src/bin/pisci_compact_one.rs` for the cross-framework
+//! Used by `src-tauri/pisci-cli/src/bin/pisci_compact_one.rs` for the cross-framework
 //! compression benchmark against Hermes / Engram / claw-compactor.
 
 use anyhow::{Context, Result};

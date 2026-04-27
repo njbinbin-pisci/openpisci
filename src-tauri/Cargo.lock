@@ -4305,6 +4305,7 @@ dependencies = [
  "async-trait",
  "dirs 5.0.1",
  "pisci-core",
+ "pisci-desktop",
  "pisci-kernel",
  "serde",
  "serde_json",

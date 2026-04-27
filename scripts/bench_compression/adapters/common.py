@@ -36,7 +36,7 @@ def find_pisci_bin() -> Path:
     if not existing:
         raise FileNotFoundError(
             "pisci_compact_one.exe not found; build with "
-            "`cargo build --bin pisci_compact_one --manifest-path src-tauri/Cargo.toml`"
+            "`cargo build -p pisci-cli --features bench-compact-cli --bin pisci_compact_one --manifest-path src-tauri/Cargo.toml`"
         )
     existing.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return existing[0]

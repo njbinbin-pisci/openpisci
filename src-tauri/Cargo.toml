@@ -48,10 +48,6 @@ license = "Apache-2.0"
 edition = "2021"
 rust-version = "1.77.2"
 
-[features]
-default = []
-bench-compact-cli = []
-
 [lib]
 name = "pisci_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -59,11 +55,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [[bin]]
 name = "pisci-desktop"
 path = "src/main.rs"
-
-[[bin]]
-name = "pisci_compact_one"
-path = "src/bin/pisci_compact_one.rs"
-required-features = ["bench-compact-cli"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

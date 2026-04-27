@@ -51,7 +51,7 @@
 
 ```powershell
 cargo build -p pisci-cli --bin openpisci-headless --manifest-path src-tauri/Cargo.toml
-cargo build --bin pisci_compact_one --manifest-path src-tauri/Cargo.toml
+cargo build -p pisci-cli --features bench-compact-cli --bin pisci_compact_one --manifest-path src-tauri/Cargo.toml
 ```
 
 然后执行：

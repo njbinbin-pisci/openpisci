@@ -11,9 +11,19 @@ description = "OpenPisci headless CLI — cross-platform agent runner with no Ta
 name = "openpisci-headless"
 path = "src/bin/openpisci-headless.rs"
 
+[[bin]]
+name = "pisci_compact_one"
+path = "src/bin/pisci_compact_one.rs"
+required-features = ["bench-compact-cli"]
+
+[features]
+default = []
+bench-compact-cli = ["dep:pisci-desktop"]
+
 [dependencies]
 pisci-core = { workspace = true }
 pisci-kernel = { workspace = true }
+pisci-desktop = { path = "..", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
