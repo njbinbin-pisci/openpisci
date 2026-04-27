@@ -85,7 +85,7 @@ pub fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAttention
     match assessment.decision {
         ProjectDecision::Continue => {
             lines.push(
-                "The project snapshot still shows active coordination pressure. Inspect pool_chat, the task board, and the org_spec before deciding whether Pisci should act now or continue waiting."
+                "The project snapshot still shows active coordination pressure. Inspect pool_org(get_messages), the task board, and the org_spec before deciding whether Pisci should act now or continue waiting."
                     .to_string(),
             );
             if assessment.active_todo_count == 0
@@ -111,7 +111,7 @@ pub fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAttention
                     .to_string(),
             );
             lines.push(
-                "Do NOT collapse this state into a fixed canned outcome. Use the org_spec, recent pool_chat, and deliverables to decide whether the project truly converged or whether the task decomposition missed something."
+                "Do NOT collapse this state into a fixed canned outcome. Use the org_spec, recent pool_org(get_messages) evidence, and deliverables to decide whether the project truly converged or whether the task decomposition missed something."
                     .to_string(),
             );
             lines.push(
@@ -139,11 +139,19 @@ pub fn build_pool_heartbeat_message(base_prompt: &str, attention: &PoolAttention
         }
         ProjectDecision::ReadyForPisciReview => {
             lines.push(
-                "The snapshot is compatible with Pisci review, but HEARTBEAT_OK is never automatic."
+                "The snapshot is compatible with Pisci review, but HEARTBEAT_OK is forbidden as the only action when needs_review todos exist."
                     .to_string(),
             );
             lines.push(
-                "Suggested actions: read pool_chat to confirm completion, merge branches if applicable, post a summary, and leave the pool active until the user explicitly asks to archive it. HEARTBEAT_OK is still not automatic. Do NOT archive the project during heartbeat. Reply HEARTBEAT_OK only when satisfied."
+                "Mandatory closeout: call pool_org(action=\"get_messages\") and pool_org(action=\"get_todos\") for this pool, inspect the reported deliverables, then choose exactly one outcome: merge_branches if the work is acceptable, resume_todo/replace_todo/assign_koi if rework is needed, or post_status plus notify_user when human review is required."
+                    .to_string(),
+            );
+            lines.push(
+                "Do not say \"no change\", \"无需干预\", or HEARTBEAT_OK until you have taken a concrete closeout action or written a clear pool_org(post_status) explanation of why no autonomous action is safe."
+                    .to_string(),
+            );
+            lines.push(
+                "During heartbeat, do NOT archive the project automatically. Leave the pool active until the user explicitly asks to archive it."
                     .to_string(),
             );
             lines.push("If you discover unresolved work, keep the project open and coordinate the next step explicitly.".to_string());

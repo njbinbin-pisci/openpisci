@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::error::Error as StdError;
 use tokio::sync::mpsc::Sender;
 
 pub struct OpenAiClient {
@@ -72,6 +73,38 @@ impl OpenAiClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             http,
         }
+    }
+
+    fn request_send_error(url: &str, err: reqwest::Error) -> anyhow::Error {
+        let mut flags = Vec::new();
+        if err.is_timeout() {
+            flags.push("timeout");
+        }
+        if err.is_connect() {
+            flags.push("connect");
+        }
+        if err.is_request() {
+            flags.push("request");
+        }
+        if err.is_body() {
+            flags.push("body");
+        }
+
+        let mut sources = Vec::new();
+        let mut source = err.source();
+        while let Some(current) = source {
+            sources.push(current.to_string());
+            source = current.source();
+        }
+
+        anyhow!(
+            "OpenAI-compatible request failed before HTTP response: url={} flags={} error={} sources=[{}] debug={:?}",
+            url,
+            if flags.is_empty() { "none".to_string() } else { flags.join(",") },
+            err,
+            sources.join(" | "),
+            err
+        )
     }
 
     /// Convert an Image block to a safe text placeholder.
@@ -570,7 +603,8 @@ impl LlmClient for OpenAiClient {
             .bearer_auth(&self.api_key)
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| Self::request_send_error(&url, e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -685,7 +719,8 @@ impl LlmClient for OpenAiClient {
             .bearer_auth(&self.api_key)
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| Self::request_send_error(&url, e))?;
 
         if !response.status().is_success() {
             let status = response.status();

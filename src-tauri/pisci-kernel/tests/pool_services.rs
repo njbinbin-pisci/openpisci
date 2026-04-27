@@ -6,16 +6,20 @@
 //! up an LLM, Tauri app handle, or filesystem worktree — the only side
 //! effect under test is `(DB rows, emitted events)`.
 
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pisci_core::host::{KoiTurnRequest, PoolEvent, PoolEventSink};
+use pisci_kernel::agent::tool::{Tool, ToolContext, ToolSettings};
 use pisci_kernel::pool::{
     self, coordinator::CoordinatorConfig, services, store::PoolStore, AssignKoiArgs, CallerContext,
-    CreatePoolArgs, CreateTodoArgs, DeleteTodoArgs, SendPoolMessageArgs, StubOutcome,
-    StubSubagentRuntime,
+    CreatePoolArgs, CreateTodoArgs, DeleteTodoArgs, PostStatusArgs, SendPoolMessageArgs,
+    StubOutcome, StubSubagentRuntime, WaitForKoiArgs,
 };
 use pisci_kernel::store::Database;
+use pisci_kernel::tools::pool_chat::PoolChatTool;
 use tokio::sync::Mutex;
 
 // ─── test plumbing ─────────────────────────────────────────────────────
@@ -210,6 +214,55 @@ async fn send_pool_message_emits_message_appended() {
 }
 
 #[tokio::test]
+async fn pool_chat_tool_rejects_pisci_send_but_allows_koi_send() {
+    let store = build_store();
+    let sink = make_sink();
+    let pool_id = create_test_pool(&store, &sink).await;
+    let cfg = CoordinatorConfig::default();
+    let tool = PoolChatTool {
+        store: store.clone(),
+        sink: sink_arc(&sink),
+        subagent: None,
+        coordinator_cfg: cfg,
+    };
+    let base_ctx = |memory_owner_id: &str| ToolContext {
+        session_id: format!("session-{memory_owner_id}"),
+        workspace_root: PathBuf::from("."),
+        bypass_permissions: false,
+        settings: Arc::new(ToolSettings::default()),
+        max_iterations: None,
+        memory_owner_id: memory_owner_id.to_string(),
+        pool_session_id: Some(pool_id.clone()),
+        cancel: Arc::new(AtomicBool::new(false)),
+    };
+
+    let pisci_result = tool
+        .call(
+            serde_json::json!({
+                "action": "send",
+                "content": "@!Alpha do this through the wrong channel"
+            }),
+            &base_ctx("pisci"),
+        )
+        .await
+        .expect("pisci tool call");
+    assert!(pisci_result.is_error);
+    assert!(pisci_result.content.contains("cannot send pool_chat"));
+
+    let koi_result = tool
+        .call(
+            serde_json::json!({
+                "action": "send",
+                "content": "Koi-visible progress update"
+            }),
+            &base_ctx("koi-alpha"),
+        )
+        .await
+        .expect("koi tool call");
+    assert!(!koi_result.is_error, "{}", koi_result.content);
+}
+
+#[tokio::test]
 async fn set_pool_status_pause_then_resume() {
     let store = build_store();
     let sink = make_sink();
@@ -343,6 +396,16 @@ async fn assign_koi_creates_todo_posts_mention_and_emits_events() {
     .await
     .expect("assign_koi");
     assert_eq!(value["koi_id"], "koi-alpha");
+    assert_eq!(value["next_required_action"]["tool"], "pool_org");
+    assert_eq!(value["next_required_action"]["action"], "wait_for_koi");
+    assert_eq!(value["next_required_action"]["koi_id"], "koi-alpha");
+    assert!(
+        value["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("wait_for_koi"),
+        "assign_koi must tell Pisci to wait with real elapsed time"
+    );
 
     let kinds = sink.drain_kinds();
     // Assign path emits: todo_changed (created), message_appended
@@ -358,6 +421,81 @@ async fn assign_koi_creates_todo_posts_mention_and_emits_events() {
     );
     // Silence the clippy lint about unused modules.
     let _ = pool::session_source::PISCI_POOL;
+}
+
+#[tokio::test]
+async fn post_status_is_controlled_and_does_not_dispatch_mentions() {
+    let store = build_store();
+    let sink = make_sink();
+    let pool_id = create_test_pool(&store, &sink).await;
+    let caller = pisci_caller("sess-1");
+
+    let value = services::post_status(
+        &store,
+        sink.as_ref(),
+        &caller,
+        PostStatusArgs {
+            pool_id: pool_id.clone(),
+            content: "@!Alpha supervisor note only; do not fan out".into(),
+            event_type: None,
+        },
+    )
+    .await
+    .expect("post_status");
+    assert_eq!(value["pool_id"], pool_id);
+
+    let alpha_todos = store
+        .read(|db| db.list_koi_todos(Some("koi-alpha")))
+        .await
+        .expect("list alpha todos");
+    assert!(
+        alpha_todos.is_empty(),
+        "post_status must not trigger @! mention todo creation"
+    );
+}
+
+#[tokio::test]
+async fn wait_for_koi_uses_elapsed_time_before_timeout() {
+    let store = build_store();
+    let sink = make_sink();
+    let pool_id = create_test_pool(&store, &sink).await;
+    let caller = pisci_caller("sess-1");
+    services::create_todo(
+        &store,
+        sink.as_ref(),
+        &caller,
+        CreateTodoArgs {
+            pool_id: pool_id.clone(),
+            title: "wait on this".into(),
+            description: "".into(),
+            priority: "".into(),
+            timeout_secs: 0,
+        },
+    )
+    .await
+    .expect("create_todo");
+
+    let started = Instant::now();
+    let value = services::wait_for_koi(
+        &store,
+        &caller,
+        WaitForKoiArgs {
+            pool_id: pool_id.clone(),
+            koi_id: Some("pisci".into()),
+            todo_id: None,
+            min_wait_secs: 0,
+            timeout_secs: 1,
+            initial_backoff_ms: 25,
+            max_backoff_ms: 25,
+        },
+    )
+    .await
+    .expect("wait_for_koi");
+    assert!(value["timed_out"].as_bool().unwrap_or(false));
+    assert!(
+        started.elapsed() >= Duration::from_millis(900),
+        "wait_for_koi must use real elapsed time, not immediate status checks"
+    );
 }
 
 #[tokio::test]
@@ -480,6 +618,55 @@ async fn forced_mention_creates_todo_and_dispatches_execution() {
         .await
         .expect("list todos");
     assert_eq!(todos.len(), 1, "forced @!mention should create a todo");
+}
+
+#[tokio::test]
+async fn forced_mention_to_busy_koi_queues_todo_without_parallel_dispatch() {
+    let store = build_store();
+    let sink = make_sink();
+    let pool_id = create_test_pool(&store, &sink).await;
+    store
+        .write(|db| db.update_koi_status("koi-alpha", "busy"))
+        .await
+        .expect("mark alpha busy");
+    let caller = pisci_caller("sess-1");
+    let requests: Arc<StdMutex<Vec<KoiTurnRequest>>> = Arc::new(StdMutex::new(Vec::new()));
+    let requests_cl = requests.clone();
+    let subagent = Arc::new(StubSubagentRuntime::new(move |request| {
+        requests_cl.lock().unwrap().push(request.clone());
+        StubOutcome::Completed("done".into())
+    })) as Arc<dyn pisci_core::host::SubagentRuntime>;
+    let cfg = CoordinatorConfig::default();
+
+    services::send_pool_message(
+        &store,
+        sink_arc(&sink),
+        Some(subagent),
+        &cfg,
+        &caller,
+        SendPoolMessageArgs {
+            pool_id: pool_id.clone(),
+            sender_id: "pisci".into(),
+            content: "@!Alpha queue this while the current turn is running.".into(),
+            reply_to_message_id: None,
+        },
+    )
+    .await
+    .expect("send_pool_message");
+
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        0,
+        "busy Koi must not receive a concurrent spawned turn"
+    );
+    let todos = store
+        .read(|db| db.list_koi_todos(Some("koi-alpha")))
+        .await
+        .expect("list todos");
+    assert_eq!(todos.len(), 1, "busy Koi should receive queued todo");
+    assert_eq!(todos[0].status, "todo");
 }
 
 #[tokio::test]

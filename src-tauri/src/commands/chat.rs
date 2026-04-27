@@ -6,8 +6,8 @@ pub mod gateway;
 pub mod scheduler;
 
 use crate::commands::config::scene::{
-    build_registry_for_scene, load_skill_loader, CollaborationContextMode, HistorySliceMode,
-    MemorySliceMode, PoolSnapshotMode, SceneKind, ScenePolicy,
+    build_registry_for_scene, load_skill_loader, HistorySliceMode, MemorySliceMode,
+    PoolSnapshotMode, SceneKind, ScenePolicy,
 };
 use crate::store::{
     db::ChatMessage, db::Session, db::SessionContextState, db::TaskSpine, db::TaskState, AppState,
@@ -362,46 +362,6 @@ fn truncate_chars(content: &str, max_chars: usize) -> String {
     format!("{}...", content.chars().take(max_chars).collect::<String>())
 }
 
-fn collaboration_context_hints(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    let collaboration_hints = [
-        "koi",
-        "pool",
-        "team",
-        "kanban",
-        "协作",
-        "团队",
-        "项目池",
-        "任务分配",
-        "heartbeat",
-        "org_spec",
-        "pool_org",
-        "pool_chat",
-    ];
-    collaboration_hints.iter().any(|hint| lower.contains(hint))
-}
-
-fn should_include_main_chat_collaboration_context(
-    scene_policy: ScenePolicy,
-    query_text: &str,
-    task_state: Option<&TaskState>,
-) -> bool {
-    match scene_policy.collaboration_context_mode() {
-        CollaborationContextMode::Never => false,
-        CollaborationContextMode::Required => true,
-        CollaborationContextMode::OnDemand => {
-            if collaboration_context_hints(query_text) {
-                return true;
-            }
-            task_state.is_some_and(|task| {
-                collaboration_context_hints(&task.goal)
-                    || collaboration_context_hints(&task.summary)
-                    || collaboration_context_hints(&task.to_task_spine().current_step)
-            })
-        }
-    }
-}
-
 fn render_pool_context_snapshot(
     scene_policy: ScenePolicy,
     pool: Option<&crate::pool::PoolSession>,
@@ -583,67 +543,9 @@ async fn build_chat_prompt_artifacts(
         .map(|ts| render_task_state_section("Active Task State", "Progress", ts))
         .unwrap_or_default();
 
-    // Only load team-collaboration context when the user is actually asking about it.
-    let koi_pool_context = if scene_policy.include_pool_roster
-        && should_include_main_chat_collaboration_context(
-            scene_policy,
-            query_text,
-            active_task_state.as_ref(),
-        ) {
-        let db = state.db.lock().await;
-        let mut ctx = String::new();
-
-        // List available Koi agents
-        if let Ok(kois) = db.list_kois() {
-            if !kois.is_empty() {
-                ctx.push_str("\n\n## Available Koi Agents\n");
-                for k in &kois {
-                    let role_part = if k.role.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" ({})", k.role)
-                    };
-                    let desc_part = if k.description.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" — {}", k.description.chars().take(80).collect::<String>())
-                    };
-                    ctx.push_str(&format!(
-                        "- **{}**{}{} [status: {}]\n",
-                        k.name, role_part, desc_part, k.status
-                    ));
-                }
-            }
-        }
-
-        // List active/paused project pools
-        if let Ok(pools) = db.list_pool_sessions() {
-            let visible: Vec<_> = pools
-                .iter()
-                .filter(|p| p.status == "active" || p.status == "paused")
-                .collect();
-            if !visible.is_empty() {
-                ctx.push_str("\n\n## Existing Project Pools\n");
-                for p in &visible {
-                    ctx.push_str(&format!(
-                            "- **{}** (id: `{}`, status: {}) — call `pool_org(action=\"list\")` to see details\n",
-                            p.name, p.id, p.status
-                        ));
-                }
-            }
-        }
-
-        ctx
-    } else {
-        String::new()
-    };
-
     let injection_budget = scene_policy.compute_injection_budget(context_window, max_tokens);
     let full_memory_context = budget_truncate(
-        &format!(
-            "{}{}{}",
-            memory_context, task_state_context, koi_pool_context
-        ),
+        &format!("{}{}", memory_context, task_state_context),
         injection_budget,
     );
     let project_instruction_context =
@@ -671,13 +573,12 @@ async fn build_chat_prompt_artifacts(
         system_prompt.push_str(&project_instruction_context);
     }
     tracing::info!(
-        "main_chat_context_slices session={} memory_mode={:?} pool_snapshot_mode={:?} memory_chars={} task_state_chars={} collab_chars={} injected_chars={} project_instruction_chars={} system_prompt_chars={}",
+        "main_chat_context_slices session={} memory_mode={:?} pool_snapshot_mode={:?} memory_chars={} task_state_chars={} injected_chars={} project_instruction_chars={} system_prompt_chars={}",
         session_id,
         scene_policy.memory_slice_mode(),
         scene_policy.pool_snapshot_mode(),
         memory_context.chars().count(),
         task_state_context.chars().count(),
-        koi_pool_context.chars().count(),
         full_memory_context.chars().count(),
         project_instruction_context.chars().count(),
         system_prompt.chars().count(),
@@ -1956,11 +1857,6 @@ fn budget_truncate(content: &str, max_chars: usize) -> String {
     format!("{}\n[... context truncated to fit budget ...]", truncated)
 }
 
-#[cfg(test)]
-fn main_chat_requests_collaboration_context(query_text: &str) -> bool {
-    collaboration_context_hints(query_text)
-}
-
 pub fn build_main_chat_system_prompt(
     memory_context: &str,
     workspace_root: &str,
@@ -1990,7 +1886,7 @@ fn pool_coordinator_scene_guidance() -> &'static str {
 You are coordinating work inside an existing pool.\n\
 - Focus on the current pool's org_spec, todos, blockers, and recent handoffs.\n\
 - Keep responses tightly scoped to project coordination and next actions.\n\
-- Use explicit `pool_chat` handoffs and `pool_org` state transitions. Do not rely on the host runtime to infer who should act next from silence alone.\n\
+- Use explicit `pool_org` assignments, status posts, waits, and state transitions. Do not rely on the host runtime to infer who should act next from silence alone.\n\
 - Do not inject unrelated global project rosters or unrelated user-chat context.\n"
 }
 
@@ -2006,8 +1902,8 @@ You must be truthful, tool-grounded, and conservative about assumptions.\n\
 
 fn collaboration_protocol_prompt() -> &'static str {
     "\n\n## Collaboration Protocol\n\
-- Project coordination must remain inspectable through `pool_org` and `pool_chat`.\n\
-- Todos record board state; chat messages record explicit handoffs and requests.\n\
+- Project coordination must remain inspectable through `pool_org` state, todos, and readable pool messages.\n\
+- Todos record board state; Koi chat messages record explicit handoffs and requests.\n\
 - Do not assume the host runtime will infer the next actor from silence.\n\
 - When another agent or Pisci must act, make that handoff explicit.\n\
 - Structured project-status signals are coordination hints, not automatic workflow transitions.\n"
@@ -2016,12 +1912,13 @@ fn collaboration_protocol_prompt() -> &'static str {
 fn main_chat_overlay_prompt() -> &'static str {
     "\n\n## Main Chat Overlay\n\
 - You are interacting directly with the user.\n\
+- Pool and Koi state is not preloaded from keyword matches. When collaboration may be useful, decide explicitly whether you need live state, then inspect it with `pool_org` and `app_control(action=\"koi_list\")` before acting.\n\
 - Route the task deliberately before acting:\n\
-  - Use `pool_org` + `pool_chat` when the work is complex, spans multiple domains, or has a high quality bar that benefits from explicit implementation/review/QA collaboration.\n\
+  - Use `pool_org` when the work is complex, spans multiple domains, or has a high quality bar that benefits from explicit implementation/review/QA collaboration.\n\
   - For complex multi-role work, inspect existing pools and the current Koi roster first. Reuse a related active/paused pool when one exists; otherwise create a pool. If the current Koi roster is missing a needed specialist role, add the minimum additional Koi required before delegating work.\n\
   - Use `call_fish` for simple, self-contained, result-heavy work where intermediate steps are not important to preserve in your own context (especially web search, file search, scanning, collection, and aggregation).\n\
   - Do the work yourself when it is still simple enough for one agent but the user benefits from your own detailed reasoning, synthesis, or judgment process being preserved in the main chat.\n\
-- When multi-agent collaboration is appropriate, create or reuse a pool and coordinate through `pool_org` + `pool_chat`.\n\
+- When multi-agent collaboration is appropriate, create or reuse a pool and coordinate through `pool_org`.\n\
 - Keep normal user-chat reasoning separate from pool-local coordination details unless the user asks for them.\n"
 }
 
@@ -2249,7 +2146,7 @@ For complex, multi-step tasks, keep a short visible plan using the `plan_todo` t
 - The user would benefit from seeing what is pending, active, or completed
 
 **CRITICAL — When NOT to use `plan_todo`:**
-- **NEVER use `plan_todo` as a substitute for multi-agent collaboration.** If the task involves multiple roles, parallel work streams, or sustained team effort, you MUST use `pool_org` + `pool_chat` to set up a project pool and assign work to Koi agents. Using `plan_todo` to linearly track team tasks yourself defeats the entire purpose of multi-agent collaboration and blocks the user from seeing real progress in the pool/kanban view.
+- **NEVER use `plan_todo` as a substitute for multi-agent collaboration.** If the task involves multiple roles, parallel work streams, or sustained team effort, you MUST use `pool_org` to set up a project pool and assign work to Koi agents. Using `plan_todo` to linearly track team tasks yourself defeats the entire purpose of multi-agent collaboration and blocks the user from seeing real progress in the pool/kanban view.
 - Do NOT use `plan_todo` for tasks that should be delegated to Koi agents — those tasks belong in `pool_org(create_todo)` on the kanban board, not in your local plan.
 
 **How to use it well:**
@@ -2314,13 +2211,13 @@ You have access to specialized Fish sub-agents via the `call_fish` tool. Fish ag
 - Good: `call_fish(action="call", fish_id="file-management", task="扫描 C:\\Projects 下所有包含 requirements.txt 或 pyproject.toml 的目录，列出每个项目名称及其依赖列表")`
 - The Fish will do all the scanning, reading, and aggregation internally, and return only the final summary
 
-## Multi-Agent Collaboration (pool_org + pool_chat)
+## Multi-Agent Collaboration (pool_org)
 
-You are the project manager. When a user asks you to "organize a team", "set up a project", "let multiple agents collaborate", or describes work that requires multiple roles or parallel effort, you MUST immediately use `pool_org` and `pool_chat` — do NOT handle it yourself with `plan_todo`.
+You are the project manager. When a user asks you to "organize a team", "set up a project", "let multiple agents collaborate", or describes work that requires multiple roles or parallel effort, you MUST immediately use `pool_org` — do NOT handle it yourself with `plan_todo`.
 
 **CRITICAL boundary for the main Pisci chat:**
 - In the main user<->Pisci conversation, you must NOT call `call_koi` directly.
-- Main-chat collaboration must happen through `pool_org` + `pool_chat` only.
+- Main-chat collaboration must happen through `pool_org` only. Pisci does not directly send or reply in pool_chat.
 - `call_koi` is a lower-level delegation primitive for Koi/internal runtime flows, not for the main user conversation.
 
 **MANDATORY trigger conditions — you MUST start a project pool when:**
@@ -2345,15 +2242,15 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 - Before assigning work, check whether the existing Koi roster covers the specialist roles the project needs. If not, use `app_control(action="koi_create", ...)` to add only the minimum missing Koi needed for this project. Avoid speculative or duplicate Koi creation.
 - The org_spec should define: project goals, Koi role assignments, collaboration rules, activation conditions, and success metrics
 
-**3. Communicate with Koi agents via @mention — also in the SAME turn**
-- Use plain `@KoiName` / `@all` only for notification. Use `@!KoiName` / `@!all` when you are explicitly delegating concrete work that should create or wake an active task. A live `@!` must be at the start of the message or the start of its own line.
-- Plain notifications do NOT create todos or wake Koi execution; they are chat-only.
-- Example forced delegation: `pool_chat(action="send", pool_id="abc", content="@!Architect Design the database schema for user authentication. When done, tell Coder to continue using a fresh delegated handoff.")`
-- After a Koi completes, task handoffs should also use `@!mention` — for example if Architect writes `@!Coder please implement`, Coder is activated for the delegated work.
-- Use `pool_chat(action="read", pool_id=...)` or `pool_org(action="get_todos", pool_id=...)` to monitor progress.
+**3. Assign Koi through controlled pool_org actions — also in the SAME turn**
+- Use `pool_org(action="assign_koi", pool_id=..., koi_id=..., task=...)` for normal Pisci-to-Koi task assignment.
+- After any `assign_koi`, `resume_todo`, or `replace_todo`, call `pool_org(action="wait_for_koi", pool_id=..., todo_id=..., timeout_secs=...)` before judging whether the Koi responded.
+- Use `pool_org(action="get_messages", pool_id=...)` and `pool_org(action="get_todos", pool_id=...)` to monitor progress.
+- Use `pool_org(action="post_status", pool_id=..., content=...)` when Pisci needs to publish a supervisor note, decision, or waiting explanation.
+- Koi agents may communicate with each other in pool_chat and use `@!mention` for handoffs. Pisci should observe those messages through `pool_org(get_messages)` rather than posting direct pool_chat messages.
 - Koi agents are fully autonomous: they communicate via pool_chat, share results, and collaborate through mentions. Do NOT micromanage their approach.
 - Every Koi may declare a free-form `role` plus a detailed description. Use both fields to understand their specialization before assigning work.
-- **IMPORTANT**: Do NOT use `pool_org(action="assign_koi")` for normal task assignment. Use `@!mention` in pool_chat instead — this is the natural communication channel that all agents share.
+- **IMPORTANT**: For Pisci, `pool_org(action="assign_koi")` is the standard task assignment path. Do not use direct `pool_chat @!mention` from the main chat.
 
 **4. Evolve the org_spec as the project progresses**
 - `pool_org(action="read", pool_id=...)` — review current org_spec
@@ -2366,7 +2263,7 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 
 **CRITICAL — Before creating a new project pool:**
 1. ALWAYS call `pool_org(action="list")` first to see all existing pools.
-2. If there is an active or paused pool that is related to the user's request, DO NOT create a new pool. Instead, add a new task to the existing pool via pool_chat `@!mention` or `pool_org(action="create_todo", pool_id="...")`.
+2. If there is an active or paused pool that is related to the user's request, DO NOT create a new pool. Instead, add a new task to the existing pool via `pool_org(action="assign_koi", pool_id="...")` when a Koi should execute it.
 3. Only create a new pool when the work is genuinely a separate, independent project with no overlap with existing pools.
 4. When in doubt, ask the user: "Should I add this to the existing project '<name>', or start a new project?"
 
@@ -2375,7 +2272,7 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 - Each Koi has full capabilities — do not micromanage their approach
 - The pool chat room and kanban board are observation windows for the user, not control surfaces
 - Prefer fewer, well-defined Koi roles over many fragmented ones
-- All agent communication flows through pool_chat mentions — plain `@mention` for notification, `@!mention` for active handoff/delegation
+- Koi-to-Koi communication flows through pool_chat mentions; Pisci-to-Koi assignment flows through `pool_org(assign_koi)`
 - **Never create a new project for work that belongs to an existing unfinished project**
 
 **5. Task Lifecycle Management**
@@ -2384,7 +2281,7 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 - Monitor blocked tasks with `pool_org(action="get_todos")`. If a task is stuck, unblock or reassign it.
 - Task status flow: `todo` → `in_progress` → `done` / `cancelled` / `blocked`. Only Pisci and the task owner can change status. Other Koi must @pisci to request task changes.
 - When the project is complete, ensure all remaining todos are either completed or cancelled before even considering archive.
-- **Supervisor closeout flow**: When all Koi todos are done, do NOT treat the project as delivered yet. First read pool messages/todos, review the reported branch/worktree results, and explicitly choose one of: (a) call `pool_org(action="merge_branches", pool_id=...)` if the Koi output is acceptable, (b) use `@!mention` / `replace_todo` / `resume_todo` to request rework, or (c) explain why no merge is needed. Koi cannot merge their own branches; Pisci owns integration into the main workspace.
+- **Supervisor closeout flow**: When all Koi todos are done, do NOT treat the project as delivered yet. First read pool messages/todos, review the reported branch/worktree results, and explicitly choose one of: (a) call `pool_org(action="merge_branches", pool_id=...)` if the Koi output is acceptable, (b) use `assign_koi` / `replace_todo` / `resume_todo` to request rework, or (c) explain why no merge is needed. Koi cannot merge their own branches; Pisci owns integration into the main workspace.
 - **Project completion flow**: After supervisor closeout, summarize results for the user and leave the pool active by default. Only archive if the user explicitly asks you to archive/close the project. Do not treat silence, review readiness, or heartbeat scans as archive approval. Only Pisci can archive a project — Koi should @pisci when they believe all work is finished.
 - **Koi cannot archive**: If a Koi's final message says "ready to archive" or "all done", treat it as a signal to review and confirm with the user, not an automatic archive trigger.
 - **No fixed completion role**: A reviewer, architect, tester, or any other Koi can provide input, but none of them alone decides project completion. You decide based on overall pool state and then the user confirms.
@@ -3992,9 +3889,8 @@ mod tests {
     use super::{
         build_context_messages, build_main_chat_system_prompt, collapse_superseded_tool_failures,
         derive_headless_session_source, extract_tool_minimals_from_history,
-        main_chat_requests_collaboration_context, minimal_tool_result_blocks,
-        resolve_headless_scene_kind, HeadlessRunOptions, SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL,
-        SESSION_SOURCE_PISCI_POOL,
+        minimal_tool_result_blocks, resolve_headless_scene_kind, HeadlessRunOptions,
+        SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL, SESSION_SOURCE_PISCI_POOL,
     };
     use crate::commands::config::scene::SceneKind;
     use crate::store::db::ChatMessage;
@@ -4163,20 +4059,11 @@ mod tests {
     }
 
     #[test]
-    fn collaboration_context_only_triggers_for_collab_queries() {
-        assert!(main_chat_requests_collaboration_context(
-            "请查看 pool 里的 koi 任务分配"
-        ));
-        assert!(!main_chat_requests_collaboration_context(
-            "帮我修一下这个普通 bug"
-        ));
-    }
-
-    #[test]
     fn main_prompt_preserves_pisci_routing_heuristics() {
         let prompt = build_main_chat_system_prompt("", "", false);
         for required in [
-            "Use `pool_org` + `pool_chat` when the work is complex, spans multiple domains, or has a high quality bar",
+            "Pool and Koi state is not preloaded from keyword matches",
+            "Use `pool_org` when the work is complex, spans multiple domains, or has a high quality bar",
             "inspect existing pools and the current Koi roster first",
             "If the current Koi roster is missing a needed specialist role, add the minimum additional Koi required before delegating work",
             "Use `call_fish` for simple, self-contained, result-heavy work",

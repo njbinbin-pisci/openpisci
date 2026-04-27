@@ -14,19 +14,31 @@ impl Tool for EmailTool {
     }
 
     fn description(&self) -> &str {
-        "Send and read emails. SMTP/IMAP credentials are taken from Settings — \
-         do NOT pass passwords in tool input. \
-         Actions: smtp_send (to, subject, body[, html_body]), \
-         imap_fetch (folder, max_items), imap_search (query, folder, max_items)."
+        if cfg!(feature = "email-imap") {
+            "Send and read emails. SMTP/IMAP credentials are taken from Settings — \
+             do NOT pass passwords in tool input. \
+             Actions: smtp_send (to, subject, body[, html_body]), \
+             imap_fetch (folder, max_items), imap_search (query, folder, max_items)."
+        } else {
+            "Send emails through SMTP. Credentials are taken from Settings — \
+             do NOT pass passwords in tool input. \
+             Action: smtp_send (to, subject, body[, html_body]). \
+             IMAP read actions are not included in the default build."
+        }
     }
 
     fn input_schema(&self) -> Value {
+        let actions = if cfg!(feature = "email-imap") {
+            vec!["smtp_send", "imap_fetch", "imap_search"]
+        } else {
+            vec!["smtp_send"]
+        };
         json!({
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["smtp_send", "imap_fetch", "imap_search"],
+                    "enum": actions,
                     "description": "Email action to perform"
                 },
                 // smtp_send params
@@ -83,14 +95,20 @@ impl Tool for EmailTool {
         let action = input["action"].as_str().unwrap_or_default();
         match action {
             "smtp_send" => self.smtp_send(&input, ctx).await,
+            #[cfg(feature = "email-imap")]
             "imap_fetch" => self.imap_fetch(&input, ctx).await,
+            #[cfg(feature = "email-imap")]
             "imap_search" => self.imap_search(&input, ctx).await,
+            "imap_fetch" | "imap_search" => Ok(ToolResult::err(
+                "IMAP read actions are not available in the default build.",
+            )),
             _ => Ok(ToolResult::err(format!("Unknown email action: {}", action))),
         }
     }
 }
 
 impl EmailTool {
+    #[cfg(feature = "email-imap")]
     fn header_value(headers: &[mailparse::MailHeader<'_>], key: &str) -> Option<String> {
         headers
             .iter()
@@ -149,6 +167,7 @@ impl EmailTool {
         Ok(ToolResult::ok(format!("Email sent to {}", to)))
     }
 
+    #[cfg(feature = "email-imap")]
     async fn imap_fetch(&self, input: &Value, ctx: &ToolContext) -> Result<ToolResult> {
         let s = ctx.settings.clone();
         let imap_host = if s.imap_host.is_empty() {
@@ -201,6 +220,7 @@ impl EmailTool {
         ))
     }
 
+    #[cfg(feature = "email-imap")]
     async fn imap_search(&self, input: &Value, ctx: &ToolContext) -> Result<ToolResult> {
         let s = ctx.settings.clone();
         let imap_host = if s.imap_host.is_empty() {

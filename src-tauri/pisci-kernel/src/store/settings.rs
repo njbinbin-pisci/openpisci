@@ -570,22 +570,23 @@ pub fn default_heartbeat_prompt() -> String {
      ## 1. 活跃项目巡查\n\
      用 pool_org(action=\"list\") 列出所有项目池。对每个 active 的池：\n\
      - pool_org(action=\"get_todos\", pool_id=...) — 查看任务板状态\n\
-     - pool_chat(action=\"read\", pool_id=...) — 阅读最新消息\n\n\
+     - pool_org(action=\"get_messages\", pool_id=...) — 阅读最新消息\n\n\
      根据任务板状态判断并执行：\n\
+     - 若存在 needs_review 任务：这不是“无需干预”。必须审查消息和产物，然后选择：合并可接受的分支、恢复/替换/重新分配需返工任务，或用 pool_org(action=\"post_status\") 写明为什么需要用户人工判断。\n\
      - 若所有 todo 状态均为 done 或 cancelled（无 todo/in_progress/blocked）：\n\
-       不要自动归档。先在 pool_chat 发送收尾总结，明确说明项目已进入“待用户确认归档”状态；只有用户明确要求归档时，Pisci 才能执行 pool_org(action=\"archive\", pool_id=...)。\n\
+       不要自动归档。先用 pool_org(action=\"post_status\") 发送收尾总结，明确说明项目已进入“待用户确认归档”状态；只有用户明确要求归档时，Pisci 才能执行 pool_org(action=\"archive\", pool_id=...)。\n\
      - 若有 blocked 任务：主动解除阻塞或重新分配。\n\
-     - 若 Koi 在空转讨论无产出：在 pool_chat 推动下一步或分配具体任务。\n\
+     - 若 Koi 在空转讨论无产出：用 pool_org(action=\"post_status\") 推动下一步，或用 pool_org(action=\"assign_koi\") 分配具体任务。\n\
      - 若项目卡住无进展：介入协调。\n\n\
      ⚠️ 重要：在心跳巡查中，**绝对不要创建新的项目池**。\n\
      如果需要追加工作，应在现有项目池中用 pool_org(action=\"create_todo\") 创建任务，\n\
-     或通过 pool_chat @!mention 分配给相关 Koi。\n\
+     或通过 pool_org(action=\"assign_koi\") 分配给相关 Koi。\n\
      只有用户明确要求启动新项目时，才能创建新的项目池。\n\n\
      ## 2. Koi 状态检查\n\
-     查看是否有 Koi 异常（长时间 busy 但无活跃 todo）。如有，在对应 pool_chat 通知或分配新任务。\n\n\
+     查看是否有 Koi 异常（长时间 busy 但无活跃 todo）。如有，用 pool_org(action=\"post_status\") 说明，或分配新任务。\n\n\
      ## 3. 定时任务检查\n\
      用 app_control(action=\"list_scheduled_tasks\") 查看是否有应运行的计划任务，按需处理。\n\n\
-     完成以上全部巡查后，回复 HEARTBEAT_OK。"
+     完成以上全部巡查且已处理所有 needs_review/blocked/停滞状态后，回复 HEARTBEAT_OK。"
         .into()
 }
 

@@ -621,7 +621,18 @@
 /* ── Archived session ── */
 
 .chatpool-session-archived {
+  color: var(--text-muted);
+}
+
+.chatpool-session-archived .chatpool-session-name,
+.chatpool-session-archived .chatpool-session-time,
+.chatpool-session-archived .chatpool-status-dot {
   opacity: 0.5;
+}
+
+.chatpool-session-archived .chatpool-session-menu-wrap,
+.chatpool-session-archived .chatpool-session-menu {
+  opacity: 1;
 }
 
 /* ── Org Spec panel ── */

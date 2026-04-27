@@ -27,6 +27,7 @@ use pisci_core::models::{KoiTodo, PoolMessage, PoolSession};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 // ─── helpers ────────────────────────────────────────────────────────────
 
@@ -624,6 +625,190 @@ pub async fn get_pool_todos(
     }))
 }
 
+pub async fn post_status(
+    store: &PoolStore,
+    sink: &dyn PoolEventSink,
+    caller: &CallerContext<'_>,
+    args: PostStatusArgs,
+) -> anyhow::Result<Value> {
+    if !caller.is_pisci() {
+        anyhow::bail!("Only Pisci may publish supervisor status through post_status.");
+    }
+    let session = resolve_pool(store, caller, &args.pool_id, "post_status").await?;
+    let content = args.content.trim();
+    if content.is_empty() {
+        anyhow::bail!("'content' is required for action 'post_status'");
+    }
+
+    let pool_id = session.id.clone();
+    let body = content.to_string();
+    let event_type = args
+        .event_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("pisci_status")
+        .to_string();
+    let metadata = json!({
+        "event": event_type,
+        "controlled_by": "pool_org.post_status",
+    })
+    .to_string();
+    let event_type_for_insert = event_type.clone();
+    let msg = store
+        .write(move |db| {
+            db.insert_pool_message_ext(
+                &pool_id,
+                "pisci",
+                &body,
+                "status_update",
+                &metadata,
+                None,
+                None,
+                Some(&event_type_for_insert),
+            )
+        })
+        .await?;
+    emit_message(sink, &msg);
+
+    Ok(json!({
+        "pool_id": session.id,
+        "message": msg,
+        "summary": "Pisci status posted through pool_org without mention fan-out.",
+    }))
+}
+
+fn todo_is_wait_terminal(status: &str) -> bool {
+    matches!(status, "done" | "needs_review" | "blocked" | "cancelled")
+}
+
+fn wait_backoff_ms(value: u64, default: u64, min: u64, max: u64) -> u64 {
+    if value == 0 {
+        default
+    } else {
+        value.clamp(min, max)
+    }
+}
+
+async fn wait_snapshot(
+    store: &PoolStore,
+    pool_id: &str,
+    koi_id: Option<&str>,
+    todo_id: Option<&str>,
+) -> anyhow::Result<(Vec<KoiTodo>, Value)> {
+    let pool = pool_id.to_string();
+    let koi = koi_id.map(str::to_string);
+    let todo = todo_id.map(str::to_string);
+    let todos = store
+        .read(move |db| {
+            let all = db.list_koi_todos(None)?;
+            Ok(all
+                .into_iter()
+                .filter(|t| t.pool_session_id.as_deref() == Some(pool.as_str()))
+                .filter(|t| {
+                    koi.as_deref()
+                        .map(|k| t.owner_id == k || t.owner_id.starts_with(k))
+                        .unwrap_or(true)
+                })
+                .filter(|t| {
+                    todo.as_deref()
+                        .map(|id| t.id == id || t.id.starts_with(id))
+                        .unwrap_or(true)
+                })
+                .collect::<Vec<_>>())
+        })
+        .await?;
+
+    let mut counts = serde_json::Map::new();
+    for status in [
+        "todo",
+        "in_progress",
+        "blocked",
+        "needs_review",
+        "done",
+        "cancelled",
+    ] {
+        let count = todos.iter().filter(|t| t.status == status).count();
+        counts.insert(status.to_string(), json!(count));
+    }
+    Ok((todos, Value::Object(counts)))
+}
+
+pub async fn wait_for_koi(
+    store: &PoolStore,
+    caller: &CallerContext<'_>,
+    args: WaitForKoiArgs,
+) -> anyhow::Result<Value> {
+    if !caller.is_pisci() {
+        anyhow::bail!("Only Pisci may wait on Koi execution through wait_for_koi.");
+    }
+    let session = resolve_pool(store, caller, &args.pool_id, "wait_for_koi").await?;
+    let min_wait = Duration::from_secs(args.min_wait_secs.min(300));
+    let timeout = Duration::from_secs(if args.timeout_secs == 0 {
+        60
+    } else {
+        args.timeout_secs.min(1800)
+    });
+    let mut backoff =
+        Duration::from_millis(wait_backoff_ms(args.initial_backoff_ms, 250, 25, 5000));
+    let max_backoff = Duration::from_millis(wait_backoff_ms(args.max_backoff_ms, 2000, 25, 10_000));
+    let started = Instant::now();
+
+    loop {
+        if caller.is_cancelled() {
+            anyhow::bail!("已被用户取消");
+        }
+
+        let elapsed = started.elapsed();
+        let (todos, counts) = wait_snapshot(
+            store,
+            &session.id,
+            args.koi_id.as_deref(),
+            args.todo_id.as_deref(),
+        )
+        .await?;
+        let terminal = todos.iter().any(|t| todo_is_wait_terminal(&t.status));
+        let timed_out = elapsed >= timeout;
+        let waited_minimum = elapsed >= min_wait;
+
+        if (waited_minimum && terminal) || timed_out {
+            let terminal_statuses: Vec<Value> = todos
+                .iter()
+                .filter(|t| todo_is_wait_terminal(&t.status))
+                .map(|t| {
+                    json!({
+                        "todo_id": t.id,
+                        "owner_id": t.owner_id,
+                        "status": t.status,
+                        "title": t.title,
+                    })
+                })
+                .collect();
+            return Ok(json!({
+                "pool_id": session.id,
+                "koi_id": args.koi_id,
+                "todo_id": args.todo_id,
+                "elapsed_ms": elapsed.as_millis() as u64,
+                "timed_out": timed_out && !terminal,
+                "terminal_reached": terminal,
+                "matched_todo_count": todos.len(),
+                "status_counts": counts,
+                "terminal_todos": terminal_statuses,
+                "summary": if terminal {
+                    "Koi work reached a reviewable or terminal state."
+                } else {
+                    "Timed out while waiting for Koi work to reach a terminal state."
+                },
+            }));
+        }
+
+        let remaining = timeout.saturating_sub(elapsed);
+        let sleep_for = backoff.min(remaining).max(Duration::from_millis(1));
+        tokio::time::sleep(sleep_for).await;
+        backoff = (backoff * 2).min(max_backoff);
+    }
+}
+
 // ─── assignment & todos ────────────────────────────────────────────────
 
 pub async fn assign_koi(
@@ -758,8 +943,17 @@ pub async fn assign_koi(
         "koi_name": koi_name,
         "todo": pisci_core::host::TodoSnapshot::from(&todo),
         "mention_message": msg,
+        "next_required_action": {
+            "tool": "pool_org",
+            "action": "wait_for_koi",
+            "pool_id": session.id,
+            "todo_id": todo.id,
+            "koi_id": koi_id,
+            "min_wait_secs": 5,
+            "timeout_secs": args.timeout_secs.max(cfg.default_task_timeout_secs),
+        },
         "summary": format!(
-            "Task posted to pool, kanban todo created, and @!{} has been delegated work.",
+            "Task posted to pool, kanban todo created, and {} has been delegated work. Next, wait with pool_org(action=\"wait_for_koi\") before judging the result.",
             koi_name
         ),
     }))

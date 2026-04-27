@@ -1038,6 +1038,16 @@ pub async fn handle_mention(
         if !synthesised && todo.status == "in_progress" {
             continue;
         }
+        if target.koi.status != "idle" {
+            tracing::info!(
+                target: "pool::coordinator",
+                koi_id = %target.koi.id,
+                status = %target.koi.status,
+                todo_id = %todo.id,
+                "delegated mention queued but not activated because Koi is not idle"
+            );
+            continue;
+        }
 
         let store_cl = store.clone();
         let subagent_cl = subagent.clone();

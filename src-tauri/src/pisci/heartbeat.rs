@@ -183,10 +183,12 @@ pub async fn dispatch_heartbeat(
                         "You are reviewing pool '{}' ({}) during a heartbeat scan.\n\
                          Assessment: {} | Decision: {:?}\n\
                          \n\
-                         Available tools: pool_chat (read/send), pool_org (get_todos, merge_branches, status updates, etc.).\n\
+                         Available coordination tools: pool_org (list, get_todos, get_messages, post_status, resume_todo, assign_koi, merge_branches, etc.).\n\
+                         Do not use pool_chat from heartbeat; Pisci heartbeat communicates through pool_org-controlled actions.\n\
+                         If any todo is needs_review, stable state is not enough: inspect messages/todos and either close it out, route rework, or post a concrete status explaining the blocker.\n\
                          If the pool has a project_dir and branches need merging, consider using merge_branches.\n\
                          During heartbeat, NEVER archive a pool automatically — only the user can explicitly request archiving.\n\
-                         Reply HEARTBEAT_OK only when you're satisfied the project is genuinely complete.",
+                         Reply HEARTBEAT_OK only after the review state has been handled, not merely because there were no new messages.",
                         attention.pool_name,
                         attention.pool_id,
                         attention.assessment.summary,

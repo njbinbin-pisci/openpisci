@@ -162,7 +162,7 @@ fn run_impl() {
     let updater_enabled = std::env::var("PISCI_ENABLE_UPDATER").ok().as_deref() == Some("1");
 
     if !updater_enabled {
-        tracing::warn!(
+        tracing::info!(
             "Updater plugin disabled at startup. Set PISCI_ENABLE_UPDATER=1 only after updater pubkey/endpoints are fully configured."
         );
     }

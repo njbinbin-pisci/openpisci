@@ -15,8 +15,8 @@
 use crate::agent::tool::{Tool, ToolContext, ToolResult};
 use crate::pool::coordinator::CoordinatorConfig;
 use crate::pool::model::{
-    AssignKoiArgs, CallerContext, CreatePoolArgs, CreateTodoArgs, DeleteTodoArgs, ReplaceTodoArgs,
-    UpdateOrgSpecArgs, UpdateTodoStatusArgs,
+    AssignKoiArgs, CallerContext, CreatePoolArgs, CreateTodoArgs, DeleteTodoArgs, PostStatusArgs,
+    ReplaceTodoArgs, UpdateOrgSpecArgs, UpdateTodoStatusArgs, WaitForKoiArgs,
 };
 use crate::pool::{services, PoolStore};
 use async_trait::async_trait;
@@ -97,13 +97,15 @@ impl Tool for PoolOrgTool {
          - 'read': Read the org_spec for an existing pool. \
          - 'update': Update the org_spec for an existing pool. \
          - 'list': List all project pools with their status. \
-         - 'assign_koi': Assign a Koi to a pool and create an initial task. \
+         - 'assign_koi': Pisci's standard way to assign concrete work to a Koi. It creates a todo, posts the controlled assignment, and requests Koi execution. \
          - 'pause': Pause a project (freezes task scheduling). \
          - 'resume': Resume a paused or archived project. \
          - 'archive': Archive a project (read-only). \
          - 'find_related': Search for existing projects by keywords. \
          - 'get_messages': Read recent messages for a project pool (requires pool_id, optional limit). \
          - 'get_todos': Read koi_todos associated with a project pool (requires pool_id). \
+         - 'post_status': Pisci-only controlled status message for supervisor notes, decisions, or waiting explanations. This does not trigger @! mention fan-out. \
+         - 'wait_for_koi': Pisci-only real elapsed-time wait after assigning/resuming/replacing work. Uses host-side sleep/backoff and returns structured status counts. \
          - 'create_todo': Create a new todo for yourself (requires pool_id, title; optional description, priority). Use this when you receive real work via `@!mention` or self-identify a task. \
          - 'claim_todo': Claim an existing unclaimed todo (requires todo_id). Marks it in_progress and assigns it to you. \
          - 'complete_todo': Mark a todo as done (requires todo_id, summary). The summary is a concise description of what was accomplished — it becomes the visible result in the pool chat. Pisci can complete any todo; Koi can only complete their own. Completing a todo does NOT hand off the next step automatically. \
@@ -118,7 +120,7 @@ impl Tool for PoolOrgTool {
          Then use 'find_related' to search for related projects by keywords. \
          Only call 'create' if no existing pool covers the requested work — \
          if an active or paused pool is related, add tasks to it instead of creating a new pool. \
-         After creating a new pool, use 'assign_koi' or pool_chat `@!mention` to kick off work. When todos are done, Pisci must explicitly review and either call 'merge_branches' or request rework; Koi completion alone is not final delivery. \
+         After creating a new pool, Pisci must use 'assign_koi' to kick off work, then call 'wait_for_koi' before judging progress. Pisci does not use pool_chat directly. When todos are done, Pisci must explicitly review and either call 'merge_branches' or request rework; Koi completion alone is not final delivery. \
          During heartbeat/routine checks: NEVER create new pools — only manage existing ones."
     }
 
@@ -128,7 +130,7 @@ impl Tool for PoolOrgTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["create", "read", "update", "list", "assign_koi", "pause", "resume", "archive", "find_related", "get_messages", "get_todos", "create_todo", "claim_todo", "complete_todo", "cancel_todo", "resume_todo", "replace_todo", "delete_todo", "update_todo_status", "merge_branches"],
+                    "enum": ["create", "read", "update", "list", "assign_koi", "pause", "resume", "archive", "find_related", "get_messages", "get_todos", "post_status", "wait_for_koi", "create_todo", "claim_todo", "complete_todo", "cancel_todo", "resume_todo", "replace_todo", "delete_todo", "update_todo_status", "merge_branches"],
                     "description": "Action to perform"
                 },
                 "project_dir": {
@@ -150,6 +152,14 @@ impl Tool for PoolOrgTool {
                 "limit": {
                     "type": "integer",
                     "description": "For get_messages: max number of messages (default 50)"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "For post_status: the supervisor status message to publish"
+                },
+                "event_type": {
+                    "type": "string",
+                    "description": "For post_status: optional structured event label (default pisci_status)"
                 },
                 "name": {
                     "type": "string",
@@ -175,7 +185,19 @@ impl Tool for PoolOrgTool {
                 },
                 "timeout_secs": {
                     "type": "integer",
-                    "description": "For assign_koi/create_todo/replace_todo: optional single-task timeout in seconds. 0 or omitted means inherit from project/Koi/system defaults."
+                    "description": "For assign_koi/create_todo/replace_todo: optional single-task timeout in seconds. For wait_for_koi: max elapsed wait seconds."
+                },
+                "min_wait_secs": {
+                    "type": "integer",
+                    "description": "For wait_for_koi: minimum elapsed seconds to wait before returning a terminal result (default 0)"
+                },
+                "initial_backoff_ms": {
+                    "type": "integer",
+                    "description": "For wait_for_koi: initial polling backoff in milliseconds (default 250)"
+                },
+                "max_backoff_ms": {
+                    "type": "integer",
+                    "description": "For wait_for_koi: maximum polling backoff in milliseconds (default 2000)"
                 },
                 "title": {
                     "type": "string",
@@ -361,6 +383,32 @@ impl Tool for PoolOrgTool {
                     Err(e) => Ok(ToolResult::err(e.to_string())),
                 }
             }
+            "post_status" => {
+                let args = PostStatusArgs {
+                    pool_id: input["pool_id"].as_str().unwrap_or("").to_string(),
+                    content: input["content"].as_str().unwrap_or("").to_string(),
+                    event_type: input["event_type"].as_str().map(str::to_string),
+                };
+                match services::post_status(&self.store, &*self.sink, &caller, args).await {
+                    Ok(v) => Ok(ToolResult::ok(Self::summary_of(&v))),
+                    Err(e) => Ok(ToolResult::err(e.to_string())),
+                }
+            }
+            "wait_for_koi" => {
+                let args = WaitForKoiArgs {
+                    pool_id: input["pool_id"].as_str().unwrap_or("").to_string(),
+                    koi_id: input["koi_id"].as_str().map(str::to_string),
+                    todo_id: input["todo_id"].as_str().map(str::to_string),
+                    min_wait_secs: input["min_wait_secs"].as_u64().unwrap_or(0),
+                    timeout_secs: input["timeout_secs"].as_u64().unwrap_or(60),
+                    initial_backoff_ms: input["initial_backoff_ms"].as_u64().unwrap_or(250),
+                    max_backoff_ms: input["max_backoff_ms"].as_u64().unwrap_or(2000),
+                };
+                match services::wait_for_koi(&self.store, &caller, args).await {
+                    Ok(v) => Ok(ToolResult::ok(render_wait_for_koi(&v))),
+                    Err(e) => Ok(ToolResult::err(e.to_string())),
+                }
+            }
             "create_todo" => {
                 let args = CreateTodoArgs {
                     pool_id: input["pool_id"].as_str().unwrap_or("").to_string(),
@@ -498,7 +546,7 @@ impl Tool for PoolOrgTool {
                 }
             }
             _ => Ok(ToolResult::err(format!(
-                "Unknown action '{}'. Use: create, read, update, list, assign_koi, pause, resume, archive, find_related, get_messages, get_todos, create_todo, claim_todo, complete_todo, cancel_todo, resume_todo, replace_todo, delete_todo, update_todo_status, merge_branches",
+                "Unknown action '{}'. Use: create, read, update, list, assign_koi, pause, resume, archive, find_related, get_messages, get_todos, post_status, wait_for_koi, create_todo, claim_todo, complete_todo, cancel_todo, resume_todo, replace_todo, delete_todo, update_todo_status, merge_branches",
                 action
             ))),
         }
@@ -735,5 +783,31 @@ fn render_todos(v: &Value) -> String {
         } else {
             lines.join("\n")
         }
+    )
+}
+
+fn render_wait_for_koi(v: &Value) -> String {
+    let elapsed_ms = v.get("elapsed_ms").and_then(|x| x.as_u64()).unwrap_or(0);
+    let timed_out = v
+        .get("timed_out")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    let terminal = v
+        .get("terminal_reached")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    let matched = v
+        .get("matched_todo_count")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let counts = v
+        .get("status_counts")
+        .map(|x| x.to_string())
+        .unwrap_or_else(|| "{}".to_string());
+    let summary = v.get("summary").and_then(|x| x.as_str()).unwrap_or("");
+
+    format!(
+        "Waited {}ms for Koi work. terminal_reached={}, timed_out={}, matched_todos={}, status_counts={}. {}",
+        elapsed_ms, terminal, timed_out, matched, counts, summary
     )
 }

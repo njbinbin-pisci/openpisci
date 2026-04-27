@@ -95,6 +95,11 @@ impl Tool for PoolChatTool {
 
         match action {
             "send" => {
+                if caller.is_pisci() {
+                    return Ok(ToolResult::err(
+                        "Pisci cannot send pool_chat messages directly. Use pool_org actions such as assign_koi, post_status, or get_messages instead.",
+                    ));
+                }
                 let content = input["content"].as_str().unwrap_or("");
                 if content.trim().is_empty() {
                     return Ok(ToolResult::err("'content' is required for action 'send'"));
@@ -123,6 +128,11 @@ impl Tool for PoolChatTool {
                 }
             }
             "reply" => {
+                if caller.is_pisci() {
+                    return Ok(ToolResult::err(
+                        "Pisci cannot reply in pool_chat directly. Use pool_org actions such as post_status or get_messages instead.",
+                    ));
+                }
                 let content = input["content"].as_str().unwrap_or("");
                 if content.trim().is_empty() {
                     return Ok(ToolResult::err("'content' is required for action 'reply'"));

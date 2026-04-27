@@ -1127,6 +1127,12 @@ impl Database {
     }
 
     pub fn delete_session(&self, id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM agent_checkpoints WHERE session_id = ?1",
+            params![id],
+        )?;
+        self.conn
+            .execute("DELETE FROM audit_log WHERE session_id = ?1", params![id])?;
         self.conn
             .execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
         Ok(())
@@ -3359,6 +3365,10 @@ impl Database {
     }
 
     pub fn delete_pool_session(&self, id: &str) -> Result<()> {
+        let internal_session_ids = self.internal_session_ids_for_pool(id)?;
+        for session_id in &internal_session_ids {
+            self.delete_session(session_id)?;
+        }
         self.conn.execute(
             "DELETE FROM koi_todos WHERE pool_session_id = ?1",
             params![id],
@@ -3370,6 +3380,35 @@ impl Database {
         self.conn
             .execute("DELETE FROM pool_sessions WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    fn internal_session_ids_for_pool(&self, pool_id: &str) -> Result<Vec<String>> {
+        let suffix = format!("_{}", pool_id);
+        let pool_pisci_id = format!("pisci_pool_{}", pool_id);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, COALESCE(source, 'chat') FROM sessions
+             WHERE id = ?1
+                OR source IN ('pisci_pool', 'pisci_heartbeat_pool')
+                OR id LIKE 'koi\\_%' ESCAPE '\\'",
+        )?;
+        let rows = stmt.query_map(params![pool_pisci_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut ids = Vec::new();
+        for row in rows {
+            let (session_id, source) = row?;
+            let linked_by_id = session_id == pool_pisci_id
+                || (session_id.ends_with(&suffix)
+                    && (session_id.starts_with("koi_runtime_")
+                        || session_id.starts_with("koi_notify_")
+                        || session_id.starts_with("koi_")));
+            let linked_by_source = matches!(source.as_str(), "pisci_pool" | "pisci_heartbeat_pool")
+                && session_id.ends_with(&suffix);
+            if linked_by_id || linked_by_source {
+                ids.push(session_id);
+            }
+        }
+        Ok(ids)
     }
 
     /// Persist (or clear) the `binding_key` of the IM conversation
@@ -3793,5 +3832,73 @@ mod tests {
             .expect("binding by session")
             .expect("binding exists");
         assert_eq!(by_session.binding_key, "wechat::dm:wx-user-1");
+    }
+
+    #[test]
+    fn delete_pool_session_removes_linked_internal_koi_sessions() {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let pool = db
+            .create_pool_session("cleanup pool", 0)
+            .expect("create pool");
+        let other_pool = db
+            .create_pool_session("other pool", 0)
+            .expect("create other pool");
+
+        let linked = [
+            format!("pisci_pool_{}", pool.id),
+            format!("koi_runtime_alpha_{}", pool.id),
+            format!("koi_notify_beta_{}", pool.id),
+            format!("koi_gamma_{}", pool.id),
+        ];
+        for session_id in &linked {
+            db.ensure_fixed_session(session_id, session_id, "pisci_pool")
+                .expect("internal session");
+            db.append_message(session_id, "assistant", "large hidden history")
+                .expect("message");
+            db.append_audit(session_id, "pool_org", "test", None, None, false)
+                .expect("audit");
+            db.upsert_checkpoint(session_id, 1, "[]")
+                .expect("checkpoint");
+        }
+
+        let unrelated = format!("koi_runtime_alpha_{}", other_pool.id);
+        db.ensure_fixed_session(&unrelated, "unrelated", "pisci_pool")
+            .expect("unrelated session");
+
+        db.delete_pool_session(&pool.id).expect("delete pool");
+
+        for session_id in &linked {
+            assert!(
+                db.get_session(session_id)
+                    .expect("query linked session")
+                    .is_none(),
+                "{session_id} should be removed with its pool"
+            );
+            assert!(
+                db.get_messages(session_id, 10, 0)
+                    .expect("query linked messages")
+                    .is_empty(),
+                "{session_id} messages should cascade through sessions"
+            );
+            assert!(
+                db.get_audit_log(Some(session_id), None, 10, 0)
+                    .expect("query linked audit")
+                    .is_empty(),
+                "{session_id} audit rows should be removed"
+            );
+            assert!(
+                db.load_checkpoint(session_id)
+                    .expect("query linked checkpoint")
+                    .is_none(),
+                "{session_id} checkpoints should be removed"
+            );
+        }
+
+        assert!(
+            db.get_session(&unrelated)
+                .expect("query unrelated")
+                .is_some(),
+            "internal sessions for other pools must remain"
+        );
     }
 }

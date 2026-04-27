@@ -40,6 +40,7 @@ pisci-cli = { path = "pisci-cli" }
 [package]
 name = "pisci-desktop"
 version = "0.7.4"
+autobins = false
 default-run = "pisci-desktop"
 description = "OpenPisci 锟?Open-source Windows AI Agent Desktop"
 authors = ["Pisci Team"]
@@ -47,9 +48,22 @@ license = "Apache-2.0"
 edition = "2021"
 rust-version = "1.77.2"
 
+[features]
+default = []
+bench-compact-cli = []
+
 [lib]
 name = "pisci_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "pisci-desktop"
+path = "src/main.rs"
+
+[[bin]]
+name = "pisci_compact_one"
+path = "src/bin/pisci_compact_one.rs"
+required-features = ["bench-compact-cli"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -118,10 +132,6 @@ chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-feature
 # ZIP extraction for Chrome for Testing downloads
 zip = { version = "2", default-features = false, features = ["deflate"] }
 scraper = "0.25.0"
-lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "hostname", "pool", "tokio1-rustls-tls"] }
-imap = "2.4.1"
-native-tls = "0.2"
-mailparse = "0.15"
 
 # SSH client 锟?use ring backend to avoid NASM dependency on Windows
 russh = { version = "0.57", default-features = false, features = ["ring"] }

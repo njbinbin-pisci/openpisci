@@ -2073,7 +2073,7 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
         },
         BuiltinToolInfo {
             name: "email".into(),
-            description: "Send and read email.".into(),
+            description: "Send email through SMTP.".into(),
             icon: "📧".into(),
             windows_only: false,
         },

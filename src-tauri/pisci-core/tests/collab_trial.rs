@@ -278,7 +278,7 @@ fn collab_trial_build_pool_heartbeat_message_keeps_no_archive_instruction() {
             decision: ProjectDecision::ReadyForPisciReview,
             active_todo_count: 0,
             blocked_todo_count: 0,
-            needs_review_count: 0,
+            needs_review_count: 1,
             task_failed_count: 0,
             follow_up_signal_count: 0,
             ready_signal_count: 1,
@@ -289,8 +289,11 @@ fn collab_trial_build_pool_heartbeat_message_keeps_no_archive_instruction() {
     };
 
     let message = build_pool_heartbeat_message("Base prompt", &attention);
-    assert!(message.contains("Do NOT archive the project during heartbeat"));
+    assert!(message.contains("do NOT archive the project automatically"));
     assert!(message.contains("HEARTBEAT_OK"));
+    assert!(message.contains("HEARTBEAT_OK is forbidden as the only action"));
+    assert!(message.contains("pool_org(action=\"get_messages\")"));
+    assert!(message.contains("post_status"));
 }
 
 #[test]
@@ -364,7 +367,8 @@ fn collab_trial_heartbeat_profile_keeps_only_coordination_tools() {
     let policy = ScenePolicy::for_kind(SceneKind::HeartbeatSupervisor);
     let allowlist = policy.tool_allowlist().expect("heartbeat allowlist");
     assert!(allowlist.contains(&"pool_org"));
-    assert!(allowlist.contains(&"pool_chat"));
+    assert!(allowlist.contains(&"app_control"));
+    assert!(!allowlist.contains(&"pool_chat"));
     assert!(!allowlist.contains(&"call_koi"));
     assert!(!allowlist.contains(&"plan_todo"));
 }

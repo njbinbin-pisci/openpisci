@@ -4,6 +4,10 @@ version = "0.7.4"
 edition = "2021"
 description = "OpenPisci agent runtime kernel — OS/UI-neutral agent loop, LLM, storage, memory and platform-neutral tools."
 
+[features]
+default = []
+email-imap = ["dep:imap", "dep:native-tls", "dep:mailparse"]
+
 [dependencies]
 pisci-core = { workspace = true }
 chrono = { workspace = true }
@@ -43,9 +47,9 @@ urlencoding = "2"
 # Neutral tools.
 scraper = "0.25.0"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "hostname", "pool", "tokio1-rustls-tls"] }
-imap = "2.4.1"
-native-tls = "0.2"
-mailparse = "0.15"
+imap = { version = "2.4.1", optional = true }
+native-tls = { version = "0.2", optional = true }
+mailparse = { version = "0.15", optional = true }
 russh = { version = "0.57", default-features = false, features = ["ring"] }
 lopdf = { version = "0.34", features = ["nom_parser"] }
 pdf-extract = "0.7"

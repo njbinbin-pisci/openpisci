@@ -78,6 +78,24 @@ pub struct AssignKoiArgs {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct PostStatusArgs {
+    pub pool_id: String,
+    pub content: String,
+    pub event_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct WaitForKoiArgs {
+    pub pool_id: String,
+    pub koi_id: Option<String>,
+    pub todo_id: Option<String>,
+    pub min_wait_secs: u64,
+    pub timeout_secs: u64,
+    pub initial_backoff_ms: u64,
+    pub max_backoff_ms: u64,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct CreateTodoArgs {
     pub pool_id: String,
     pub title: String,

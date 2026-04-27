@@ -66,7 +66,7 @@ pub async fn list_builtin_tools(
         },
         BuiltinToolInfo {
             name: "email".into(),
-            description: "通过 SMTP/IMAP 发送和读取邮件（需在设置中配置）".into(),
+            description: "通过 SMTP 发送邮件（需在设置中配置）".into(),
             icon: "📧".into(),
             windows_only: false,
         },

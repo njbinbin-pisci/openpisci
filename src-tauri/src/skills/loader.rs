@@ -385,7 +385,7 @@ impl SkillLoader {
                 "system-admin",
                 "System Administration",
                 "Manage Windows system settings and processes",
-                vec!["powershell", "wmi_tool", "shell"],
+                vec!["powershell_query", "wmi", "shell"],
                 vec![
                     "system",
                     "windows",
@@ -406,7 +406,7 @@ impl SkillLoader {
                     "Windows管理",
                     "系统优化",
                 ],
-                "Use PowerShell and WMI to manage the Windows system.\n\n\
+                "Use `powershell_query` and `wmi` to manage the Windows system.\n\n\
                  ## Capabilities\n\
                  - Query system information\n\
                  - Manage services and processes\n\
@@ -602,15 +602,35 @@ impl SkillLoader {
             name,
             "file_read"
                 | "file_write"
+                | "file_edit"
+                | "file_diff"
+                | "file_search"
+                | "file_list"
+                | "code_run"
+                | "process_control"
                 | "shell"
                 | "web_search"
                 | "powershell_query"
-                | "wmi_tool"
+                | "memory_store"
+                | "plan_todo"
+                | "vision_context"
+                | "call_fish"
+                | "call_koi"
+                | "pool_org"
+                | "pool_chat"
+                | "app_control"
+                | "im_send_message"
+                | "skill_list"
+                | "skill_search"
+                | "ssh"
+                | "pdf"
+                | "wmi"
                 | "office"
                 | "browser"
                 | "uia"
                 | "screen_capture"
                 | "com"
+                | "com_invoke"
                 | "email"
         )
     }
