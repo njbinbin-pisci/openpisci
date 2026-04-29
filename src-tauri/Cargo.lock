@@ -4299,7 +4299,7 @@ dependencies = [
 
 [[package]]
 name = "pisci-cli"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4315,7 +4315,7 @@ dependencies = [
 
 [[package]]
 name = "pisci-core"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4326,7 +4326,7 @@ dependencies = [
 
 [[package]]
 name = "pisci-desktop"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "aes",
  "anyhow",
@@ -4384,7 +4384,7 @@ dependencies = [
 
 [[package]]
 name = "pisci-kernel"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "anyhow",
  "async-trait",

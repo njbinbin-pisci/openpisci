@@ -39,10 +39,10 @@ pisci-cli = { path = "pisci-cli" }
 
 [package]
 name = "pisci-desktop"
-version = "0.7.5"
+version = "0.7.6"
 autobins = false
 default-run = "pisci-desktop"
-description = "OpenPisci 锟?Open-source Windows AI Agent Desktop"
+description = "OpenPisci - Open-source Windows AI Agent Desktop"
 authors = ["Pisci Team"]
 license = "Apache-2.0"
 edition = "2021"
@@ -78,7 +78,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["full"] }
 futures = "0.3"
 
-# HTTP client (LLM API calls) 锟?use rustls to avoid openssl dependency
+# HTTP client (LLM API calls) - use rustls to avoid openssl dependency
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "multipart", "gzip", "deflate", "brotli"], default-features = false }
 
 # WebSocket client for Feishu long connection
@@ -90,7 +90,7 @@ serde_json = { workspace = true }
 serde_yaml = "0.9"
 toml = "0.8"
 
-# SQLite (bundled 锟?no external dll needed)
+# SQLite (bundled - no external dll needed)
 rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Cron scheduling
@@ -124,7 +124,7 @@ chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-feature
 zip = { version = "2", default-features = false, features = ["deflate"] }
 scraper = "0.25.0"
 
-# SSH client 锟?use ring backend to avoid NASM dependency on Windows
+# SSH client - use ring backend to avoid NASM dependency on Windows
 russh = { version = "0.57", default-features = false, features = ["ring"] }
 
 # PDF read/write

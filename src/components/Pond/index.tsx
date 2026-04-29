@@ -6,7 +6,7 @@ import Board from "./Board";
 import PisciInbox from "./PisciInbox";
 import "./Pond.css";
 
-type PondSubTab = "kois" | "pool" | "board" | "inbox";
+type PondSubTab = "kois" | "pool" | "board" | "inbox" | "koiObserver";
 
 export default function Pond() {
   const { t } = useTranslation();
@@ -17,6 +17,7 @@ export default function Pond() {
     { id: "pool", label: t("pond.tabPool"), icon: "💬" },
     { id: "board", label: t("pond.tabBoard"), icon: "📋" },
     { id: "inbox", label: t("pond.tabInbox"), icon: "📬" },
+    { id: "koiObserver", label: t("pond.tabKoiObserver"), icon: "🔎" },
   ];
 
   return (
@@ -40,7 +41,8 @@ export default function Pond() {
         {subTab === "kois" && <KoiManager />}
         {subTab === "pool" && <ChatPool />}
         {subTab === "board" && <Board />}
-        {subTab === "inbox" && <PisciInbox />}
+        {subTab === "inbox" && <PisciInbox mode="coordination" />}
+        {subTab === "koiObserver" && <PisciInbox mode="koiObserver" />}
       </div>
     </div>
   );

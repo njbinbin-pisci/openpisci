@@ -10,6 +10,20 @@ import "./PisciInbox.css";
 
 const INBOX_INITIAL_SIZE = 200;
 const INBOX_LAZY_STEP = 10;
+type InboxMode = "coordination" | "koiObserver";
+
+type PisciInboxProps = {
+  mode?: InboxMode;
+};
+
+function isKoiObserverSession(session: Session): boolean {
+  const id = session.id ?? "";
+  return id.startsWith("koi_runtime_") || id.startsWith("koi_notify_");
+}
+
+function isCoordinationSession(session: Session): boolean {
+  return isInternalSession(session) && !isKoiObserverSession(session);
+}
 
 function InboxMessageContent({ content }: { content: string }) {
   const processed = linkifyPaths(content);
@@ -53,7 +67,34 @@ function formatTime(value: string): string {
   }
 }
 
-function sessionKindLabel(t: (key: string) => string, session: Session): string {
+function inboxMessageRoleLabel(
+  t: (key: string) => string,
+  mode: InboxMode,
+  role: ChatMessage["role"],
+): string {
+  if (mode === "koiObserver") {
+    switch (role) {
+      case "assistant":
+        return t("pond.observerRoleAssistant");
+      case "user":
+        return t("pond.observerRoleUser");
+      case "system":
+        return t("pond.observerRoleSystem");
+      case "tool":
+        return t("pond.observerRoleTool");
+      default:
+        return role;
+    }
+  }
+  return role === "assistant" ? t("chat.pisci") : role;
+}
+
+function sessionKindLabel(t: (key: string) => string, mode: InboxMode, session: Session): string {
+  if (mode === "koiObserver") {
+    if (session.id.startsWith("koi_runtime_")) return t("pond.observerRuntime");
+    if (session.id.startsWith("koi_notify_")) return t("pond.observerNotify");
+    return t("pond.observerInternal");
+  }
   if (
     session.id === "heartbeat"
     || session.id === "pisci_inbox_global"
@@ -65,7 +106,7 @@ function sessionKindLabel(t: (key: string) => string, session: Session): string 
   return t("pond.inboxProject");
 }
 
-export default function PisciInbox() {
+export default function PisciInbox({ mode = "coordination" }: PisciInboxProps) {
   const { t } = useTranslation();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -81,16 +122,21 @@ export default function PisciInbox() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialLoadDoneRef = useRef<string | null>(null);
 
+  const sessionFilter = useCallback(
+    (session: Session) => (mode === "koiObserver" ? isKoiObserverSession(session) : isCoordinationSession(session)),
+    [mode],
+  );
+
   const internalSessions = useMemo(
-    () => sessions.filter(isInternalSession),
-    [sessions],
+    () => sessions.filter(sessionFilter),
+    [sessions, sessionFilter],
   );
 
   const loadSessions = useCallback(async () => {
     setLoadingSessions(true);
     try {
       const result = await sessionsApi.list(200, 0);
-      const internal = result.sessions.filter(isInternalSession);
+      const internal = result.sessions.filter(sessionFilter);
       setSessions(result.sessions);
       setActiveSessionId((prev) => {
         if (prev && internal.some((session) => session.id === prev)) return prev;
@@ -99,7 +145,7 @@ export default function PisciInbox() {
     } finally {
       setLoadingSessions(false);
     }
-  }, []);
+  }, [sessionFilter]);
 
   const loadMessages = useCallback(async (sessionId: string) => {
     setLoadingMessages(true);
@@ -191,7 +237,7 @@ export default function PisciInbox() {
       await sessionsApi.delete(confirmTarget.id);
       setSessions((prev) => prev.filter((s) => s.id !== confirmTarget.id));
       if (activeSessionId === confirmTarget.id) {
-        const remaining = sessions.filter((s) => s.id !== confirmTarget.id && isInternalSession(s));
+        const remaining = sessions.filter((s) => s.id !== confirmTarget.id && sessionFilter(s));
         setActiveSessionId(remaining.length > 0 ? remaining[0].id : null);
         setMessages([]);
       }
@@ -201,7 +247,29 @@ export default function PisciInbox() {
     } finally {
       setDeletingId(null);
     }
-  }, [confirmTarget, activeSessionId, sessions]);
+  }, [confirmTarget, activeSessionId, sessionFilter, sessions]);
+
+  const copy = mode === "koiObserver"
+    ? {
+        title: t("pond.observerTitle"),
+        subtitle: t("pond.observerDesc"),
+        empty: t("pond.observerEmpty"),
+        selectHint: t("pond.observerSelectHint"),
+        readonly: t("pond.observerReadonly"),
+        noMessages: t("pond.observerNoMessages"),
+        deleteTitle: t("pond.observerDeleteTitle"),
+        deleteMessage: t("pond.observerDeleteMessage", { name: confirmTarget?.title ?? "" }),
+      }
+    : {
+        title: t("pond.inboxTitle"),
+        subtitle: t("pond.inboxDesc"),
+        empty: t("pond.inboxEmpty"),
+        selectHint: t("pond.inboxSelectHint"),
+        readonly: t("pond.inboxReadonly"),
+        noMessages: t("pond.inboxNoMessages"),
+        deleteTitle: t("pond.inboxDeleteTitle"),
+        deleteMessage: t("pond.inboxDeleteMessage", { name: confirmTarget?.title ?? "" }),
+      };
 
   const activeSession = internalSessions.find((session) => session.id === activeSessionId) ?? null;
 
@@ -210,8 +278,8 @@ export default function PisciInbox() {
       <div className="pisci-inbox-sidebar">
         <div className="pisci-inbox-sidebar-header">
           <div>
-            <div className="pisci-inbox-title">{t("pond.inboxTitle")}</div>
-            <div className="pisci-inbox-subtitle">{t("pond.inboxDesc")}</div>
+            <div className="pisci-inbox-title">{copy.title}</div>
+            <div className="pisci-inbox-subtitle">{copy.subtitle}</div>
           </div>
           <button className="pisci-inbox-refresh" onClick={() => loadSessions().catch(console.error)}>
             {t("pond.inboxRefresh")}
@@ -223,7 +291,7 @@ export default function PisciInbox() {
             <div className="pisci-inbox-empty">{t("common.loading")}</div>
           )}
           {!loadingSessions && internalSessions.length === 0 && (
-            <div className="pisci-inbox-empty">{t("pond.inboxEmpty")}</div>
+            <div className="pisci-inbox-empty">{copy.empty}</div>
           )}
           {internalSessions.map((session) => (
             <div
@@ -235,7 +303,7 @@ export default function PisciInbox() {
               <div className="pisci-inbox-session-top">
                 <span className="pisci-inbox-session-name">{session.title || session.id}</span>
                 <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span className="pisci-inbox-session-kind">{sessionKindLabel(t, session)}</span>
+                  <span className="pisci-inbox-session-kind">{sessionKindLabel(t, mode, session)}</span>
                   <button
                     title={t("common.delete")}
                     disabled={deletingId === session.id}
@@ -259,7 +327,7 @@ export default function PisciInbox() {
         {!activeSession && (
           <div className="pisci-inbox-main-empty">
             <div className="pisci-inbox-main-empty-icon">📬</div>
-            <div>{t("pond.inboxSelectHint")}</div>
+            <div>{copy.selectHint}</div>
           </div>
         )}
 
@@ -269,7 +337,7 @@ export default function PisciInbox() {
               <div>
                 <div className="pisci-inbox-main-title">{activeSession.title || activeSession.id}</div>
                 <div className="pisci-inbox-main-meta">
-                  {sessionKindLabel(t, activeSession)} · {t("pond.inboxReadonly")}
+                  {sessionKindLabel(t, mode, activeSession)} · {copy.readonly}
                 </div>
               </div>
               <button
@@ -289,7 +357,7 @@ export default function PisciInbox() {
                 <div className="pisci-inbox-empty">{t("common.loading")}</div>
               )}
               {!loadingMessages && messages.length === 0 && (
-                <div className="pisci-inbox-empty">{t("pond.inboxNoMessages")}</div>
+                <div className="pisci-inbox-empty">{copy.noMessages}</div>
               )}
               {messages.length > 0 && (
                 <div className="pisci-inbox-load-more">
@@ -304,7 +372,7 @@ export default function PisciInbox() {
                 <div key={message.id} className={`pisci-inbox-message pisci-inbox-message--${message.role}`}>
                   <div className="pisci-inbox-message-header">
                     <span className="pisci-inbox-message-role">
-                      {message.role === "assistant" ? "Pisci" : message.role}
+                      {inboxMessageRoleLabel(t, mode, message.role)}
                     </span>
                     <span className="pisci-inbox-message-time">{formatTime(message.created_at)}</span>
                   </div>
@@ -319,11 +387,11 @@ export default function PisciInbox() {
 
       <ConfirmDialog
         open={!!confirmTarget}
-        title={confirmTarget?.blocked ? t("pond.inboxDeleteActiveTitle") : t("pond.inboxDeleteTitle")}
+        title={confirmTarget?.blocked ? t("pond.inboxDeleteActiveTitle") : copy.deleteTitle}
         message={
           confirmTarget?.blocked
             ? t("pond.inboxDeleteActiveMessage", { name: confirmTarget.title })
-            : t("pond.inboxDeleteMessage", { name: confirmTarget?.title ?? "" })
+            : copy.deleteMessage
         }
         confirmLabel={t("common.delete")}
         variant="danger"
