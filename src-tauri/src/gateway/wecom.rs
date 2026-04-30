@@ -368,12 +368,43 @@ fn parse_text_callback(frame: &Value) -> Option<InboundMessage> {
 
     let req_id = frame["headers"]["req_id"].as_str()?.trim();
     let body = &frame["body"];
-    if body["msgtype"].as_str()? != "text" {
-        return None;
-    }
+    let msgtype = body["msgtype"].as_str()?;
 
     let sender = body["from"]["userid"].as_str()?.trim().to_string();
-    let content = body["text"]["content"].as_str()?.trim().to_string();
+    let (content, media) = match msgtype {
+        "text" => (
+            body["text"]["content"].as_str()?.trim().to_string(),
+            None,
+        ),
+        "voice" | "audio" => {
+            let media_id = body[msgtype]["media_id"]
+                .as_str()
+                .or_else(|| body[msgtype]["file_id"].as_str())
+                .or_else(|| body[msgtype]["url"].as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let content = if media_id.is_empty() {
+                "[语音消息]".to_string()
+            } else {
+                format!("[语音消息: media_id={}]", media_id)
+            };
+            (
+                content,
+                Some(super::MediaAttachment {
+                    media_type: "audio/unknown".to_string(),
+                    url: if media_id.is_empty() {
+                        None
+                    } else {
+                        Some(format!("wecom://voice/{}", media_id))
+                    },
+                    data: None,
+                    filename: Some(format!("wecom_voice_{}.bin", req_id)),
+                }),
+            )
+        }
+        other => (format!("[企业微信非文本消息: {}]", other), None),
+    };
     if sender.is_empty() || content.is_empty() || req_id.is_empty() {
         return None;
     }
@@ -424,7 +455,7 @@ fn parse_text_callback(frame: &Value) -> Option<InboundMessage> {
         is_group,
         group_name: None,
         timestamp,
-        media: None,
+        media,
         routing_state: Some(json!({
             "req_id": req_id,
             "chatid": chatid,
@@ -505,6 +536,34 @@ mod tests {
         assert_eq!(msg.reply_target, "group:chat-1");
         assert_eq!(msg.conversation_key.as_deref(), Some("group:chat-1"));
         assert_eq!(msg.routing_state.unwrap()["chat_type"], 2);
+    }
+
+    #[test]
+    fn preserves_voice_callback_as_inbound_message() {
+        let frame = json!({
+            "cmd": "aibot_msg_callback",
+            "headers": {
+                "req_id": "req-voice",
+            },
+            "body": {
+                "msgid": "msg-voice",
+                "create_time": 1700000002u64,
+                "chattype": "single",
+                "from": {
+                    "userid": "zhangsan",
+                },
+                "msgtype": "voice",
+                "voice": {
+                    "media_id": "media-123",
+                }
+            }
+        });
+
+        let msg = parse_text_callback(&frame).expect("voice callback");
+        assert_eq!(msg.content, "[语音消息: media_id=media-123]");
+        let media = msg.media.as_ref().expect("voice media placeholder");
+        assert_eq!(media.media_type, "audio/unknown");
+        assert_eq!(media.url.as_deref(), Some("wecom://voice/media-123"));
     }
 
     #[test]

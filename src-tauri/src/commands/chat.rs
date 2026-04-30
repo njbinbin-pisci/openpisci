@@ -23,6 +23,7 @@ use pisci_kernel::policy::PolicyGate;
 use pisci_kernel::project_context::render_project_instruction_context;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -1377,7 +1378,9 @@ pub async fn run_agent_headless(
     // vision_capable: user override OR auto-detection by provider/model name
     let vision_capable = vision_setting || model_supports_vision(&provider, &model);
 
-    // Build the effective user message text, handling inbound media
+    // Build the effective user message text, handling inbound media.
+    // Non-image media is intentionally passed through as a local file/metadata prompt
+    // so the agent can decide how to transcribe or inspect it with available tools.
     let effective_user_message = if let Some(ref media) = inbound_media {
         if let Some(ref data) = media.data {
             if media.media_type.starts_with("image/") && !vision_capable {
@@ -1402,10 +1405,67 @@ pub async fn run_agent_headless(
                     user_message.to_string()
                 }
             } else {
-                user_message.to_string()
+                let default_filename = if media.media_type.starts_with("audio/") {
+                    "im_audio.bin"
+                } else {
+                    "im_attachment.bin"
+                };
+                let filename = media
+                    .filename
+                    .as_deref()
+                    .and_then(|name| Path::new(name).file_name())
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(default_filename);
+                let tmp_path = std::env::temp_dir().join(filename);
+                if let Ok(()) = std::fs::write(&tmp_path, data) {
+                    let path_str = tmp_path.to_string_lossy();
+                    let prefix = if media.media_type.starts_with("audio/") {
+                        "用户通过 IM 发送了一条语音消息"
+                    } else {
+                        "用户通过 IM 发送了一个媒体附件"
+                    };
+                    if user_message.trim().is_empty()
+                        || user_message == "[语音消息]"
+                        || user_message == "[音频消息]"
+                    {
+                        format!(
+                            "{}，附件已保存到本地：{}\n媒体类型：{}\n请根据可用工具自行尝试转写、读取或处理该文件。",
+                            prefix, path_str, media.media_type
+                        )
+                    } else {
+                        format!(
+                            "{}\n[{}，附件已保存到：{}，媒体类型：{}。请根据可用工具自行处理。]",
+                            user_message, prefix, path_str, media.media_type
+                        )
+                    }
+                } else {
+                    format!(
+                        "{}\n[IM 媒体附件：type={} filename={:?} url={:?}。附件未能保存到本地，请根据这些线索处理。]",
+                        user_message, media.media_type, media.filename, media.url
+                    )
+                }
             }
         } else {
-            user_message.to_string()
+            let prefix = if media.media_type.starts_with("audio/") {
+                "用户通过 IM 发送了一条语音消息"
+            } else {
+                "用户通过 IM 发送了一个媒体附件"
+            };
+            let details = format!(
+                "{}：type={} filename={:?} url={:?}",
+                prefix, media.media_type, media.filename, media.url
+            );
+            if user_message.trim().is_empty()
+                || user_message == "[语音消息]"
+                || user_message == "[音频消息]"
+            {
+                format!(
+                    "{}\n当前网关没有内联音频字节，但已保留平台媒体线索；请根据可用工具自行尝试获取或转写。",
+                    details
+                )
+            } else {
+                format!("{}\n[{}]", user_message, details)
+            }
         }
     } else {
         user_message.to_string()

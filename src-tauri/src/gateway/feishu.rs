@@ -921,7 +921,38 @@ async fn parse_and_dispatch_event(
             }
         }
         "sticker" => ("[表情包]".to_string(), None),
-        "audio" => ("[语音消息]".to_string(), None),
+        "audio" => {
+            let file_key = serde_json::from_str::<serde_json::Value>(content_str)
+                .ok()
+                .and_then(|v| {
+                    v["file_key"]
+                        .as_str()
+                        .or_else(|| v["audio_key"].as_str())
+                        .or_else(|| v["media_key"].as_str())
+                        .map(String::from)
+                })
+                .unwrap_or_default();
+            let media = super::MediaAttachment {
+                media_type: "audio/opus".to_string(),
+                url: if file_key.is_empty() {
+                    None
+                } else {
+                    Some(format!("feishu://audio/{}", file_key))
+                },
+                data: None,
+                filename: if file_key.is_empty() {
+                    Some("feishu_audio.opus".to_string())
+                } else {
+                    Some(format!("feishu_{}.opus", file_key))
+                },
+            };
+            let text = if file_key.is_empty() {
+                "[语音消息]".to_string()
+            } else {
+                format!("[语音消息: file_key={}]", file_key)
+            };
+            (text, Some(media))
+        }
         "media" => ("[视频消息]".to_string(), None),
         "file" => {
             let file_key = serde_json::from_str::<serde_json::Value>(content_str)

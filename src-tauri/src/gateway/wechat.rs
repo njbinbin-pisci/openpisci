@@ -1101,7 +1101,8 @@ fn outbound_to_weixin_message(msg: &OutboundMessage) -> Value {
 }
 
 /// Extract an `InboundMessage` from a `WeixinMessage` JSON value sent by the
-/// plugin.  Returns `None` if the message is not a user text message.
+/// plugin. Text is preferred, but non-text user media (including voice) is
+/// preserved as a structured placeholder so Pisci can decide how to handle it.
 fn weixin_message_to_inbound(msg: &Value) -> Option<InboundMessage> {
     // Only handle USER messages (message_type == 1).
     let msg_type = msg["message_type"].as_u64().unwrap_or(0);
@@ -1114,6 +1115,11 @@ fn weixin_message_to_inbound(msg: &Value) -> Option<InboundMessage> {
         return None;
     }
 
+    let msg_id = msg["message_id"]
+        .as_u64()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
     // Extract text from the first TEXT item.
     let text = msg["item_list"]
         .as_array()?
@@ -1123,14 +1129,14 @@ fn weixin_message_to_inbound(msg: &Value) -> Option<InboundMessage> {
         .unwrap_or("")
         .to_string();
 
-    if text.trim().is_empty() {
-        return None;
-    }
-
-    let msg_id = msg["message_id"]
-        .as_u64()
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let (content, media) = if text.trim().is_empty() {
+        let items = msg["item_list"].as_array()?;
+        let content = wechat_non_text_content(items)?;
+        let media = wechat_media_placeholder(&msg_id, items);
+        (content, media)
+    } else {
+        (text, None)
+    };
 
     let session_id = msg["session_id"].as_str().unwrap_or("").to_string();
     let context_token = msg["context_token"].as_str().unwrap_or("").to_string();
@@ -1148,7 +1154,7 @@ fn weixin_message_to_inbound(msg: &Value) -> Option<InboundMessage> {
         channel: "wechat".to_string(),
         sender: from_user.clone(),
         sender_name: Some(from_user.clone()),
-        content: text,
+        content,
         reply_target,
         conversation_key: Some(if session_id.is_empty() {
             format!("dm:{}", from_user)
@@ -1162,13 +1168,58 @@ fn weixin_message_to_inbound(msg: &Value) -> Option<InboundMessage> {
             Some(session_id.clone())
         },
         timestamp: msg["create_time_ms"].as_u64().unwrap_or_else(now_ms),
-        media: None,
+        media,
         routing_state: Some(json!({
             "context_token": context_token,
             "session_id": session_id,
             "from_user_id": from_user,
+            "item_list": msg["item_list"],
         })),
     })
+}
+
+fn wechat_non_text_content(items: &[Value]) -> Option<String> {
+    if items.iter().any(is_wechat_voice_item) {
+        return Some("[语音消息]".to_string());
+    }
+    if items
+        .iter()
+        .any(|item| item["type"].as_u64() == Some(MESSAGE_ITEM_TYPE_IMAGE as u64))
+    {
+        return Some("[图片消息]".to_string());
+    }
+    if items
+        .iter()
+        .any(|item| item["type"].as_u64() == Some(MESSAGE_ITEM_TYPE_FILE as u64))
+    {
+        return Some("[文件消息]".to_string());
+    }
+    items.first().map(|item| {
+        format!(
+            "[微信非文本消息: type={}]",
+            item["type"].as_u64().unwrap_or(0)
+        )
+    })
+}
+
+fn is_wechat_voice_item(item: &Value) -> bool {
+    let item_type = item["type"].as_u64().unwrap_or(0);
+    item_type == 3
+        || item.get("voice_item").is_some()
+        || item.get("audio_item").is_some()
+        || item.get("speech_item").is_some()
+}
+
+fn wechat_media_placeholder(msg_id: &str, items: &[Value]) -> Option<MediaAttachment> {
+    if items.iter().any(is_wechat_voice_item) {
+        return Some(MediaAttachment {
+            media_type: "audio/unknown".to_string(),
+            url: Some(format!("wechat://message/{}", msg_id)),
+            data: None,
+            filename: Some(format!("wechat_voice_{}.bin", msg_id)),
+        });
+    }
+    None
 }
 
 // ── Minimal HTTP helpers ──────────────────────────────────────────────────────
@@ -1278,6 +1329,32 @@ mod tests {
         assert_eq!(messages[0].sender, "wx-user-1");
         assert_eq!(messages[0].content, "hello from wechat");
         assert_eq!(messages[0].reply_target, "wx-user-1|ctx-1");
+    }
+
+    #[test]
+    fn preserves_wechat_voice_message_placeholder() {
+        let payload = json!({
+            "ret": 0,
+            "msgs": [{
+                "message_id": 456,
+                "from_user_id": "wx-user-1",
+                "session_id": "",
+                "message_type": 1,
+                "create_time_ms": 1700000000_u64,
+                "context_token": "ctx-voice",
+                "item_list": [{
+                    "type": 3,
+                    "voice_item": { "duration_ms": 1200 }
+                }]
+            }]
+        });
+
+        let messages = extract_inbound_messages(&payload);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "[语音消息]");
+        let media = messages[0].media.as_ref().expect("voice media placeholder");
+        assert_eq!(media.media_type, "audio/unknown");
+        assert_eq!(media.url.as_deref(), Some("wechat://message/456"));
     }
 
     #[test]

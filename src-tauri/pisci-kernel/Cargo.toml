@@ -1,6 +1,6 @@
 [package]
 name = "pisci-kernel"
-version = "0.7.6"
+version = "0.7.7"
 edition = "2021"
 description = "OpenPisci agent runtime kernel - OS/UI-neutral agent loop, LLM, storage, memory and platform-neutral tools."
 
