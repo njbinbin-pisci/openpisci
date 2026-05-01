@@ -679,7 +679,8 @@ impl Channel for FeishuChannel {
                                                 }
                                             }
                                             Message::Text(t) => {
-                                                warn!("Feishu: unexpected text frame: {}", &t[..t.len().min(200)]);
+                                                let t_preview: String = t.chars().take(200).collect();
+                                                warn!("Feishu: unexpected text frame: {}", t_preview);
                                             }
                                             Message::Ping(data) => {
                                                 let _ = ws_sink.send(Message::Pong(data)).await;

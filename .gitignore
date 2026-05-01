@@ -80,3 +80,4 @@ references/
 ci-log.txt
 src-tauri/ci-log.txt
 tauri-bundle-log.txt
+.qoder/

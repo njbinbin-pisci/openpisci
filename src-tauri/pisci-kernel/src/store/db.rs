@@ -1290,6 +1290,38 @@ impl Database {
         })
     }
 
+    /// Delete all messages for a session that belong to a specific turn index.
+    /// This is used to clean up "in-progress" agent messages when a turn is
+    /// cancelled mid-flight, preventing incomplete tool-call/tool-result pairs
+    /// from polluting the conversation history.
+    pub fn delete_messages_by_turn_index(
+        &self,
+        session_id: &str,
+        turn_index: i64,
+    ) -> Result<usize> {
+        let count = self.conn.execute(
+            "DELETE FROM messages WHERE session_id = ?1 AND turn_index = ?2",
+            params![session_id, turn_index],
+        )?;
+        Ok(count)
+    }
+
+    /// Recompute the message_count for a session by counting rows in messages.
+    /// Called after deleting messages so the session counter stays accurate.
+    pub fn recompute_session_message_count(&self, session_id: &str) -> Result<()> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
+            params![session_id],
+            |r| r.get(0),
+        )?;
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE sessions SET message_count = ?1, updated_at = ?2 WHERE id = ?3",
+            params![count, now, session_id],
+        )?;
+        Ok(())
+    }
+
     pub fn get_messages(
         &self,
         session_id: &str,

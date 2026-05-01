@@ -338,6 +338,12 @@ pub struct Settings {
     /// minimal overlay while Pisci replies.
     #[serde(default = "default_true")]
     pub im_auto_minimal_mode: bool,
+    /// How to handle new inbound IM messages while Pisci is already processing
+    /// a previous message in the same session.
+    /// "queue"  = enqueue new messages and process them sequentially.
+    /// "cancel" = cancel the current run and start processing immediately.
+    #[serde(default = "default_im_message_mode")]
+    pub im_message_mode: String,
 
     // ── Email (SMTP / IMAP) ──────────────────────────────────────────────────
     /// SMTP server hostname (e.g. smtp.gmail.com)
@@ -622,6 +628,9 @@ fn default_policy_mode() -> String {
 fn default_tool_rate_limit() -> u32 {
     120
 }
+fn default_im_message_mode() -> String {
+    "queue".into()
+}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -683,6 +692,7 @@ impl Default for Settings {
             wechat_base_url: String::new(),
             wechat_bot_id: String::new(),
             im_auto_minimal_mode: true,
+            im_message_mode: default_im_message_mode(),
             smtp_host: String::new(),
             smtp_port: default_smtp_port(),
             smtp_username: String::new(),

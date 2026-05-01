@@ -1492,7 +1492,7 @@ fn summarize_input(tool_name: &str, input: &serde_json::Value) -> String {
             if url.is_empty() {
                 action.to_string()
             } else {
-                format!("{} {}", action, &url[..url.len().min(60)])
+                format!("{} {}", action, url.chars().take(60).collect::<String>())
             }
         }
         _ => input.to_string().chars().take(80).collect(),

@@ -77,6 +77,8 @@ export interface Settings {
   wechat_bot_id: string;
   /** When true, inbound IM messages switch the app into minimal overlay mode. */
   im_auto_minimal_mode: boolean;
+  /** IM message handling mode: "queue" or "cancel". */
+  im_message_mode: string;
   // Email (SMTP / IMAP)
   smtp_host: string;
   smtp_port: number;

@@ -52,6 +52,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   wechat_base_url: "",
   wechat_bot_id: "",
   im_auto_minimal_mode: true,
+  im_message_mode: "queue",
   dingtalk_app_key: "",
   dingtalk_app_secret: "",
   dingtalk_robot_code: "",
@@ -1270,6 +1271,24 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
               </div>
               <input type="checkbox" checked={form.im_auto_minimal_mode ?? true} onChange={(e) => update("im_auto_minimal_mode", e.target.checked)} />
             </label>
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 16, padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-secondary)" }}>
+            <label className="label" style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, display: "block" }}>
+              {t("settings.imMessageMode")}
+            </label>
+            <select
+              className="input"
+              value={form.im_message_mode ?? "queue"}
+              onChange={(e) => update("im_message_mode", e.target.value)}
+              style={{ width: "100%" }}
+            >
+              <option value="queue">{t("settings.imMessageModeQueue")}</option>
+              <option value="cancel">{t("settings.imMessageModeCancel")}</option>
+            </select>
+            <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.5 }}>
+              {t("settings.imMessageModeHint")}
+            </p>
           </div>
 
           {gatewayStatus.length > 0 && (

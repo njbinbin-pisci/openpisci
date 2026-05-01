@@ -2725,6 +2725,26 @@ impl AgentLoop {
             let _ = db.prune_checkpoints(24);
         }
 
+        // If this run was cancelled, scrub any partially-written agent messages
+        // for this turn so they don't pollute the conversation history.
+        let was_cancelled = cancel.load(Ordering::Relaxed);
+        if was_cancelled {
+            if let (Some(ref db_arc), Some(idx)) = (self.db.as_ref(), turn_index) {
+                let db = db_arc.lock().await;
+                match db.delete_messages_by_turn_index(&ctx.session_id, idx) {
+                    Ok(deleted) if deleted > 0 => {
+                        info!(
+                            "Cancelled run cleaned up {} incomplete messages for turn {} session {}",
+                            deleted, idx, ctx.session_id
+                        );
+                        let _ = db.recompute_session_message_count(&ctx.session_id);
+                    }
+                    Ok(_) => {}
+                    Err(e) => warn!("Failed to clean up cancelled turn messages: {}", e),
+                }
+            }
+        }
+
         // Return only the new messages produced during this run (not the full context).
         // new_messages is immune to compaction: it accumulates every assistant/tool message
         // appended during the run, regardless of how many times the context was compacted.

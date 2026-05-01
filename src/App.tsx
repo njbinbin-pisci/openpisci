@@ -121,6 +121,11 @@ function AppContent() {
         dispatch(sessionsActions.setSessions(fresh));
         dispatch(chatActions.setMessages({ sessionId: sid, messages }));
         dispatch(chatActions.setRunning({ sessionId: sid, running: true }));
+        // Clear any stale streaming state / tool steps from a previous run
+        // so the UI doesn't show overlapping output from the old agent.
+        dispatch(chatActions.clearStreaming(sid));
+        dispatch(chatActions.clearToolSteps(sid));
+        dispatch(chatActions.clearContextUsage(sid));
       } catch (e) {
         console.error("[IM] im_session_updated error:", e);
       }

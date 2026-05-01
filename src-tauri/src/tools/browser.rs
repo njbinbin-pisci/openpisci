@@ -495,7 +495,7 @@ impl BrowserTool {
         Ok(ToolResult::ok(format!(
             "Typed into {}: {}",
             selector,
-            &text[..text.len().min(50)]
+            &text.chars().take(50).collect::<String>()
         )))
     }
 

@@ -1744,11 +1744,16 @@ pub async fn run_agent_headless(
         }
     }
 
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
+    let cancel = {
         let mut flags = state.cancel_flags.lock().await;
-        flags.insert(session_id.to_string(), cancel.clone());
-    }
+        // Use entry().or_insert_with() so we don't overwrite a cancel flag
+        // that was already set by the IM queue-mode cancel handler (which may
+        // have created the entry between drain-loop iterations).
+        flags
+            .entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone()
+    };
 
     let ctx = ToolContext {
         session_id: session_id.to_string(),

@@ -99,6 +99,9 @@ pub async fn save_settings(state: State<'_, AppState>, updates: Value) -> Result
     if let Some(v) = updates["im_auto_minimal_mode"].as_bool() {
         settings.im_auto_minimal_mode = v;
     }
+    if let Some(v) = updates["im_message_mode"].as_str() {
+        settings.im_message_mode = v.to_string();
+    }
     if let Some(v) = updates["policy_mode"].as_str() {
         settings.policy_mode = v.to_string();
     }

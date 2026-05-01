@@ -114,6 +114,112 @@ async fn resolve_im_outbound_route(
     }
 }
 
+/// Run the headless agent for a single inbound message and send the reply
+/// back through the IM gateway.  This is the shared body used by both
+/// cancel-mode and queue-mode processing.
+async fn run_im_agent_and_send_reply(
+    state_ref: &store::AppState,
+    gw: &gateway::GatewayManager,
+    session_id: &str,
+    msg: &gateway::InboundMessage,
+) {
+    let response = commands::chat::run_agent_headless(
+        state_ref,
+        session_id,
+        &msg.content,
+        msg.media.clone(),
+        &msg.channel,
+        None,
+    )
+    .await;
+
+    if let Err(e) = &response {
+        info!(
+            "run_agent_headless returned error for {}, emitting im_session_done: {}",
+            session_id, e
+        );
+        let _ = state_ref.app_handle.emit("im_session_done", session_id);
+        return;
+    }
+
+    let (reply_text, reply_image, reply_image_mime) = match response {
+        Ok((text, img, mime)) => {
+            let t = if text.is_empty() && img.is_none() {
+                "（Agent 未返回内容）".to_string()
+            } else {
+                text
+            };
+            (t, img, mime)
+        }
+        Err(_) => unreachable!("handled above"),
+    };
+
+    let (clean_text, file_path) = extract_send_marker(&reply_text);
+
+    let media = file_path
+        .and_then(|p| match std::fs::read(&p) {
+            Ok(data) => {
+                let mime = guess_mime_from_path(&p);
+                let filename = std::path::Path::new(&p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "file".to_string());
+                info!(
+                    "extract_send_marker: read {} bytes from '{}', mime={}",
+                    data.len(),
+                    p,
+                    mime
+                );
+                Some(gateway::MediaAttachment {
+                    media_type: mime,
+                    url: None,
+                    data: Some(data),
+                    filename: Some(filename),
+                })
+            }
+            Err(e) => {
+                tracing::warn!("extract_send_marker: failed to read file '{}': {}", p, e);
+                None
+            }
+        })
+        .or_else(|| {
+            reply_image.map(|data| gateway::MediaAttachment {
+                media_type: reply_image_mime.unwrap_or_else(|| "image/jpeg".to_string()),
+                url: None,
+                data: Some(data),
+                filename: Some("image.jpg".to_string()),
+            })
+        });
+
+    let (recipient, routing_state) = resolve_im_outbound_route(
+        &state_ref.db,
+        session_id,
+        &msg.channel,
+        &msg.reply_target,
+        msg.routing_state.clone(),
+    )
+    .await;
+
+    let outbound = gateway::OutboundMessage {
+        channel: msg.channel.clone(),
+        recipient: recipient.clone(),
+        content: clean_text,
+        reply_to: Some(msg.id.clone()),
+        media,
+        routing_state,
+    };
+    info!(
+        "Sending IM reply via channel={} recipient={} len={}",
+        msg.channel,
+        recipient,
+        outbound.content.len()
+    );
+    match gw.send(&outbound).await {
+        Ok(()) => info!("IM reply sent successfully via {}", msg.channel),
+        Err(e) => tracing::warn!("Failed to send IM reply via {}: {}", msg.channel, e),
+    }
+}
+
 /// Open a local file or directory with the system default application.
 /// On Windows, directories are opened with `explorer.exe` to guarantee
 /// Explorer opens (ShellExecute "open" verb is unreliable for directories).
@@ -285,15 +391,24 @@ fn run_impl() {
                         >,
                     >,
                 > = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+                let im_message_queues: std::sync::Arc<
+                    tokio::sync::Mutex<
+                        std::collections::HashMap<String, Vec<gateway::InboundMessage>>,
+                    >,
+                > = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+                let im_processing: std::sync::Arc<
+                    tokio::sync::Mutex<std::collections::HashMap<String, bool>>,
+                > = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
                 tauri::async_runtime::spawn(async move {
                     if let Some(mut rx) = gateway.take_receiver().await {
                         info!("Gateway inbound consumer started");
                         while let Some(msg) = rx.recv().await {
+                            let preview: String = msg.content.chars().take(80).collect();
                             info!(
                                 "Inbound IM message from {} via {}: {}",
                                 msg.sender,
                                 msg.channel,
-                                &msg.content[..msg.content.len().min(80)]
+                                preview
                             );
 
                             let auto_minimal_mode = {
@@ -323,6 +438,11 @@ fn run_impl() {
                                 }
                             }
 
+                            let im_message_mode = {
+                                let settings = settings.lock().await;
+                                settings.im_message_mode.clone()
+                            };
+
                             let binding = match resolve_or_create_im_binding(&db, &msg).await {
                                 Ok(binding) => binding,
                                 Err(e) => {
@@ -346,154 +466,319 @@ fn run_impl() {
                                 Err(e) => tracing::warn!("Failed to emit im_session_updated: {}", e),
                             }
 
-                            let session_lock = {
-                                let mut locks = im_session_locks.lock().await;
-                                locks
-                                    .entry(session_id.clone())
-                                    .or_insert_with(|| {
-                                        std::sync::Arc::new(tokio::sync::Mutex::new(()))
-                                    })
-                                    .clone()
-                            };
-
-                            {
-                                let flags = cancel_flags.lock().await;
-                                if let Some(flag) = flags.get(&session_id) {
-                                    info!(
-                                        "Cancelling previous agent for session {} due to new inbound message",
-                                        session_id
-                                    );
-                                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
-                                }
-                            }
-
-                            let state_ref = store::AppState {
-                                db: db.clone(),
-                                settings: settings.clone(),
-                                plan_state: plan_state.clone(),
-                                browser: browser.clone(),
-                                cancel_flags: cancel_flags.clone(),
-                                confirmation_responses: confirm_resp.clone(),
-                                interactive_responses: interactive_resp.clone(),
-                                app_handle: app_h.clone(),
-                                scheduler: sched.clone(),
-                                gateway: gateway.clone(),
-                                pisci_heartbeat_cursor: pisci_heartbeat_cursor.clone(),
-                            };
-
-                            let gw = gateway.clone();
-                            let inbound_media = msg.media.clone();
-                            let msg_channel = msg.channel.clone();
-                            tokio::spawn(async move {
-                                let _session_guard = session_lock.lock().await;
-                                info!("IM session lock acquired for {}", session_id);
-
-                                let response = commands::chat::run_agent_headless(
-                                    &state_ref,
-                                    &session_id,
-                                    &msg.content,
-                                    inbound_media,
-                                    &msg_channel,
-                                    None,
-                                )
-                                .await;
-
-                                if response.is_err() {
-                                    info!(
-                                        "run_agent_headless returned error, emitting im_session_done for {}",
-                                        session_id
-                                    );
-                                    let _ = state_ref.app_handle.emit("im_session_done", &session_id);
-                                }
-
-                                let (reply_text, reply_image, reply_image_mime) = match response {
-                                    Ok((text, img, mime)) => {
-                                        let t = if text.is_empty() && img.is_none() {
-                                            "（Agent 未返回内容）".to_string()
-                                        } else {
-                                            text
-                                        };
-                                        (t, img, mime)
-                                    }
-                                    Err(e) => (format!("Agent error: {}", e), None, None),
+                            if im_message_mode == "queue" {
+                                // -----------------------------------------------------------------
+                                // QUEUE MODE: finish the current task, then process next queued msg
+                                // -----------------------------------------------------------------
+                                let is_cancel_command = {
+                                    let c = msg.content.trim();
+                                    c == "取消" || c.eq_ignore_ascii_case("cancel")
                                 };
 
-                                let (clean_text, file_path) = extract_send_marker(&reply_text);
-
-                                let media = file_path
-                                    .and_then(|p| match std::fs::read(&p) {
-                                        Ok(data) => {
-                                            let mime = guess_mime_from_path(&p);
-                                            let filename = std::path::Path::new(&p)
-                                                .file_name()
-                                                .map(|n| n.to_string_lossy().into_owned())
-                                                .unwrap_or_else(|| "file".to_string());
+                                if is_cancel_command {
+                                    let has_active = {
+                                        let proc = im_processing.lock().await;
+                                        proc.get(&session_id).copied().unwrap_or(false)
+                                    };
+                                    let has_queued = {
+                                        let queues = im_message_queues.lock().await;
+                                        queues.get(&session_id).map(|q| !q.is_empty()).unwrap_or(false)
+                                    };
+                                    if has_active || has_queued {
+                                        {
+                                            let mut flags = cancel_flags.lock().await;
+                                            let flag = flags
+                                                .entry(session_id.clone())
+                                                .or_insert_with(|| {
+                                                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
+                                                });
                                             info!(
-                                                "extract_send_marker: read {} bytes from '{}', mime={}",
-                                                data.len(),
-                                                p,
-                                                mime
+                                                "Cancelling current agent for session {} due to cancel command",
+                                                session_id
                                             );
-                                            Some(gateway::MediaAttachment {
-                                                media_type: mime,
+                                            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                                        }
+                                        {
+                                            let mut queues = im_message_queues.lock().await;
+                                            queues.remove(&session_id);
+                                        }
+                                        let cancel_notice = {
+                                            let s = settings.lock().await;
+                                            if s.language == "zh" {
+                                                "已取消当前任务并清空消息队列。".to_string()
+                                            } else {
+                                                "Current task cancelled and message queue cleared.".to_string()
+                                            }
+                                        };
+                                        let outbound = gateway::OutboundMessage {
+                                            channel: msg.channel.clone(),
+                                            recipient: msg.reply_target.clone(),
+                                            content: cancel_notice,
+                                            reply_to: Some(msg.id.clone()),
+                                            media: None,
+                                            routing_state: msg.routing_state.clone(),
+                                        };
+                                        let _ = gateway.send(&outbound).await;
+                                        continue;
+                                    }
+                                }
+
+                                let is_processing = {
+                                    let proc = im_processing.lock().await;
+                                    proc.get(&session_id).copied().unwrap_or(false)
+                                };
+
+                                if is_processing {
+                                    {
+                                        let mut queues = im_message_queues.lock().await;
+                                        queues.entry(session_id.clone()).or_default().push(msg.clone());
+                                    }
+                                    let queue_len = {
+                                        let queues = im_message_queues.lock().await;
+                                        queues.get(&session_id).map(|q| q.len()).unwrap_or(0)
+                                    };
+                                    let notice = {
+                                        let s = settings.lock().await;
+                                        if s.language == "zh" {
+                                            format!(
+                                                "当前任务处理中，您的新消息已加入队列（前面还有 {} 条）。发送「取消」可终止当前任务并清空队列。",
+                                                queue_len
+                                            )
+                                        } else {
+                                            format!(
+                                                "Current task is still running. Your new message has been queued ({} ahead). Send 'cancel' to abort.",
+                                                queue_len
+                                            )
+                                        }
+                                    };
+                                    let outbound = gateway::OutboundMessage {
+                                        channel: msg.channel.clone(),
+                                        recipient: msg.reply_target.clone(),
+                                        content: notice,
+                                        reply_to: Some(msg.id.clone()),
+                                        media: None,
+                                        routing_state: msg.routing_state.clone(),
+                                    };
+                                    let _ = gateway.send(&outbound).await;
+                                    continue;
+                                }
+
+                                // Start processing this message
+                                {
+                                    let mut proc = im_processing.lock().await;
+                                    proc.insert(session_id.clone(), true);
+                                }
+
+                                let session_lock = {
+                                    let mut locks = im_session_locks.lock().await;
+                                    locks
+                                        .entry(session_id.clone())
+                                        .or_insert_with(|| {
+                                            std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                                        })
+                                        .clone()
+                                };
+
+                                let state_ref = store::AppState {
+                                    db: db.clone(),
+                                    settings: settings.clone(),
+                                    plan_state: plan_state.clone(),
+                                    browser: browser.clone(),
+                                    cancel_flags: cancel_flags.clone(),
+                                    confirmation_responses: confirm_resp.clone(),
+                                    interactive_responses: interactive_resp.clone(),
+                                    app_handle: app_h.clone(),
+                                    scheduler: sched.clone(),
+                                    gateway: gateway.clone(),
+                                    pisci_heartbeat_cursor: pisci_heartbeat_cursor.clone(),
+                                };
+
+                                let gw = gateway.clone();
+                                let queues_ref = im_message_queues.clone();
+                                let processing_ref = im_processing.clone();
+                                tokio::spawn(async move {
+                                    let _session_guard = session_lock.lock().await;
+                                    info!("IM session lock acquired for {}", session_id);
+
+                                    run_im_agent_and_send_reply(&state_ref, &gw, &session_id, &msg).await;
+
+                                    // Drain any queued messages
+                                    loop {
+                                        let next_msg = {
+                                            let mut queues = queues_ref.lock().await;
+                                            queues.get_mut(&session_id).and_then(|q| {
+                                                if q.is_empty() { None } else { Some(q.remove(0)) }
+                                            })
+                                        };
+
+                                        if let Some(queued_msg) = next_msg {
+                                            info!("Processing queued message for session {}", session_id);
+                                            let _ = state_ref.app_handle.emit("im_session_updated", &session_id);
+                                            run_im_agent_and_send_reply(&state_ref, &gw, &session_id, &queued_msg).await;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+
+                                    {
+                                        let mut proc = processing_ref.lock().await;
+                                        proc.remove(&session_id);
+                                    }
+                                });
+                            } else {
+                                // -----------------------------------------------------------------
+                                // CANCEL MODE: cancel previous run and start immediately
+                                // -----------------------------------------------------------------
+                                let session_lock = {
+                                    let mut locks = im_session_locks.lock().await;
+                                    locks
+                                        .entry(session_id.clone())
+                                        .or_insert_with(|| {
+                                            std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                                        })
+                                        .clone()
+                                };
+
+                                {
+                                    let flags = cancel_flags.lock().await;
+                                    if let Some(flag) = flags.get(&session_id) {
+                                        info!(
+                                            "Cancelling previous agent for session {} due to new inbound message",
+                                            session_id
+                                        );
+                                        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                                    }
+                                }
+
+                                let state_ref = store::AppState {
+                                    db: db.clone(),
+                                    settings: settings.clone(),
+                                    plan_state: plan_state.clone(),
+                                    browser: browser.clone(),
+                                    cancel_flags: cancel_flags.clone(),
+                                    confirmation_responses: confirm_resp.clone(),
+                                    interactive_responses: interactive_resp.clone(),
+                                    app_handle: app_h.clone(),
+                                    scheduler: sched.clone(),
+                                    gateway: gateway.clone(),
+                                    pisci_heartbeat_cursor: pisci_heartbeat_cursor.clone(),
+                                };
+
+                                let gw = gateway.clone();
+                                let inbound_media = msg.media.clone();
+                                let msg_channel = msg.channel.clone();
+                                tokio::spawn(async move {
+                                    let _session_guard = session_lock.lock().await;
+                                    info!("IM session lock acquired for {}", session_id);
+
+                                    let response = commands::chat::run_agent_headless(
+                                        &state_ref,
+                                        &session_id,
+                                        &msg.content,
+                                        inbound_media,
+                                        &msg_channel,
+                                        None,
+                                    )
+                                    .await;
+
+                                    if let Err(e) = &response {
+                                        info!(
+                                            "run_agent_headless returned error for {}, emitting im_session_done: {}",
+                                            session_id, e
+                                        );
+                                        let _ = state_ref.app_handle.emit("im_session_done", &session_id);
+                                        return;
+                                    }
+
+                                    let (reply_text, reply_image, reply_image_mime) = match response {
+                                        Ok((text, img, mime)) => {
+                                            let t = if text.is_empty() && img.is_none() {
+                                                "（Agent 未返回内容）".to_string()
+                                            } else {
+                                                text
+                                            };
+                                            (t, img, mime)
+                                        }
+                                        Err(_) => unreachable!("handled above"),
+                                    };
+
+                                    let (clean_text, file_path) = extract_send_marker(&reply_text);
+
+                                    let media = file_path
+                                        .and_then(|p| match std::fs::read(&p) {
+                                            Ok(data) => {
+                                                let mime = guess_mime_from_path(&p);
+                                                let filename = std::path::Path::new(&p)
+                                                    .file_name()
+                                                    .map(|n| n.to_string_lossy().into_owned())
+                                                    .unwrap_or_else(|| "file".to_string());
+                                                info!(
+                                                    "extract_send_marker: read {} bytes from '{}', mime={}",
+                                                    data.len(),
+                                                    p,
+                                                    mime
+                                                );
+                                                Some(gateway::MediaAttachment {
+                                                    media_type: mime,
+                                                    url: None,
+                                                    data: Some(data),
+                                                    filename: Some(filename),
+                                                })
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    "extract_send_marker: failed to read file '{}': {}",
+                                                    p,
+                                                    e
+                                                );
+                                                None
+                                            }
+                                        })
+                                        .or_else(|| {
+                                            reply_image.map(|data| gateway::MediaAttachment {
+                                                media_type: reply_image_mime
+                                                    .unwrap_or_else(|| "image/jpeg".to_string()),
                                                 url: None,
                                                 data: Some(data),
-                                                filename: Some(filename),
+                                                filename: Some("image.jpg".to_string()),
                                             })
-                                        }
+                                        });
+
+                                    let (recipient, routing_state) = resolve_im_outbound_route(
+                                        &state_ref.db,
+                                        &session_id,
+                                        &msg.channel,
+                                        &msg.reply_target,
+                                        msg.routing_state.clone(),
+                                    )
+                                    .await;
+
+                                    let outbound = gateway::OutboundMessage {
+                                        channel: msg.channel.clone(),
+                                        recipient: recipient.clone(),
+                                        content: clean_text,
+                                        reply_to: Some(msg.id.clone()),
+                                        media,
+                                        routing_state,
+                                    };
+                                    info!(
+                                        "Sending IM reply via channel={} recipient={} len={}",
+                                        msg.channel,
+                                        recipient,
+                                        outbound.content.len()
+                                    );
+                                    match gw.send(&outbound).await {
+                                        Ok(()) => info!("IM reply sent successfully via {}", msg.channel),
                                         Err(e) => {
                                             tracing::warn!(
-                                                "extract_send_marker: failed to read file '{}': {}",
-                                                p,
+                                                "Failed to send IM reply via {}: {}",
+                                                msg.channel,
                                                 e
-                                            );
-                                            None
+                                            )
                                         }
-                                    })
-                                    .or_else(|| {
-                                        reply_image.map(|data| gateway::MediaAttachment {
-                                            media_type: reply_image_mime
-                                                .unwrap_or_else(|| "image/jpeg".to_string()),
-                                            url: None,
-                                            data: Some(data),
-                                            filename: Some("image.jpg".to_string()),
-                                        })
-                                    });
-
-                                let (recipient, routing_state) = resolve_im_outbound_route(
-                                    &state_ref.db,
-                                    &session_id,
-                                    &msg.channel,
-                                    &msg.reply_target,
-                                    msg.routing_state.clone(),
-                                )
-                                .await;
-
-                                let outbound = gateway::OutboundMessage {
-                                    channel: msg.channel.clone(),
-                                    recipient: recipient.clone(),
-                                    content: clean_text,
-                                    reply_to: Some(msg.id.clone()),
-                                    media,
-                                    routing_state,
-                                };
-                                info!(
-                                    "Sending IM reply via channel={} recipient={} len={}",
-                                    msg.channel,
-                                    recipient,
-                                    outbound.content.len()
-                                );
-                                match gw.send(&outbound).await {
-                                    Ok(()) => info!("IM reply sent successfully via {}", msg.channel),
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "Failed to send IM reply via {}: {}",
-                                            msg.channel,
-                                            e
-                                        )
                                     }
-                                }
-                            });
+                                });
+                            }
                         }
                     }
                 });
