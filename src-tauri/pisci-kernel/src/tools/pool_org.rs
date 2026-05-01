@@ -183,6 +183,10 @@ impl Tool for PoolOrgTool {
                     "enum": ["low", "medium", "high", "urgent"],
                     "description": "For assign_koi: task priority (default: medium)"
                 },
+                "context": {
+                    "type": "string",
+                    "description": "For assign_koi: background context for the task — what has been done, where inputs are (file paths, previous Koi outputs), and how this task fits into the project. The Koi starts each task in a fresh session, so it only knows what you tell it and what it can read from pool_chat, the board, and kb/ files."
+                },
                 "timeout_secs": {
                     "type": "integer",
                     "description": "For assign_koi/create_todo/replace_todo: optional single-task timeout in seconds. For wait_for_koi: max elapsed wait seconds."
@@ -325,6 +329,7 @@ impl Tool for PoolOrgTool {
                     task: input["task"].as_str().unwrap_or("").to_string(),
                     priority: input["priority"].as_str().unwrap_or("medium").to_string(),
                     timeout_secs: input["timeout_secs"].as_u64().unwrap_or(0) as u32,
+                    context: input["context"].as_str().map(|s| s.to_string()).filter(|s| !s.is_empty()),
                 };
                 match services::assign_koi(
                     &self.store,

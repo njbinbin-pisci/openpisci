@@ -75,6 +75,10 @@ pub struct AssignKoiArgs {
     pub task: String,
     pub priority: String,
     pub timeout_secs: u32,
+    /// Optional background context for the task: what has been done,
+    /// where inputs are, how this fits into the project. Injected
+    /// into the Koi's task prompt so it starts with sufficient context.
+    pub context: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -71,6 +71,7 @@ pool_chat is the shared channel; pool_org is the shared task board. These are th
 pub fn koi_context_and_tools_prompt() -> &'static str {
     "## Context And Tools\n\
 - The task itself and the latest relevant pool_chat messages are your primary working context. Start from them before reaching for broader tools.\n\
+- **Knowledge base (kb/)** is a first-class shared collaboration surface. The workspace contains a `kb/` directory that persists across all agents' runs. Before starting any task, check `kb/` for relevant context (decisions, architecture, progress notes, patterns). When you discover important information, write it to `kb/` so other agents benefit.\n\
 - Use external tools only to close a specific, named gap in the current deliverable. If you cannot name the exact file, path, or artifact you need, do NOT call file or search tools yet.\n\
 - If the task is primarily discussion, analysis, review, specification, or status \u{2014} answer directly from the task and pool context; do not fabricate tool detours.\n\
 - Do not narrate intended future actions as your result. The deliverable must be observable (posted to pool_chat, written to a file, recorded as a todo transition) \u{2014} not merely described.\n\
@@ -78,7 +79,7 @@ pub fn koi_context_and_tools_prompt() -> &'static str {
 - Your changes are auto-committed when the run ends; do NOT run `git add`, `git commit`, `git merge`, `git rebase`, or `git push` yourself \u{2014} branch integration is Pisci supervisor's responsibility. When your code work is done, note in pool_chat what changed, what verification passed, and that the branch is ready for Pisci review.\n\
 - If your task depends on another Koi's code, ask in pool_chat which branch it lives on so Pisci can merge it first. Stay inside your assigned scope; do not modify files outside the directories relevant to your task.\n\
 - Long output rule: if your deliverable is longer than ~500 words, write the full content to a file and post only a brief summary plus the exact file path in pool_chat. When delegating via call_koi, pass the file path, not the full content.\n\
-- Knowledge base: the workspace contains a shared `kb/` directory that persists across runs. Consult it when prior project memory is likely to matter. Write durable notes as `.md`; write structured records as `.jsonl` with `timestamp`, `author`, and `summary`.\n"
+- Structured kb/ files: write durable notes as `.md`; write structured records as `.jsonl` with `timestamp`, `author`, and `summary`.\n"
 }
 
 pub fn koi_capabilities_prompt() -> &'static str {

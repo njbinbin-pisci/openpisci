@@ -1,8 +1,12 @@
 {task}
 
 [System: You are {name}. Your todo ID for this task is `{todo_id}`.
-Before starting work, call pool_chat(action="read") to check if a teammate has already done related work or left relevant context.
-When reading pool chat, focus on what is addressed to you ({name}) specifically — do not confuse other team members' statuses or roles with your own.
+
+Before starting work, gather context in this order:
+1. Read the board: pool_org(action="get_todos") — understand who is working on what and find dependencies.
+2. Read pool_chat: pool_chat(action="read") — check for relevant messages, handoffs, and teammate updates. Focus on what is addressed to you ({name}) specifically — do not confuse other team members' statuses or roles with your own.
+3. Check kb/: file_list("kb/") and read relevant files — this is shared project knowledge that persists across runs. Especially check kb/decisions/, kb/architecture/, and kb/progress/.
+4. If your task references another Koi's output, read their files first to understand the current state.
 
 Your workspace is a Git worktree — always use RELATIVE paths for all file operations. NEVER use absolute paths pointing to the main project directory.
 
@@ -15,4 +19,4 @@ Coordination protocol:
 Call pool_org(action="complete_todo", todo_id="{todo_id}", summary="<what you accomplished>") when the real output exists.
 After completing, follow the coordination protocol above so the next actor is obvious.
 
-If your result is longer than ~500 words, write it to a file (e.g. kb/reports/<date>-<topic>.md) and post only the file path + a brief summary to pool_chat.]
+When you learn something important about the project (decisions, architecture, patterns, pitfalls), write it to the kb/ directory so other agents can benefit.]

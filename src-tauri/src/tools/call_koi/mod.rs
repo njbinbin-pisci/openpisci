@@ -433,6 +433,70 @@ impl CallKoiTool {
             String::new()
         };
 
+        // Board state: inject current todo summary so the Koi knows
+        // who is working on what, without needing to call get_todos first.
+        let board_state_ctx = if let Some(ref psid) = pool_session_id {
+            let db = state.db.lock().await;
+            let all_todos = db.list_koi_todos(None).unwrap_or_default();
+            let pool_todos: Vec<_> = all_todos
+                .iter()
+                .filter(|t| t.pool_session_id.as_deref() == Some(psid.as_str()))
+                .collect();
+            if pool_todos.is_empty() {
+                String::new()
+            } else {
+                let lines: Vec<String> = pool_todos
+                    .iter()
+                    .map(|t| {
+                        let marker = match t.status.as_str() {
+                            "in_progress" => "🔄",
+                            "todo" => "📋",
+                            "done" => "✅",
+                            "blocked" => "🚫",
+                            _ => "❓",
+                        };
+                        format!(
+                            "{} [{}] {} — \"{}\"",
+                            marker,
+                            t.status,
+                            t.owner_id,
+                            t.title.chars().take(80).collect::<String>()
+                        )
+                    })
+                    .collect();
+                format!("\n\n## Current Board State\n{}", lines.join("\n"))
+            }
+        } else {
+            String::new()
+        };
+
+        // kb/ directory listing: hint at shared project knowledge.
+        let kb_ctx = {
+            let ws = {
+                let settings = state.settings.lock().await;
+                settings.workspace_root.clone()
+            };
+            let kb_path = std::path::Path::new(&ws).join("kb");
+            if kb_path.exists() {
+                let entries: Vec<String> = std::fs::read_dir(&kb_path)
+                    .unwrap_or_else(|_| std::fs::read_dir(std::path::Path::new(&ws)).unwrap())
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .take(30)
+                    .collect();
+                if entries.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "\n\n## Project Knowledge Base (kb/)\nAvailable directories: {}\nRead relevant files before starting work.",
+                        entries.join(", ")
+                    )
+                }
+            } else {
+                String::new()
+            }
+        };
+
         let assignment_ctx = {
             let trimmed = task.trim();
             if trimmed.is_empty() {
@@ -453,6 +517,14 @@ impl CallKoiTool {
             }
         };
 
+                // Merge board_state and kb/ into the pool_chat_ctx so they
+        // appear in the project-environment layer without changing the
+        // build_koi_task_system_prompt signature.
+        let combined_env_ctx = format!(
+            "{}{}{}",
+            board_state_ctx, kb_ctx, pool_chat_ctx
+        );
+
         let system_prompt = build_koi_task_system_prompt(
             &koi_def.system_prompt,
             &koi_def.name,
@@ -460,7 +532,7 @@ impl CallKoiTool {
             &continuity_context,
             &memory_context,
             &org_spec_ctx,
-            &pool_chat_ctx,
+            &combined_env_ctx,
             &assignment_ctx,
         );
         tracing::info!(
@@ -497,6 +569,10 @@ impl CallKoiTool {
             builtin_tool_enabled,
             allow_outside_workspace,
             vision_enabled,
+            vision_use_main_llm,
+            vision_provider,
+            vision_model,
+            vision_api_key,
             auto_compact_input_tokens_threshold,
             loop_max_iterations,
         ) = {
@@ -561,6 +637,10 @@ impl CallKoiTool {
                 settings.builtin_tool_enabled.clone(),
                 koi_allow_outside,
                 settings.vision_enabled,
+                settings.vision_use_main_llm,
+                settings.vision_provider.clone(),
+                settings.vision_model.clone(),
+                settings.vision_api_key.clone(),
                 settings.auto_compact_input_tokens_threshold,
                 if koi_def.max_iterations > 0 {
                     Some(koi_def.max_iterations)
@@ -576,8 +656,11 @@ impl CallKoiTool {
             return Ok(ToolResult::err("API key not configured"));
         }
 
-        let vision_capable =
-            vision_enabled || crate::commands::chat::model_supports_vision(&provider, &model);
+        let vision_capable = if vision_use_main_llm {
+            vision_enabled || crate::commands::chat::model_supports_vision(&provider, &model)
+        } else {
+            !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
+        };
 
         let cancel = Arc::new(AtomicBool::new(false));
 

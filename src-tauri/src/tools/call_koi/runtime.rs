@@ -112,6 +112,39 @@ pub(crate) async fn release_managed_run_slot(
         active.remove(&key);
     }
     refresh_managed_koi_status(app, db_arc, koi_id).await;
+
+    // Auto-pickup: now that the Koi is idle, check for queued todos
+    // in the same pool and dispatch the next one immediately.
+    if let Some(psid) = pool_session_id {
+        let psid_owned = psid.to_string();
+        let koi_id_owned = koi_id.to_string();
+        let app_cl = app.clone();
+        let db_cl = db_arc.clone();
+        tokio::spawn(async move {
+            match crate::pool::bridge::activate_pending_todos_arc(
+                &app_cl,
+                db_cl,
+                Some(&psid_owned),
+            )
+            .await
+            {
+                Ok(n) if n > 0 => tracing::info!(
+                    target: "pool::runtime",
+                    koi_id = %koi_id_owned,
+                    pool_id = %psid_owned,
+                    activated = n,
+                    "auto-pickup: dispatched queued todo(s) after Koi became idle"
+                ),
+                Ok(_) => {} // no pending todos
+                Err(e) => tracing::warn!(
+                    target: "pool::runtime",
+                    koi_id = %koi_id_owned,
+                    pool_id = %psid_owned,
+                    "auto-pickup activate_pending_todos failed: {e}"
+                ),
+            }
+        });
+    }
 }
 
 pub(crate) async fn is_koi_run_slot_active(koi_id: &str, pool_session_id: Option<&str>) -> bool {

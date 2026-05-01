@@ -391,20 +391,20 @@ async fn assign_koi_creates_todo_posts_mention_and_emits_events() {
             task: "build the thing".into(),
             priority: "high".into(),
             timeout_secs: 30,
+            context: None,
         },
     )
     .await
     .expect("assign_koi");
     assert_eq!(value["koi_id"], "koi-alpha");
     assert_eq!(value["next_required_action"]["tool"], "pool_org");
-    assert_eq!(value["next_required_action"]["action"], "wait_for_koi");
-    assert_eq!(value["next_required_action"]["koi_id"], "koi-alpha");
+    assert_eq!(value["next_required_action"]["action"], "get_todos");
     assert!(
         value["summary"]
             .as_str()
             .unwrap_or_default()
-            .contains("wait_for_koi"),
-        "assign_koi must tell Pisci to wait with real elapsed time"
+            .contains("get_todos"),
+        "assign_koi must direct Pisci to check with get_todos"
     );
 
     let kinds = sink.drain_kinds();

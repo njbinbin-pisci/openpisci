@@ -610,18 +610,26 @@ pub async fn get_pool_todos(
 ) -> anyhow::Result<Value> {
     let session = resolve_pool(store, caller, pool_id_hint, "get_todos").await?;
     let id = session.id.clone();
-    let todos = store
+    let (todos, kois) = store
         .read(move |db| {
             let all = db.list_koi_todos(None)?;
-            Ok(all
+            let pool_todos: Vec<_> = all
                 .into_iter()
                 .filter(|t| t.pool_session_id.as_deref() == Some(&id))
-                .collect::<Vec<_>>())
+                .collect();
+            let kois = db.list_kois()?;
+            Ok::<_, anyhow::Error>((pool_todos, kois))
         })
         .await?;
+    // Build a koi_status_map so the caller can correlate todos with Koi availability.
+    let koi_status_map: std::collections::HashMap<String, String> = kois
+        .iter()
+        .map(|k| (k.id.clone(), k.status.clone()))
+        .collect();
     Ok(json!({
         "pool_id": session.id,
         "todos": todos,
+        "koi_status": koi_status_map,
     }))
 }
 
@@ -857,6 +865,14 @@ pub async fn assign_koi(
     } else {
         format!("@!{} [Priority: {}] {}", koi_name, priority, task)
     };
+    // If the assigner provided background context, append it to the
+    // mention so the Koi sees it as part of its task prompt.
+    let mention_with_context = match &args.context {
+        Some(ctx) if !ctx.trim().is_empty() => {
+            format!("{}\n\n## Task Background\n{}", mention, ctx)
+        }
+        _ => mention.clone(),
+    };
 
     // Pre-create the kanban todo so the board shows the work before
     // the Koi actually wakes up.
@@ -865,7 +881,14 @@ pub async fn assign_koi(
         let assigned_by = "pisci".to_string();
         let pool_id = session.id.clone();
         let title: String = task.chars().take(120).collect();
-        let desc = task.clone();
+        // Include context in the todo description so it's available to
+        // the Koi when it reads the board.
+        let desc = match &args.context {
+            Some(ctx) if !ctx.trim().is_empty() => {
+                format!("{}\n\n[Background]\n{}", task, ctx)
+            }
+            _ => task.clone(),
+        };
         let prio = priority.clone();
         let timeout = args.timeout_secs;
         store
@@ -898,7 +921,7 @@ pub async fn assign_koi(
         "todo_id": &todo.id,
     });
     let pool_id = session.id.clone();
-    let mention_clone = mention.clone();
+    let mention_clone = mention_with_context.clone();
     let meta_str = meta.to_string();
     let msg = store
         .write(move |db| {
@@ -945,15 +968,12 @@ pub async fn assign_koi(
         "mention_message": msg,
         "next_required_action": {
             "tool": "pool_org",
-            "action": "wait_for_koi",
+            "action": "get_todos",
             "pool_id": session.id,
-            "todo_id": todo.id,
-            "koi_id": koi_id,
-            "min_wait_secs": 5,
-            "timeout_secs": args.timeout_secs.max(cfg.default_task_timeout_secs),
+            "note": format!("{} will report results to pool_chat when done. Check progress with get_todos/get_messages.", koi_name),
         },
         "summary": format!(
-            "Task posted to pool, kanban todo created, and {} has been delegated work. Next, wait with pool_org(action=\"wait_for_koi\") before judging the result.",
+            "Task posted to pool, kanban todo created, and {} has been delegated work. The Koi will report results to pool_chat when done — check with pool_org(action=\"get_todos\") or pool_org(action=\"get_messages\") later.",
             koi_name
         ),
     }))

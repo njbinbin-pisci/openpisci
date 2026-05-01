@@ -696,6 +696,10 @@ pub async fn chat_send(
         builtin_tool_enabled,
         allow_outside_workspace,
         vision_enabled,
+        vision_use_main_llm,
+        vision_provider,
+        vision_model,
+        vision_api_key,
         llm_read_timeout_secs,
         auto_compact_input_tokens_threshold,
         project_instruction_budget_chars,
@@ -721,6 +725,10 @@ pub async fn chat_send(
             settings.builtin_tool_enabled.clone(),
             settings.allow_outside_workspace,
             settings.vision_enabled,
+            settings.vision_use_main_llm,
+            settings.vision_provider.clone(),
+            settings.vision_model.clone(),
+            settings.vision_api_key.clone(),
             settings.llm_read_timeout_secs,
             settings.auto_compact_input_tokens_threshold,
             settings.project_instruction_budget_chars,
@@ -781,7 +789,11 @@ pub async fn chat_send(
     // Resolve attachment: convert FrontendAttachment → MediaAttachment
     // For non-vision models or non-image files, we append the path to the message text.
     // For vision models + image data, we pass through as MediaAttachment for inline injection.
-    let vision_capable = vision_enabled || model_supports_vision(&provider, &model);
+    let vision_capable = if vision_use_main_llm {
+        vision_enabled || model_supports_vision(&provider, &model)
+    } else {
+        !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
+    };
     let (effective_content, media_attachment): (String, Option<crate::gateway::MediaAttachment>) =
         if let Some(att) = attachment {
             if att.media_type.starts_with("image/") {
@@ -1292,6 +1304,10 @@ pub async fn run_agent_headless(
         mut builtin_tool_enabled,
         allow_outside_workspace,
         vision_setting,
+        vision_use_main_llm,
+        vision_provider,
+        vision_model,
+        vision_api_key,
         llm_read_timeout_secs,
         auto_compact_input_tokens_threshold,
         project_instruction_budget_chars,
@@ -1315,6 +1331,10 @@ pub async fn run_agent_headless(
             settings.builtin_tool_enabled.clone(),
             settings.allow_outside_workspace,
             settings.vision_enabled,
+            settings.vision_use_main_llm,
+            settings.vision_provider.clone(),
+            settings.vision_model.clone(),
+            settings.vision_api_key.clone(),
             settings.llm_read_timeout_secs,
             settings.auto_compact_input_tokens_threshold,
             settings.project_instruction_budget_chars,
@@ -1376,7 +1396,12 @@ pub async fn run_agent_headless(
     let scene_policy = ScenePolicy::for_kind(scene_kind);
 
     // vision_capable: user override OR auto-detection by provider/model name
-    let vision_capable = vision_setting || model_supports_vision(&provider, &model);
+    // Also accounts for separate vision model when vision_use_main_llm is false.
+    let vision_capable = if vision_use_main_llm {
+        vision_setting || model_supports_vision(&provider, &model)
+    } else {
+        !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
+    };
 
     // Build the effective user message text, handling inbound media.
     // Non-image media is intentionally passed through as a local file/metadata prompt
@@ -1971,13 +1996,26 @@ fn collaboration_protocol_prompt() -> &'static str {
 - Todos record board state; Koi chat messages record explicit handoffs and requests.\n\
 - Do not assume the host runtime will infer the next actor from silence.\n\
 - When another agent or Pisci must act, make that handoff explicit.\n\
-- Structured project-status signals are coordination hints, not automatic workflow transitions.\n"
+- Structured project-status signals are coordination hints, not automatic workflow transitions.\n\
+\n\
+## Blocking Diagnosis\n\
+A project is NOT blocked merely because a Koi has not responded within a polling window. Use these rules:\n\
+- Koi busy + todo in_progress → normal, the Koi is actively working. Do NOT intervene.\n\
+- Koi idle + todo in_progress → possibly stuck. Investigate with get_messages, then try resume_todo or replace_todo.\n\
+- Koi idle + todo status \"todo\" → dispatch may have failed. Try resume_todo to re-dispatch.\n\
+- Koi offline + assigned todos → truly stuck. Reassign with replace_todo to a different Koi.\n\
+- `wait_for_koi` timeout does NOT mean the Koi failed — it only means the synchronous polling window ended.\n\
+- Before declaring a project blocked, always check get_todos AND get_messages. A Koi may have completed work and posted results to pool_chat that haven't been read yet.\n"
 }
 
 fn main_chat_overlay_prompt() -> &'static str {
     "\n\n## Main Chat Overlay\n\
 - You are interacting directly with the user.\n\
 - Pool and Koi state is not preloaded from keyword matches. When collaboration may be useful, decide explicitly whether you need live state, then inspect it with `pool_org` and `app_control(action=\"koi_list\")` before acting.\n\
+- When the user asks about an ongoing project or returns to continue work, ALWAYS start by checking pool state:\n\
+  1. `pool_org(action=\"get_todos\", pool_id=...)` — see which tasks are in progress, done, or blocked\n\
+  2. `pool_org(action=\"get_messages\", pool_id=...)` — see the latest pool_chat updates from Koi agents\n\
+  Then decide the next action based on what you observe, not what you assume.\n\
 - Route the task deliberately before acting:\n\
   - Use `pool_org` when the work is complex, spans multiple domains, or has a high quality bar that benefits from explicit implementation/review/QA collaboration.\n\
   - For complex multi-role work, inspect existing pools and the current Koi roster first. Reuse a related active/paused pool when one exists; otherwise create a pool. If the current Koi roster is missing a needed specialist role, add the minimum additional Koi required before delegating work.\n\
@@ -2309,13 +2347,15 @@ You are the project manager. When a user asks you to "organize a team", "set up 
 
 **3. Assign Koi through controlled pool_org actions — also in the SAME turn**
 - Use `pool_org(action="assign_koi", pool_id=..., koi_id=..., task=...)` for normal Pisci-to-Koi task assignment.
-- After any `assign_koi`, `resume_todo`, or `replace_todo`, call `pool_org(action="wait_for_koi", pool_id=..., todo_id=..., timeout_secs=...)` before judging whether the Koi responded.
-- Use `pool_org(action="get_messages", pool_id=...)` and `pool_org(action="get_todos", pool_id=...)` to monitor progress.
+- After `assign_koi`, the task is delegated and the Koi will execute it autonomously. **Do NOT call `wait_for_koi` as a mandatory step.** The Koi reports results to pool_chat and updates the todo board when done. Inform the user that work has been delegated and move on to other tasks.
+- `wait_for_koi` is available ONLY for short-lived, quick-turnaround tasks where you need the result within the same turn (e.g., a brief code review that takes < 2 minutes). For any task expected to take more than a few minutes, do NOT use it.
+- Use `pool_org(action="get_messages", pool_id=...)` and `pool_org(action="get_todos", pool_id=...)` to monitor progress when you need to check on the project.
 - Use `pool_org(action="post_status", pool_id=..., content=...)` when Pisci needs to publish a supervisor note, decision, or waiting explanation.
 - Koi agents may communicate with each other in pool_chat and use `@!mention` for handoffs. Pisci should observe those messages through `pool_org(get_messages)` rather than posting direct pool_chat messages.
 - Koi agents are fully autonomous: they communicate via pool_chat, share results, and collaborate through mentions. Do NOT micromanage their approach.
 - Every Koi may declare a free-form `role` plus a detailed description. Use both fields to understand their specialization before assigning work.
 - **IMPORTANT**: For Pisci, `pool_org(action="assign_koi")` is the standard task assignment path. Do not use direct `pool_chat @!mention` from the main chat.
+- When assigning a task, provide sufficient context in the `task` parameter: what has been done so far, where the relevant inputs are (file paths, previous Koi outputs), and how this task fits into the larger project plan. A Koi starts each task in a fresh session — it only knows what you tell it and what it can read from pool_chat, the board, and kb/ files.
 
 **4. Evolve the org_spec as the project progresses**
 - `pool_org(action="read", pool_id=...)` — review current org_spec

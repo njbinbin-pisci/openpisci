@@ -130,8 +130,8 @@ pub struct ExecuteTodoArgs {
     /// When the turn was triggered by a `@mention`, the id of that
     /// mention message — used to link the result back in the pool chat.
     pub assign_msg_id: Option<i64>,
-    /// Session id the parent wants propagated to the subagent; usually
-    /// `format!("koi_runtime_{}_{}", koi_id, pool_id_or_default)`.
+    /// Session id the parent wants propagated to the subagent;
+    /// per-task isolation format: `format!("koi_task_{}_{}", koi_id, &todo_id[..8])`.
     pub session_id: String,
     /// Extra tool-profile hints forwarded verbatim to the subagent.
     pub extra_tool_profile: Vec<String>,
@@ -770,12 +770,9 @@ pub async fn resume_blocked_todo(
     let owner_id = owner.id.clone();
     let todo_id = todo.id.clone();
     let session_id = format!(
-        "koi_runtime_{}_{}",
+        "koi_task_{}_{}",
         owner.id,
-        pool_session
-            .as_ref()
-            .map(|p| p.id.as_str())
-            .unwrap_or("default")
+        &todo.id[..8.min(todo.id.len())]
     );
     let pool_id_for_task = pool_session.as_ref().map(|p| p.id.clone());
     tokio::spawn(async move {
@@ -942,12 +939,9 @@ pub async fn replace_blocked_todo(
     let owner_id = new_owner.id.clone();
     let replacement_id = replacement.id.clone();
     let session_id = format!(
-        "koi_runtime_{}_{}",
+        "koi_task_{}_{}",
         new_owner.id,
-        pool_session
-            .as_ref()
-            .map(|p| p.id.as_str())
-            .unwrap_or("default")
+        &replacement.id[..8.min(replacement.id.len())]
     );
     let pool_id_for_task = pool_session.as_ref().map(|p| p.id.clone());
     tokio::spawn(async move {
@@ -1002,42 +996,35 @@ pub async fn handle_mention(
     let kois = store.read(|db| db.list_kois()).await.unwrap_or_default();
 
     for target in parse_mention_targets(&kois, sender_id, content) {
-        let existing = find_active_todo_for_koi(store, &target.koi.id, pool_session_id).await;
-        let (todo, synthesised) = match existing {
-            Some(t) => (t, false),
-            None => {
-                let owner = target.koi.id.clone();
-                let title: String = content.chars().take(120).collect();
-                let desc = content.to_string();
-                let assigned_by = sender_id.to_string();
-                let pool_id = pool_session_id.to_string();
-                let todo = store
-                    .write(move |db| {
-                        db.create_koi_todo(
-                            &owner,
-                            &title,
-                            &desc,
-                            "medium",
-                            &assigned_by,
-                            Some(&pool_id),
-                            "mention",
-                            None,
-                            0,
-                        )
-                    })
-                    .await?;
-                sink.as_ref().emit_pool(&PoolEvent::TodoChanged {
-                    pool_id: pool_session_id.to_string(),
-                    action: TodoChangeAction::Created,
-                    todo: (&todo).into(),
-                });
-                (todo, true)
-            }
-        };
+        // Always create a new todo for the mention, even if the Koi is busy.
+        // This ensures the task appears on the board and will be auto-picked
+        // when the Koi becomes idle (via release_managed_run_slot → activate_pending_todos).
+        let owner = target.koi.id.clone();
+        let title: String = content.chars().take(120).collect();
+        let desc = content.to_string();
+        let assigned_by = sender_id.to_string();
+        let pool_id = pool_session_id.to_string();
+        let todo = store
+            .write(move |db| {
+                db.create_koi_todo(
+                    &owner,
+                    &title,
+                    &desc,
+                    "medium",
+                    &assigned_by,
+                    Some(&pool_id),
+                    "mention",
+                    None,
+                    0,
+                )
+            })
+            .await?;
+        sink.as_ref().emit_pool(&PoolEvent::TodoChanged {
+            pool_id: pool_session_id.to_string(),
+            action: TodoChangeAction::Created,
+            todo: (&todo).into(),
+        });
 
-        if !synthesised && todo.status == "in_progress" {
-            continue;
-        }
         if target.koi.status != "idle" {
             tracing::info!(
                 target: "pool::coordinator",
@@ -1054,7 +1041,7 @@ pub async fn handle_mention(
         let cfg_cl = cfg.clone();
         let owner_id = target.koi.id.clone();
         let todo_id = todo.id.clone();
-        let session_id = format!("koi_runtime_{}_{}", target.koi.id, pool_session_id);
+        let session_id = format!("koi_task_{}_{}", target.koi.id, &todo.id[..8.min(todo.id.len())]);
         let sink_cl = sink.clone();
         tokio::spawn(async move {
             let args = ExecuteTodoArgs {
@@ -1156,9 +1143,9 @@ pub async fn activate_pending_todos(
             todo_id: todo.id.clone(),
             assign_msg_id: None,
             session_id: format!(
-                "koi_runtime_{}_{}",
+                "koi_task_{}_{}",
                 todo.owner_id,
-                todo.pool_session_id.as_deref().unwrap_or("direct")
+                &todo.id[..8.min(todo.id.len())]
             ),
             extra_tool_profile: Vec::new(),
             extra_system_context: None,
@@ -1263,7 +1250,7 @@ pub async fn assign_and_execute(
         koi_id: koi_def.id.clone(),
         todo_id: todo.id.clone(),
         assign_msg_id: None,
-        session_id: format!("koi_runtime_{}_direct", koi_def.id),
+        session_id: format!("koi_task_{}_{}", koi_def.id, &todo.id[..8.min(todo.id.len())]),
         extra_tool_profile: Vec::new(),
         extra_system_context: None,
     };
@@ -1307,6 +1294,7 @@ fn has_live_delegated_mention(content: &str, name: &str) -> bool {
     })
 }
 
+#[allow(dead_code)]
 async fn find_active_todo_for_koi(
     store: &PoolStore,
     koi_id: &str,
