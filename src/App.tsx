@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
@@ -7,21 +7,22 @@ import { settingsApi, sessionsApi, windowApi } from "./services/tauri";
 import { isInternalSession } from "./utils/session";
 import { setLanguage } from "./i18n";
 import Chat from "./components/Chat";
-import Memory from "./components/Memory";
-import Tools from "./components/Tools";
-import FishPage from "./components/Fish";
-import Pond from "./components/Pond";
-import Skills from "./components/Skills";
-import Scheduler from "./components/Scheduler";
-import Settings from "./components/Settings";
-import AuditLog from "./components/AuditLog";
-import About from "./components/About";
-import Onboarding from "./components/Onboarding";
-import OverlayApp from "./components/Overlay";
-import DebugPanel from "./components/Debug";
 import Toaster from "./components/Toaster";
 import "./theme.css";
 import "./App.css";
+
+const Memory = lazy(() => import("./components/Memory"));
+const Tools = lazy(() => import("./components/Tools"));
+const FishPage = lazy(() => import("./components/Fish"));
+const Pond = lazy(() => import("./components/Pond"));
+const Skills = lazy(() => import("./components/Skills"));
+const Scheduler = lazy(() => import("./components/Scheduler"));
+const Settings = lazy(() => import("./components/Settings"));
+const AuditLog = lazy(() => import("./components/AuditLog"));
+const About = lazy(() => import("./components/About"));
+const Onboarding = lazy(() => import("./components/Onboarding"));
+const OverlayApp = lazy(() => import("./components/Overlay"));
+const DebugPanel = lazy(() => import("./components/Debug"));
 
 type Tab = "chat" | "memory" | "tools" | "fish" | "pond" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
 
@@ -185,7 +186,9 @@ function AppContent() {
   if (showOnboarding) {
     return (
       <>
-        <Onboarding onComplete={() => dispatch(settingsActions.setShowOnboarding(false))} />
+        <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>Loading Pisci...</p></div>}>
+          <Onboarding onComplete={() => dispatch(settingsActions.setShowOnboarding(false))} />
+        </Suspense>
         <Toaster />
       </>
     );
@@ -244,17 +247,19 @@ function AppContent() {
         </div>
       </aside>
       <main className="main-content">
-        {activeTab === "chat" && <Chat />}
-        {activeTab === "memory" && <Memory />}
-        {activeTab === "tools" && <Tools />}
-        {activeTab === "pond" && <Pond />}
-        {activeTab === "fish" && <FishPage />}
-        {activeTab === "skills" && <Skills />}
-        {activeTab === "scheduler" && <Scheduler />}
-        {activeTab === "audit" && <AuditLog />}
-        {activeTab === "settings" && <Settings theme={theme} setTheme={setTheme} onOpenTools={() => setActiveTab("tools")} />}
-        {activeTab === "about" && <About />}
-        {activeTab === "debug" && <DebugPanel />}
+        <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>Loading Pisci...</p></div>}>
+          {activeTab === "chat" && <Chat />}
+          {activeTab === "memory" && <Memory />}
+          {activeTab === "tools" && <Tools />}
+          {activeTab === "pond" && <Pond />}
+          {activeTab === "fish" && <FishPage />}
+          {activeTab === "skills" && <Skills />}
+          {activeTab === "scheduler" && <Scheduler />}
+          {activeTab === "audit" && <AuditLog />}
+          {activeTab === "settings" && <Settings theme={theme} setTheme={setTheme} onOpenTools={() => setActiveTab("tools")} />}
+          {activeTab === "about" && <About />}
+          {activeTab === "debug" && <DebugPanel />}
+        </Suspense>
       </main>
       <Toaster />
     </div>
@@ -263,7 +268,11 @@ function AppContent() {
 
 export default function App() {
   if (IS_OVERLAY) {
-    return <OverlayApp />;
+    return (
+      <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>Loading Pisci...</p></div>}>
+        <OverlayApp />
+      </Suspense>
+    );
   }
   return (
     <Provider store={store}>

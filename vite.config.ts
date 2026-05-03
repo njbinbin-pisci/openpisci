@@ -9,6 +9,29 @@ export default defineConfig({
   base: "./",
   plugins: [react()],
   clearScreen: false,
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "app-vendor": [
+            "react",
+            "react-dom",
+            "react-redux",
+            "@reduxjs/toolkit",
+            "i18next",
+            "react-i18next",
+            "@tauri-apps/api",
+          ],
+          markdown: [
+            "react-markdown",
+            "remark-gfm",
+            "rehype-highlight",
+            "highlight.js",
+          ],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,

@@ -10,14 +10,27 @@ import { chatApi, sessionsApi, gatewayApi, AgentEventType, ChannelInfo, ChatAtta
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openPath } from "../../services/tauri";
-import mermaid from "mermaid";
 import InteractiveCard from "./InteractiveCard";
 import ConfirmDialog from "../ConfirmDialog";
 import { isInternalSession } from "../../utils/session";
 import "./Chat.css";
 
 // ─── Mermaid diagram block ────────────────────────────────────────────────────
-mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
+let mermaidPromise: Promise<{
+  parse: (code: string, options?: { suppressErrors?: boolean }) => Promise<unknown>;
+  render: (id: string, code: string) => Promise<{ svg: string }>;
+}> | null = null;
+
+function loadMermaid() {
+  if (!mermaidPromise) {
+    mermaidPromise = import("mermaid").then(({ default: mermaid }) => {
+      mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
+      return mermaid;
+    });
+  }
+
+  return mermaidPromise;
+}
 
 let mermaidIdCounter = 0;
 
@@ -152,6 +165,7 @@ function MermaidBlock({ code }: { code: string }) {
 
     const render = async () => {
       try {
+        const mermaid = await loadMermaid();
         await mermaid.parse(code, { suppressErrors: false });
         const { svg } = await mermaid.render(id, code);
         if (!cancelled && ref.current) {
