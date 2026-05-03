@@ -116,6 +116,8 @@ urlencoding = "2"
 qrcode = "0.14"
 # image encoding (replaces hand-written PNG encoder, supports JPEG for Vision API)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Cross-platform screenshot library (Linux X11/Wayland, macOS, Windows)
+xcap = "0.9"
 
 # Browser automation via Chrome DevTools Protocol (cross-platform)
 chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-features = false }

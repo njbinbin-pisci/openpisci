@@ -199,27 +199,29 @@ impl LoopDetectorState {
             .iter()
             .any(|t| pending_name.contains(t));
         if is_research {
-            let recent_family_count =
-                self.count_recent_tool_family_occurrences(pending_name, RESEARCH_RECENT_WINDOW) + 1;
-            if recent_family_count >= RESEARCH_CRITICAL_THRESHOLD {
+            // Count only calls with the same tool+input — different operations
+            // like browser launch/navigate/type/press are not repetitions.
+            let same_input_count =
+                self.count_recent_tool_family_same_input(pending_name, pending_hash, RESEARCH_RECENT_WINDOW) + 1;
+            if same_input_count >= RESEARCH_CRITICAL_THRESHOLD {
                 return LoopDetectionResult {
                     level: LoopLevel::Critical,
                     detector: Some(LoopDetector::GenericRepeat),
-                    count: recent_family_count,
+                    count: same_input_count,
                     message: format!(
                         "调研工具 '{}' 在最近步骤中已累计调用{}次。请停止继续搜集，先基于现有证据总结结论、明确不确定性，再决定是否还需要补充一轮查询。",
-                        pending_name, recent_family_count
+                        pending_name, same_input_count
                     ),
                 };
             }
-            if recent_family_count >= RESEARCH_WARNING_THRESHOLD {
+            if same_input_count >= RESEARCH_WARNING_THRESHOLD {
                 return LoopDetectionResult {
                     level: LoopLevel::Warning,
                     detector: Some(LoopDetector::GenericRepeat),
-                    count: recent_family_count,
+                    count: same_input_count,
                     message: format!(
                         "调研工具 '{}' 在最近步骤中已累计调用{}次。请优先收束：总结已有发现、列出分歧点，只在确有信息缺口时再补充搜索。",
-                        pending_name, recent_family_count
+                        pending_name, same_input_count
                     ),
                 };
             }
@@ -319,12 +321,21 @@ impl LoopDetectorState {
             .count()
     }
 
-    fn count_recent_tool_family_occurrences(&self, name: &str, window: usize) -> usize {
+    /// Count recent occurrences in the same tool family **with the same input hash**.
+    /// Different tool operations (e.g. browser launch vs navigate vs type) count
+    /// separately because they have different inputs — only truly identical calls
+    /// are flagged as research repetition.
+    fn count_recent_tool_family_same_input(
+        &self,
+        name: &str,
+        input_hash: u64,
+        window: usize,
+    ) -> usize {
         self.history
             .iter()
             .rev()
             .take(window)
-            .filter(|r| same_tool_family(&r.name, name))
+            .filter(|r| same_tool_family(&r.name, name) && r.input_hash == input_hash)
             .count()
     }
 

@@ -13,12 +13,45 @@ import {
   Settings as SettingsData,
   ChannelInfo,
   RuntimeCheckItem,
+  SystemDependencyItem,
   SshServerConfig,
   LlmProviderConfig,
   EnterpriseCapabilityStatus,
   EnterpriseCapabilityTestResult,
 } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
+
+function localizedDependencyRemediation(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  item: SystemDependencyItem,
+): string | null {
+  switch (item.key) {
+    case "linux-session":
+      return t("settings.depRemediation_linux_session");
+    case "xdotool":
+      return t("settings.depRemediation_xdotool");
+    case "wmctrl":
+      return t("settings.depRemediation_wmctrl");
+    case "xclip":
+      return t("settings.depRemediation_xclip");
+    case "cliclick":
+      return t("settings.depRemediation_cliclick");
+    case "osascript":
+      return t("settings.depRemediation_osascript");
+    case "macos-accessibility":
+      return t("settings.depRemediation_macos_accessibility");
+    case "powershell":
+      return t("settings.depRemediation_powershell");
+    case "uia-runtime":
+      return t("settings.depRemediation_uia_runtime");
+    case "wmi-service":
+      return t("settings.depRemediation_wmi_service");
+    case "office-installation":
+      return t("settings.depRemediation_office_installation");
+    default:
+      return item.remediation;
+  }
+}
 
 type EnterprisePlatformId = "feishu" | "wecom" | "dingtalk";
 
@@ -53,6 +86,11 @@ const DEFAULT_SETTINGS: SettingsData = {
   wechat_bot_id: "",
   im_auto_minimal_mode: true,
   im_message_mode: "queue",
+  vision_use_main_llm: true,
+  vision_provider: "",
+  vision_model: "",
+  vision_api_key: "",
+  vision_base_url: "",
   dingtalk_app_key: "",
   dingtalk_app_secret: "",
   dingtalk_robot_code: "",
@@ -134,6 +172,8 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
   const [runtimes, setRuntimes] = useState<RuntimeCheckItem[]>([]);
   const [runtimesLoading, setRuntimesLoading] = useState(false);
   const [runtimesSettingKey, setRuntimesSettingKey] = useState<string | null>(null);
+  const [systemDependencies, setSystemDependencies] = useState<SystemDependencyItem[]>([]);
+  const [systemDependenciesLoading, setSystemDependenciesLoading] = useState(false);
   const [defaultWorkspace, setDefaultWorkspace] = useState<string>("");
   const [capabilityStatus, setCapabilityStatus] = useState<Partial<Record<EnterprisePlatformId, EnterpriseCapabilityStatus>>>({});
   const [capabilityLoading, setCapabilityLoading] = useState<Partial<Record<EnterprisePlatformId, boolean>>>({});
@@ -321,13 +361,19 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
 
   const handleCheckRuntimes = useCallback(async () => {
     setRuntimesLoading(true);
+    setSystemDependenciesLoading(true);
     try {
-      const items = await systemApi.checkRuntimes();
+      const [items, deps] = await Promise.all([
+        systemApi.checkRuntimes(),
+        systemApi.checkSystemDependencies(),
+      ]);
       setRuntimes(items);
+      setSystemDependencies(deps);
     } catch {
       // ignore
     } finally {
       setRuntimesLoading(false);
+      setSystemDependenciesLoading(false);
     }
   }, []);
 
@@ -597,6 +643,77 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
               {t("settings.visionEnabled")}
             </label>
             <p className="field-hint" style={{ marginTop: 4 }}>{t("settings.visionEnabledHint")}</p>
+          </div>
+
+          {/* Vision Model Section */}
+          <div style={{ marginTop: 20, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg-secondary)" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", marginBottom: 12 }}>
+              {t("settings.visionModelSection")}
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 10 }}>
+              <label className="label" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={!!form.vision_use_main_llm}
+                  onChange={(e) => update("vision_use_main_llm", e.target.checked)}
+                  style={{ width: 16, height: 16, cursor: "pointer" }}
+                />
+                {t("settings.visionUseMainLlm")}
+              </label>
+              <p className="field-hint" style={{ marginTop: 2, fontSize: 11 }}>{t("settings.visionUseMainLlmHint")}</p>
+            </div>
+
+            {!form.vision_use_main_llm && (
+              <>
+                <div className="form-group">
+                  <label className="label">{t("settings.visionProvider")}</label>
+                  <select className="input" value={form.vision_provider || "anthropic"} onChange={(e) => update("vision_provider", e.target.value)}>
+                    <option value="anthropic">Anthropic (Claude)</option>
+                    <option value="openai">OpenAI (GPT)</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="qwen">阿里百炼（Qwen）</option>
+                    <option value="minimax">MiniMax</option>
+                    <option value="zhipu">智谱 AI（GLM）</option>
+                    <option value="kimi">Kimi（Moonshot）</option>
+                    <option value="custom">{t("settings.customApiKey")} (OpenAI {t("common.enable")})</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="label">{t("settings.visionModel")}</label>
+                  <input className="input" value={form.vision_model ?? ""} onChange={(e) => update("vision_model", e.target.value)}
+                    placeholder={t("settings.visionModelPlaceholder")}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="label">{t("settings.visionApiKey")}</label>
+                  <input className="input" type={showKeys ? "text" : "password"} value={form.vision_api_key ?? ""}
+                    onChange={(e) => update("vision_api_key", e.target.value)} placeholder="sk-..." />
+                </div>
+
+                <div className="form-group">
+                  <label className="label">{t("settings.visionBaseUrl")}</label>
+                  <input className="input" value={form.vision_base_url ?? ""} onChange={(e) => update("vision_base_url", e.target.value)}
+                    placeholder="https://api.openai.com/v1" />
+                </div>
+              </>
+            )}
+
+            {/* Status badge */}
+            <div style={{ marginTop: 8, fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{
+                width: 8, height: 8, borderRadius: "50%",
+                background: (form.vision_use_main_llm && form.vision_enabled) || (!form.vision_use_main_llm && form.vision_provider && form.vision_model && form.vision_api_key)
+                  ? "#4ade80" : "#f87171"
+              }} />
+              <span style={{ color: (form.vision_use_main_llm && form.vision_enabled) || (!form.vision_use_main_llm && form.vision_provider && form.vision_model && form.vision_api_key)
+                ? "#4ade80" : "#f87171" }}>
+                {(form.vision_use_main_llm && form.vision_enabled) || (!form.vision_use_main_llm && form.vision_provider && form.vision_model && form.vision_api_key)
+                  ? t("settings.visionStatusOk") : t("settings.visionStatusMissing")}
+              </span>
+            </div>
           </div>
 
           <div className="form-group">
@@ -1932,6 +2049,99 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
               })}
             </div>
           )}
+
+          <div style={{ marginTop: 20 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", marginBottom: 8 }}>
+              {t("settings.systemDepsTitle")}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12 }}>
+              {t("settings.systemDepsDesc")}
+            </div>
+
+            {systemDependenciesLoading && systemDependencies.length === 0 ? (
+              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("common.loading")}</div>
+            ) : systemDependencies.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {systemDependencies.map((item) => {
+                  const icon = item.status === "ok" ? "✅" : item.status === "missing" ? "❌" : "⚠️";
+                  const badgeBg = item.status === "ok"
+                    ? "rgba(40, 167, 69, 0.12)"
+                    : item.status === "missing"
+                      ? "rgba(220, 53, 69, 0.12)"
+                      : "rgba(255, 193, 7, 0.12)";
+                  const badgeColor = item.status === "ok"
+                    ? "#28a745"
+                    : item.status === "missing"
+                      ? "#dc3545"
+                      : "#b8860b";
+                  const statusLabel = item.status === "ok"
+                    ? t("settings.dependencyStatusOk")
+                    : item.status === "missing"
+                      ? t("settings.dependencyStatusMissing")
+                      : t("settings.dependencyStatusWarning");
+                  return (
+                    <div
+                      key={item.key}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 10,
+                        padding: "10px 14px",
+                        border: "1px solid var(--border)",
+                        borderRadius: 8,
+                        background: "var(--bg-secondary)",
+                      }}
+                    >
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>{icon}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }}>
+                            {item.name}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              padding: "2px 6px",
+                              borderRadius: 999,
+                              background: badgeBg,
+                              color: badgeColor,
+                              fontWeight: 700,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {statusLabel}
+                          </span>
+                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                            {item.required ? t("settings.dependencyRequired") : t("settings.dependencyRecommended")}
+                          </span>
+                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                            {item.feature}
+                          </span>
+                        </div>
+                        {item.details && (
+                          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                            {item.details}
+                          </div>
+                        )}
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+                          {item.hint}
+                        </div>
+                        {localizedDependencyRemediation(t, item) && !item.available && (
+                          <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4 }}>
+                            {localizedDependencyRemediation(t, item)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                {t("settings.systemDepsHint")}
+              </div>
+            )}
+          </div>
         </section>
       </div>
     </div>

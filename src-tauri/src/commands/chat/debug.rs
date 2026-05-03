@@ -1,3 +1,4 @@
+use crate::commands::platform::system::{collect_system_dependencies, SystemDependencyItem};
 use crate::host::DesktopHostTools;
 use crate::store::AppState;
 /// Debug & E2E testing module for OpenPisci.
@@ -37,6 +38,10 @@ pub struct DebugScenario {
     /// Supported values: "ssh_servers" (at least one SSH server configured)
     #[serde(default)]
     pub requires_config: Option<Vec<String>>,
+    /// Which platforms this scenario supports. `None` means all platforms.
+    /// Supported values: "windows", "linux", "macos"
+    #[serde(default)]
+    pub platforms: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +74,7 @@ pub struct DebugReport {
     pub timestamp: String,
     pub system_info: SystemInfo,
     pub settings_summary: SettingsSummary,
+    pub system_dependencies: Vec<SystemDependencyItem>,
     pub available_tools: Vec<String>,
     pub recent_audit: Vec<crate::store::db::AuditEntry>,
     pub recent_errors: Vec<String>,
@@ -86,7 +92,13 @@ pub struct SystemInfo {
     pub max_iterations: u32,
     pub tool_rate_limit: u32,
     pub api_key_configured: bool,
+    /// Whether the main LLM model is recognized as vision-capable.
     pub vision_enabled: bool,
+    /// Whether a vision model is effectively configured (main model supports vision,
+    /// or a separate vision model has provider+model+api_key set).
+    pub vision_configured: bool,
+    /// Whether a separate vision model is being used (vision_use_main_llm == false).
+    pub vision_uses_separate_model: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +113,196 @@ pub struct SettingsSummary {
     pub confirm_file_write: bool,
     pub enabled_tools: Vec<String>,
     pub disabled_tools: Vec<String>,
+}
+
+// ─── Platform-adaptive helpers ───────────────────────────────────────────────
+
+/// Returns the OS name used in platform filtering: "windows", "linux", or "macos".
+fn current_os_platform() -> &'static str {
+    std::env::consts::OS // "windows", "linux", "macos"
+}
+
+/// A directory path that exists on all platforms and contains many files.
+/// Useful for file_search/file_list tests.
+fn findable_dir() -> &'static str {
+    if cfg!(target_os = "windows") {
+        r"C:\Windows\System32"
+    } else if cfg!(target_os = "macos") {
+        "/usr/bin"
+    } else {
+        "/usr/bin"
+    }
+}
+
+/// A directory path one level up from findable_dir, for directory listing tests.
+fn system_parent_dir() -> &'static str {
+    if cfg!(target_os = "windows") {
+        r"C:\Windows"
+    } else {
+        "/usr"
+    }
+}
+
+/// A public writable directory path that exists on all platforms.
+fn public_dir() -> &'static str {
+    if cfg!(target_os = "windows") {
+        r"C:\Users\Public"
+    } else {
+        "/tmp"
+    }
+}
+
+/// A file glob pattern for finding many files in the findable directory.
+fn findable_glob_pattern() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "*.exe"
+    } else {
+        // Use *lib* so the expected keyword "lib" reliably appears in results.
+        // /usr/bin contains many files with "lib" in the name (e.g. dpkg-shlibdeps, gcc-ranlib).
+        "*lib*"
+    }
+}
+
+/// A shell command to list a large directory (non-recursive).
+fn shell_list_dir_cmd(dir: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("dir {} /b", dir)
+    } else {
+        format!("ls {}", dir)
+    }
+}
+
+/// A shell command to get CPU info.
+fn shell_cpu_info_cmd() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Get-WmiObject Win32_Processor | Select Name"
+    } else if cfg!(target_os = "macos") {
+        "sysctl -n machdep.cpu.brand_string"
+    } else {
+        "cat /proc/cpuinfo | grep 'model name' | head -1"
+    }
+}
+
+/// A shell command to get total memory info.
+fn shell_memory_info_cmd() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Get-WmiObject Win32_ComputerSystem | Select TotalPhysicalMemory"
+    } else if cfg!(target_os = "macos") {
+        "sysctl -n hw.memsize"
+    } else {
+        "free -h | grep Mem"
+    }
+}
+
+/// A shell command to list top processes by memory.
+fn shell_top_mem_cmd() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Get-Process | Sort-Object WorkingSet -Descending | Select -First 5 Name,Id"
+    } else if cfg!(target_os = "macos") {
+        "ps aux --sort=-%mem | head -6"
+    } else {
+        "ps aux --sort=-%mem | head -6"
+    }
+}
+
+/// A shell command to open a URL in the default browser.
+fn shell_open_url_cmd(url: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("Start-Process \"{}\"", url)
+    } else if cfg!(target_os = "macos") {
+        format!("open {}", url)
+    } else {
+        format!("xdg-open {}", url)
+    }
+}
+
+/// A shell command to wait/sleep for N seconds.
+fn shell_sleep_cmd(secs: u32) -> String {
+    if cfg!(target_os = "windows") {
+        format!("Start-Sleep -Seconds {}", secs)
+    } else {
+        format!("sleep {}", secs)
+    }
+}
+
+/// A shell command to check if an environment variable is set.
+fn shell_check_env_cmd(var: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("$env:{}", var)
+    } else {
+        format!("echo ${}", var)
+    }
+}
+
+/// A shell command to open a text editor application.
+#[allow(dead_code)]
+fn shell_open_editor_cmd() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "start notepad.exe"
+    } else if cfg!(target_os = "macos") {
+        "open -a TextEdit"
+    } else {
+        "gedit"
+    }
+}
+
+/// A shell command to kill an editor process.
+#[allow(dead_code)]
+fn shell_kill_editor_cmd() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "taskkill /f /im notepad.exe"
+    } else if cfg!(target_os = "macos") {
+        "pkill TextEdit"
+    } else {
+        "pkill gedit"
+    }
+}
+
+/// A shell command to get system resource info (CPU, memory, disk).
+#[allow(dead_code)]
+fn shell_sys_resource_cmd() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Get-WmiObject Win32_Processor | Select-Object LoadPercentage; Get-WmiObject Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory; Get-WmiObject Win32_LogicalDisk | Select-Object DeviceID,Size,FreeSpace"
+    } else if cfg!(target_os = "macos") {
+        "top -l 1 | head -10; vm_stat; df -h"
+    } else {
+        "cat /proc/stat | head -1; free -h; df -h"
+    }
+}
+
+/// A shell command to list installed software.
+#[allow(dead_code)]
+fn shell_installed_apps_cmd() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Get-WmiObject Win32_Product | Select -First 5 Name"
+    } else if cfg!(target_os = "macos") {
+        "ls /Applications | head -10"
+    } else {
+        "dpkg -l | head -10"
+    }
+}
+
+/// A system info query command for the platform.
+#[allow(dead_code)]
+fn shell_os_version_cmd() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Get-WmiObject Win32_OperatingSystem | Select-Object Caption"
+    } else if cfg!(target_os = "macos") {
+        "sw_vers"
+    } else {
+        "uname -a"
+    }
+}
+
+/// Returns the current OS name in human-readable form.
+fn os_display_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Windows"
+    } else if cfg!(target_os = "macos") {
+        "macOS"
+    } else {
+        "Linux"
+    }
 }
 
 // ─── Built-in test scenarios ──────────────────────────────────────────────────
@@ -118,6 +320,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["PONG".into()],
             expected_tools: vec![],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "file_write_read".into(),
@@ -131,6 +334,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["PISCI_DEBUG_OK".into()],
             expected_tools: vec!["file_write".into(), "file_read".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "file_edit".into(),
@@ -145,6 +349,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["Hello Pisci".into()],
             expected_tools: vec!["file_write".into(), "file_edit".into(), "file_read".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "file_search_glob".into(),
@@ -152,10 +357,11 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "File Search (glob)".into(),
             description: "用 file_search 工具按文件名模式搜索文件".into(),
             description_en: "Use file_search to find files by name pattern (glob)".into(),
-            prompt: "请用 file_search 工具在 C:\\Windows\\System32 目录下搜索所有 *.exe 文件（max_results=5），告诉我找到了哪些文件".into(),
-            expected_keywords: vec![".exe".into()],
+            prompt: format!("请用 file_search 工具在 {} 目录下搜索所有 {} 文件（max_results=5），告诉我找到了哪些文件", findable_dir(), findable_glob_pattern()),
+            expected_keywords: vec![if cfg!(target_os = "windows") { ".exe".into() } else { "lib".into() }],
             expected_tools: vec!["file_search".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "file_list".into(),
@@ -163,10 +369,11 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "Directory Listing".into(),
             description: "用 file_list 工具列出目录内容，验证结构化目录读取".into(),
             description_en: "Use file_list to list directory contents as structured JSON".into(),
-            prompt: "请用 file_list 工具列出 C:\\Windows 目录的内容（不递归），告诉我有哪些子目录".into(),
-            expected_keywords: vec!["System32".into()],
+            prompt: format!("请用 file_list 工具列出 {} 目录的内容（不递归），告诉我有哪些子目录", system_parent_dir()),
+            expected_keywords: vec![if cfg!(target_os = "windows") { "System32".into() } else { "bin".into() }],
             expected_tools: vec!["file_list".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "shell_echo".into(),
@@ -178,6 +385,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["SHELL_OK".into()],
             expected_tools: vec!["shell".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "shell_sysinfo".into(),
@@ -185,10 +393,11 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "System Info Query".into(),
             description: "用 shell 查询 CPU、内存、磁盘等基本系统信息".into(),
             description_en: "Query CPU, memory, and disk info via shell".into(),
-            prompt: "请用 shell 工具查询：1) CPU 型号（Get-WmiObject Win32_Processor | Select Name）；2) 内存总量（Get-WmiObject Win32_ComputerSystem | Select TotalPhysicalMemory）。告诉我结果".into(),
+            prompt: format!("请用 shell 工具查询：1) CPU 型号（{}）；2) 内存总量（{}）。告诉我结果", shell_cpu_info_cmd(), shell_memory_info_cmd()),
             expected_keywords: vec![],
             expected_tools: vec!["shell".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "shell_process".into(),
@@ -196,10 +405,11 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "Process List".into(),
             description: "查询当前运行的进程列表，验证 shell 的系统查询能力".into(),
             description_en: "List running processes to verify shell system query capability".into(),
-            prompt: "请用 shell 工具列出当前占用内存最多的 5 个进程（Get-Process | Sort-Object WorkingSet -Descending | Select -First 5 Name,Id），告诉我结果".into(),
+            prompt: format!("请用 shell 工具列出当前占用内存最多的 5 个进程（{}），告诉我结果", shell_top_mem_cmd()),
             expected_keywords: vec![],
             expected_tools: vec!["shell".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "web_search".into(),
@@ -207,10 +417,11 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "Web Search".into(),
             description: "执行混合网络搜索（SearXNG + 本地引擎），验证网络访问是否正常".into(),
             description_en: "Run a hybrid web search (SearXNG + local engines) to verify network access".into(),
-            prompt: "请搜索 'Windows 11 最新版本' 并告诉我找到了什么".into(),
+            prompt: format!("请搜索 '{} 最新版本' 并告诉我找到了什么", os_display_name()).into(),
             expected_keywords: vec![],
             expected_tools: vec!["web_search".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "powershell_query".into(),
@@ -218,10 +429,11 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "PowerShell Structured Query".into(),
             description: "用 powershell_query 工具查询系统信息，返回结构化 JSON".into(),
             description_en: "Query system info via powershell_query tool, returns structured JSON".into(),
-            prompt: "请用 powershell_query 工具查询当前系统的 Windows 版本（query: get_system_info），告诉我操作系统版本".into(),
+            prompt: "请用 powershell_query 工具查询当前系统的版本（query: get_system_info），告诉我操作系统版本".into(),
             expected_keywords: vec![],
             expected_tools: vec!["powershell_query".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
         DebugScenario {
             id: "powershell_installed_apps".into(),
@@ -233,6 +445,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec![],
             expected_tools: vec!["powershell_query".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
         DebugScenario {
             id: "wmi_hardware".into(),
@@ -244,6 +457,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec![],
             expected_tools: vec!["wmi".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
         DebugScenario {
             id: "process_control".into(),
@@ -251,12 +465,13 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "Process Control".into(),
             description: "检查进程是否在运行，验证 process_control 工具可用".into(),
             description_en: "Check if a process is running to verify process_control tool".into(),
-            prompt: "请用 process_control 工具检查 explorer.exe 是否在运行（action: is_running, name: explorer）.\
+            prompt: format!("请用 process_control 工具检查 {} 是否在运行（action: is_running, name: {}）.\
                      工具返回 JSON，请告诉我其中 running 字段的值（true 或 false），以及 PID 列表.\
-                     回复中必须包含英文单词 running（例如：running: true）。".into(),
+                     回复中必须包含英文单词 running（例如：running: true）。", if cfg!(target_os = "windows") { "explorer.exe" } else { "dbus-daemon" }, if cfg!(target_os = "windows") { "explorer" } else { "dbus-daemon" }),
             expected_keywords: vec!["running".into()],
             expected_tools: vec!["process_control".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "multi_step".into(),
@@ -273,6 +488,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["MULTI_STEP_DONE".into()],
             expected_tools: vec!["shell".into(), "file_write".into(), "file_read".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "file_search_grep".into(),
@@ -288,6 +504,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["pisci_grep_ok".into()],
             expected_tools: vec!["file_write".into(), "file_search".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "memory_store".into(),
@@ -299,6 +516,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["DEBUG_MEMORY_TEST_OK".into()],
             expected_tools: vec!["memory_store".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "screen_capture".into(),
@@ -311,6 +529,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["x".into()],
             expected_tools: vec!["screen_capture".into()],
             requires_config: None,
+            platforms: None,
         },
         // ── Context management tests ──────────────────────────────────────────
         DebugScenario {
@@ -325,6 +544,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["CTX_PERSIST_OK".into()],
             expected_tools: vec!["file_write".into(), "file_read".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "ctx_multi_turn_memory".into(),
@@ -340,6 +560,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["42".into()],
             expected_tools: vec!["file_write".into(), "file_read".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "ctx_compression_check".into(),
@@ -347,13 +568,14 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "Context Compression Check".into(),
             description: "验证大量工具输出被正确裁剪，不超出上下文预算".into(),
             description_en: "Verify large tool outputs are trimmed correctly and context stays within budget".into(),
-            prompt: "请执行以下操作并报告结果:\
-                     1. 用 powershell_query 工具执行 action: query，query: 'Get-Process | Select-Object Name,Id,CPU | ConvertTo-Json' 获取进程列表\
-                     2. 用 file_list 工具列出 C:\\Windows\\System32 目录（不递归)\
-                     3. 告诉我：系统中运行了多少个进程（大约），System32 目录中有多少个文件/文件夹？".into(),
+            prompt: format!("请执行以下操作并报告结果:\
+                     1. 用 shell 工具执行命令 '{}' 获取进程列表\
+                     2. 用 file_list 工具列出 {} 目录（不递归)\
+                     3. 告诉我：系统中运行了多少个进程（大约），{} 目录中有多少个文件/文件夹？", shell_top_mem_cmd().replace("head -6", ""), findable_dir(), findable_dir()),
             expected_keywords: vec!["进程".into(), "文件".into()],
-            expected_tools: vec!["powershell_query".into(), "file_list".into()],
+            expected_tools: vec!["shell".into(), "file_list".into()],
             requires_config: None,
+            platforms: None,
         },
         DebugScenario {
             id: "ctx_trim_verify".into(),
@@ -361,13 +583,14 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "Tool Result Trim Verify".into(),
             description: "验证中间轮的大型工具输出经 head+tail 裁剪，保留关键信息".into(),
             description_en: "Verify that large tool outputs in middle turns are trimmed with head+tail strategy".into(),
-            prompt: "请分两步完成:\
-                     第一步：用 shell 工具执行命令 'dir C:\\Windows\\System32 /b' 获取文件列表（这会产生大量输出）.\
+            prompt: format!("请分两步完成:\
+                     第一步：用 shell 工具执行命令 '{}' 获取文件列表（这会产生大量输出）.\
                      第二步：从上面的输出中，告诉我列表中的前 3 个文件名是什么？\
-                     注意：只需告诉我前 3 个文件名，不需要完整列表。".into(),
+                     注意：只需告诉我前 3 个文件名，不需要完整列表。", shell_list_dir_cmd(findable_dir())),
             expected_keywords: vec![".".into()],
             expected_tools: vec!["shell".into()],
             requires_config: None,
+            platforms: None,
         },
 
         // ── Office 操作 ────────────────────────────────────────────────────────
@@ -386,6 +609,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["姓名".into(), "分数".into()],
             expected_tools: vec!["office".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         DebugScenario {
@@ -402,6 +626,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["折线".into(), "line".into()],
             expected_tools: vec!["office".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         DebugScenario {
@@ -420,6 +645,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["成功".into(), "debug_word_test.docx".into()],
             expected_tools: vec!["office".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         DebugScenario {
@@ -437,6 +663,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["3".into(), "幻灯片".into()],
             expected_tools: vec!["office".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         DebugScenario {
@@ -454,6 +681,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["产品".into(), "价格".into()],
             expected_tools: vec!["office".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         // ── 邮件收发 ───────────────────────────────────────────────────────────
@@ -473,6 +701,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["SKIP".into(), "成功".into(), "邮件".into()],
             expected_tools: vec![],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         DebugScenario {
@@ -489,6 +718,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["SKIP".into(), "成功".into(), "SMTP".into(), "smtp".into(), "邮件".into(), "未配置".into(), "发送".into()],
             expected_tools: vec!["powershell_query".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         DebugScenario {
@@ -504,6 +734,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["SKIP".into(), "邮件".into(), "IMAP".into()],
             expected_tools: vec!["powershell_query".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         // ── 技能市场 ───────────────────────────────────────────────────────────
@@ -514,13 +745,14 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "Skill Market Search".into(),
             description: "搜索 Clawhub 技能市场，验证网络访问和技能列表获取".into(),
             description_en: "Search Clawhub skill market to verify network access and skill listing".into(),
-            prompt: "请用 web_search 工具搜索「OpenPisci 技能 site:github.com」,\
-                     或者直接用 shell 工具执行 curl 或 PowerShell Invoke-WebRequest 访问 https://api.github.com/search/repositories?q=pisci+skill,\
-                     获取相关技能仓库列表.\
-                     告诉我找到了哪些相关仓库或技能，以及它们的名称和描述。".into(),
-            expected_keywords: vec!["github".into(), "skill".into()],
-            expected_tools: vec!["web_search".into()],
+            prompt: "请用 app_control 工具，执行 action=skill_search，query 留空获取热门技能列表，\
+                     或者 query 填入「OpenPisci」搜索相关技能。\
+                     从 ClawHub 技能市场（https://clawhub.ai）获取技能列表。\
+                     告诉我找到了哪些技能，以及它们的名称和描述。".into(),
+            expected_keywords: vec!["ClawHub".into(), "skill".into(), "slug".into()],
+            expected_tools: vec!["app_control".into()],
             requires_config: None,
+            platforms: None,
         },
 
         DebugScenario {
@@ -538,6 +770,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["debug_test_skill".into(), "成功".into()],
             expected_tools: vec!["file_write".into(), "file_read".into()],
             requires_config: None,
+            platforms: None,
         },
 
         DebugScenario {
@@ -547,13 +780,14 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             description: "列出已安装的用户工具并尝试调用，验证技能调用链路".into(),
             description_en: "List installed user tools and attempt to invoke one to verify skill invocation chain".into(),
             prompt: "请完成以下操作:\
-                     1. 用 powershell_query 工具执行 Get-ChildItem 列出工作区目录中所有 .json 文件，找出技能配置文件.\
+                     1. 用 shell 或 file_list 工具列出工作区目录中所有 .json 文件，找出技能配置文件.\
                      2. 如果找到了技能配置文件，读取其中一个并告诉我技能名称和描述.\
                      3. 如果没有找到任何技能，请回复：SKIP - 未安装任何用户技能.\
                      4. 告诉我当前已安装的技能列表（或 SKIP 原因）。".into(),
             expected_keywords: vec!["SKIP".into(), "技能".into(), "skill".into(), "Skill".into(), "未安装".into(), "找到".into(), "json".into(), "JSON".into()],
-            expected_tools: vec!["powershell_query".into()],
+            expected_tools: vec!["shell".into()],
             requires_config: None,
+            platforms: None,
         },
 
         // ── 小鱼（Fish）─────────────────────────────────────────────────────────
@@ -565,13 +799,14 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             description: "列出所有已配置的小鱼（子智能体），验证小鱼配置读取".into(),
             description_en: "List all configured Fish (sub-agents) to verify Fish config reading".into(),
             prompt: "请用 file_list 工具列出小鱼（Fish）配置目录，步骤如下:\
-                     1. 用 file_list 列出 fish 目录（路径：%APPDATA%\\com.pisci.desktop\\fish），查看有哪些 FISH.toml 文件.\
-                     2. 如果目录不存在或为空，直接回复：SKIP - 未配置小鱼（当前没有安装任何 Fish 子智能体）.\
+                     1. 用 app_control(action=settings_get) 获取 Fish 配置目录路径.\
+                     2. 如果找不到配置目录或目录为空，直接回复：SKIP - 未配置小鱼（当前没有安装任何 Fish 子智能体）.\
                      3. 如果找到了 FISH.toml 文件，告诉我找到了多少个小鱼（Fish），以及它们的名称.\
                      注意：无论结果如何，最终回复中必须包含小鱼和Fish这两个词。".into(),
             expected_keywords: vec!["SKIP".into(), "小鱼".into(), "Fish".into(), "未配置".into()],
             expected_tools: vec!["file_list".into()],
             requires_config: None,
+            platforms: None,
         },
 
         DebugScenario {
@@ -587,6 +822,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["SKIP".into(), "星期".into(), "小鱼".into(), "fish".into(), "Fish".into(), "Monday".into(), "Tuesday".into(), "Wednesday".into(), "Thursday".into(), "Friday".into(), "Saturday".into(), "Sunday".into(), "一".into()],
             expected_tools: vec![],
             requires_config: None,
+            platforms: None,
         },
 
         // ── UIA 自动化 ─────────────────────────────────────────────────────────
@@ -602,6 +838,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["窗口".into()],
             expected_tools: vec!["uia".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         DebugScenario {
@@ -620,6 +857,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["记事本".into(), "Notepad".into()],
             expected_tools: vec!["shell".into(), "uia".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         DebugScenario {
@@ -644,6 +882,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["UIA定位测试".into(), "OpenPisci".into()],
             expected_tools: vec!["shell".into(), "uia".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         // ── 多模态 ─────────────────────────────────────────────────────────────
@@ -662,23 +901,25 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["SKIP".into(), "图像".into(), "截图".into(), "窗口".into()],
             expected_tools: vec!["screen_capture".into()],
             requires_config: None,
+            platforms: None,
         },
 
         DebugScenario {
             id: "multimodal_image_read_file".into(),
             name: "多模态本地图片读取".into(),
             name_en: "Multimodal Local Image Read".into(),
-            description: "读取本地图片文件并让模型描述，验证图片文件多模态处理（不支持则回复 SKIP）".into(),
-            description_en: "Read a local image file and ask the model to describe it, verify multimodal file handling (SKIP if not supported)".into(),
-            prompt: "请完成以下多模态文件测试:\
-                     1. 用 file_list 工具列出 C:\\Users\\Public 目录下的图片文件（.png, .jpg, .jpeg, .bmp）.\
-                     2. 如果找到图片文件，用 file_read 工具读取其中一张.\
-                     3. 如果当前模型支持多模态，描述图片内容；如果不支持，回复：SKIP - 当前模型不支持多模态.\
-                     4. 如果没有找到图片文件，先用 screen_capture 截图保存，再读取描述.\
-                     告诉我图片内容描述或 SKIP 原因。".into(),
-            expected_keywords: vec!["SKIP".into(), "图片".into(), "图像".into(), "image".into(), "Image".into(), "png".into(), "PNG".into(), "描述".into(), "内容".into()],
-            expected_tools: vec!["file_list".into()],
+            description: "检查本地图片目录后用 screen_capture 截取桌面并让模型描述，验证多模态（不支持则回复 SKIP）".into(),
+            description_en: "List a local image directory then use screen_capture to screenshot and describe with Vision AI (SKIP if not supported)".into(),
+            prompt: format!("请完成以下多模态文件测试:\
+                     首先用 file_list 工具快速列出 {}/ 目录下的图片文件（.png, .jpg, .jpeg, .bmp）.\
+                     然后用 screen_capture 工具（action=capture, format=jpeg）截取当前屏幕.\
+                     如果当前模型支持多模态图像，请描述截图中的主要内容（至少 3 个可见元素）;\
+                     如果不支持多模态，请回复：SKIP - 当前模型不支持多模态.\
+                     请直接描述，不需要使用 vision_context 工具。", public_dir()),
+            expected_keywords: vec!["SKIP".into(), "截图".into(), "屏幕".into(), "image".into(), "Image".into(), "描述".into(), "窗口".into()],
+            expected_tools: vec!["file_list".into(), "screen_capture".into()],
             requires_config: None,
+            platforms: None,
         },
 
         // ── 浏览器 ─────────────────────────────────────────────────────────────
@@ -698,6 +939,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["搜索".into(), "结果".into(), "bing".into(), "Bing".into()],
             expected_tools: vec!["browser".into()],
             requires_config: None,
+            platforms: None,
         },
 
         DebugScenario {
@@ -706,15 +948,16 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "Headless Browser Screenshot".into(),
             description: "使用 headless 浏览器访问 URL 并截图，验证页面渲染能力".into(),
             description_en: "Use headless browser to visit a URL and take a screenshot, verify page rendering".into(),
-            prompt: "请用 browser 工具（headless 模式）完成以下操作:\
+            prompt: format!("请用 browser 工具（headless 模式）完成以下操作:\
                      1. 访问 https://example.com.\
                      2. 等待页面加载完成.\
-                     3. 截取页面截图并保存到 C:\\Users\\Public\\debug_browser_screenshot.png.\
+                     3. 截取页面截图并保存到 {}/debug_browser_screenshot.png.\
                      4. 获取页面标题和主要文字内容.\
-                     5. 告诉我页面标题和主要内容，以及截图是否保存成功。".into(),
+                     5. 告诉我页面标题和主要内容，以及截图是否保存成功。", public_dir()),
             expected_keywords: vec!["Example".into(), "页面".into(), "example.com".into(), "标题".into()],
             expected_tools: vec!["browser".into()],
             requires_config: None,
+            platforms: None,
         },
 
         DebugScenario {
@@ -723,14 +966,15 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "Open User Browser".into(),
             description: "用 shell 命令打开用户默认浏览器访问指定 URL，验证系统浏览器集成".into(),
             description_en: "Open user's default browser to a URL via shell command, verify system browser integration".into(),
-            prompt: "请用 shell 工具执行以下操作:\
-                     1. 执行 PowerShell 命令 'Start-Process \"https://example.com\"' 打开用户默认浏览器访问 example.com.\
-                     2. 等待 2 秒.\
-                     3. 用 uia 工具执行 action=list_windows，检查是否有浏览器窗口出现（标题包含 Chrome、Edge、Firefox 等）.\
-                     4. 告诉我浏览器是否成功打开，以及检测到的浏览器窗口信息。".into(),
+            prompt: format!("请用 shell 工具执行以下操作:\
+                     1. 执行命令 '{}' 打开用户默认浏览器访问 example.com.\
+                     2. 等待 2 秒（{}）.\
+                     3. 用 shell 工具检查是否有浏览器进程出现（执行：{}）.\
+                     4. 告诉我浏览器是否成功打开。", shell_open_url_cmd("https://example.com"), shell_sleep_cmd(2), shell_top_mem_cmd()),
             expected_keywords: vec!["浏览器".into(), "打开".into()],
             expected_tools: vec!["shell".into()],
             requires_config: None,
+            platforms: None,
         },
 
         DebugScenario {
@@ -747,6 +991,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["登录".into(), "GitHub".into(), "表单".into(), "login".into(), "github".into()],
             expected_tools: vec!["browser".into()],
             requires_config: None,
+            platforms: None,
         },
 
         // ── IM 网关 ────────────────────────────────────────────────────────────
@@ -767,6 +1012,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["FEISHU_CONFIGURED".into(), "FEISHU_NOT_CONFIGURED".into()],
             expected_tools: vec!["app_control".into()],
             requires_config: None,
+            platforms: None,
         },
 
         DebugScenario {
@@ -785,6 +1031,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["SKIP".into(), "飞书".into(), "消息".into(), "Feishu".into(), "feishu".into(), "未配置".into(), "发送".into(), "配置".into()],
             expected_tools: vec!["powershell_query".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         DebugScenario {
@@ -803,6 +1050,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["SKIP".into(), "debug_im_test.xlsx".into(), "飞书".into(), "未配置".into(), "xlsx".into(), "配置".into()],
             expected_tools: vec!["powershell_query".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         DebugScenario {
@@ -821,6 +1069,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["DINGTALK_CONFIGURED".into(), "DINGTALK_NOT_CONFIGURED".into()],
             expected_tools: vec!["app_control".into()],
             requires_config: None,
+            platforms: None,
         },
 
         // ── 定时任务 ───────────────────────────────────────────────────────────
@@ -839,6 +1088,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["SCHEDULER_OK".into(), "SCHEDULER_EMPTY".into()],
             expected_tools: vec!["app_control".into()],
             requires_config: None,
+            platforms: None,
         },
 
         DebugScenario {
@@ -859,6 +1109,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["OpenPisciDebugTest".into(), "成功".into(), "删除".into()],
             expected_tools: vec!["shell".into()],
             requires_config: None,
+            platforms: Some(vec!["windows".into()]),
         },
 
         // ── SSH ───────────────────────────────────────────────────────────────
@@ -869,17 +1120,18 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "SSH Ad-hoc Connect".into(),
             description: "通过环境变量 SSH_TEST_HOST 等临时参数连接 SSH 服务器并执行命令；未配置环境变量时回复 SKIP".into(),
             description_en: "Connect to an SSH server using SSH_TEST_HOST env vars and execute a command; reply SKIP if env vars are not set".into(),
-            prompt: "请用 ssh 工具完成以下 SSH 连接测试:\
-                     1. 先用 powershell_query 检查环境变量 SSH_TEST_HOST 是否存在（执行：$env:SSH_TEST_HOST）.\
+            prompt: format!("请用 ssh 工具完成以下 SSH 连接测试:\
+                     1. 先用 shell 工具检查环境变量 SSH_TEST_HOST 是否存在（执行：{}）.\
                      2. 如果未设置，回复：SKIP - 未配置 SSH 测试环境变量 SSH_TEST_HOST.\
                      3. 如果已设置，读取以下环境变量：SSH_TEST_HOST（主机）、SSH_TEST_USER（用户名，默认 root）、SSH_TEST_PASSWORD（密码）、SSH_TEST_PORT（端口，默认 22）.\
                      4. 用 ssh 工具 action=connect 建立连接，connection_id 设为 'debug-test'.\
                      5. 连接成功后，用 ssh 工具 action=exec 执行命令：echo SSH_EXEC_OK && uname -a.\
                      6. 用 ssh 工具 action=disconnect 断开连接.\
-                     7. 告诉我连接是否成功、命令输出内容，以及是否包含 SSH_EXEC_OK。".into(),
+                     7. 告诉我连接是否成功、命令输出内容，以及是否包含 SSH_EXEC_OK。", shell_check_env_cmd("SSH_TEST_HOST")),
             expected_keywords: vec!["SKIP".into(), "SSH_EXEC_OK".into(), "连接".into(), "成功".into()],
-            expected_tools: vec!["powershell_query".into(), "ssh".into()],
+            expected_tools: vec!["shell".into(), "ssh".into()],
             requires_config: None,
+            platforms: None,
         },
 
         DebugScenario {
@@ -898,6 +1150,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["SSH_SETTINGS_OK".into(), "SKIP".into()],
             expected_tools: vec!["app_control".into()],
             requires_config: None,
+            platforms: None,
         },
 
         // ── 心跳与系统资源 ─────────────────────────────────────────────────────
@@ -914,6 +1167,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_keywords: vec!["心跳正常".into(), "OK".into()],
             expected_tools: vec![],
             requires_config: None,
+            platforms: None,
         },
 
         DebugScenario {
@@ -922,13 +1176,14 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "Tool Chain Heartbeat".into(),
             description: "通过文件写入/读取往返验证工具调用链路的完整性和延迟".into(),
             description_en: "Verify tool call chain integrity and latency via file write/read round-trip".into(),
-            prompt: "请完成以下工具链路心跳测试:\
-                     1. 用 file_write 工具将字符串 HEARTBEAT_OK 写入文件 C:\\Users\\Public\\debug_heartbeat.txt.\
+            prompt: format!("请完成以下工具链路心跳测试:\
+                     1. 用 file_write 工具将字符串 HEARTBEAT_OK 写入文件 {}/debug_heartbeat.txt.\
                      2. 用 file_read 工具立即读取该文件，确认内容包含 HEARTBEAT_OK.\
-                     3. 完成后，你的最终回复必须包含这两个词（原样输出，不要翻译）：HEARTBEAT_OK 和 工具链路正常。".into(),
+                     3. 完成后，你的最终回复必须包含这两个词（原样输出，不要翻译）：HEARTBEAT_OK 和 工具链路正常。", public_dir()),
             expected_keywords: vec!["工具链路正常".into(), "HEARTBEAT_OK".into()],
             expected_tools: vec!["file_write".into(), "file_read".into()],
             requires_config: None,
+            platforms: None,
         },
 
         DebugScenario {
@@ -937,24 +1192,34 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "System Resource Monitor".into(),
             description: "获取当前系统 CPU 使用率、内存占用、磁盘空间等资源信息".into(),
             description_en: "Get current system CPU usage, memory usage, disk space and other resource metrics".into(),
-            prompt: "请用 powershell_query 工具获取以下系统资源信息:\
-                     1. CPU 使用率：执行 Get-WmiObject Win32_Processor | Select-Object LoadPercentage.\
-                     2. 内存使用：执行 Get-WmiObject Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory.\
-                     3. 磁盘空间：执行 Get-WmiObject Win32_LogicalDisk | Select-Object DeviceID,Size,FreeSpace.\
-                     4. 整理以上信息，告诉我：CPU 使用率是多少？总内存和可用内存各是多少 GB？C 盘总空间和剩余空间各是多少 GB？".into(),
+            prompt: format!("请用 shell 工具获取以下系统资源信息:\
+                     1. CPU 使用率：执行 '{}'.\
+                     2. 内存使用：执行 '{}'.\
+                     3. 磁盘空间：执行 '{}'.\
+                     4. 整理以上信息，告诉我：CPU 和内存、磁盘的使用情况。", shell_cpu_info_cmd(), shell_memory_info_cmd(), if cfg!(target_os = "windows") { "Get-WmiObject Win32_LogicalDisk | Select-Object DeviceID,Size,FreeSpace" } else { "df -h" }),
             expected_keywords: vec!["CPU".into(), "内存".into(), "磁盘".into()],
-            expected_tools: vec!["powershell_query".into()],
+            expected_tools: vec!["shell".into()],
             requires_config: None,
+            platforms: None,
         },
     ]
 }
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
-/// List all available debug scenarios.
+/// List all available debug scenarios (filtered to current platform).
 #[tauri::command]
 pub async fn list_debug_scenarios() -> Result<Vec<DebugScenario>, String> {
-    Ok(builtin_scenarios())
+    let current_os = current_os_platform();
+    Ok(builtin_scenarios()
+        .into_iter()
+        .filter(|s| {
+            s.platforms
+                .as_ref()
+                .map(|p| p.iter().any(|os| os == current_os))
+                .unwrap_or(true)
+        })
+        .collect())
 }
 
 /// Run a single named scenario through the real agent loop.
@@ -989,6 +1254,7 @@ pub async fn run_debug_scenario(
         max_iterations,
         builtin_tool_enabled,
         ssh_servers_count,
+        allow_outside_workspace,
     ) = {
         let settings = state.settings.lock().await;
         (
@@ -1006,6 +1272,7 @@ pub async fn run_debug_scenario(
             settings.max_iterations,
             settings.builtin_tool_enabled.clone(),
             settings.ssh_servers.len(),
+            settings.allow_outside_workspace,
         )
     };
 
@@ -1091,10 +1358,11 @@ pub async fn run_debug_scenario(
         .build_registry(),
     );
 
-    let policy = Arc::new(PolicyGate::with_profile(
+    let policy = Arc::new(PolicyGate::with_profile_and_flags(
         &workspace_root,
         &policy_mode,
         tool_rate_limit_per_minute,
+        allow_outside_workspace,
     ));
 
     // For debug runs, fall back to the system temp directory when workspace is not configured.
@@ -1118,7 +1386,7 @@ pub async fn run_debug_scenario(
     };
 
     let system_prompt = format!(
-        "You are Pisci, a Windows AI Agent running a debug/test scenario.\n\
+        "You are Pisci, a {} AI Agent running a debug/test scenario.\n\
          Scenario: {}\n\
          Today's date: {}\n\
          Workspace directory: {}\n\
@@ -1126,6 +1394,7 @@ pub async fn run_debug_scenario(
          {}\n\
          Execute the task precisely. Do not ask for confirmation. \
          Complete the task in as few tool calls as possible.",
+        os_display_name(),
         scenario.name,
         chrono::Utc::now().format("%Y-%m-%d"),
         effective_workspace.display(),
@@ -1362,7 +1631,7 @@ pub async fn get_debug_report(state: State<'_, AppState>) -> Result<DebugReport,
     let timestamp = chrono::Utc::now().to_rfc3339();
 
     // Settings summary
-    let (settings_summary, system_info) = {
+    let (settings_summary, system_info, system_dependencies) = {
         let settings = state.settings.lock().await;
         let api_key_configured = settings.is_configured();
 
@@ -1392,6 +1661,15 @@ pub async fn get_debug_report(state: State<'_, AppState>) -> Result<DebugReport,
             disabled_tools,
         };
 
+        let vision_uses_separate_model = !settings.vision_use_main_llm;
+        let vision_configured = if settings.vision_use_main_llm {
+            settings.vision_enabled
+        } else {
+            !settings.vision_provider.is_empty()
+                && !settings.vision_model.is_empty()
+                && !settings.vision_api_key.is_empty()
+        };
+
         let info = SystemInfo {
             os: std::env::consts::OS.into(),
             provider: settings.provider.clone(),
@@ -1402,9 +1680,11 @@ pub async fn get_debug_report(state: State<'_, AppState>) -> Result<DebugReport,
             tool_rate_limit: settings.tool_rate_limit_per_minute,
             api_key_configured,
             vision_enabled: settings.vision_enabled,
+            vision_configured,
+            vision_uses_separate_model,
         };
 
-        (summary, info)
+        (summary, info, collect_system_dependencies(&settings))
     };
 
     // Available tools
@@ -1450,6 +1730,7 @@ pub async fn get_debug_report(state: State<'_, AppState>) -> Result<DebugReport,
         timestamp,
         system_info,
         settings_summary,
+        system_dependencies,
         available_tools,
         recent_audit,
         recent_errors,
@@ -1548,7 +1829,9 @@ pub struct UiaDragTestResult {
 /// 3. Execute a drag operation from ball center to target center
 /// 4. Report whether the drag succeeded
 ///
-/// Requires vision_enabled = true in settings.
+/// Requires a vision-capable model: either the main LLM (if vision_use_main_llm=true
+/// and vision_enabled=true) or a separate vision model (if vision_use_main_llm=false
+/// and vision_provider/model/api_key are all set).
 #[tauri::command]
 pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTestResult, String> {
     let (
@@ -1564,6 +1847,12 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
         max_iterations,
         builtin_tool_enabled,
         vision_enabled,
+        vision_use_main_llm,
+        vision_provider,
+        vision_model,
+        vision_api_key,
+        vision_base_url,
+        allow_outside_workspace,
     ) = {
         let settings = state.settings.lock().await;
         (
@@ -1581,14 +1870,35 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
             settings.max_iterations,
             settings.builtin_tool_enabled.clone(),
             settings.vision_enabled,
+            settings.vision_use_main_llm,
+            settings.vision_provider.clone(),
+            settings.vision_model.clone(),
+            settings.vision_api_key.clone(),
+            settings.vision_base_url.clone(),
+            settings.allow_outside_workspace,
         )
     };
 
-    if !vision_enabled {
-        return Err("vision_not_enabled".into());
+    // Determine effective vision configuration
+    let vision_configured = if vision_use_main_llm {
+        vision_enabled
+    } else {
+        !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
+    };
+
+    if !vision_configured {
+        return Err("vision_not_configured".into());
     }
 
-    if api_key.is_empty() {
+    // Use the vision model as the primary model for this test
+    let (effective_provider, effective_model, effective_api_key, effective_base_url) = if vision_use_main_llm {
+        (provider, model, api_key, base_url)
+    } else {
+        let vb = if vision_base_url.is_empty() { base_url } else { vision_base_url };
+        (vision_provider, vision_model, vision_api_key, vb)
+    };
+
+    if effective_api_key.is_empty() {
         return Err("api_key_not_configured".into());
     }
 
@@ -1598,12 +1908,12 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
     let session_id = "debug_uia_drag_test".to_string();
 
     let client = build_client(
-        &provider,
-        &api_key,
-        if base_url.is_empty() {
+        &effective_provider,
+        &effective_api_key,
+        if effective_base_url.is_empty() {
             None
         } else {
-            Some(&base_url)
+            Some(&effective_base_url)
         },
     );
 
@@ -1631,10 +1941,11 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
         .build_registry(),
     );
 
-    let policy = Arc::new(PolicyGate::with_profile(
+    let policy = Arc::new(PolicyGate::with_profile_and_flags(
         &workspace_root,
         &policy_mode,
         tool_rate_limit_per_minute,
+        allow_outside_workspace,
     ));
 
     let effective_workspace = if workspace_root.is_empty() {
@@ -1643,43 +1954,70 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
         std::path::PathBuf::from(&workspace_root)
     };
 
-    let prompt = "任务：将橙色小球拖拽到绿色目标区域。\n\
-         \n\
-         步骤：\n\
-         1. 用 screen_capture 工具（action=list_monitors）查看显示器布局和各显示器上的窗口分布，\n\
-            找到 OpenPisci 窗口在哪个显示器（monitor_index）\n\
-         2. 用 screen_capture 工具截取该显示器截图（action=capture, monitor_index=N, grid=true）\n\
-         3. 仔细观察截图中的坐标网格（每200像素一条线，标签显示绝对物理屏幕坐标）\n\
-         4. 找到橙色圆形小球的中心坐标（读取最近的网格线标签，精确估算）\n\
-         5. 找到绿色虚线矩形（目标区域）的中心坐标（读取最近的网格线标签，精确估算）\n\
-         6. 用 uia 工具的 drag_drop 操作，从小球中心拖拽到目标区域中心\n\
-         \n\
-         重要提示：\n\
-         - 网格标签显示的是物理屏幕绝对坐标，可直接用于 uia drag_drop（无需任何转换）\n\
-         - 读取坐标时，先找最近的网格线，再根据元素与网格线的相对位置微调\n\
-         - 橙色小球是一个橙色圆形，直径约40像素\n\
-         - 目标区域是一个绿色虚线矩形（有发光效果），约120x120像素，位于测试区域右侧\n\
-         - 拖拽时 from 是小球中心坐标，to 是目标区域中心坐标\n\
-         - 如果 OpenPisci 在主显示器，可直接用 monitor_index=0（默认）"
-        .to_string();
+    // Platform-adaptive tool selection: uia (Windows) vs desktop_automation (Linux/macOS via xdotool/cliclick).
+    // Both support drag with coordinate-based input; only the action name and end-coordinate parameter names differ.
+    let (drag_tool, drag_action, end_x_param, end_y_param) = if cfg!(target_os = "windows") {
+        ("uia", "drag_drop", "x2", "y2")
+    } else {
+        ("desktop_automation", "drag", "to_x", "to_y")
+    };
+
+    let prompt = {
+        let mut s = String::from("任务：将橙色小球拖拽到绿色目标区域。
+
+步骤：
+");
+        s.push_str("1. 用 screen_capture 工具（action=list_monitors）查看显示器布局和各显示器上的窗口分布，
+");
+        s.push_str("   找到 OpenPisci 窗口在哪个显示器（monitor_index）
+");
+        s.push_str("2. 用 screen_capture 工具截取该显示器截图（action=capture, monitor_index=N, grid=true）
+");
+        s.push_str("3. 仔细观察截图中的坐标网格（每200像素一条线，标签显示绝对物理屏幕坐标）
+");
+        s.push_str("4. 找到橙色圆形小球的中心坐标（读取最近的网格线标签，精确估算）
+");
+        s.push_str("5. 找到绿色虚线矩形（目标区域）的中心坐标（读取最近的网格线标签，精确估算）
+");
+        s.push_str(&format!("6. 用 {} 工具的 {} 操作，从小球中心拖拽到目标区域中心
+", drag_tool, drag_action));
+        s.push_str(&format!("   参数：x=小球中心X y=小球中心Y {}={} {}={}
+", end_x_param, "目标中心X", end_y_param, "目标中心Y"));
+        s.push_str("
+重要提示：
+");
+        s.push_str(&format!("- 网格标签显示的是物理屏幕绝对坐标，可直接用于 {} {}（无需任何转换）
+", drag_tool, drag_action));
+        s.push_str("- 读取坐标时，先找最近的网格线，再根据元素与网格线的相对位置微调
+");
+        s.push_str("- 橙色小球是一个橙色圆形，直径约40像素
+");
+        s.push_str("- 目标区域是一个绿色虚线矩形（有发光效果），约120x120像素，位于测试区域右侧
+");
+        s.push_str("- 拖拽时 from 是小球中心坐标，to 是目标区域中心坐标
+");
+        s.push_str("- 如果 OpenPisci 在主显示器，可直接用 monitor_index=0（默认）");
+        s
+    };
 
     let system_prompt = format!(
-        "You are Pisci, a Windows AI Agent running a UIA precision drag test.\nToday's date: {}\nWorkspace directory: {}\nUse ONLY these tools: screen_capture, uia. Do not call any other tools.\nExecute the task precisely. Do not ask for confirmation.",
+        "You are Pisci, a cross-platform AI Agent running a precision drag test.\nToday's date: {}\nWorkspace directory: {}\nUse ONLY these tools: screen_capture, {}. Do not call any other tools.\nExecute the task precisely. Do not ask for confirmation.",
         chrono::Utc::now().format("%Y-%m-%d"),
         effective_workspace.display(),
+        drag_tool,
     );
     let uia_compaction_settings = {
         let s = state.settings.lock().await;
         pisci_kernel::agent::harness::config::CompactionSettings::from_settings(&s)
     };
     let agent = HarnessConfig::for_debug(
-        model,
+        effective_model,
         registry,
         policy,
         system_prompt,
         max_tokens,
         0,
-        Some(vision_enabled),
+        Some(true), // vision is already verified as configured
         uia_compaction_settings,
         Some(state.db.clone()),
         None,

@@ -4,6 +4,8 @@ pub mod browser;
 pub mod call_fish;
 pub mod call_koi;
 pub mod chat_ui;
+pub mod desktop_automation;
+pub mod system_info;
 pub mod im_send;
 #[cfg(target_os = "windows")]
 pub mod office;
@@ -29,7 +31,6 @@ pub use pisci_kernel::tools::{mcp, user_tool};
 pub mod com_invoke;
 #[cfg(target_os = "windows")]
 pub mod com_tool;
-#[cfg(target_os = "windows")]
 pub mod screen;
 #[cfg(target_os = "windows")]
 pub mod uia;
@@ -64,10 +65,6 @@ const WINDOWS_ORIENTED_TOOLS: &[(&str, &str)] = &[
     (
         "uia",
         "Disabled outside Windows: UI Automation is Windows-only.",
-    ),
-    (
-        "screen_capture",
-        "Disabled outside Windows: current implementation uses Windows APIs.",
     ),
     ("com", "Disabled outside Windows: COM/OLE is Windows-only."),
     (

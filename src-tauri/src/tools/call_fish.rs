@@ -181,6 +181,10 @@ When you need to wait for an external event, background process, Koi/Fish respon
             builtin_tool_enabled,
             allow_outside_workspace,
             vision_enabled,
+            vision_use_main_llm,
+            vision_provider,
+            vision_model,
+            vision_api_key,
         ) = {
             let settings = state.settings.lock().await;
             (
@@ -197,14 +201,21 @@ When you need to wait for an external event, background process, Koi/Fish respon
                 settings.builtin_tool_enabled.clone(),
                 settings.allow_outside_workspace,
                 settings.vision_enabled,
+                settings.vision_use_main_llm,
+                settings.vision_provider.clone(),
+                settings.vision_model.clone(),
+                settings.vision_api_key.clone(),
             )
         };
         if api_key.is_empty() {
             return Ok(ToolResult::err("API key not configured"));
         }
 
-        let vision_capable =
-            vision_enabled || crate::commands::chat::model_supports_vision(&provider, &model);
+        let vision_capable = if vision_use_main_llm {
+            vision_enabled || crate::commands::chat::model_supports_vision(&provider, &model)
+        } else {
+            !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
+        };
 
         // Build a fresh message list: only the task as a single user message
         let llm_messages = vec![LlmMessage {

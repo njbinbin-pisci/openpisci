@@ -2073,8 +2073,17 @@ pub fn build_system_prompt_with_env(
         };
         format!("\nWorkspace: `{}`{}", workspace_root, outside_note)
     };
+    let os_display = match std::env::consts::OS {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        other => other,
+    };
+    let os_identity = format!(
+        "You are Pisci, a powerful AI Agent. You run on the user's local {os_display} machine and can control the entire desktop environment."
+    );
     format!(
-        r#"You are Pisci, a powerful Windows AI Agent. You run on the user's local Windows machine and can control the entire desktop environment.
+        r#"{os_identity}
 Today's date: {date}{workspace_line}
 
 ## Waiting Discipline
@@ -2129,18 +2138,21 @@ This applies to every new task, no exceptions.
 **Launching an application and then automating it:**
 → Use `process_control` with `action: "start"`, `wait: false` to launch in background
 → Then `process_control` with `action: "wait_for_window"` to wait until the UI appears
-→ Then `uia` to interact with the application
+→ On Windows: use `uia` to interact with the application
+→ On Linux/macOS: use `desktop_automation` for coordinate-based clicks and typing
 
 **Checking if a process is running / killing a process:**
 → Use `process_control` with `action: "is_running"` or `action: "kill"`
 → Do NOT use shell+tasklist or taskkill for this — process_control returns structured data
 
-**Querying Windows system info (processes, services, registry, installed apps):**
-→ Use `powershell_query` — returns structured JSON, faster than raw shell
+**Querying system info (processes, services, CPU, memory, disk, network, OS, GPU):**
+→ Use `system_info` — cross-platform structured info across Windows/Linux/macOS
+→ On Windows: `powershell_query` for registry queries and Windows-specific details
 → For 32-bit registry (WOW6432Node) or 32-bit COM: add `arch: "x86"` to powershell_query
 
 **Querying hardware info (CPU, RAM, GPU, BIOS, disks):**
-→ Use `wmi` with a preset — faster and more reliable than PowerShell for hardware
+→ Use `system_info` with `action="query"`, `category="all"` — cross-platform
+→ On Windows: `wmi` with a preset — alternative for Windows-specific hardware queries
 
 **Interacting with COM/ActiveX objects (legacy industrial/CAD software):**
 → Use `com_invoke` — supports any ProgID, 32-bit or 64-bit
@@ -2148,10 +2160,14 @@ This applies to every new task, no exceptions.
 → To check if a ProgID exists: `com_invoke` with `action: "create"`, `arch: "x86"`
 
 **Automating desktop apps (clicking buttons, typing in forms):**
-→ Use `uia` — works with any Windows app via UI Automation
-→ Workflow: `uia(list_windows)` → `uia(find)` → `uia(click/type/get_value)`
-→ `uia(get_value)` and `uia(get_text)` now read actual control content (not just the label)
-→ If uia cannot find an element: use `screen_capture` to see the screen, then `uia` with x/y coords
+→ On Windows: Use `uia` — works with any Windows app via UI Automation
+  Workflow: `uia(list_windows)` → `uia(find)` → `uia(click/type/get_value)`
+  `uia(get_value)` and `uia(get_text)` read actual control content (not just the label)
+→ Cross-platform (Windows/Linux/macOS): Use `screen_capture` + `desktop_automation`
+  Workflow: `screen_capture(action="capture", grid=true)` → identify element coordinates from the grid overlay → `desktop_automation(action="click", x=X, y=Y)`
+  For typing: `desktop_automation(action="type_text", text="...")`
+  For keyboard shortcuts: `desktop_automation(action="hotkey", keys=["ctrl","c"])`
+→ For window management: `desktop_automation(action="list_windows")`, `desktop_automation(action="activate_window", title="...")`
 
 **Web browsing / web scraping:**
 → Use `browser` — full Chrome control (navigate, click, screenshot, eval_js)
@@ -2487,6 +2503,7 @@ Older tool results are automatically demoted to a one-line receipt to keep your 
 - Recall costs context, so only call it when the receipt is genuinely insufficient.{memory}"#,
         date = chrono::Utc::now().format("%Y-%m-%d"),
         memory = memory_context,
+        os_identity = os_identity,
     )
 }
 

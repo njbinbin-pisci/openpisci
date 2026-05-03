@@ -109,6 +109,12 @@ export interface Settings {
   heartbeat_prompt: string;
   // Vision / multimodal
   vision_enabled: boolean;
+  // Vision model (for UIA / screen_capture / desktop_automation)
+  vision_use_main_llm: boolean;
+  vision_provider: string;
+  vision_model: string;
+  vision_api_key: string;
+  vision_base_url: string;
   /** When true, main-chat LLM responses stream as they arrive. Default false. */
   enable_streaming: boolean;
   // SSH Servers

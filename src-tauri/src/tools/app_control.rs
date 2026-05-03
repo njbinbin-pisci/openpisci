@@ -2160,7 +2160,19 @@ fn builtin_tool_catalog() -> Vec<BuiltinToolInfo> {
             name: "screen_capture".into(),
             description: "Capture the screen.".into(),
             icon: "📸".into(),
-            windows_only: true,
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "system_info".into(),
+            description: "Query system information: CPU, memory, disk, network, processes, OS, GPU.".into(),
+            icon: "💻".into(),
+            windows_only: false,
+        },
+        BuiltinToolInfo {
+            name: "desktop_automation".into(),
+            description: "Cross-platform desktop automation (click, type, hotkeys, window management).".into(),
+            icon: "🖱️".into(),
+            windows_only: false,
         },
         BuiltinToolInfo {
             name: "com".into(),

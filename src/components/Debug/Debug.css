@@ -244,6 +244,55 @@
   font-size: 14px;
 }
 
+.dbg-dependency-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dbg-dependency-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+}
+
+.dbg-dependency-ok {
+  border-color: color-mix(in srgb, #28a745 35%, var(--border));
+}
+
+.dbg-dependency-missing {
+  border-color: color-mix(in srgb, #dc3545 35%, var(--border));
+}
+
+.dbg-dependency-warning {
+  border-color: color-mix(in srgb, #ffc107 35%, var(--border));
+}
+
+.dbg-dependency-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dbg-dependency-name {
+  font-weight: 600;
+}
+
+.dbg-dependency-meta,
+.dbg-dependency-details,
+.dbg-dependency-hint,
+.dbg-dependency-remediation {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.dbg-dependency-remediation {
+  color: var(--text);
+}
+
 /* ─── Buttons ──────────────────────────────────────────────────────────────── */
 
 .dbg-btn {

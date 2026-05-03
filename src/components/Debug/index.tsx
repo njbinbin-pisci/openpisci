@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { useTranslation } from "react-i18next";
-import { systemApi, settingsApi, RuntimeCheckItem, Settings, poolApi, koiApi, PoolMessage, KoiWithStats } from "../../services/tauri";
+import { systemApi, settingsApi, RuntimeCheckItem, Settings, SystemDependencyItem, poolApi, koiApi, PoolMessage, KoiWithStats } from "../../services/tauri";
 import "./Debug.css";
 
 // ─── Types (mirror Rust structs) ─────────────────────────────────────────────
@@ -18,6 +18,8 @@ interface DebugScenario {
   expected_keywords: string[];
   expected_tools: string[];
   requires_config?: string[] | null;
+  /** Which platforms this scenario supports. null means all platforms. */
+  platforms?: string[] | null;
 }
 
 interface ToolCallRecord {
@@ -52,6 +54,11 @@ interface SystemInfo {
   max_iterations: number;
   tool_rate_limit: number;
   api_key_configured: boolean;
+  vision_enabled: boolean;
+  /** Whether a vision model is effectively configured (main model supports vision OR separate vision model is set). */
+  vision_configured: boolean;
+  /** Whether a separate vision model is in use (not the main LLM). */
+  vision_uses_separate_model: boolean;
 }
 
 interface SettingsSummary {
@@ -71,6 +78,7 @@ interface DebugReport {
   timestamp: string;
   system_info: SystemInfo;
   settings_summary: SettingsSummary;
+  system_dependencies: SystemDependencyItem[];
   available_tools: string[];
   recent_audit: any[];
   recent_errors: string[];
@@ -91,6 +99,38 @@ function StatusBadge({ passed, running }: { passed?: boolean; running?: boolean 
 
 function ms(n: number) {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${n}ms`;
+}
+
+function localizedDependencyRemediation(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  item: SystemDependencyItem,
+): string | null {
+  switch (item.key) {
+    case "linux-session":
+      return t("settings.depRemediation_linux_session");
+    case "xdotool":
+      return t("settings.depRemediation_xdotool");
+    case "wmctrl":
+      return t("settings.depRemediation_wmctrl");
+    case "xclip":
+      return t("settings.depRemediation_xclip");
+    case "cliclick":
+      return t("settings.depRemediation_cliclick");
+    case "osascript":
+      return t("settings.depRemediation_osascript");
+    case "macos-accessibility":
+      return t("settings.depRemediation_macos_accessibility");
+    case "powershell":
+      return t("settings.depRemediation_powershell");
+    case "uia-runtime":
+      return t("settings.depRemediation_uia_runtime");
+    case "wmi-service":
+      return t("settings.depRemediation_wmi_service");
+    case "office-installation":
+      return t("settings.depRemediation_office_installation");
+    default:
+      return item.remediation;
+  }
 }
 
 function isScenarioAvailable(scenario: DebugScenario, settings: Settings | null): boolean {
@@ -692,6 +732,35 @@ function ReportView({
         )}
       </div>
 
+      {report.system_dependencies.length > 0 && (
+        <div className="dbg-report-section">
+          <div className="dbg-section-title">{t("debug.reportSystemDeps")}</div>
+          <div className="dbg-dependency-list">
+            {report.system_dependencies.map((item) => {
+              const localized = localizedDependencyRemediation(t, item);
+              return (
+                <div key={item.key} className={`dbg-dependency-item dbg-dependency-${item.status}`}>
+                  <div className="dbg-dependency-header">
+                    <span className="dbg-dependency-name">{item.name}</span>
+                    <span className={`dbg-badge ${item.status === "ok" ? "dbg-badge-pass" : item.status === "missing" ? "dbg-badge-fail" : "dbg-badge-running"}`}>
+                      {item.status === "ok" ? t("settings.dependencyStatusOk") : item.status === "missing" ? t("settings.dependencyStatusMissing") : t("settings.dependencyStatusWarning")}
+                    </span>
+                    <span className="dbg-dependency-meta">
+                      {item.required ? t("settings.dependencyRequired") : t("settings.dependencyRecommended")} · {item.feature}
+                    </span>
+                  </div>
+                  {item.details && <div className="dbg-dependency-details">{item.details}</div>}
+                  <div className="dbg-dependency-hint">{item.hint}</div>
+                  {!item.available && localized && (
+                    <div className="dbg-dependency-remediation">{localized}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="dbg-report-section">
         <div className="dbg-section-title">{t("debug.reportTools", { count: report.available_tools.length })}</div>
         <div className="dbg-tool-list">
@@ -833,13 +902,17 @@ function UiaTestPanel() {
   // Agent test state
   const [testRunning, setTestRunning] = useState(false);
   const [testResult, setTestResult] = useState<UiaDragTestResult | null>(null);
-  const [visionEnabled, setVisionEnabled] = useState<boolean | null>(null);
+  const [visionConfigured, setVisionConfigured] = useState<boolean | null>(null);
 
   // Load vision status from report
   useEffect(() => {
-    invoke<{ system_info: { vision_enabled: boolean } }>("get_debug_report")
-      .then((r) => setVisionEnabled(r.system_info.vision_enabled))
-      .catch(() => setVisionEnabled(false));
+    invoke<{ system_info: SystemInfo }>("get_debug_report")
+      .then((r) => {
+        setVisionConfigured(r.system_info.vision_configured);
+      })
+      .catch(() => {
+        setVisionConfigured(false);
+      });
   }, []);
 
   // Update arena rect whenever layout changes (needed for drag boundary clamping)
@@ -926,7 +999,7 @@ function UiaTestPanel() {
   };
 
   const runTest = async () => {
-    if (testRunning || !visionEnabled) return;
+    if (testRunning || !visionConfigured) return;
     setTestRunning(true);
     setTestResult(null);
     setDragState("idle");
@@ -961,10 +1034,13 @@ function UiaTestPanel() {
             {t("debug.uiaReset")}
           </button>
           <button
-            className={`dbg-btn ${visionEnabled ? "dbg-btn-primary" : "dbg-btn-disabled"}`}
+            className={`dbg-btn ${visionConfigured ? "dbg-btn-primary" : "dbg-btn-disabled"}`}
             onClick={runTest}
-            disabled={!visionEnabled || testRunning}
-            title={!visionEnabled ? t("debug.uiaVisionRequired") : undefined}
+            disabled={!visionConfigured || testRunning}
+            title={
+              !visionConfigured ? t("debug.uiaVisionRequired")
+              : undefined
+            }
           >
             {testRunning ? t("debug.uiaRunning") : t("debug.uiaRunTest")}
           </button>
@@ -972,14 +1048,13 @@ function UiaTestPanel() {
       </div>
 
       {/* Vision not available warning */}
-      {visionEnabled === false && (
+      {visionConfigured === false && (
         <div className="dbg-uia-vision-warning">
           <div className="dbg-uia-vision-warning-title">⚠ {t("debug.uiaVisionRequired")}</div>
           <div className="dbg-uia-vision-warning-hint">{t("debug.uiaVisionRequiredHint")}</div>
         </div>
       )}
 
-      {/* Status banner */}
       {dragState === "success" && (
         <div className="dbg-uia-status dbg-uia-status-success">✓ {t("debug.uiaSuccess")}</div>
       )}

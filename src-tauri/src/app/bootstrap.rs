@@ -1342,6 +1342,7 @@ fn run_impl() {
             commands::platform::system::get_vm_status,
             commands::platform::system::get_runtime_capabilities,
             commands::platform::system::check_runtimes,
+            commands::platform::system::check_system_dependencies,
             commands::platform::system::set_runtime_path,
             commands::platform::permission::respond_permission,
             commands::platform::interactive::respond_interactive_ui,

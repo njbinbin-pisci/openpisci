@@ -287,6 +287,23 @@ pub async fn save_settings(state: State<'_, AppState>, updates: Value) -> Result
     if let Some(v) = updates["vision_enabled"].as_bool() {
         settings.vision_enabled = v;
     }
+    if let Some(v) = updates["vision_use_main_llm"].as_bool() {
+        settings.vision_use_main_llm = v;
+    }
+    if let Some(v) = updates["vision_provider"].as_str() {
+        settings.vision_provider = v.to_string();
+    }
+    if let Some(v) = updates["vision_model"].as_str() {
+        settings.vision_model = v.to_string();
+    }
+    if let Some(v) = updates["vision_api_key"].as_str() {
+        if !v.is_empty() {
+            settings.vision_api_key = v.to_string();
+        }
+    }
+    if let Some(v) = updates["vision_base_url"].as_str() {
+        settings.vision_base_url = v.to_string();
+    }
 
     // Streaming output
     if let Some(v) = updates["enable_streaming"].as_bool() {

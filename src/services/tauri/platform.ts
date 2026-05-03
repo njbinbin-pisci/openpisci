@@ -21,10 +21,24 @@ export interface RuntimeCheckItem {
   hint: string;
 }
 
+export interface SystemDependencyItem {
+  key: string;
+  name: string;
+  feature: string;
+  available: boolean;
+  required: boolean;
+  status: "ok" | "warning" | "missing";
+  details: string | null;
+  hint: string;
+  remediation: string | null;
+}
+
 export const systemApi = {
   getVmStatus: () =>
     invoke<{ backend: string; available: boolean; description: string }>("get_vm_status"),
   checkRuntimes: () => invoke<RuntimeCheckItem[]>("check_runtimes"),
+  checkSystemDependencies: () =>
+    invoke<SystemDependencyItem[]>("check_system_dependencies"),
   setRuntimePath: (runtimeKey: string, exePath: string) =>
     invoke<RuntimeCheckItem[]>("set_runtime_path", { runtimeKey, exePath }),
 };

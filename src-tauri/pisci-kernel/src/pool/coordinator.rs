@@ -163,6 +163,50 @@ pub async fn execute_todo_turn(
     )
     .await?;
 
+    // Mark the Koi as busy in the DB so that monitoring (trials, Pisci,
+    // get_todos koi_status) can observe the running state.
+    {
+        let koi_id = koi.id.clone();
+        store
+            .write(move |db| db.update_koi_status(&koi_id, "busy"))
+            .await?;
+    }
+
+    let koi_id_for_restore = koi.id.clone();
+    let result = execute_todo_turn_inner(
+        store,
+        sink,
+        subagent,
+        cfg,
+        koi,
+        todo,
+        pool_session,
+        args,
+    )
+    .await;
+
+    // Always restore Koi to idle regardless of success or failure.
+    {
+        let _ = store
+            .write(move |db| db.update_koi_status(&koi_id_for_restore, "idle"))
+            .await;
+    }
+
+    result
+}
+
+async fn execute_todo_turn_inner(
+    store: &PoolStore,
+    sink: Arc<dyn PoolEventSink>,
+    subagent: Arc<dyn SubagentRuntime>,
+    cfg: &CoordinatorConfig,
+    koi: KoiDefinition,
+    todo: KoiTodo,
+    pool_session: Option<PoolSession>,
+    args: ExecuteTodoArgs,
+) -> anyhow::Result<KoiExecResult> {
+    let canonical_pool_id = pool_session.as_ref().map(|p| p.id.clone());
+
     let workspace =
         maybe_setup_worktree(store, cfg, canonical_pool_id.as_deref(), &koi, &todo).await;
 

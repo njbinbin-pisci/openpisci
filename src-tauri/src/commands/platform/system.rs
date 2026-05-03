@@ -1,7 +1,7 @@
 use crate::browser::download;
 use crate::host::DesktopHostTools;
-use crate::store::AppState;
-use serde::Serialize;
+use crate::store::{AppState, Settings};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tauri::State;
 
@@ -28,6 +28,19 @@ pub struct RuntimeCheckItem {
     pub version: Option<String>,
     pub download_url: String,
     pub hint: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SystemDependencyItem {
+    pub key: String,
+    pub name: String,
+    pub feature: String,
+    pub available: bool,
+    pub required: bool,
+    pub status: String,
+    pub details: Option<String>,
+    pub hint: String,
+    pub remediation: Option<String>,
 }
 
 /// Detect Node.js, npm, Python and other runtimes needed by skills.
@@ -143,6 +156,226 @@ pub async fn check_runtimes(state: State<'_, AppState>) -> Result<Vec<RuntimeChe
     Ok(items)
 }
 
+/// Check platform-specific feature dependencies that affect desktop automation,
+/// Windows integrations, and host runtime behavior.
+#[tauri::command]
+pub async fn check_system_dependencies(
+    state: State<'_, AppState>,
+) -> Result<Vec<SystemDependencyItem>, String> {
+    let settings = state.settings.lock().await.clone();
+    Ok(collect_system_dependencies(&settings))
+}
+
+pub fn collect_system_dependencies(settings: &Settings) -> Vec<SystemDependencyItem> {
+    let tool_enabled = |tool_name: &str| settings.builtin_tool_enabled.get(tool_name).copied().unwrap_or(true);
+
+    let mut items = Vec::new();
+
+    #[cfg(target_os = "linux")]
+    {
+        let desktop_enabled = tool_enabled("desktop_automation");
+        let session_type = std::env::var("XDG_SESSION_TYPE")
+            .unwrap_or_else(|_| "unknown".to_string())
+            .to_lowercase();
+        let x11 = session_type == "x11" || session_type.is_empty();
+
+        items.push(build_dependency_item(
+            "linux-session",
+            "Display Session (X11)",
+            "desktop_automation",
+            x11,
+            desktop_enabled,
+            Some(format!("Current session: {}", if session_type.is_empty() { "unknown" } else { &session_type })),
+            if x11 {
+                "Desktop automation is running on an X11-compatible session."
+            } else {
+                "Wayland sessions often block synthetic mouse/keyboard input and window control."
+            },
+            Some("Use an X11 session for reliable desktop automation, or expect limited support under Wayland."),
+        ));
+
+        items.push(build_dependency_item(
+            "xdotool",
+            "xdotool",
+            "desktop_automation",
+            command_exists("xdotool"),
+            desktop_enabled,
+            None,
+            "Mouse, keyboard, cursor position, dragging, and scroll automation on Linux.",
+            Some("Install xdotool from your distro packages, e.g. `sudo apt install xdotool`."),
+        ));
+
+        items.push(build_dependency_item(
+            "wmctrl",
+            "wmctrl",
+            "desktop_automation",
+            command_exists("wmctrl"),
+            desktop_enabled,
+            None,
+            "Window listing and window activation for desktop_automation on Linux.",
+            Some("Install wmctrl from your distro packages, e.g. `sudo apt install wmctrl`."),
+        ));
+
+        items.push(build_dependency_item(
+            "xclip",
+            "xclip",
+            "desktop_automation",
+            command_exists("xclip"),
+            false,
+            None,
+            "Recommended for reliable clipboard-based text input; desktop_automation falls back to xdotool typing when missing.",
+            Some("Install xclip for better text entry reliability, e.g. `sudo apt install xclip`."),
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let desktop_enabled = tool_enabled("desktop_automation");
+        items.push(build_dependency_item(
+            "cliclick",
+            "cliclick",
+            "desktop_automation",
+            command_exists("cliclick"),
+            desktop_enabled,
+            None,
+            "Mouse, keyboard, drag, and click automation on macOS.",
+            Some("Install cliclick with Homebrew: `brew install cliclick`."),
+        ));
+
+        items.push(build_dependency_item(
+            "osascript",
+            "osascript",
+            "desktop_automation",
+            command_exists("osascript"),
+            desktop_enabled,
+            None,
+            "Used for window listing, activation, and some fallback automation on macOS.",
+            Some("osascript ships with macOS. If unavailable, check shell PATH / system integrity."),
+        ));
+
+        let accessibility = probe_command(
+            "osascript",
+            &[
+                "-e",
+                "tell application \"System Events\" to return UI elements enabled",
+            ],
+        );
+        let accessibility_ok = accessibility
+            .as_deref()
+            .map(|v| v.trim().eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        items.push(build_dependency_item(
+            "macos-accessibility",
+            "Accessibility Permission",
+            "desktop_automation",
+            accessibility_ok,
+            desktop_enabled,
+            accessibility.map(|v| format!("System Events returned: {}", v)),
+            "Required for controlling other apps via System Events / synthetic input.",
+            Some("Grant Accessibility access to OpenPisci / terminal in System Settings → Privacy & Security → Accessibility."),
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let desktop_enabled = tool_enabled("desktop_automation");
+        let powershell_needed = desktop_enabled
+            || tool_enabled("powershell_query")
+            || tool_enabled("office")
+            || tool_enabled("wmi");
+        let powershell = command_exists("powershell") || command_exists("pwsh");
+
+        items.push(build_dependency_item(
+            "powershell",
+            "PowerShell",
+            "windows_integration",
+            powershell,
+            powershell_needed,
+            probe_command("powershell", &["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"])
+                .or_else(|| probe_command("pwsh", &["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"])),
+            "Required by powershell_query and used by Windows desktop automation / Office helpers.",
+            Some("Install Windows PowerShell / PowerShell 7 and ensure `powershell` or `pwsh` is available on PATH."),
+        ));
+
+        if tool_enabled("uia") {
+            items.push(build_dependency_item(
+                "uia-runtime",
+                "Windows UI Automation Runtime",
+                "desktop_automation",
+                true,
+                true,
+                Some("Built into the Windows desktop host".into()),
+                "UIA support is compiled into the Windows build; failures are usually app-specific or permission-related.",
+                Some("If UIA actions fail, try running the app with matching privilege level and verify the target app exposes UIA elements."),
+            ));
+        }
+
+        if tool_enabled("wmi") {
+            let wmi_status = probe_command(
+                "powershell",
+                &[
+                    "-NoProfile",
+                    "-Command",
+                    "$svc=Get-Service Winmgmt -ErrorAction SilentlyContinue; if ($svc) { $svc.Status }",
+                ],
+            )
+            .or_else(|| {
+                probe_command(
+                    "pwsh",
+                    &[
+                        "-NoProfile",
+                        "-Command",
+                        "$svc=Get-Service Winmgmt -ErrorAction SilentlyContinue; if ($svc) { $svc.Status }",
+                    ],
+                )
+            });
+            items.push(build_dependency_item(
+                "wmi-service",
+                "WMI Service (Winmgmt)",
+                "windows_integration",
+                wmi_status.is_some(),
+                true,
+                wmi_status.clone().map(|v| format!("Service status: {}", v)),
+                "Needed for the WMI tool to query hardware, processes, and services.",
+                Some("Ensure the Windows Management Instrumentation service exists and can be started."),
+            ));
+        }
+
+        if tool_enabled("office") {
+            let office = probe_command(
+                "powershell",
+                &[
+                    "-NoProfile",
+                    "-Command",
+                    "$paths=@('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\excel.exe','HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\winword.exe','HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\powerpnt.exe'); if (($paths | Where-Object { Test-Path $_ }).Count -gt 0) { 'installed' }",
+                ],
+            )
+            .or_else(|| {
+                probe_command(
+                    "pwsh",
+                    &[
+                        "-NoProfile",
+                        "-Command",
+                        "$paths=@('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\excel.exe','HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\winword.exe','HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\powerpnt.exe'); if (($paths | Where-Object { Test-Path $_ }).Count -gt 0) { 'installed' }",
+                    ],
+                )
+            });
+            items.push(build_dependency_item(
+                "office-installation",
+                "Microsoft Office",
+                "office",
+                office.is_some(),
+                true,
+                office.map(|v| format!("Registry probe: {}", v)),
+                "Required for Excel / Word / PowerPoint / Outlook COM automation.",
+                Some("Install Microsoft Office desktop apps on this machine before enabling the Office tool."),
+            ));
+        }
+    }
+
+    items
+}
+
 /// Save a user-specified runtime executable path and return updated check results.
 #[tauri::command]
 pub async fn set_runtime_path(
@@ -173,6 +406,61 @@ fn probe_with_override(
         return None;
     }
     probe_command(path, args)
+}
+
+fn build_dependency_item(
+    key: &str,
+    name: &str,
+    feature: &str,
+    available: bool,
+    required: bool,
+    details: Option<String>,
+    hint: &str,
+    remediation: Option<&str>,
+) -> SystemDependencyItem {
+    let status = if available {
+        "ok"
+    } else if required {
+        "missing"
+    } else {
+        "warning"
+    };
+
+    SystemDependencyItem {
+        key: key.to_string(),
+        name: name.to_string(),
+        feature: feature.to_string(),
+        available,
+        required,
+        status: status.to_string(),
+        details,
+        hint: hint.to_string(),
+        remediation: remediation.map(|s| s.to_string()),
+    }
+}
+
+fn command_exists(cmd: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("where");
+        command.arg(cmd);
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let mut command = {
+        let mut command = std::process::Command::new("which");
+        command.arg(cmd);
+        command
+    };
+
+    command
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 fn probe_command(cmd: &str, args: &[&str]) -> Option<String> {

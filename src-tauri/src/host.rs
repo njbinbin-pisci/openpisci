@@ -34,10 +34,10 @@ use crate::browser::SharedBrowserManager;
 use crate::runtime::koi::DesktopInProcessSubagentRuntime;
 use crate::skills::loader::SkillLoader;
 use crate::store::{AppState, Database, Settings};
-use crate::tools::{app_control, browser, call_fish, call_koi, chat_ui, im_send, skill_list};
+use crate::tools::{app_control, browser, call_fish, call_koi, chat_ui, desktop_automation, im_send, screen, skill_list, system_info};
 
 #[cfg(target_os = "windows")]
-use crate::tools::{com_invoke, com_tool, office, powershell, screen, uia, wmi_tool};
+use crate::tools::{com_invoke, com_tool, office, powershell, uia, wmi_tool};
 
 // ─── Shared maps -------------------------------------------------------------
 
@@ -531,6 +531,16 @@ impl HostTools for DesktopHostTools {
             }
         }
 
+        if self.is_enabled("screen_capture") {
+            registry.register(Box::new(screen::ScreenTool));
+        }
+        if self.is_enabled("desktop_automation") {
+            registry.register(Box::new(desktop_automation::DesktopAutomationTool));
+        }
+        if self.is_enabled("system_info") {
+            registry.register(Box::new(system_info::SystemInfoTool));
+        }
+
         // 3) Windows-only tools.
         #[cfg(target_os = "windows")]
         {
@@ -545,9 +555,6 @@ impl HostTools for DesktopHostTools {
             }
             if self.is_enabled("uia") {
                 registry.register(Box::new(uia::UiaTool));
-            }
-            if self.is_enabled("screen_capture") {
-                registry.register(Box::new(screen::ScreenTool));
             }
             if self.is_enabled("com") {
                 registry.register(Box::new(com_tool::ComTool));

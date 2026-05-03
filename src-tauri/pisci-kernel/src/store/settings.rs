@@ -491,6 +491,24 @@ pub struct Settings {
     #[serde(default)]
     pub vision_enabled: bool,
 
+    // ── Vision Model (UIA / screen_capture / desktop_automation) ────────────
+    /// When true, vision-based tools reuse the main LLM settings.
+    /// When false, the separate vision_provider/model/api_key/base_url below are used.
+    #[serde(default = "default_true")]
+    pub vision_use_main_llm: bool,
+    /// Vision LLM provider (e.g. "anthropic", "openai", "qwen")
+    #[serde(default)]
+    pub vision_provider: String,
+    /// Vision LLM model name (e.g. "claude-sonnet-4-5", "gpt-4o")
+    #[serde(default)]
+    pub vision_model: String,
+    /// Vision LLM API key
+    #[serde(default)]
+    pub vision_api_key: String,
+    /// Vision LLM custom base URL
+    #[serde(default)]
+    pub vision_base_url: String,
+
     // ── Streaming output ────────────────────────────────────────────────────
     /// Stream LLM text deltas to the UI as they arrive instead of waiting
     /// for the full response. Only wired into the main chat / Koi task
@@ -723,6 +741,11 @@ impl Default for Settings {
             llm_providers: Vec::new(),
             runtime_paths: HashMap::new(),
             vision_enabled: false,
+            vision_use_main_llm: true,
+            vision_provider: String::new(),
+            vision_model: String::new(),
+            vision_api_key: String::new(),
+            vision_base_url: String::new(),
             enable_streaming: false,
             overlay_x: None,
             overlay_y: None,
