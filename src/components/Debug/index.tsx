@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { useTranslation } from "react-i18next";
 import { systemApi, settingsApi, RuntimeCheckItem, Settings, SystemDependencyItem, poolApi, koiApi, PoolMessage, KoiWithStats } from "../../services/tauri";
+import { localizedDependencyRemediation } from "../../utils/systemDependencies";
 import "./Debug.css";
 
 // ─── Types (mirror Rust structs) ─────────────────────────────────────────────
@@ -99,38 +100,6 @@ function StatusBadge({ passed, running }: { passed?: boolean; running?: boolean 
 
 function ms(n: number) {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${n}ms`;
-}
-
-function localizedDependencyRemediation(
-  t: (key: string, options?: Record<string, unknown>) => string,
-  item: SystemDependencyItem,
-): string | null {
-  switch (item.key) {
-    case "linux-session":
-      return t("settings.depRemediation_linux_session");
-    case "xdotool":
-      return t("settings.depRemediation_xdotool");
-    case "wmctrl":
-      return t("settings.depRemediation_wmctrl");
-    case "xclip":
-      return t("settings.depRemediation_xclip");
-    case "cliclick":
-      return t("settings.depRemediation_cliclick");
-    case "osascript":
-      return t("settings.depRemediation_osascript");
-    case "macos-accessibility":
-      return t("settings.depRemediation_macos_accessibility");
-    case "powershell":
-      return t("settings.depRemediation_powershell");
-    case "uia-runtime":
-      return t("settings.depRemediation_uia_runtime");
-    case "wmi-service":
-      return t("settings.depRemediation_wmi_service");
-    case "office-installation":
-      return t("settings.depRemediation_office_installation");
-    default:
-      return item.remediation;
-  }
 }
 
 function isScenarioAvailable(scenario: DebugScenario, settings: Settings | null): boolean {

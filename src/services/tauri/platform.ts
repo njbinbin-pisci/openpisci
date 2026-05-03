@@ -31,6 +31,25 @@ export interface SystemDependencyItem {
   details: string | null;
   hint: string;
   remediation: string | null;
+  action: SystemDependencyAction | null;
+}
+
+export interface SystemDependencyAction {
+  kind: "install_command" | "open_url" | "open_settings";
+  command: string | null;
+  url: string | null;
+}
+
+export interface PrivilegeElevationCheckItem {
+  key: string;
+  name: string;
+  available: boolean;
+  required: boolean;
+  status: "ok" | "warning" | "missing";
+  details: string | null;
+  hint: string;
+  remediation: string | null;
+  action: SystemDependencyAction | null;
 }
 
 export const systemApi = {
@@ -39,6 +58,10 @@ export const systemApi = {
   checkRuntimes: () => invoke<RuntimeCheckItem[]>("check_runtimes"),
   checkSystemDependencies: () =>
     invoke<SystemDependencyItem[]>("check_system_dependencies"),
+  checkPrivilegeElevation: () =>
+    invoke<PrivilegeElevationCheckItem[]>("check_privilege_elevation"),
+  runSystemDependencyAction: (key: string) =>
+    invoke<void>("run_system_dependency_action", { key }),
   setRuntimePath: (runtimeKey: string, exePath: string) =>
     invoke<RuntimeCheckItem[]>("set_runtime_path", { runtimeKey, exePath }),
 };

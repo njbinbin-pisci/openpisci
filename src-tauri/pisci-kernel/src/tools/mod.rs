@@ -10,7 +10,6 @@
 //! host crates and are plugged in via the `HostTools` host trait.
 
 pub mod code_run;
-#[cfg(target_os = "windows")]
 pub mod elevate;
 pub mod email;
 pub mod file_diff;

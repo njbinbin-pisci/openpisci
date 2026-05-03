@@ -14,44 +14,14 @@ import {
   ChannelInfo,
   RuntimeCheckItem,
   SystemDependencyItem,
+  PrivilegeElevationCheckItem,
   SshServerConfig,
   LlmProviderConfig,
   EnterpriseCapabilityStatus,
   EnterpriseCapabilityTestResult,
 } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
-
-function localizedDependencyRemediation(
-  t: (key: string, options?: Record<string, unknown>) => string,
-  item: SystemDependencyItem,
-): string | null {
-  switch (item.key) {
-    case "linux-session":
-      return t("settings.depRemediation_linux_session");
-    case "xdotool":
-      return t("settings.depRemediation_xdotool");
-    case "wmctrl":
-      return t("settings.depRemediation_wmctrl");
-    case "xclip":
-      return t("settings.depRemediation_xclip");
-    case "cliclick":
-      return t("settings.depRemediation_cliclick");
-    case "osascript":
-      return t("settings.depRemediation_osascript");
-    case "macos-accessibility":
-      return t("settings.depRemediation_macos_accessibility");
-    case "powershell":
-      return t("settings.depRemediation_powershell");
-    case "uia-runtime":
-      return t("settings.depRemediation_uia_runtime");
-    case "wmi-service":
-      return t("settings.depRemediation_wmi_service");
-    case "office-installation":
-      return t("settings.depRemediation_office_installation");
-    default:
-      return item.remediation;
-  }
-}
+import { localizedDependencyRemediation, localizedPrivilegeElevationRemediation } from "../../utils/systemDependencies";
 
 type EnterprisePlatformId = "feishu" | "wecom" | "dingtalk";
 
@@ -174,6 +144,10 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
   const [runtimesSettingKey, setRuntimesSettingKey] = useState<string | null>(null);
   const [systemDependencies, setSystemDependencies] = useState<SystemDependencyItem[]>([]);
   const [systemDependenciesLoading, setSystemDependenciesLoading] = useState(false);
+  const [privilegeElevationChecks, setPrivilegeElevationChecks] = useState<PrivilegeElevationCheckItem[]>([]);
+  const [privilegeElevationLoading, setPrivilegeElevationLoading] = useState(false);
+  const [systemDependencyActionKey, setSystemDependencyActionKey] = useState<string | null>(null);
+  const [systemDependencyActionError, setSystemDependencyActionError] = useState<string | null>(null);
   const [defaultWorkspace, setDefaultWorkspace] = useState<string>("");
   const [capabilityStatus, setCapabilityStatus] = useState<Partial<Record<EnterprisePlatformId, EnterpriseCapabilityStatus>>>({});
   const [capabilityLoading, setCapabilityLoading] = useState<Partial<Record<EnterprisePlatformId, boolean>>>({});
@@ -362,20 +336,57 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
   const handleCheckRuntimes = useCallback(async () => {
     setRuntimesLoading(true);
     setSystemDependenciesLoading(true);
+    setPrivilegeElevationLoading(true);
+    setSystemDependencyActionError(null);
     try {
-      const [items, deps] = await Promise.all([
+      const [items, deps, privilegeChecks] = await Promise.all([
         systemApi.checkRuntimes(),
         systemApi.checkSystemDependencies(),
+        systemApi.checkPrivilegeElevation(),
       ]);
       setRuntimes(items);
       setSystemDependencies(deps);
+      setPrivilegeElevationChecks(privilegeChecks);
     } catch {
       // ignore
     } finally {
       setRuntimesLoading(false);
       setSystemDependenciesLoading(false);
+      setPrivilegeElevationLoading(false);
     }
   }, []);
+
+  const handleRunDependencyAction = useCallback(async (
+    item: { key: string; name: string; action: SystemDependencyItem["action"] },
+  ) => {
+    if (!item.action) return;
+    setSystemDependencyActionKey(item.key);
+    setSystemDependencyActionError(null);
+    try {
+      await systemApi.runSystemDependencyAction(item.key);
+    } catch (e) {
+      setSystemDependencyActionError(t("settings.systemDepActionFailed", {
+        name: item.name,
+        error: String(e),
+      }));
+    } finally {
+      setSystemDependencyActionKey(null);
+    }
+  }, [t]);
+
+  const dependencyActionLabel = useCallback((item: { action: SystemDependencyItem["action"] }) => {
+    if (!item.action) return null;
+    switch (item.action.kind) {
+      case "install_command":
+        return t("settings.systemDepActionInstall");
+      case "open_url":
+        return t("settings.systemDepActionDownload");
+      case "open_settings":
+        return t("settings.systemDepActionOpenSettings");
+      default:
+        return t("settings.systemDepActionOpen");
+    }
+  }, [t]);
 
   const handleSelectRuntimePath = useCallback(async (runtimeKey: string, runtimeName: string) => {
     setRuntimesSettingKey(runtimeKey);
@@ -2057,6 +2068,11 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12 }}>
               {t("settings.systemDepsDesc")}
             </div>
+            {systemDependencyActionError && (
+              <div style={{ fontSize: 12, color: "#dc3545", marginBottom: 12 }}>
+                {systemDependencyActionError}
+              </div>
+            )}
 
             {systemDependenciesLoading && systemDependencies.length === 0 ? (
               <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("common.loading")}</div>
@@ -2131,6 +2147,20 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                             {localizedDependencyRemediation(t, item)}
                           </div>
                         )}
+                        {!item.available && item.action && (
+                          <div style={{ marginTop: 8 }}>
+                            <button
+                              className="btn btn-primary"
+                              onClick={() => handleRunDependencyAction(item)}
+                              disabled={systemDependencyActionKey === item.key}
+                              style={{ fontSize: 11, padding: "3px 10px" }}
+                            >
+                              {systemDependencyActionKey === item.key
+                                ? t("common.loading")
+                                : dependencyActionLabel(item)}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -2139,6 +2169,110 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
             ) : (
               <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
                 {t("settings.systemDepsHint")}
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginTop: 20 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", marginBottom: 8 }}>
+              {t("settings.privElevationTitle")}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12 }}>
+              {t("settings.privElevationDesc")}
+            </div>
+
+            {privilegeElevationLoading && privilegeElevationChecks.length === 0 ? (
+              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("common.loading")}</div>
+            ) : privilegeElevationChecks.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {privilegeElevationChecks.map((item) => {
+                  const icon = item.status === "ok" ? "✅" : item.status === "missing" ? "❌" : "⚠️";
+                  const badgeBg = item.status === "ok"
+                    ? "rgba(40, 167, 69, 0.12)"
+                    : item.status === "missing"
+                      ? "rgba(220, 53, 69, 0.12)"
+                      : "rgba(255, 193, 7, 0.12)";
+                  const badgeColor = item.status === "ok"
+                    ? "#28a745"
+                    : item.status === "missing"
+                      ? "#dc3545"
+                      : "#b8860b";
+                  const statusLabel = item.status === "ok"
+                    ? t("settings.dependencyStatusOk")
+                    : item.status === "missing"
+                      ? t("settings.dependencyStatusMissing")
+                      : t("settings.dependencyStatusWarning");
+                  return (
+                    <div
+                      key={item.key}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 10,
+                        padding: "10px 14px",
+                        border: "1px solid var(--border)",
+                        borderRadius: 8,
+                        background: "var(--bg-secondary)",
+                      }}
+                    >
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>{icon}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: 13 }}>
+                            {item.name}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              padding: "2px 6px",
+                              borderRadius: 999,
+                              background: badgeBg,
+                              color: badgeColor,
+                              fontWeight: 700,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {statusLabel}
+                          </span>
+                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                            {item.required ? t("settings.dependencyRequired") : t("settings.dependencyRecommended")}
+                          </span>
+                        </div>
+                        {item.details && (
+                          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                            {item.details}
+                          </div>
+                        )}
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+                          {item.hint}
+                        </div>
+                        {localizedPrivilegeElevationRemediation(t, item) && !item.available && (
+                          <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4 }}>
+                            {localizedPrivilegeElevationRemediation(t, item)}
+                          </div>
+                        )}
+                        {!item.available && item.action && (
+                          <div style={{ marginTop: 8 }}>
+                            <button
+                              className="btn btn-primary"
+                              onClick={() => handleRunDependencyAction(item)}
+                              disabled={systemDependencyActionKey === item.key}
+                              style={{ fontSize: 11, padding: "3px 10px" }}
+                            >
+                              {systemDependencyActionKey === item.key
+                                ? t("common.loading")
+                                : dependencyActionLabel(item)}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                {t("settings.privElevationHint")}
               </div>
             )}
           </div>

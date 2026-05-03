@@ -1,21 +1,14 @@
-/// Elevated (administrator) command execution via Windows UAC.
+/// Cross-platform elevated command execution helpers.
 ///
-/// How it works:
-/// 1. Write the command to a temp .ps1 script file.
-/// 2. Use ShellExecuteW with verb="runas" to launch a new elevated PowerShell process.
-///    This triggers the Windows UAC consent dialog — the user sees and approves it.
-/// 3. The elevated process runs the script and writes stdout/stderr/exitcode to a temp result file.
-/// 4. We poll the result file until it appears (the elevated process writes it when done).
-/// 5. Read and return the result, then clean up temp files.
-///
-/// Limitations:
-/// - The UAC dialog is shown by Windows itself (not our app) — this is by design and correct.
-/// - If the user clicks "No" in UAC, ShellExecuteW returns error code 5 (ERROR_ACCESS_DENIED).
-/// - Elevated process runs in a separate session; it cannot interact with our process directly.
-/// - Timeout applies to the entire operation including UAC wait time.
+/// Windows: ShellExecute `runas` triggers the native UAC consent dialog.
+/// macOS: AppleScript `do shell script ... with administrator privileges`
+/// opens the system admin-password prompt.
+/// Linux: `pkexec` asks polkit to show an authentication dialog; availability
+/// depends on the desktop environment / installed polkit agent.
 use anyhow::Result;
 use std::path::PathBuf;
 use std::time::Duration;
+use tokio::process::Command;
 use tokio::time::{sleep, timeout};
 
 #[cfg(target_os = "windows")]
@@ -29,6 +22,14 @@ pub struct ElevatedResult {
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,
+}
+
+#[cfg(not(target_os = "windows"))]
+struct ElevatedPaths {
+    script_path: PathBuf,
+    result_path: PathBuf,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
 }
 
 /// Run a PowerShell command with administrator privileges via UAC.
@@ -111,23 +112,23 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
     std::fs::write(&script_path, script_content.as_bytes())?;
 
-    // Choose PowerShell executable
-    let ps_exe = if arch == "x86" {
-        r"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe".to_string()
-    } else {
-        "powershell.exe".to_string()
-    };
-
-    // Build the arguments: -File <script_path>
-    let script_path_str = script_path.to_string_lossy().to_string();
-    let ps_args = format!(
-        "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\"",
-        script_path_str
-    );
-
     // Launch elevated via ShellExecuteW runas
     #[cfg(target_os = "windows")]
-    let launch_result = launch_elevated_windows(&ps_exe, &ps_args);
+    let launch_result = {
+        let ps_exe = if arch == "x86" {
+            r"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe".to_string()
+        } else {
+            "powershell.exe".to_string()
+        };
+
+        let script_path_str = script_path.to_string_lossy().to_string();
+        let ps_args = format!(
+            "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\"",
+            script_path_str
+        );
+
+        launch_elevated_windows(&ps_exe, &ps_args)
+    };
 
     #[cfg(not(target_os = "windows"))]
     let launch_result: Result<()> = Err(anyhow::anyhow!(
@@ -172,6 +173,66 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     }
 }
 
+#[cfg(target_os = "macos")]
+pub async fn run_elevated_shell(
+    command: &str,
+    cwd: &std::path::Path,
+    env: &[(String, String)],
+    timeout_secs: u64,
+) -> Result<ElevatedResult> {
+    let paths = write_unix_wrapper(command, cwd, env)?;
+    let shell_cmd = format!("/bin/sh {}", shell_quote(&paths.script_path.to_string_lossy()));
+    let script = format!(
+        "do shell script \"{}\" with administrator privileges",
+        apple_script_escape(&shell_cmd)
+    );
+
+    let result = timeout(
+        Duration::from_secs(timeout_secs),
+        Command::new("osascript").args(["-e", &script]).output(),
+    )
+    .await;
+
+    finalize_unix_result(paths, result, "macOS administrator prompt", timeout_secs)
+}
+
+#[cfg(target_os = "linux")]
+pub async fn run_elevated_shell(
+    command: &str,
+    cwd: &std::path::Path,
+    env: &[(String, String)],
+    timeout_secs: u64,
+) -> Result<ElevatedResult> {
+    if !command_exists("pkexec") {
+        return Err(anyhow::anyhow!(
+            "pkexec is not available. Install polkit/pkexec or rerun the command manually with sudo in a terminal."
+        ));
+    }
+
+    let paths = write_unix_wrapper(command, cwd, env)?;
+    let result = timeout(
+        Duration::from_secs(timeout_secs),
+        Command::new("pkexec")
+            .args(["/bin/sh", &paths.script_path.to_string_lossy()])
+            .output(),
+    )
+    .await;
+
+    finalize_unix_result(paths, result, "polkit authentication", timeout_secs)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+pub async fn run_elevated_shell(
+    _command: &str,
+    _cwd: &std::path::Path,
+    _env: &[(String, String)],
+    _timeout_secs: u64,
+) -> Result<ElevatedResult> {
+    Err(anyhow::anyhow!(
+        "Elevated shell execution is not implemented for this platform"
+    ))
+}
+
 async fn poll_for_result(result_path: &PathBuf) -> Result<String> {
     // Poll every 500ms until the result file appears
     loop {
@@ -185,6 +246,127 @@ async fn poll_for_result(result_path: &PathBuf) -> Result<String> {
         }
         sleep(Duration::from_millis(500)).await;
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn write_unix_wrapper(
+    command: &str,
+    cwd: &std::path::Path,
+    env: &[(String, String)],
+) -> Result<ElevatedPaths> {
+    let tmp_dir = std::env::temp_dir();
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let script_path = tmp_dir.join(format!("pisci_elev_{}.sh", id));
+    let result_path = tmp_dir.join(format!("pisci_elev_{}.exit", id));
+    let stdout_path = tmp_dir.join(format!("pisci_elev_{}.out", id));
+    let stderr_path = tmp_dir.join(format!("pisci_elev_{}.err", id));
+
+    let exports = env
+        .iter()
+        .map(|(key, value)| format!("export {}={}\n", key, shell_quote(value)))
+        .collect::<String>();
+
+    let script = format!(
+        "#!/bin/sh\ncd {} || exit 1\n{} /bin/sh -lc {} > {} 2> {}\nprintf '%s' $? > {}\n",
+        shell_quote(&cwd.to_string_lossy()),
+        exports,
+        shell_quote(command),
+        shell_quote(&stdout_path.to_string_lossy()),
+        shell_quote(&stderr_path.to_string_lossy()),
+        shell_quote(&result_path.to_string_lossy()),
+    );
+
+    std::fs::write(&script_path, script.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script_path)?.permissions();
+        perms.set_mode(0o700);
+        std::fs::set_permissions(&script_path, perms)?;
+    }
+
+    Ok(ElevatedPaths {
+        script_path,
+        result_path,
+        stdout_path,
+        stderr_path,
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn finalize_unix_result(
+    paths: ElevatedPaths,
+    launch_result: Result<Result<std::process::Output, std::io::Error>, tokio::time::error::Elapsed>,
+    prompt_name: &str,
+    timeout_secs: u64,
+) -> Result<ElevatedResult> {
+    let result = match launch_result {
+        Err(_) => {
+            cleanup_unix_paths(&paths);
+            return Err(anyhow::anyhow!(
+                "Elevated command timed out after {}s while waiting for {}",
+                timeout_secs,
+                prompt_name
+            ));
+        }
+        Ok(Err(e)) => {
+            cleanup_unix_paths(&paths);
+            return Err(anyhow::anyhow!("Failed to start elevated command: {}", e));
+        }
+        Ok(Ok(output)) => output,
+    };
+
+    if !paths.result_path.exists() {
+        let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
+        cleanup_unix_paths(&paths);
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(anyhow::anyhow!(
+            "Elevated command did not complete. The user may have cancelled authentication or the system could not show the privilege prompt. {}",
+            detail
+        ));
+    }
+
+    let exit_code = std::fs::read_to_string(&paths.result_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .unwrap_or(-1);
+    let stdout = std::fs::read_to_string(&paths.stdout_path).unwrap_or_default();
+    let stderr = std::fs::read_to_string(&paths.stderr_path).unwrap_or_default();
+    cleanup_unix_paths(&paths);
+
+    Ok(ElevatedResult {
+        exit_code,
+        stdout: stdout.trim().to_string(),
+        stderr: stderr.trim().to_string(),
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn cleanup_unix_paths(paths: &ElevatedPaths) {
+    let _ = std::fs::remove_file(&paths.script_path);
+    let _ = std::fs::remove_file(&paths.result_path);
+    let _ = std::fs::remove_file(&paths.stdout_path);
+    let _ = std::fs::remove_file(&paths.stderr_path);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(target_os = "macos")]
+fn apple_script_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(target_os = "linux")]
+fn command_exists(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 fn parse_result(json_str: &str) -> Result<ElevatedResult> {

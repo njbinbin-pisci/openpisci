@@ -8,7 +8,6 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-#[cfg(target_os = "windows")]
 use super::elevate;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
@@ -23,7 +22,9 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a shell command on Windows. By default uses 64-bit PowerShell. \
+        #[cfg(target_os = "windows")]
+        {
+            return "Execute a shell command on Windows. By default uses 64-bit PowerShell. \
          Use `interpreter: \"powershell32\"` for 32-bit PowerShell (required for legacy COM/ActiveX components). \
          Use `interpreter: \"cmd\"` for cmd.exe (useful for dir, reg, findstr, etc.). \
          Use `elevated: true` to run with administrator privileges — Windows will show a UAC consent dialog \
@@ -38,7 +39,30 @@ impl Tool for ShellTool {
          - To query registry: `reg query HKLM\\SOFTWARE\\Classes /f keyword /s` \
          - To check 32-bit COM: use powershell32 and New-Object -ComObject ProgID \
          - To list C:\\ root dirs: `cmd /c dir C:\\ /ad /b` \
-         - Needs admin (e.g. install software, write to Program Files, modify system registry, regsvr32): use elevated=true"
+         - Needs admin (e.g. install software, write to Program Files, modify system registry, regsvr32): use elevated=true";
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            return "Execute a shell command on macOS. Uses `/bin/sh -c` by default. \
+         Use `elevated: true` to trigger the native administrator password dialog via AppleScript. \
+         If a command fails with 'Operation not permitted' or 'Permission denied', retry with `elevated: true`. \
+         Working directory defaults to `/`. Always returns exit code + stdout + stderr so you can judge success yourself.";
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            return "Execute a shell command on Linux. Uses `/bin/sh -c` by default. \
+         Use `elevated: true` to retry through polkit (`pkexec`) when a command needs root privileges. \
+         If a command fails with 'Permission denied' or 'Operation not permitted', retry with `elevated: true`. \
+         This requires a desktop polkit agent; otherwise rerun manually with sudo in a terminal. \
+         Working directory defaults to `/`. Always returns exit code + stdout + stderr so you can judge success yourself.";
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        {
+            "Execute a shell command on the host. Uses `/bin/sh -c` by default. Working directory defaults to `/`. Always returns exit code + stdout + stderr."
+        }
     }
 
     fn input_schema(&self) -> Value {
@@ -76,16 +100,28 @@ impl Tool for ShellTool {
     }
 
     fn description_minimal(&self) -> Cow<'_, str> {
-        // Terse: keep the critical operational tips (cwd=C:\, auto-elevate
-        // on access-denied) so minimal-mode agents still call it right.
-        // Long prose (per-interpreter recipes, tips list) only appears
-        // via `description()` on schema-correction / recall.
-        Cow::Borrowed(
+        #[cfg(target_os = "windows")]
+        return Cow::Borrowed(
             "Execute a Windows shell command. Defaults to 64-bit PowerShell; set \
              interpreter to powershell32 or cmd when needed. Working directory defaults \
              to C:\\ — use absolute paths. Set elevated=true to run as Administrator \
              (UAC prompt). Always retry with elevated=true on Access Denied.",
-        )
+        );
+
+        #[cfg(target_os = "macos")]
+        return Cow::Borrowed(
+            "Execute a macOS shell command via /bin/sh. Working directory defaults to /. \
+             Set elevated=true to show the native administrator password dialog.",
+        );
+
+        #[cfg(target_os = "linux")]
+        return Cow::Borrowed(
+            "Execute a Linux shell command via /bin/sh. Working directory defaults to /. \
+             Set elevated=true to retry via pkexec/polkit when root privileges are required.",
+        );
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        Cow::Borrowed("Execute a shell command on the host. Working directory defaults to /.")
     }
 
     fn input_schema_minimal(&self) -> Value {
@@ -140,43 +176,42 @@ impl Tool for ShellTool {
         }
 
         let timeout_secs = input["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let elevated = input["elevated"].as_bool().unwrap_or(false);
         #[cfg(target_os = "windows")]
         let interpreter = input["interpreter"].as_str().unwrap_or("powershell");
-        #[cfg(target_os = "windows")]
-        let elevated = input["elevated"].as_bool().unwrap_or(false);
 
-        // Elevated path: use UAC ShellExecute runas + temp file bridge
-        #[cfg(target_os = "windows")]
+        let env_pairs = input["env"]
+            .as_object()
+            .map(|env_obj| {
+                env_obj
+                    .iter()
+                    .filter_map(|(key, value)| value.as_str().map(|val| (key.clone(), val.to_string())))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
         if elevated {
-            let arch = match interpreter {
-                "powershell32" => "x86",
-                _ => "x64",
-            };
-            // For elevated, timeout includes UAC dialog wait — use a longer default
-            let elev_timeout = input["timeout"].as_u64().unwrap_or(180);
-            return match elevate::run_elevated_powershell(command, arch, elev_timeout).await {
-                Ok(r) => {
-                    let mut parts =
-                        vec![format!("Exit code: {} (ran as Administrator)", r.exit_code)];
-                    if !r.stdout.is_empty() {
-                        parts.push(format!(
-                            "STDOUT:\n{}",
-                            truncate_output(&r.stdout, MAX_OUTPUT_BYTES * 3 / 4)
-                        ));
-                    }
-                    if !r.stderr.is_empty() {
-                        parts.push(format!(
-                            "STDERR:\n{}",
-                            truncate_output(&r.stderr, MAX_OUTPUT_BYTES / 4)
-                        ));
-                    }
-                    if r.stdout.is_empty() && r.stderr.is_empty() {
-                        parts.push("(no output)".to_string());
-                    }
-                    Ok(ToolResult::ok(parts.join("\n\n")))
-                }
-                Err(e) => Ok(ToolResult::err(format!("Elevated execution failed: {}", e))),
-            };
+            #[cfg(target_os = "windows")]
+            {
+                let arch = match interpreter {
+                    "powershell32" => "x86",
+                    _ => "x64",
+                };
+                let elev_timeout = input["timeout"].as_u64().unwrap_or(180);
+                return render_elevated_result(
+                    elevate::run_elevated_powershell(command, arch, elev_timeout).await,
+                    "Administrator",
+                );
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                let elev_timeout = input["timeout"].as_u64().unwrap_or(180);
+                return render_elevated_result(
+                    elevate::run_elevated_shell(command, &cwd, &env_pairs, elev_timeout).await,
+                    elevated_label(),
+                );
+            }
         }
 
         #[cfg(target_os = "windows")]
@@ -195,12 +230,8 @@ impl Tool for ShellTool {
             .kill_on_drop(true);
 
         // Apply extra env vars
-        if let Some(env_obj) = input["env"].as_object() {
-            for (k, v) in env_obj {
-                if let Some(val) = v.as_str() {
-                    cmd.env(k, val);
-                }
-            }
+        for (key, value) in &env_pairs {
+            cmd.env(key, value);
         }
 
         let run_result = timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
@@ -218,43 +249,44 @@ impl Tool for ShellTool {
 
                 // Auto-elevate: if the command failed with a permission error and
                 // elevated was not already requested, retry automatically with UAC.
-                #[cfg(target_os = "windows")]
                 if !elevated && is_permission_error(exit_code, &stdout, &stderr) {
                     tracing::info!(
                         "shell: permission error detected (exit={}), auto-retrying with elevation",
                         exit_code
                     );
-                    let arch = match interpreter {
-                        "powershell32" => "x86",
-                        _ => "x64",
+
+                    #[cfg(target_os = "windows")]
+                    let retry = {
+                        let arch = match interpreter {
+                            "powershell32" => "x86",
+                            _ => "x64",
+                        };
+                        elevate::run_elevated_powershell(
+                            command,
+                            arch,
+                            input["timeout"].as_u64().unwrap_or(180),
+                        )
+                        .await
                     };
-                    // Use a longer timeout to give the user time to respond to UAC
-                    let elev_timeout = input["timeout"].as_u64().unwrap_or(180);
-                    return match elevate::run_elevated_powershell(command, arch, elev_timeout).await {
-                        Ok(r) => {
-                            let mut parts = vec![format!(
-                                "Exit code: {} (auto-elevated to Administrator after permission error)",
-                                r.exit_code
-                            )];
-                            if !r.stdout.is_empty() {
-                                parts.push(format!(
-                                    "STDOUT:\n{}",
-                                    truncate_output(&r.stdout, MAX_OUTPUT_BYTES * 3 / 4)
-                                ));
-                            }
-                            if !r.stderr.is_empty() {
-                                parts.push(format!(
-                                    "STDERR:\n{}",
-                                    truncate_output(&r.stderr, MAX_OUTPUT_BYTES / 4)
-                                ));
-                            }
-                            if r.stdout.is_empty() && r.stderr.is_empty() {
-                                parts.push("(no output)".to_string());
-                            }
-                            Ok(ToolResult::ok(parts.join("\n\n")))
-                        }
+
+                    #[cfg(not(target_os = "windows"))]
+                    let retry = elevate::run_elevated_shell(
+                        command,
+                        &cwd,
+                        &env_pairs,
+                        input["timeout"].as_u64().unwrap_or(180),
+                    )
+                    .await;
+
+                    return match retry {
+                        Ok(r) => Ok(render_elevated_output(
+                            &r,
+                            &format!(
+                                "auto-elevated to {} after permission error",
+                                elevated_label()
+                            ),
+                        )),
                         Err(e) => {
-                            // UAC was denied or failed — return original error with a hint
                             let mut parts = vec![format!("Exit code: {}", exit_code)];
                             if !stdout.is_empty() {
                                 parts.push(format!("STDOUT:\n{}", stdout));
@@ -263,8 +295,7 @@ impl Tool for ShellTool {
                                 parts.push(format!("STDERR:\n{}", stderr));
                             }
                             parts.push(format!(
-                                "\n⚠️ Auto-elevation attempted but failed (UAC denied or error: {}). \
-                                 To retry manually, use `elevated: true` in your next shell call.",
+                                "\n⚠️ Auto-elevation attempted but failed ({}). To retry manually, use `elevated: true` in your next shell call.",
                                 e
                             ));
                             Ok(ToolResult::ok(parts.join("\n\n")))
@@ -288,6 +319,55 @@ impl Tool for ShellTool {
                 Ok(ToolResult::ok(parts.join("\n\n")))
             }
         }
+    }
+}
+
+fn render_elevated_result(
+    result: Result<elevate::ElevatedResult, anyhow::Error>,
+    label: &str,
+) -> Result<ToolResult> {
+    match result {
+        Ok(r) => Ok(render_elevated_output(&r, &format!("ran as {}", label))),
+        Err(e) => Ok(ToolResult::err(format!("Elevated execution failed: {}", e))),
+    }
+}
+
+fn render_elevated_output(r: &elevate::ElevatedResult, label: &str) -> ToolResult {
+    let mut parts = vec![format!("Exit code: {} ({})", r.exit_code, label)];
+    if !r.stdout.is_empty() {
+        parts.push(format!(
+            "STDOUT:\n{}",
+            truncate_output(&r.stdout, MAX_OUTPUT_BYTES * 3 / 4)
+        ));
+    }
+    if !r.stderr.is_empty() {
+        parts.push(format!(
+            "STDERR:\n{}",
+            truncate_output(&r.stderr, MAX_OUTPUT_BYTES / 4)
+        ));
+    }
+    if r.stdout.is_empty() && r.stderr.is_empty() {
+        parts.push("(no output)".to_string());
+    }
+    ToolResult::ok(parts.join("\n\n"))
+}
+
+fn elevated_label() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "Administrator"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "administrator privileges"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "root via polkit"
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        "elevated privileges"
     }
 }
 
@@ -332,27 +412,40 @@ fn build_windows_cmd(interpreter: &str, command: &str) -> Command {
 
 /// Detect whether a command failed due to insufficient privileges.
 /// Checks common Windows permission error patterns in exit code, stdout, and stderr.
-#[cfg(target_os = "windows")]
 fn is_permission_error(exit_code: i32, stdout: &str, stderr: &str) -> bool {
     // Non-zero exit code required — don't auto-elevate successful commands
     if exit_code == 0 {
         return false;
     }
     let combined = format!("{} {}", stdout, stderr).to_lowercase();
+    #[cfg(target_os = "windows")]
+    {
     // Common Windows permission error strings
-    combined.contains("access is denied")
-        || combined.contains("access denied")
-        || combined.contains("拒绝访问")
-        || combined.contains("requires elevation")
-        || combined.contains("elevated")
-        || combined.contains("administrator")
-        || combined.contains("privileged")
-        || combined.contains("0x80070005") // E_ACCESSDENIED HRESULT
-        || combined.contains("error 5")    // ERROR_ACCESS_DENIED Win32
-        || combined.contains("error: 5,")
-        || (exit_code == 1 && combined.contains("regsvr32"))
-        || combined.contains("cannot be loaded because running scripts is disabled")
-        || combined.contains("unauthorizedaccessexception")
+        return combined.contains("access is denied")
+            || combined.contains("access denied")
+            || combined.contains("拒绝访问")
+            || combined.contains("requires elevation")
+            || combined.contains("elevated")
+            || combined.contains("administrator")
+            || combined.contains("privileged")
+            || combined.contains("0x80070005")
+            || combined.contains("error 5")
+            || combined.contains("error: 5,")
+            || (exit_code == 1 && combined.contains("regsvr32"))
+            || combined.contains("cannot be loaded because running scripts is disabled")
+            || combined.contains("unauthorizedaccessexception");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        combined.contains("permission denied")
+            || combined.contains("operation not permitted")
+            || combined.contains("not permitted")
+            || combined.contains("must be root")
+            || combined.contains("authentication is required")
+            || combined.contains("polkit")
+            || exit_code == 126
+    }
 }
 
 fn truncate_output(s: &str, max_bytes: usize) -> String {
