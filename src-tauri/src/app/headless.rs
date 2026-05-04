@@ -333,6 +333,7 @@ pub async fn run_cli_headless_request(
         workspace_root_override: workspace_override,
         builtin_tool_overrides,
         context_toggles: request.context_toggles.clone(),
+        memory_owner_id: None,
     };
 
     let (response_text, _, _) = commands::chat::run_agent_headless(

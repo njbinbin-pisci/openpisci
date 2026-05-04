@@ -1198,6 +1198,12 @@ pub struct HeadlessRunOptions {
     pub workspace_root_override: Option<String>,
     pub builtin_tool_overrides: HashMap<String, bool>,
     pub context_toggles: crate::headless_cli::HeadlessContextToggles,
+    /// Override for the tool-context memory owner.
+    /// When `None`, defaults to "pisci".
+    /// For Koi-driven headless turns, this must be the Koi's own id so that
+    /// pool_chat messages, memory writes, and privilege checks attribute to
+    /// the Koi rather than to Pisci.
+    pub memory_owner_id: Option<String>,
 }
 
 pub(crate) const SESSION_SOURCE_IM_PREFIX: &str = "im_";
@@ -1375,6 +1381,11 @@ pub async fn run_agent_headless(
     pisci_kernel::agent::vision::clear_selection(session_id).await;
 
     let pool_session_id = options.as_ref().and_then(|o| o.pool_session_id.clone());
+    let memory_owner_id = options
+        .as_ref()
+        .and_then(|o| o.memory_owner_id.clone())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "pisci".to_string());
     let context_toggles = options
         .as_ref()
         .map(|o| o.context_toggles.clone())
@@ -1593,7 +1604,7 @@ pub async fn run_agent_headless(
                     String::new()
                 } else {
                     let db = state.db.lock().await;
-                    match db.search_memories_scoped(&query, "pisci", pool_session_id.as_deref(), 5)
+                    match db.search_memories_scoped(&query, &memory_owner_id, pool_session_id.as_deref(), 5)
                     {
                         Ok(mems) if !mems.is_empty() => {
                             let mut ctx = String::from("\n\n## Relevant Memory\n");
@@ -1786,7 +1797,7 @@ pub async fn run_agent_headless(
         bypass_permissions: false,
         settings: tool_settings,
         max_iterations: Some(max_iterations),
-        memory_owner_id: "pisci".to_string(),
+        memory_owner_id,
         pool_session_id: pool_session_id.clone(),
         cancel: cancel.clone(),
     };

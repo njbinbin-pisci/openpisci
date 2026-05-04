@@ -85,9 +85,8 @@ fn default_trial_scenario() -> TrialScenario {
              1) reverse_words(s) - reverses word order in a sentence \
              2) count_vowels(s) - counts vowels in a string \
              3) to_title_case(s) - converts a string to title case. \
-             Write a clear, concise specification with function signatures, \
-             parameter descriptions, expected behavior, and edge cases. \
-             Keep it practical. When you finish, share the spec in pool_chat, include `[ProjectStatus] follow_up_needed`, and hand off implementation to Coder using the delegated mention syntax from your coordination protocol."
+             Keep the spec practical: function signatures, parameter descriptions, expected behavior, and edge cases. \
+             Follow your coordination protocol to hand off to Coder when the spec is ready."
             .into(),
         workflow: vec![
             "Pisci assigns the initial design task to Architect.".into(),

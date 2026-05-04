@@ -175,6 +175,11 @@ async fn run_in_process_koi_turn(
         workspace_root_override: request.workspace.clone(),
         builtin_tool_overrides: HashMap::new(),
         context_toggles: HeadlessContextToggles::default(),
+        memory_owner_id: if request.koi_id.trim().is_empty() {
+            None
+        } else {
+            Some(request.koi_id.clone())
+        },
     };
 
     match run_agent_headless(
