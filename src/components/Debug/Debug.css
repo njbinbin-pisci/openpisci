@@ -85,6 +85,7 @@
   overflow: hidden;
   display: flex;
   min-height: 0;
+  min-width: 0;
 }
 
 /* Scenarios tab: left list + right detail pane */
@@ -863,10 +864,13 @@
   gap: 16px;
   padding: 20px;
   height: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow-y: auto;
-  /* Prevent scrollbar from causing layout reflow that changes arena width */
   overflow-x: hidden;
   box-sizing: border-box;
+  /* Prevent scrollbar from causing layout reflow that changes arena width */
+  scrollbar-gutter: stable;
 }
 
 .dbg-uia-header {
@@ -909,11 +913,16 @@
   border: 1px solid rgba(239, 68, 68, 0.35);
 }
 
-/* Arena */
+/* Arena - FIXED width and centered so content below CANNOT shift its screen position.
+   This is critical: the agent-test drag target coords are computed once before the
+   drag starts, so the arena must stay at exactly the same screen location throughout
+   the test regardless of tool-log / result-panel content appearing below. */
 .dbg-uia-arena {
   position: relative;
-  width: 100%;
+  width: 800px;
+  max-width: 100%;
   height: 260px;
+  margin: 0 auto;
   background: var(--bg-secondary);
   border: 2px dashed var(--border);
   border-radius: var(--radius);
@@ -972,6 +981,25 @@
 .dbg-uia-ball-label {
   font-size: 20px;
   pointer-events: none;
+}
+
+/* Coordinate label displayed on ball/target for agent to read */
+.dbg-uia-coord-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, 140%);
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.75);
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 20;
+  font-family: "SF Mono", "Fira Code", monospace;
+  letter-spacing: 0.5px;
 }
 
 /* Target zone */
@@ -1080,6 +1108,96 @@
   color: var(--text-secondary);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+/* Live agent event log - CONTAINED so long tool-call inputs cannot widen the panel.
+   width:100% + min-width:0 + overflow-x:hidden together guarantee the log stays inside
+   the panel regardless of any child content width. */
+.dbg-uia-live-log {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px 0;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 12px;
+  scrollbar-gutter: stable;
+}
+
+.dbg-uia-live-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.4;
+  /* Allow flex item to shrink below content width */
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.dbg-uia-live-entry:last-child {
+  border-bottom: none;
+}
+
+.dbg-uia-live-start {
+  background: rgba(99, 102, 241, 0.06);
+}
+
+.dbg-uia-live-end {
+  background: rgba(34, 197, 94, 0.04);
+}
+
+.dbg-uia-live-error {
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.dbg-uia-live-icon {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  font-size: 11px;
+}
+
+.dbg-uia-live-start .dbg-uia-live-icon {
+  color: #6366f1;
+}
+
+.dbg-uia-live-end .dbg-uia-live-icon {
+  color: #22c55e;
+}
+
+.dbg-uia-live-error .dbg-uia-live-icon {
+  color: #ef4444;
+}
+
+.dbg-uia-live-tool {
+  font-weight: 600;
+  color: var(--accent, #7c6af7);
+  flex-shrink: 0;
+  min-width: 80px;
+}
+
+.dbg-uia-live-summary {
+  flex: 1;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dbg-uia-live-dur {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
 }
 
 /* Test result */

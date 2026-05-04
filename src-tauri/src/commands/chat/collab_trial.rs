@@ -208,6 +208,7 @@ fn ensure_trial_koi(
             Some(0),
         )
         .map_err(|e| e.to_string())?;
+        let _ = db.update_koi_status(&existing.id, "idle");
         let mut updated = existing.clone();
         updated.name = spec.name.clone();
         updated.role = spec.role.clone();
@@ -216,6 +217,7 @@ fn ensure_trial_koi(
         updated.system_prompt = spec.system_prompt.clone();
         updated.description = spec.description.clone();
         updated.max_iterations = spec.max_iterations;
+        updated.status = "idle".to_string();
         if let Some(idx) = all_kois.iter().position(|k| k.id == updated.id) {
             all_kois[idx] = updated.clone();
         }
@@ -236,6 +238,7 @@ fn ensure_trial_koi(
             Some(0),
         )
         .map_err(|e| e.to_string())?;
+        let _ = db.update_koi_status(&existing.id, "idle");
         let mut updated = existing.clone();
         updated.name = spec.name.clone();
         updated.role = spec.role.clone();
@@ -244,6 +247,7 @@ fn ensure_trial_koi(
         updated.system_prompt = spec.system_prompt.clone();
         updated.description = spec.description.clone();
         updated.max_iterations = spec.max_iterations;
+        updated.status = "idle".to_string();
         if let Some(idx) = all_kois.iter().position(|k| k.id == updated.id) {
             all_kois[idx] = updated.clone();
         }

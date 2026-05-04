@@ -25,7 +25,7 @@ impl Tool for ScreenTool {
          \
          Use 'list_monitors' to discover available displays and their pixel extents. \
          Use 'find_element' to capture and ask Vision AI to locate a described element. \
-         Tip: grid_spacing=100 gives finer labels (default 200)."
+         Tip: grid_spacing=50 gives even finer labels (default 100)."
     }
 
     fn input_schema(&self) -> Value {
@@ -142,7 +142,7 @@ pub(crate) fn encode_and_return_with_offset(
     let format = input["format"].as_str().unwrap_or("jpeg");
     let quality = input["quality"].as_u64().unwrap_or(75) as u8;
     let draw_grid = input["grid"].as_bool().unwrap_or(false);
-    let grid_spacing = input["grid_spacing"].as_u64().unwrap_or(200).max(50) as u32;
+    let grid_spacing = input["grid_spacing"].as_u64().unwrap_or(100).max(50) as u32;
 
     tracing::info!(
         "screen_capture: {}x{} origin=({},{}) grid={} spacing={}",
@@ -316,18 +316,26 @@ fn draw_coordinate_grid(
         iy += spacing;
     }
 
-    // Draw coordinate labels at grid intersections
+    // Draw coordinate labels at grid intersections.
+    // When spacing is small (< 200px), label every 2nd line to prevent overlap.
+    let label_interval = if spacing < 200 { 2 } else { 1 };
     let mut lx = first_x;
+    let mut xi = 0usize;
     while lx < w {
         let mut ly = first_y;
+        let mut yi = 0usize;
         while ly < h {
-            let screen_x = origin_x + lx as i32;
-            let screen_y = origin_y + ly as i32;
-            let label = format!("{},{}" , screen_x, screen_y);
-            draw_label(img, lx + 2, ly + 2, &label);
+            if xi % label_interval == 0 && yi % label_interval == 0 {
+                let screen_x = origin_x + lx as i32;
+                let screen_y = origin_y + ly as i32;
+                let label = format!("{},{}" , screen_x, screen_y);
+                draw_label(img, lx + 2, ly + 2, &label);
+            }
             ly += spacing;
+            yi += 1;
         }
         lx += spacing;
+        xi += 1;
     }
 }
 

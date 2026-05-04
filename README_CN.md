@@ -29,6 +29,8 @@ OpenPisci 是一款本地优先的 AI Agent 桌面应用，基于 Tauri 2 + Rust
 - **崩溃恢复**：每次迭代写入 checkpoint，程序崩溃后可从断点恢复
 - **心跳机制**：可配置定时心跳，Agent 自主检查待处理任务
 - **循环检测**：四种检测器（GenericRepeat / KnownPollNoProgress / PingPong / GlobalCircuitBreaker）防止 Agent 陷入死循环
+- **独立视觉模型**：为视觉/图像任务配置专用 LLM，与主聊天模型解耦——当主模型不支持视觉时，可搭配轻量多模态模型
+- **IM 消息队列模式**：批量处理 IM 入站消息而非逐条触发 Agent 轮次，减少 API 开销并避免高流量频道中的上下文抖动
 - **MCP 集成**：按场景装配的工具注册器支持主聊天 / 任务场景按需接入 MCP（Model Context Protocol）外部工具服务器
 - **工作区级硬 Lint**：Rust 工作区统一运行在 `-D warnings` 下，防止死代码、未使用导入、调试残留重新渗入
 
@@ -77,6 +79,7 @@ OpenPisci 是一款本地优先的 AI Agent 桌面应用，基于 Tauri 2 + Rust
 2. **Pisci 组织团队**
    - Pisci 根据项目目标选择合适的 Koi 角色
    - Pisci 优先通过 `pool_chat` 发送带 `@KoiName` 的消息来发起工作，而不是死板串行分配
+   - 任务委派是异步的：Pisci 通过 `assign_koi` 派发任务后，通过 `get_todos` / `get_messages` 监控进度，不再同步阻塞 `wait_for_koi`
 
 3. **Koi 自主协作**
    - Koi 在 `pool_chat` 中汇报进展、交接工作、提出问题、请求复审
@@ -377,6 +380,23 @@ OpenPisci
 ---
 
 ## 📋 更新日志
+
+### v0.7.7
+- **IM 语音消息保留**：来自 IM 渠道的语音消息现会保留并转发给 Agent 处理，不再直接丢弃
+
+### v0.7.6
+- **Koi 运行时观察器**：Pond UI 新增 Koi 运行时观察面板，实时展示每个 Koi 的执行状态（活跃运行槽位、checkpoint 状态）
+- **NSIS 打包修复**：将 `pisci_compact_one` 移入 `pisci-cli`，修复 Tauri NSIS 安装包因缺少二进制而构建失败的问题
+
+### v0.7.5
+- **微信 IM 文件上传**：微信网关现支持接收并转发用户发送的文件附件
+- **桌面会话 UX**：改进会话管理——开发用 bench CLI 通过 feature flag 门控；协作试验间自动清理历史鱼池
+
+### v0.7.4
+- **跨平台 pool git 辅助工具**：修复鱼池相关的 Git 辅助命令（worktree 设置、清理）在 macOS 和 Linux 上的兼容性问题
+
+### v0.7.3
+- **Koi 协作交接稳定性修复**：修复 Koi 间任务交接中的多个竞态条件和状态不一致问题，减少协作中的误报 `blocked` 待办和丢失 mention
 
 ### v0.7.2
 - **桌面运行时纠偏**：Koi 协同默认恢复为 GUI 主进程内运行。源码仍按 `pisci-core` / `pisci-kernel` / `pisci-cli` / `pisci-desktop` 分层，但桌面产品的主聊天与 Koi 协同不再依赖 `openpisci-headless`。

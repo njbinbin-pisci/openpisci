@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
 import { systemApi, settingsApi, RuntimeCheckItem, Settings, SystemDependencyItem, poolApi, koiApi, PoolMessage, KoiWithStats } from "../../services/tauri";
 import { localizedDependencyRemediation } from "../../utils/systemDependencies";
@@ -856,6 +857,16 @@ interface UiaDragTestResult {
   tool_calls: ToolCallRecord[];
 }
 
+interface UiaLiveEvent {
+  type: "tool_start" | "tool_end";
+  tool_name: string;
+  input_summary: string;
+  result_summary?: string;
+  is_error?: boolean;
+  duration_ms?: number;
+  ts: number;
+}
+
 function UiaTestPanel() {
   const { t } = useTranslation();
   const arenaRef = useRef<HTMLDivElement>(null);
@@ -872,6 +883,64 @@ function UiaTestPanel() {
   const [testRunning, setTestRunning] = useState(false);
   const [testResult, setTestResult] = useState<UiaDragTestResult | null>(null);
   const [visionConfigured, setVisionConfigured] = useState<boolean | null>(null);
+  const [liveEvents, setLiveEvents] = useState<UiaLiveEvent[]>([]);
+  const liveEventsRef = useRef<HTMLDivElement>(null);
+
+  // Window screen position for coordinate display
+  const [winPos, setWinPos] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const updatePos = async () => {
+      try {
+        const pos = await win.innerPosition();
+        setWinPos({ x: pos.x, y: pos.y });
+      } catch { /* ignore */ }
+    };
+    updatePos();
+    const unlisten = win.onMoved(() => updatePos());
+    return () => { unlisten.then((f) => f()).catch(() => {}); };
+  }, []);
+
+  // Screen-absolute ball center (for agent to read)
+  const ballScreenAbs = (() => {
+    if (!arenaRect || !winPos) return null;
+    // ball center = arena screen pos + ballPos + ball radius (20px)
+    const ax = arenaRect.left + ballPos.x + 20;
+    const ay = arenaRect.top + ballPos.y + 20;
+    // arenaRect is in CSS pixels relative to viewport; add window screen offset
+    // innerPosition already includes decorations/frame offset
+    return { x: Math.round(winPos.x + ax), y: Math.round(winPos.y + ay) };
+  })();
+
+  // Screen-absolute target center
+  const targetScreenAbs = (() => {
+    if (!arenaRect || !winPos || !targetRef.current) return null;
+    const tr = targetRef.current.getBoundingClientRect();
+    return { x: Math.round(winPos.x + tr.left + tr.width / 2), y: Math.round(winPos.y + tr.top + tr.height / 2) };
+  })();
+
+  // DOM event diagnostic counters
+  const [domEventLog, setDomEventLog] = useState<string[]>([]);
+  useEffect(() => {
+    const log: string[] = [];
+    const handler = (type: string) => (e: MouseEvent) => {
+      const ts = new Date().toLocaleTimeString();
+      log.push(`${ts} ${type} (${e.clientX},${e.clientY}) isTrusted=${e.isTrusted}`);
+      if (log.length > 20) log.shift();
+      setDomEventLog([...log]);
+    };
+    const md = handler("mousedown");
+    const mm = handler("mousemove");
+    const mu = handler("mouseup");
+    window.addEventListener("mousedown", md);
+    window.addEventListener("mousemove", mm);
+    window.addEventListener("mouseup", mu);
+    return () => {
+      window.removeEventListener("mousedown", md);
+      window.removeEventListener("mousemove", mm);
+      window.removeEventListener("mouseup", mu);
+    };
+  }, []);
 
   // Load vision status from report
   useEffect(() => {
@@ -883,6 +952,41 @@ function UiaTestPanel() {
         setVisionConfigured(false);
       });
   }, []);
+
+  // Listen for live drag-test events from backend
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen<{
+      type: string;
+      tool_name: string;
+      input_summary: string;
+      result_summary?: string;
+      is_error?: boolean;
+      duration_ms?: number;
+    }>("uia_drag_test_event", (e) => {
+      const p = e.payload;
+      setLiveEvents((prev: UiaLiveEvent[]) => [
+        ...prev,
+        {
+          type: p.type as "tool_start" | "tool_end",
+          tool_name: p.tool_name,
+          input_summary: p.input_summary,
+          result_summary: p.result_summary,
+          is_error: p.is_error,
+          duration_ms: p.duration_ms,
+          ts: Date.now(),
+        },
+      ]);
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, []);
+
+  // Auto-scroll live events
+  useEffect(() => {
+    if (liveEventsRef.current) {
+      liveEventsRef.current.scrollTop = liveEventsRef.current.scrollHeight;
+    }
+  }, [liveEvents.length]);
 
   // Update arena rect whenever layout changes (needed for drag boundary clamping)
   const refreshCoords = useCallback(() => {
@@ -971,9 +1075,48 @@ function UiaTestPanel() {
     if (testRunning || !visionConfigured) return;
     setTestRunning(true);
     setTestResult(null);
+    setLiveEvents([]);
     setDragState("idle");
     try {
-      const result = await invoke<UiaDragTestResult>("run_uia_drag_test");
+      // Compute EXACT physical screen coordinates for ball and target.
+      // The agent doesn't need vision — we already know where these elements are.
+      let ball_x: number | null = null;
+      let ball_y: number | null = null;
+      let target_x: number | null = null;
+      let target_y: number | null = null;
+      try {
+        const win = getCurrentWindow();
+        const pos = await win.innerPosition();
+        const dpr = window.devicePixelRatio || 1;
+        if (arenaRef.current) {
+          const ar = arenaRef.current.getBoundingClientRect();
+          // ball center in CSS pixels (relative to viewport)
+          const bcx_css = ar.left + ballPosRef.current.x + 20;
+          const bcy_css = ar.top + ballPosRef.current.y + 20;
+          ball_x = Math.round(pos.x + bcx_css * dpr);
+          ball_y = Math.round(pos.y + bcy_css * dpr);
+        }
+        if (targetRef.current) {
+          const tr = targetRef.current.getBoundingClientRect();
+          const tcx_css = tr.left + tr.width / 2;
+          const tcy_css = tr.top + tr.height / 2;
+          target_x = Math.round(pos.x + tcx_css * dpr);
+          target_y = Math.round(pos.y + tcy_css * dpr);
+        }
+      } catch (e) {
+        console.warn("Failed to compute screen coords, falling back to vision:", e);
+      }
+
+      const result = await invoke<UiaDragTestResult>("run_uia_drag_test", {
+        ball_x,
+        ball_y,
+        target_x,
+        target_y,
+        ballX: ball_x,
+        ballY: ball_y,
+        targetX: target_x,
+        targetY: target_y,
+      });
       setTestResult(result);
       setTimeout(() => {
         checkDrop();
@@ -1001,6 +1144,21 @@ function UiaTestPanel() {
         <div className="dbg-uia-header-actions">
           <button className="dbg-btn dbg-btn-secondary" onClick={reset} disabled={testRunning}>
             {t("debug.uiaReset")}
+          </button>
+          <button
+            className="dbg-btn dbg-btn-secondary"
+            onClick={async () => {
+              try {
+                const r = await invoke<string>("test_mouse_control");
+                alert(r);
+              } catch (e) {
+                alert(t("debug.uiaTestMouseFailed") + String(e));
+              }
+            }}
+            disabled={testRunning}
+            title={t("debug.uiaTestMouseTitle")}
+          >
+            {t("debug.uiaTestMouse")}
           </button>
           <button
             className={`dbg-btn ${visionConfigured ? "dbg-btn-primary" : "dbg-btn-disabled"}`}
@@ -1046,20 +1204,57 @@ function UiaTestPanel() {
           onDragStart={(e) => e.preventDefault()}
         >
           <span className="dbg-uia-ball-label">🟠</span>
+          {ballScreenAbs && (
+            <div className="dbg-uia-coord-label">{ballScreenAbs.x},{ballScreenAbs.y}</div>
+          )}
         </div>
 
         {/* Target zone */}
         <div ref={targetRef} className="dbg-uia-target">
           <span className="dbg-uia-target-label">{t("debug.uiaTarget")}</span>
+          {targetScreenAbs && (
+            <div className="dbg-uia-coord-label">{targetScreenAbs.x},{targetScreenAbs.y}</div>
+          )}
         </div>
 
       </div>
+
+      {/* DOM event diagnostic */}
+      {domEventLog.length > 0 && (
+        <div style={{ fontSize: 11, color: "#888", maxHeight: 80, overflow: "auto", marginTop: 4, padding: "4px 8px", background: "#1a1a1a", borderRadius: 4, overflowWrap: "break-word", wordBreak: "break-all" }}>
+          {domEventLog.map((l, i) => <div key={i}>{l}</div>)}
+        </div>
+      )}
 
       {/* Running progress bar (below arena, so agent can still see the arena) */}
       {testRunning && (
         <div className="dbg-uia-progress">
           <div className="dbg-uia-progress-bar" />
           <div className="dbg-uia-progress-text">{t("debug.uiaRunning")}</div>
+        </div>
+      )}
+
+      {/* Live agent event log (only during test run) */}
+      {testRunning && liveEvents.length > 0 && (
+        <div className="dbg-uia-live-log" ref={liveEventsRef}>
+          {liveEvents.map((ev, i) => (
+            <div key={i} className={`dbg-uia-live-entry ${ev.type === "tool_start" ? "dbg-uia-live-start" : ev.is_error ? "dbg-uia-live-error" : "dbg-uia-live-end"}`}>
+              <span className="dbg-uia-live-icon">
+                {ev.type === "tool_start" ? "▶" : ev.is_error ? "✕" : "✓"}
+              </span>
+              <span className="dbg-uia-live-tool">{ev.tool_name}</span>
+              <span className="dbg-uia-live-summary">
+                {ev.type === "tool_start"
+                  ? ev.input_summary
+                  : ev.is_error
+                    ? (ev.result_summary?.substring(0, 120) || "(error, no output)")
+                    : (ev.result_summary?.substring(0, 120) || "(ok)")}
+              </span>
+              {ev.type === "tool_end" && ev.duration_ms !== undefined && (
+                <span className="dbg-uia-live-dur">{ms(ev.duration_ms)}</span>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
@@ -1077,6 +1272,9 @@ function UiaTestPanel() {
           </div>
           {testResult.error && (
             <div className="dbg-uia-result-error">{testResult.error}</div>
+          )}
+          {!testResult.error && !testResult.response_text && (
+            <div className="dbg-uia-result-error">{t("debug.uiaNoOutput")}</div>
           )}
           {testResult.response_text && (
             <div className="dbg-uia-result-body">

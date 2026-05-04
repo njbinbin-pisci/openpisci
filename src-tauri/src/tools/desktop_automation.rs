@@ -37,12 +37,12 @@ impl Tool for DesktopAutomationTool {
                     "type": "string",
                     "enum": [
                         "click", "double_click", "right_click",
-                        "drag", "move_mouse", "get_cursor_position",
+                        "drag", "drag_to", "move_mouse", "get_cursor_position",
                         "type_text", "hotkey",
                         "list_windows", "activate_window",
                         "scroll", "launch_app"
                     ],
-                    "description": "click/double_click/right_click: at (x,y); drag: from (x,y) to (to_x,to_y); move_mouse: to (x,y); type_text: input text; hotkey: key combo like ctrl+c; list_windows: enumerate visible windows; activate_window: bring window to front by title; scroll: scroll at position; launch_app: open app by name"
+                    "description": "click/double_click/right_click: at (x,y); drag: from (x,y) to (to_x,to_y); drag_to: from current position or (x,y) to (to_x,to_y) — x/y optional, uses cursor position if omitted; move_mouse: to (x,y); type_text: input text; hotkey: key combo like ctrl+c; list_windows: enumerate visible windows; activate_window: bring window to front by title; scroll: scroll at position; launch_app: open app by name"
                 },
                 "x": {
                     "type": "integer",
@@ -106,6 +106,7 @@ impl Tool for DesktopAutomationTool {
             "double_click" => platform_click(&input, 2).await,
             "right_click" => platform_click(&input, 3).await,
             "drag" => platform_drag(&input).await,
+            "drag_to" => platform_drag_to(&input).await,
             "move_mouse" => platform_move_mouse(&input).await,
             "get_cursor_position" => platform_get_cursor_position().await,
             "type_text" => platform_type_text(&input).await,
@@ -126,18 +127,31 @@ use tokio::process::Command;
 // ── Common helpers ────────────────────────────────────────────────────────────
 
 fn require_coords(input: &Value) -> anyhow::Result<(i32, i32)> {
+    let action = input["action"].as_str().unwrap_or("");
     let x = match input["x"].as_i64() {
         Some(v) => v as i32,
-        None => anyhow::bail!("Missing required parameter: x"),
+        None => anyhow::bail!(
+            "Missing required parameter: x. Action '{}' requires x and y coordinates. \
+             If you want to drag from the current cursor position (without specifying x/y), \
+             use action='drag_to' with only to_x and to_y instead.",
+            action
+        ),
     };
     let y = match input["y"].as_i64() {
         Some(v) => v as i32,
-        None => anyhow::bail!("Missing required parameter: y"),
+        None => anyhow::bail!(
+            "Missing required parameter: y. Action '{}' requires x and y coordinates. \
+             If you want to drag from the current cursor position (without specifying x/y), \
+             use action='drag_to' with only to_x and to_y instead.",
+            action
+        ),
     };
     Ok((x, y))
 }
 
 async fn run_cmd(program: &str, args: &[&str]) -> Result<ToolResult> {
+    let args_display = args.join(" ");
+    tracing::info!("run_cmd: {} {}", program, args_display);
     let output = Command::new(program)
         .args(args)
         .output()
@@ -146,6 +160,7 @@ async fn run_cmd(program: &str, args: &[&str]) -> Result<ToolResult> {
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    tracing::info!("run_cmd result: success={} stdout='{}' stderr='{}'", output.status.success(), stdout, stderr);
 
     if !output.status.success() {
         let detail = if stderr.is_empty() { stdout } else { stderr };
@@ -153,6 +168,127 @@ async fn run_cmd(program: &str, args: &[&str]) -> Result<ToolResult> {
     }
 
     Ok(ToolResult::ok(format!("{} succeeded{}", program, if stdout.is_empty() { String::new() } else { format!(": {}", stdout) })))
+}
+
+// ── X11 native backend (XIWarpPointer + XTest) ─────────────────────────────
+// In VMware+Xorg, xdotool mousemove updates only the XTEST slave pointer
+// which is decoupled from the visible cursor. We use a small C helper that
+// calls XIWarpPointer on the master pointer (device id=2) + XTestFakeButtonEvent
+// which correctly deliver events to windows.
+//
+// The C helper is built at build time from src-tauri/xi_helpers.c
+
+#[cfg(target_os = "linux")]
+fn xi_helper_path() -> String {
+    // 1) Next to the main executable (release builds)
+    if let Ok(exe) = std::env::current_exe() {
+        let dir = exe.parent().unwrap_or(std::path::Path::new("."));
+        let p = dir.join("pisci-xi-helper");
+        if p.exists() { return p.to_string_lossy().to_string(); }
+    }
+    // 2) OUT_DIR from build.rs (dev builds)
+    if let Ok(out_dir) = std::env::var("OUT_DIR") {
+        let p = std::path::Path::new(&out_dir).join("pisci-xi-helper");
+        if p.exists() { return p.to_string_lossy().to_string(); }
+    }
+    // 3) Fallback: /tmp (where we built it manually during development)
+    "/tmp/xi_warp".to_string()
+}
+
+#[cfg(target_os = "linux")]
+fn xi_move_mouse(x: i32, y: i32) -> Result<()> {
+    let helper = xi_helper_path();
+    let output = std::process::Command::new(&helper)
+        .args(["move", &x.to_string(), &y.to_string()])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            tracing::info!("xi_move_mouse: XIWarpPointer -> ({},{})", x, y);
+        }
+        _ => {
+            // Fallback to xdotool if XIWarpPointer helper is unavailable
+            tracing::warn!("xi_helper unavailable, falling back to xdotool mousemove");
+            let out = std::process::Command::new("xdotool")
+                .args(["mousemove", "--sync", &x.to_string(), &y.to_string()])
+                .output()
+                .map_err(|e| anyhow::anyhow!("xdotool mousemove failed: {}", e))?;
+            if !out.status.success() {
+                return Err(anyhow::anyhow!("xdotool mousemove failed: {}", String::from_utf8_lossy(&out.stderr)));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn xi_click(x: i32, y: i32, button: u8, repeat: u8) -> Result<()> {
+    // Move to position first, then use xdotool for click (XTest clicks work correctly)
+    xi_move_mouse(x, y)?;
+    // Small delay to let the position take effect
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let btn_str = button.to_string();
+    let repeat_str = repeat.to_string();
+    let output = std::process::Command::new("xdotool")
+        .args(["click", "--repeat", &repeat_str, &btn_str])
+        .output()
+        .map_err(|e| anyhow::anyhow!("xdotool click failed: {}", e))?;
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("xdotool click failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    tracing::info!("xi_click: button={} repeat={} at ({},{})", button, repeat, x, y);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn xi_drag(sx: i32, sy: i32, ex: i32, ey: i32) -> Result<()> {
+    // Use the C helper's "drag" command which generates smooth intermediate
+    // MotionNotify events (XIWarpPointer + XTestFakeMotionEvent in steps).
+    // This matches the Windows UIA drag_drop behavior (20-step smooth movement)
+    // and is required for WebKit/Chromium to detect the drag gesture.
+    let helper = xi_helper_path();
+    let output = std::process::Command::new(&helper)
+        .args(["drag", &sx.to_string(), &sy.to_string(), &ex.to_string(), &ey.to_string()])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            tracing::info!("xi_drag: ({},{}) -> ({},{})", sx, sy, ex, ey);
+        }
+        _ => {
+            // Fallback: use separate xi_move_mouse + xdotool mousedown/mouseup
+            tracing::warn!("xi_helper drag unavailable, falling back to xdotool drag");
+            xi_move_mouse(sx, sy)?;
+            std::thread::sleep(std::time::Duration::from_millis(30));
+
+            let out = std::process::Command::new("xdotool")
+                .args(["mousedown", "1"])
+                .output()
+                .map_err(|e| anyhow::anyhow!("xdotool mousedown failed: {}", e))?;
+            if !out.status.success() {
+                return Err(anyhow::anyhow!("xdotool mousedown failed: {}", String::from_utf8_lossy(&out.stderr)));
+            }
+
+            // Generate intermediate mousemove events for smooth drag
+            let steps = 20i32;
+            for i in 1..=steps {
+                let ix = sx + (ex - sx) * i / steps;
+                let iy = sy + (ey - sy) * i / steps;
+                let _ = std::process::Command::new("xdotool")
+                    .args(["mousemove", "--sync", &ix.to_string(), &iy.to_string()])
+                    .output();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+
+            let out = std::process::Command::new("xdotool")
+                .args(["mouseup", "1"])
+                .output()
+                .map_err(|e| anyhow::anyhow!("xdotool mouseup failed: {}", e))?;
+            if !out.status.success() {
+                return Err(anyhow::anyhow!("xdotool mouseup failed: {}", String::from_utf8_lossy(&out.stderr)));
+            }
+            tracing::info!("xdotool_drag (fallback): ({},{}) -> ({},{})", sx, sy, ex, ey);
+        }
+    }
+    Ok(())
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -163,58 +299,89 @@ mod imp {
 
     pub async fn click(input: &Value, button: u8) -> Result<ToolResult> {
         let (x, y) = require_coords(input)?;
-        let btn = match button {
-            1 => "1",
-            2 => "1",
-            3 => "3",
-            _ => "1",
-        };
+        let btn_label = match button { 1 => "left", 2 => "double", 3 => "right", _ => "left" };
+        let xi_btn = match button { 1 => 1, 2 => 1, 3 => 3, _ => 1 };
+        xi_move_mouse(x, y)?;
         if button == 2 {
-            // Double-click: move then click twice
-            let output = Command::new("xdotool")
-                .args([
-                    "mousemove", "--sync", &x.to_string(), &y.to_string(),
-                    "click", "--repeat", "2", &btn,
-                ])
-                .output()
-                .await
-                .map_err(|e| anyhow::anyhow!("xdotool double-click failed: {}", e))?;
-            if !output.status.success() {
-                return Ok(ToolResult::err(format!("xdotool failed: {}", String::from_utf8_lossy(&output.stderr))));
-            }
+            xi_click(x, y, xi_btn, 2)?;
             Ok(ToolResult::ok(format!("Double-click at ({},{})", x, y)))
         } else {
-            let output = Command::new("xdotool")
-                .args([
-                    "mousemove", "--sync", &x.to_string(), &y.to_string(),
-                    "click", &btn,
-                ])
-                .output()
-                .await
-                .map_err(|e| anyhow::anyhow!("xdotool click failed: {}", e))?;
-            if !output.status.success() {
-                return Ok(ToolResult::err(format!("xdotool failed: {}", String::from_utf8_lossy(&output.stderr))));
-            }
-            Ok(ToolResult::ok(format!("Click button {} at ({},{})", btn, x, y)))
+            xi_click(x, y, xi_btn, 1)?;
+            Ok(ToolResult::ok(format!("Click {} at ({},{})", btn_label, x, y)))
         }
     }
 
     pub async fn drag(input: &Value) -> Result<ToolResult> {
         let (x, y) = require_coords(input)?;
-        let to_x = input["to_x"].as_i64().unwrap_or(0) as i32;
-        let to_y = input["to_y"].as_i64().unwrap_or(0) as i32;
-        run_cmd("xdotool", &[
-            "mousemove", "--sync", &x.to_string(), &y.to_string(),
-            "mousedown", "1",
-            "mousemove", "--sync", &to_x.to_string(), &to_y.to_string(),
-            "mouseup", "1",
-        ]).await?;
+        let to_x = match input["to_x"].as_i64() {
+            Some(v) => v as i32,
+            None => return Ok(ToolResult::err(
+                "drag requires parameter 'to_x' (target X coordinate). \
+                 Use action='drag' with x, y, to_x, to_y for explicit start/end, \
+                 or action='drag_to' with only to_x, to_y to drag from current cursor position."
+            )),
+        };
+        let to_y = match input["to_y"].as_i64() {
+            Some(v) => v as i32,
+            None => return Ok(ToolResult::err(
+                "drag requires parameter 'to_y' (target Y coordinate). \
+                 Use action='drag' with x, y, to_x, to_y for explicit start/end, \
+                 or action='drag_to' with only to_x, to_y to drag from current cursor position."
+            )),
+        };
+        tracing::info!(
+            "desktop_automation.drag: x={}, y={}, to_x={}, to_y={}",
+            x, y, to_x, to_y
+        );
+        xi_drag(x, y, to_x, to_y)?;
         Ok(ToolResult::ok(format!("Dragged from ({},{}) to ({},{})", x, y, to_x, to_y)))
+    }
+
+    /// drag_to: drag from current cursor position to (to_x, to_y).
+    /// Unlike `drag`, x/y are optional — if omitted the current mouse position is used.
+    pub async fn drag_to(input: &Value) -> Result<ToolResult> {
+        let to_x = match input["to_x"].as_i64() {
+            Some(v) => v as i32,
+            None => return Ok(ToolResult::err("drag_to requires parameter: to_x")),
+        };
+        let to_y = match input["to_y"].as_i64() {
+            Some(v) => v as i32,
+            None => return Ok(ToolResult::err("drag_to requires parameter: to_y")),
+        };
+        // If x/y provided, move there first; otherwise use current position
+        let (start_x, start_y) = if input["x"].is_null() || input["y"].is_null() {
+            let (cx, cy) = get_cursor_pos().await?;
+            (cx, cy)
+        } else {
+            (input["x"].as_i64().unwrap_or(0) as i32, input["y"].as_i64().unwrap_or(0) as i32)
+        };
+        tracing::info!(
+            "desktop_automation.drag_to: start=({}, {}) to=({}, {})",
+            start_x, start_y, to_x, to_y
+        );
+        xi_drag(start_x, start_y, to_x, to_y)?;
+        Ok(ToolResult::ok(format!("Dragged from ({},{}) to ({},{})", start_x, start_y, to_x, to_y)))
+    }
+
+    async fn get_cursor_pos() -> Result<(i32, i32)> {
+        let output = Command::new("xdotool")
+            .args(["getmouselocation", "--shell"])
+            .output()
+            .await
+            .map_err(|e| anyhow::anyhow!("xdotool getmouselocation failed: {}", e))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut x = 0i32;
+        let mut y = 0i32;
+        for line in stdout.lines() {
+            if let Some(v) = line.strip_prefix("X=") { x = v.parse().unwrap_or(0); }
+            if let Some(v) = line.strip_prefix("Y=") { y = v.parse().unwrap_or(0); }
+        }
+        Ok((x, y))
     }
 
     pub async fn move_mouse(input: &Value) -> Result<ToolResult> {
         let (x, y) = require_coords(input)?;
-        run_cmd("xdotool", &["mousemove", "--sync", &x.to_string(), &y.to_string()]).await?;
+        xi_move_mouse(x, y)?;
         Ok(ToolResult::ok(format!("Mouse moved to ({},{})", x, y)))
     }
 
@@ -463,6 +630,36 @@ mod imp {
         Ok(ToolResult::ok(format!("Dragged from ({},{}) to ({},{})", x, y, to_x, to_y)))
     }
 
+    pub async fn drag_to(input: &Value) -> Result<ToolResult> {
+        let to_x = match input["to_x"].as_i64() {
+            Some(v) => v as i32,
+            None => return Ok(ToolResult::err("drag_to requires parameter: to_x")),
+        };
+        let to_y = match input["to_y"].as_i64() {
+            Some(v) => v as i32,
+            None => return Ok(ToolResult::err("drag_to requires parameter: to_y")),
+        };
+        // If x/y provided, move there first; otherwise drag from current position
+        if input["x"].is_null() || input["y"].is_null() {
+            // cliclick dd:. = mouse down at current position, then move and up
+            run_cmd("cliclick", &[
+                &format!("dd:."),
+                &format!("dm:{},{}", to_x, to_y),
+                &format!("du:{},{}", to_x, to_y),
+            ]).await?;
+            Ok(ToolResult::ok(format!("Dragged to ({},{})", to_x, to_y)))
+        } else {
+            let start_x = input["x"].as_i64().unwrap_or(0) as i32;
+            let start_y = input["y"].as_i64().unwrap_or(0) as i32;
+            run_cmd("cliclick", &[
+                &format!("dd:{},{}", start_x, start_y),
+                &format!("dm:{},{}", to_x, to_y),
+                &format!("du:{},{}", to_x, to_y),
+            ]).await?;
+            Ok(ToolResult::ok(format!("Dragged from ({},{}) to ({},{})", start_x, start_y, to_x, to_y)))
+        }
+    }
+
     pub async fn move_mouse(input: &Value) -> Result<ToolResult> {
         let (x, y) = require_coords(input)?;
         run_cmd("cliclick", &[&format!("m:{},{}", x, y)]).await?;
@@ -587,6 +784,16 @@ mod imp {
         )))
     }
 
+    pub async fn drag_to(input: &Value) -> Result<ToolResult> {
+        // On Windows, desktop_automation is a stub — delegate to uia
+        let to_x = input["to_x"].as_i64().unwrap_or(0);
+        let to_y = input["to_y"].as_i64().unwrap_or(0);
+        Ok(ToolResult::ok(format!(
+            "drag_to ({},{}) — use uia tool for drag_drop on Windows",
+            to_x, to_y
+        )))
+    }
+
     pub async fn move_mouse(input: &Value) -> Result<ToolResult> {
         click(input, 0).await
     }
@@ -671,6 +878,9 @@ async fn platform_click(input: &Value, button: u8) -> Result<ToolResult> {
 }
 async fn platform_drag(input: &Value) -> Result<ToolResult> {
     imp::drag(input).await
+}
+async fn platform_drag_to(input: &Value) -> Result<ToolResult> {
+    imp::drag_to(input).await
 }
 async fn platform_move_mouse(input: &Value) -> Result<ToolResult> {
     imp::move_mouse(input).await

@@ -29,6 +29,8 @@ OpenPisci is a local-first AI Agent desktop application built with Tauri 2 + Rus
 - **Crash recovery**: Checkpoints are written every iteration; the agent resumes from the last checkpoint after a crash
 - **Heartbeat mechanism**: Configurable periodic heartbeat for proactive task checking
 - **Loop detection**: Four detectors (GenericRepeat / KnownPollNoProgress / PingPong / GlobalCircuitBreaker) prevent the agent from getting stuck in infinite loops
+- **Separate vision model**: configure a dedicated LLM for vision/image tasks independent of the main chat model — useful when the primary model lacks vision support but a smaller multimodal model is available
+- **IM message queue mode**: batch-process incoming IM messages instead of triggering an agent turn for each one, reducing API costs and avoiding context thrashing in high-traffic channels
 - **MCP integration**: scene-aware MCP tool registration lets the main chat and task scenes connect to external tool servers through the Model Context Protocol
 - **Workspace-wide hard lints**: Rust workspace lints run under `-D warnings` to keep dead code / unused imports / debugging leftovers from creeping back in
 
@@ -77,6 +79,7 @@ A typical pond project follows this mechanism:
 2. **Pisci organizes the team**
    - Pisci chooses suitable Koi roles based on the project
    - Pisci should primarily kick off work by sending `@KoiName` messages in `pool_chat`, instead of rigid sequential assignment
+   - Task delegation is asynchronous: Pisci assigns a task via `assign_koi` and then monitors progress through `get_todos` / `get_messages` instead of blocking with `wait_for_koi`
 
 3. **Koi collaborate autonomously**
    - Koi report progress, ask for reviews, hand off work, and raise blockers inside `pool_chat`
@@ -374,6 +377,23 @@ The `v0.7.0` line is the first release after a major internal cleanup:
 ---
 
 ## 📋 Changelog
+
+### v0.7.7
+- **IM voice message preservation**: voice messages from IM channels are now preserved and forwarded to the Agent for handling instead of being dropped
+
+### v0.7.6
+- **Koi runtime observer**: added a runtime observer in the Pond UI that shows each Koi's real-time execution state (active run slot, checkpoint status)
+- **NSIS packaging fix**: moved `pisci_compact_one` into `pisci-cli` so the Tauri NSIS installer no longer fails on a missing binary
+
+### v0.7.5
+- **WeChat IM file upload**: the WeChat gateway now supports receiving and forwarding file attachments from users
+- **Desktop session UX**: improved session management — dev bench CLI is gated behind a feature flag; pool cleanup between collaboration trials is automatic
+
+### v0.7.4
+- **Cross-platform pool git helpers**: fixed pool-related Git helper commands (worktree setup, cleanup) to work correctly on macOS and Linux, not just Windows
+
+### v0.7.3
+- **Koi collaboration handoff stabilization**: fixed several race conditions and state inconsistencies in Koi-to-Koi task handoffs, reducing spurious `blocked` todos and lost mentions during busy coordination
 
 ### v0.7.2
 - **Desktop runtime correction**: restored desktop Koi collaboration to the in-process GUI runtime. Source layering remains (`pisci-core` / `pisci-kernel` / `pisci-cli` / `pisci-desktop`), but the desktop product no longer depends on `openpisci-headless` for normal chat or Koi coordination.

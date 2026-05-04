@@ -138,6 +138,9 @@ aes = "0.8.4"
 ecb = "0.1.2"
 md5 = "0.8.0"
 
+# Linux-specific (conditional)
+# (no additional crates needed; mouse movement uses C helper binary)
+
 # Windows-specific (conditional)
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows UIA via COM

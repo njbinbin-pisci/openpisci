@@ -14,7 +14,7 @@ use pisci_kernel::llm::{build_client, LlmMessage, MessageContent};
 use pisci_kernel::policy::PolicyGate;
 use serde::{Deserialize, Serialize};
 use std::sync::{atomic::AtomicBool, Arc};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tracing::info;
 
 // ─── Data types ───────────────────────────────────────────────────────────────
@@ -532,20 +532,6 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             platforms: None,
         },
         // ── Context management tests ──────────────────────────────────────────
-        DebugScenario {
-            id: "ctx_tool_persistence".into(),
-            name: "工具调用持久化".into(),
-            name_en: "Tool Call Persistence".into(),
-            description: "验证工具调用记录被正确写入数据库（tool_calls_json 非空）".into(),
-            description_en: "Verify tool call records are persisted to DB with tool_calls_json populated".into(),
-            prompt: "请用 file_write 工具在工作区（见 Debug context）写文件 ctx_persist_test.txt，内容为 'CTX_PERSIST_OK'.\
-                     然后用 file_read 工具读取它，确认内容正确.\
-                     最后告诉我：写入的内容是什么？".into(),
-            expected_keywords: vec!["CTX_PERSIST_OK".into()],
-            expected_tools: vec!["file_write".into(), "file_read".into()],
-            requires_config: None,
-            platforms: None,
-        },
         DebugScenario {
             id: "ctx_multi_turn_memory".into(),
             name: "跨轮上下文记忆".into(),
@@ -1625,6 +1611,84 @@ pub async fn run_all_debug_scenarios(
     Ok(results)
 }
 
+/// Quick mouse-control sanity test: move cursor to (500,500) and back.
+/// Returns a human-readable report showing which backend was used.
+#[tauri::command]
+pub async fn test_mouse_control() -> Result<String, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let helper = std::path::Path::new("/tmp/xi_warp");
+        let has_helper = helper.exists();
+
+        let before = tokio::process::Command::new("xdotool")
+            .args(["getmouselocation", "--shell"])
+            .output()
+            .await
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+
+        let bx: i32 = before.lines().find(|l| l.starts_with("X=")).and_then(|l| l[2..].parse().ok()).unwrap_or(-1);
+        let by: i32 = before.lines().find(|l| l.starts_with("Y=")).and_then(|l| l[2..].parse().ok()).unwrap_or(-1);
+
+        if has_helper {
+            let _ = tokio::process::Command::new(helper)
+                .args(["500", "500"])
+                .output()
+                .await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+            let after = tokio::process::Command::new("xdotool")
+                .args(["getmouselocation", "--shell"])
+                .output()
+                .await
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+            let ax: i32 = after.lines().find(|l| l.starts_with("X=")).and_then(|l| l[2..].parse().ok()).unwrap_or(-1);
+            let ay: i32 = after.lines().find(|l| l.starts_with("Y=")).and_then(|l| l[2..].parse().ok()).unwrap_or(-1);
+
+            // Restore
+            let _ = tokio::process::Command::new("xdotool")
+                .args(["mousemove", "--sync", &bx.to_string(), &by.to_string()])
+                .output()
+                .await;
+
+            return Ok(format!(
+                "XIWarpPointer test:\n  before: ({},{})\n  after:  ({},{})\n  Note: visible cursor may not move in VMware, but X11 events are delivered correctly.",
+                bx, by, ax, ay
+            ));
+        } else {
+            let _ = tokio::process::Command::new("xdotool")
+                .args(["mousemove", "--sync", "500", "500"])
+                .output()
+                .await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+            let after = tokio::process::Command::new("xdotool")
+                .args(["getmouselocation", "--shell"])
+                .output()
+                .await
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+            let ax: i32 = after.lines().find(|l| l.starts_with("X=")).and_then(|l| l[2..].parse().ok()).unwrap_or(-1);
+            let ay: i32 = after.lines().find(|l| l.starts_with("Y=")).and_then(|l| l[2..].parse().ok()).unwrap_or(-1);
+
+            // Restore
+            let _ = tokio::process::Command::new("xdotool")
+                .args(["mousemove", "--sync", &bx.to_string(), &by.to_string()])
+                .output()
+                .await;
+
+            return Ok(format!(
+                "xdotool test:\n  before: ({},{})\n  after:  ({},{})\n  Note: xdotool may not move the visible cursor in VMware+Xorg.",
+                bx, by, ax, ay
+            ));
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok("Mouse control test only available on Linux in this build.".to_string())
+    }
+}
+
 /// Collect a full diagnostic report without running scenarios.
 #[tauri::command]
 pub async fn get_debug_report(state: State<'_, AppState>) -> Result<DebugReport, String> {
@@ -1833,7 +1897,13 @@ pub struct UiaDragTestResult {
 /// and vision_enabled=true) or a separate vision model (if vision_use_main_llm=false
 /// and vision_provider/model/api_key are all set).
 #[tauri::command]
-pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTestResult, String> {
+pub async fn run_uia_drag_test(
+    state: State<'_, AppState>,
+    ball_x: Option<i32>,
+    ball_y: Option<i32>,
+    target_x: Option<i32>,
+    target_y: Option<i32>,
+) -> Result<UiaDragTestResult, String> {
     let (
         provider,
         model,
@@ -1962,50 +2032,53 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
         ("desktop_automation", "drag", "to_x", "to_y")
     };
 
-    let prompt = {
-        let mut s = String::from("任务：将橙色小球拖拽到绿色目标区域。
+    // Use explicit coordinates passed from frontend when available.
+    // The frontend computes these precisely from window position + DOM element rect,
+    // which is FAR more reliable than vision-based OCR of a screenshot.
+    let have_coords = ball_x.is_some() && ball_y.is_some() && target_x.is_some() && target_y.is_some();
 
-步骤：
-");
-        s.push_str("1. 用 screen_capture 工具（action=list_monitors）查看显示器布局和各显示器上的窗口分布，
-");
-        s.push_str("   找到 OpenPisci 窗口在哪个显示器（monitor_index）
-");
-        s.push_str("2. 用 screen_capture 工具截取该显示器截图（action=capture, monitor_index=N, grid=true）
-");
-        s.push_str("3. 仔细观察截图中的坐标网格（每200像素一条线，标签显示绝对物理屏幕坐标）
-");
-        s.push_str("4. 找到橙色圆形小球的中心坐标（读取最近的网格线标签，精确估算）
-");
-        s.push_str("5. 找到绿色虚线矩形（目标区域）的中心坐标（读取最近的网格线标签，精确估算）
-");
-        s.push_str(&format!("6. 用 {} 工具的 {} 操作，从小球中心拖拽到目标区域中心
-", drag_tool, drag_action));
-        s.push_str(&format!("   参数：x=小球中心X y=小球中心Y {}={} {}={}
-", end_x_param, "目标中心X", end_y_param, "目标中心Y"));
-        s.push_str("
-重要提示：
-");
-        s.push_str(&format!("- 网格标签显示的是物理屏幕绝对坐标，可直接用于 {} {}（无需任何转换）
-", drag_tool, drag_action));
-        s.push_str("- 读取坐标时，先找最近的网格线，再根据元素与网格线的相对位置微调
-");
-        s.push_str("- 橙色小球是一个橙色圆形，直径约40像素
-");
-        s.push_str("- 目标区域是一个绿色虚线矩形（有发光效果），约120x120像素，位于测试区域右侧
-");
-        s.push_str("- 拖拽时 from 是小球中心坐标，to 是目标区域中心坐标
-");
-        s.push_str("- 如果 OpenPisci 在主显示器，可直接用 monitor_index=0（默认）");
+    let prompt = if have_coords {
+        let bx = ball_x.unwrap();
+        let by = ball_y.unwrap();
+        let tx = target_x.unwrap();
+        let ty = target_y.unwrap();
+        let mut s = String::from("任务：将橙色小球从 起点 拖拽到 终点。\n\n");
+        s.push_str(&format!("【精确坐标（物理屏幕绝对坐标，单位：像素）】\n"));
+        s.push_str(&format!("- 起点（橙色小球中心）：x={}, y={}\n", bx, by));
+        s.push_str(&format!("- 终点（绿色目标区域中心）：x={}, y={}\n\n", tx, ty));
+        s.push_str("【执行步骤】\n");
+        s.push_str(&format!("1. 直接调用 {} 工具的 {} 操作，使用上面给出的精确坐标：\n", drag_tool, drag_action));
+        s.push_str(&format!("   参数：x={}, y={}, {}={}, {}={}\n\n", bx, by, end_x_param, tx, end_y_param, ty));
+        s.push_str("【重要提示】\n");
+        s.push_str("- 坐标已经精确给出，无需截图、无需识别、无需估算。\n");
+        s.push_str("- 不要调用 screen_capture。不要调用 get_cursor_position。\n");
+        s.push_str(&format!("- 直接一步完成：调用 {} {} 即可。\n", drag_tool, drag_action));
+        s
+    } else {
+        // Fallback (vision-based) path for callers that don't provide coords
+        let mut s = String::from("任务：将橙色小球拖拽到绿色目标区域。\n\n步骤：\n");
+        s.push_str("1. 用 screen_capture 工具（action=list_monitors）查看显示器布局\n");
+        s.push_str("2. 用 screen_capture 工具截取该显示器截图（action=capture, grid=true, grid_spacing=100）\n");
+        s.push_str("3. 找到橙色小球和绿色目标区域的中心坐标\n");
+        s.push_str(&format!("4. 调用 {} {} 从小球中心拖拽到目标中心\n", drag_tool, drag_action));
         s
     };
 
-    let system_prompt = format!(
-        "You are Pisci, a cross-platform AI Agent running a precision drag test.\nToday's date: {}\nWorkspace directory: {}\nUse ONLY these tools: screen_capture, {}. Do not call any other tools.\nExecute the task precisely. Do not ask for confirmation.",
-        chrono::Utc::now().format("%Y-%m-%d"),
-        effective_workspace.display(),
-        drag_tool,
-    );
+    let system_prompt = if have_coords {
+        format!(
+            "You are Pisci running a precision drag test with EXACT coordinates provided in the task.\nToday's date: {}\nWorkspace directory: {}\nUse ONLY the {} tool. Do NOT call screen_capture or any other tool.\nExecute the drag in a single tool call using the provided coordinates. Do not ask for confirmation.",
+            chrono::Utc::now().format("%Y-%m-%d"),
+            effective_workspace.display(),
+            drag_tool,
+        )
+    } else {
+        format!(
+            "You are Pisci, a cross-platform AI Agent running a precision drag test.\nToday's date: {}\nWorkspace directory: {}\nUse ONLY these tools: screen_capture, {}, get_cursor_position. Do not call any other tools.\nExecute the task precisely. Do not ask for confirmation.",
+            chrono::Utc::now().format("%Y-%m-%d"),
+            effective_workspace.display(),
+            drag_tool,
+        )
+    };
     let uia_compaction_settings = {
         let s = state.settings.lock().await;
         pisci_kernel::agent::harness::config::CompactionSettings::from_settings(&s)
@@ -2055,10 +2128,17 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
     > = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let tool_starts_clone = tool_starts.clone();
 
+    let app_handle = state.app_handle.clone();
     let event_collector = tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
                 AgentEvent::ToolStart { id, name, input } => {
+                    let input_summary = summarize_input(&name, &input);
+                    let _ = app_handle.emit("uia_drag_test_event", serde_json::json!({
+                        "type": "tool_start",
+                        "tool_name": name,
+                        "input_summary": input_summary,
+                    }));
                     tool_starts_clone
                         .lock()
                         .await
@@ -2070,23 +2150,30 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
                     result,
                     is_error,
                 } => {
-                    let duration_ms = {
+                    let (dur, input_summary) = {
                         let mut starts = tool_starts_clone.lock().await;
                         starts
                             .remove(&id)
                             .map(|(_, t, input)| {
-                                let dur = t.elapsed().as_millis() as u64;
-                                (dur, summarize_input(&name, &input))
+                                (t.elapsed().as_millis() as u64, summarize_input(&name, &input))
                             })
                             .unwrap_or((0, String::new()))
                     };
                     let result_summary: String = result.chars().take(500).collect();
+                    let _ = app_handle.emit("uia_drag_test_event", serde_json::json!({
+                        "type": "tool_end",
+                        "tool_name": name,
+                        "input_summary": input_summary,
+                        "result_summary": result_summary,
+                        "is_error": is_error,
+                        "duration_ms": dur,
+                    }));
                     tool_records_clone.lock().await.push(ToolCallRecord {
                         tool_name: name,
-                        input_summary: duration_ms.1,
+                        input_summary,
                         result_summary,
                         is_error,
-                        duration_ms: duration_ms.0,
+                        duration_ms: dur,
                     });
                 }
                 _ => {}

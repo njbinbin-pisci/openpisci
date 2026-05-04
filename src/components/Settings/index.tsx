@@ -20,7 +20,7 @@ import {
   EnterpriseCapabilityStatus,
   EnterpriseCapabilityTestResult,
 } from "../../services/tauri";
-import { setLanguage } from "../../i18n";
+import i18n, { setLanguage } from "../../i18n";
 import { localizedDependencyRemediation, localizedPrivilegeElevationRemediation } from "../../utils/systemDependencies";
 
 type EnterprisePlatformId = "feishu" | "wecom" | "dingtalk";
@@ -113,7 +113,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   koi_timeout_secs: 600,
   heartbeat_enabled: false,
   heartbeat_interval_mins: 30,
-  heartbeat_prompt: "检查是否有待处理任务，如无则回复 HEARTBEAT_OK",
+  heartbeat_prompt: i18n.t("settings.heartbeatPromptDefault"),
   vision_enabled: false,
   enable_streaming: false,
   ssh_servers: [],
@@ -618,11 +618,11 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
             <select className="input" value={form.provider ?? "anthropic"} onChange={(e) => update("provider", e.target.value)}>
               <option value="anthropic">Anthropic (Claude)</option>
               <option value="openai">OpenAI (GPT)</option>
-              <option value="deepseek">DeepSeek（深度求索）</option>
-              <option value="qwen">阿里百炼（通义千问 Qwen）</option>
-              <option value="minimax">MiniMax（稀宇科技）</option>
-              <option value="zhipu">智谱 AI（GLM / Z.AI）</option>
-              <option value="kimi">Kimi（月之暗面 Moonshot）</option>
+              <option value="deepseek">{t("settings.providerName_deepseek")}</option>
+              <option value="qwen">{t("settings.providerName_qwen")}</option>
+              <option value="minimax">{t("settings.providerName_minimax")}</option>
+              <option value="zhipu">{t("settings.providerName_zhipu")}</option>
+              <option value="kimi">{t("settings.providerName_kimi")}</option>
               <option value="custom">{t("settings.customApiKey")} (OpenAI {t("common.enable")})</option>
             </select>
           </div>
@@ -683,10 +683,10 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                     <option value="anthropic">Anthropic (Claude)</option>
                     <option value="openai">OpenAI (GPT)</option>
                     <option value="deepseek">DeepSeek</option>
-                    <option value="qwen">阿里百炼（Qwen）</option>
-                    <option value="minimax">MiniMax</option>
-                    <option value="zhipu">智谱 AI（GLM）</option>
-                    <option value="kimi">Kimi（Moonshot）</option>
+                    <option value="qwen">{t("settings.providerName_qwen")}</option>
+                    <option value="minimax">{t("settings.providerName_minimax")}</option>
+                    <option value="zhipu">{t("settings.providerName_zhipu")}</option>
+                    <option value="kimi">{t("settings.providerName_kimi")}</option>
                     <option value="custom">{t("settings.customApiKey")} (OpenAI {t("common.enable")})</option>
                   </select>
                 </div>
@@ -857,10 +857,10 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
           {/* Named LLM Providers — lives inside AI Provider section */}
           <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid var(--border)" }}>
             <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text-primary)", marginBottom: 6 }}>
-              🔑 多供应商配置
+              {t("settings.namedProvidersTitle")}
             </div>
             <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12 }}>
-              配置多个命名 LLM 供应商，每个 Koi 可在编辑界面独立选择。未选择时使用上方全局默认配置。
+              {t("settings.namedProvidersDesc")}
             </p>
 
             {llmProviders.length > 0 && (
@@ -874,18 +874,18 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                         <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 11, marginLeft: 8 }}>[{p.id}]</span>
                       </div>
                       <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                        {p.provider} · {p.model || "（未设置模型）"}
+                        {p.provider} · {p.model || t("settings.providerModelNotSet")}
                         {p.base_url ? ` · ${p.base_url}` : ""}
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 6 }}>
                       <button className="btn" style={{ fontSize: 11, padding: "3px 10px", border: "1px solid var(--border)" }}
                         onClick={() => { setLlmEditIdx(idx); setLlmEditForm({ ...p, api_key: "" }); setLlmShowKey(false); }}>
-                        编辑
+                        {t("common.edit")}
                       </button>
                       <button className="btn" style={{ fontSize: 11, padding: "3px 10px", border: "1px solid #dc3545", color: "#dc3545" }}
                         onClick={() => setLlmProviders(prev => prev.filter((_, i) => i !== idx))}>
-                        删除
+                        {t("common.delete")}
                       </button>
                     </div>
                   </div>
@@ -896,34 +896,34 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
             {llmEditIdx !== null ? (
               <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-secondary)" }}>
                 <div style={{ fontWeight: 600, marginBottom: 12, fontSize: 13 }}>
-                  {llmEditIdx === -1 ? "添加供应商" : "编辑供应商"}
+                  {llmEditIdx === -1 ? t("settings.addProvider") : t("settings.editProvider")}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="label">ID（唯一标识）*</label>
+                    <label className="label">{t("settings.providerId")}</label>
                     <input className="input" value={llmEditForm.id} onChange={e => setLlmEditForm(f => ({ ...f, id: e.target.value }))}
                       placeholder="my-gpt4" disabled={llmEditIdx !== -1} />
                   </div>
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="label">显示名称</label>
+                    <label className="label">{t("settings.providerDisplayName")}</label>
                     <input className="input" value={llmEditForm.label} onChange={e => setLlmEditForm(f => ({ ...f, label: e.target.value }))}
-                      placeholder="工作用 GPT-4" />
+                      placeholder={t("settings.providerDisplayNamePlaceholder")} />
                   </div>
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="label">供应商类型 *</label>
+                    <label className="label">{t("settings.providerType")}</label>
                     <select className="input" value={llmEditForm.provider} onChange={e => setLlmEditForm(f => ({ ...f, provider: e.target.value }))}>
                       <option value="anthropic">Anthropic (Claude)</option>
                       <option value="openai">OpenAI (GPT)</option>
                       <option value="deepseek">DeepSeek</option>
-                      <option value="qwen">阿里百炼（Qwen）</option>
-                      <option value="minimax">MiniMax</option>
-                      <option value="zhipu">智谱 AI（GLM）</option>
-                      <option value="kimi">Kimi（Moonshot）</option>
-                      <option value="custom">自定义（OpenAI 兼容）</option>
+                      <option value="qwen">{t("settings.providerName_qwen")}</option>
+                      <option value="minimax">{t("settings.providerName_minimax")}</option>
+                      <option value="zhipu">{t("settings.providerName_zhipu")}</option>
+                      <option value="kimi">{t("settings.providerName_kimi")}</option>
+                      <option value="custom">{t("settings.providerCustom")}</option>
                     </select>
                   </div>
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="label">模型名称 *</label>
+                    <label className="label">{t("settings.providerModelName")}</label>
                     <input className="input" value={llmEditForm.model} onChange={e => setLlmEditForm(f => ({ ...f, model: e.target.value }))}
                       placeholder={
                         llmEditForm.provider === "anthropic" ? "claude-opus-4-5" :
@@ -939,12 +939,12 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                   <div className="form-group" style={{ marginBottom: 0, gridColumn: "1 / -1" }}>
                     <label className="label">
                       API Key
-                      {llmEditIdx !== -1 && <span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 6 }}>留空表示不修改</span>}
+                      {llmEditIdx !== -1 && <span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 6 }}>{t("settings.providerApiKeyKeep")}</span>}
                     </label>
                     <div style={{ display: "flex", gap: 6 }}>
                       <input className="input" style={{ flex: 1 }} type={llmShowKey ? "text" : "password"}
                         value={llmEditForm.api_key} onChange={e => setLlmEditForm(f => ({ ...f, api_key: e.target.value }))}
-                        placeholder={llmEditIdx !== -1 ? "（保持不变）" : "sk-..."} />
+                        placeholder={llmEditIdx !== -1 ? t("settings.providerApiKeyPlaceholder") : "sk-..."} />
                       <button className="btn" style={{ padding: "0 10px", border: "1px solid var(--border)" }}
                         onClick={() => setLlmShowKey(v => !v)}>
                         {llmShowKey ? "🙈" : "👁️"}
@@ -959,7 +959,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                     </div>
                   )}
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="label">最大输出 Token（0 = 继承全局）</label>
+                    <label className="label">{t("settings.providerMaxTokens")}</label>
                     <input className="input" type="number" value={llmEditForm.max_tokens}
                       onChange={e => setLlmEditForm(f => ({ ...f, max_tokens: parseInt(e.target.value) || 0 }))} />
                   </div>
@@ -976,18 +976,18 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
                       }
                       setLlmEditIdx(null);
                     }}>
-                    保存
+                    {t("common.save")}
                   </button>
                   <button className="btn" style={{ fontSize: 12, border: "1px solid var(--border)" }}
                     onClick={() => setLlmEditIdx(null)}>
-                    取消
+                    {t("common.cancel")}
                   </button>
                 </div>
               </div>
             ) : (
               <button className="btn" style={{ fontSize: 12, padding: "6px 14px", border: "1px solid var(--border)" }}
                 onClick={() => { setLlmEditIdx(-1); setLlmEditForm(EMPTY_LLM_PROVIDER); setLlmShowKey(false); }}>
-                + 添加供应商
+                {t("settings.addProvider")}
               </button>
             )}
           </div>
@@ -1069,9 +1069,9 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
           </div>
           <div className="form-group" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>
-              <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>允许多开</div>
+              <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>{t("settings.allowMultipleInstances")}</div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                开启后可同时运行多个 OpenPisci 实例；关闭时再次启动会激活已有窗口（重启后生效）
+                {t("settings.allowMultipleInstancesDesc")}
               </div>
             </div>
             <input type="checkbox" checked={form.allow_multiple_instances ?? false} onChange={(e) => update("allow_multiple_instances", e.target.checked)} />
@@ -1303,8 +1303,8 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
           <div className="form-group">
             <label className="label">{t("settings.language")}</label>
             <select className="input" value={form.language ?? "zh"} onChange={(e) => update("language", e.target.value)}>
-              <option value="zh">中文</option>
-              <option value="en">English</option>
+              <option value="zh">{t("settings.languageZh")}</option>
+              <option value="en">{t("settings.languageEn")}</option>
             </select>
           </div>
 

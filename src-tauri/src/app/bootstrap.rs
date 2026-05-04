@@ -1304,6 +1304,7 @@ fn run_impl() {
             commands::chat::debug::run_uia_drag_test,
             commands::chat::debug::get_debug_report,
             commands::chat::debug::get_log_tail,
+            commands::chat::debug::test_mouse_control,
             commands::chat::fish::get_fish_dir,
             commands::chat::fish::list_fish,
             commands::chat::collab_trial::run_collaboration_trial,
