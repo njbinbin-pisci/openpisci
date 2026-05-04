@@ -378,6 +378,10 @@ The `v0.7.0` line is the first release after a major internal cleanup:
 
 ## 📋 Changelog
 
+### v0.7.8
+- **Per-Koi `memory_owner_id`**: Koi-driven headless turns now use the Koi's own ID as the tool-context memory owner instead of the hardcoded `"pisci"`. This means `pool_chat` posts, memory writes, and privilege checks correctly attribute to the Koi rather than to Pisci, and scoped-memory retrieval uses the Koi's scope instead of Pisci's.
+- **Collaboration trial prompt tightening**: The trial kickoff message is now content-only (what to design) while the execution wrapper (`koi_execute_todo.txt`) owns all procedural instructions. The previous verbose kickoff crammed four responsibilities into one iteration budget, causing Architect to frequently stop without posting to `pool_chat` — which triggered Pisci's `replace_todo` retry. The wrapper now also states plainly that plain assistant text is invisible to the pool, promotes the >500-word "write to file, post path" rule to take precedence over task-text instructions, and ends with an explicit three-step end-of-turn checklist.
+
 ### v0.7.7
 - **IM voice message preservation**: voice messages from IM channels are now preserved and forwarded to the Agent for handling instead of being dropped
 
