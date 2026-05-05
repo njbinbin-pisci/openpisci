@@ -179,7 +179,7 @@ impl Tool for UiaTool {
             "get_window_rect" => self.get_window_rect(&input),
             // Hybrid vision automation
             "smart_find" => self.smart_find(&input, ctx).await,
-            "annotate_elements" => self.annotate_elements(&input),
+            "annotate_elements" => self.annotate_elements(&input, ctx).await,
             _ => Ok(ToolResult::err(format!("Unknown action: {}", action))),
         }
     }
@@ -1399,55 +1399,67 @@ impl UiaTool {
     // ─── Hybrid Vision Automation ────────────────────────────────────────────
 
     async fn smart_find(&self, input: &Value, _ctx: &ToolContext) -> Result<ToolResult> {
-        use uiautomation::UIAutomation;
+        // Phase 1: synchronous UIA work — collect all data, then drop all
+        // uiautomation references before any .await (they are not Send).
+        let description = input["description"].as_str().unwrap_or("").to_string();
 
-        let description = input["description"].as_str().unwrap_or("");
+        #[allow(clippy::type_complexity)]
+        let uia_result: Result<Option<(String, String, i32, i32, i32, i32)>> = (|| {
+            use uiautomation::UIAutomation;
+            let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
+            let root = self.get_search_root(&automation, input)?;
 
-        let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
-        let root = self.get_search_root(&automation, input)?;
+            let mut matcher = automation.create_matcher().from(root.clone()).timeout(3000);
+            if let Some(name) = input["name"].as_str() {
+                matcher = matcher.name(name);
+            } else if !description.is_empty() {
+                matcher = matcher.name(&description);
+            }
+            if let Some(class) = input["class_name"].as_str() {
+                matcher = matcher.classname(class);
+            }
+            if let Some(ct) = input["control_type"].as_str() {
+                matcher = matcher.classname(ct);
+            }
 
-        let mut matcher = automation.create_matcher().from(root.clone()).timeout(3000);
-        if let Some(name) = input["name"].as_str() {
-            matcher = matcher.name(name);
-        } else if !description.is_empty() {
-            matcher = matcher.name(description);
-        }
-        if let Some(class) = input["class_name"].as_str() {
-            matcher = matcher.classname(class);
-        }
-        if let Some(ct) = input["control_type"].as_str() {
-            matcher = matcher.classname(ct);
-        }
+            match matcher.find_first() {
+                Ok(element) => {
+                    let name = element.get_name().unwrap_or_default();
+                    let class = element.get_classname().unwrap_or_default();
+                    let rect = element
+                        .get_bounding_rectangle()
+                        .map_err(|e| anyhow::anyhow!("{}", e))?;
+                    Ok(Some((
+                        name,
+                        class,
+                        rect.get_left(),
+                        rect.get_top(),
+                        rect.get_right(),
+                        rect.get_bottom(),
+                    )))
+                }
+                Err(_) => Ok(None),
+            }
+        })();
 
-        match matcher.find_first() {
-            Ok(element) => {
-                let name = element.get_name().unwrap_or_default();
-                let class = element.get_classname().unwrap_or_default();
-                let rect = element
-                    .get_bounding_rectangle()
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
-                let cx = (rect.get_left() + rect.get_right()) / 2;
-                let cy = (rect.get_top() + rect.get_bottom()) / 2;
+        match uia_result? {
+            Some((name, class, left, top, right, bottom)) => {
+                let cx = (left + right) / 2;
+                let cy = (top + bottom) / 2;
                 Ok(ToolResult::ok(format!(
                     "Found via UIA: Name='{}', Class='{}', Center=({}, {}), Rect=[{},{},{},{}]",
-                    name,
-                    class,
-                    cx,
-                    cy,
-                    rect.get_left(),
-                    rect.get_top(),
-                    rect.get_right(),
-                    rect.get_bottom()
+                    name, class, cx, cy, left, top, right, bottom
                 )))
             }
-            Err(_) => {
-                let screen_tool = super::screen::ScreenTool;
+            None => {
+                let screen = super::screen::ScreenTool;
                 let capture_input = serde_json::json!({
                     "action": "capture",
                     "format": "jpeg",
                     "quality": 75
                 });
-                match screen_tool.capture_full(&capture_input) {
+                let ctx_clone = _ctx.clone();
+                match screen.call(capture_input, &ctx_clone).await {
                     Ok(result) => {
                         let msg = format!(
                             "UIA could not find element matching '{}'. Screenshot captured for Vision AI analysis. \
@@ -1469,18 +1481,24 @@ impl UiaTool {
         }
     }
 
-    fn annotate_elements(&self, input: &Value) -> Result<ToolResult> {
-        use uiautomation::UIAutomation;
+    async fn annotate_elements(&self, input: &Value, _ctx: &ToolContext) -> Result<ToolResult> {
+        // Phase 1: synchronous UIA work — collect all data in a closure so
+        // that all uiautomation references (which are not Send) are dropped
+        // before we .await the screen capture.
+        let elements: Vec<(String, String, i32, i32, i32, i32)> = {
+            use uiautomation::UIAutomation;
 
-        let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
-        let root = self.get_search_root(&automation, input)?;
-        let max_elements = input["max_elements"].as_u64().unwrap_or(30) as usize;
+            let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
+            let root = self.get_search_root(&automation, input)?;
+            let max_elements = input["max_elements"].as_u64().unwrap_or(30) as usize;
 
-        let walker = automation
-            .get_control_view_walker()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        let mut elements: Vec<(String, String, i32, i32, i32, i32)> = Vec::new();
-        self.collect_interactive_elements(&walker, &root, 0, 4, &mut elements, max_elements);
+            let walker = automation
+                .get_control_view_walker()
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let mut elems: Vec<(String, String, i32, i32, i32, i32)> = Vec::new();
+            self.collect_interactive_elements(&walker, &root, 0, 4, &mut elems, max_elements);
+            elems
+        }; // automation / root / walker dropped here
 
         if elements.is_empty() {
             return Ok(ToolResult::err(
@@ -1488,9 +1506,10 @@ impl UiaTool {
             ));
         }
 
-        let screen_tool = super::screen::ScreenTool;
+        let screen = super::screen::ScreenTool;
         let capture_input = serde_json::json!({ "action": "capture", "format": "png" });
-        let capture_result = screen_tool.capture_full(&capture_input)?;
+        let ctx_clone = _ctx.clone();
+        let capture_result = screen.call(capture_input, &ctx_clone).await?;
 
         let mut map_text = String::from("Annotated elements:\n");
         for (i, (name, class, left, top, right, bottom)) in elements.iter().enumerate() {

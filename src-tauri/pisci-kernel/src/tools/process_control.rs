@@ -9,7 +9,9 @@ use serde_json::{json, Value};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
-use tokio::time::{sleep, timeout};
+#[cfg(not(target_os = "windows"))]
+use tokio::time::sleep;
+use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 const MAX_OUTPUT_BYTES: usize = 100 * 1024;

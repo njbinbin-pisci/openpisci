@@ -1003,11 +1003,14 @@ mod imp {
         // Convert to SendKeys format: ^ for Ctrl, % for Alt, + for Shift
         let sk: String = keys
             .iter()
-            .map(|k| match k.to_lowercase().as_str() {
-                "ctrl" | "control" => "^",
-                "alt" => "%",
-                "shift" => "+",
-                other => other,
+            .map(|k| {
+                let lower = k.to_lowercase();
+                match lower.as_str() {
+                    "ctrl" | "control" => "^".to_string(),
+                    "alt" => "%".to_string(),
+                    "shift" => "+".to_string(),
+                    other => other.to_string(),
+                }
             })
             .collect();
         run_cmd(
