@@ -378,6 +378,12 @@ The `v0.7.0` line is the first release after a major internal cleanup:
 
 ## 📋 Changelog
 
+### v0.7.9
+- **UIA precision drag test**: the agent now receives exact ball/target physical-screen coordinates from the frontend via IPC (computed from `innerPosition()` + `getBoundingClientRect()` × `devicePixelRatio`) and performs the drag in a single `desktop_automation`/`uia` tool call — no vision OCR, no grid estimation.
+- **Linux mouse control under VMware+Xorg**: new `xi_helpers.c` native helper (`pisci-xi-helper`) uses `XIWarpPointer` on the master pointer (device id=2) plus `XTestFakeMotionEvent` to deliver events reliably. Mouse movement is now a 20-step smooth motion matching Windows UIA behavior.
+- **Layout stability**: the UIA test arena is fixed-width (800px) and centered; tool-call log and result panels can no longer shift the arena's screen position during a running test.
+- **IM send auto-resolve**: `im_send_message` now automatically resolves the IM binding from the current session when no explicit `binding_key` or `channel`+`recipient` is provided, so IM-driven replies don't need explicit addressing.
+
 ### v0.7.8
 - **Per-Koi `memory_owner_id`**: Koi-driven headless turns now use the Koi's own ID as the tool-context memory owner instead of the hardcoded `"pisci"`. This means `pool_chat` posts, memory writes, and privilege checks correctly attribute to the Koi rather than to Pisci, and scoped-memory retrieval uses the Koi's scope instead of Pisci's.
 - **Collaboration trial prompt tightening**: The trial kickoff message is now content-only (what to design) while the execution wrapper (`koi_execute_todo.txt`) owns all procedural instructions. The previous verbose kickoff crammed four responsibilities into one iteration budget, causing Architect to frequently stop without posting to `pool_chat` — which triggered Pisci's `replace_todo` retry. The wrapper now also states plainly that plain assistant text is invisible to the pool, promotes the >500-word "write to file, post path" rule to take precedence over task-text instructions, and ends with an explicit three-step end-of-turn checklist.

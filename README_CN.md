@@ -381,6 +381,12 @@ OpenPisci
 
 ## 📋 更新日志
 
+### v0.7.9
+- **UIA 精度拖拽测试**：前端通过 IPC 直接传入小球与目标的精确物理屏幕坐标（由 `innerPosition()` + `getBoundingClientRect()` × `devicePixelRatio` 计算），Agent 仅需一次 `desktop_automation`/`uia` 调用即可完成拖拽——无需截图识别、无需网格估算。
+- **Linux (VMware+Xorg) 鼠标控制**：新增 `xi_helpers.c` 原生助手（`pisci-xi-helper`），对 master pointer (device id=2) 使用 `XIWarpPointer` + `XTestFakeMotionEvent` 可靠投递事件。鼠标移动改为 20 步平滑动画，与 Windows UIA 行为一致。
+- **布局稳定性**：UIA 测试区域固定宽度（800px）并居中，工具调用日志和结果面板不再能在测试运行中改变区域的屏幕位置。
+- **IM 发送自动解析**：`im_send_message` 在未显式传入 `binding_key` 或 `channel`+`recipient` 时，自动从当前会话解析 IM 绑定，IM 驱动的回复不再需要显式寻址。
+
 ### v0.7.8
 - **Koi 独立 `memory_owner_id`**：Koi 驱动的无头轮次现在使用 Koi 自身 ID 作为工具上下文记忆归属，而非硬编码 `"pisci"`。这意味着 `pool_chat` 发帖、记忆写入和权限检查都会正确归属到 Koi 而不是 Pisci，且范围记忆检索也使用 Koi 自己的作用域。
 - **协作试验提示词收紧**：试验启动消息现在只包含内容（设计什么），所有流程指令由执行包装器（`koi_execute_todo.txt`）负责。此前冗长的启动消息把四个职责塞进一个迭代预算，导致 Architect 经常停在前端没有向 `pool_chat` 发帖——从而触发 Pisci 的 `replace_todo` 重试。包装器现在明确声明纯助手回复对鱼池不可见，将 >500 字"写入文件、只发路径"规则提升为优先于任务文本指令，并新增显式的三步回合结束检查清单。

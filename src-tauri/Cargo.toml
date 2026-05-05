@@ -39,7 +39,7 @@ pisci-cli = { path = "pisci-cli" }
 
 [package]
 name = "pisci-desktop"
-version = "0.7.8"
+version = "0.7.9"
 autobins = false
 default-run = "pisci-desktop"
 description = "OpenPisci - Open-source Windows AI Agent Desktop"

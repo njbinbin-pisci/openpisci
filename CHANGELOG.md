@@ -6,6 +6,36 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.7.9] - 2026-05-05
+
+### Fixed
+- **UIA precision drag test coordinate accuracy**: the agent now receives exact
+  ball/target physical-screen coordinates from the frontend via IPC (computed
+  from `innerPosition()` + `getBoundingClientRect()` × `devicePixelRatio`).
+  The drag is executed in a single `desktop_automation` / `uia` tool call with
+  no screenshot, no OCR, no grid estimation. Vision-based fallback retained.
+- **UIA test layout stability**: arena is now fixed-width (800px) and centered;
+  tool-call live log and result panel are width-contained
+  (`overflow-x:hidden`, `box-sizing:border-box`) so they cannot shift the arena's
+  screen position during a running test.
+- **Linux (VMware+Xorg) mouse control**: new `xi_helpers.c` native helper
+  (`pisci-xi-helper`) uses `XIWarpPointer` on the master pointer (device id=2)
+  plus `XTestFakeMotionEvent` to deliver events reliably. `move_mouse` /
+  `drag` now execute a 20-step smooth motion matching Windows UIA behavior,
+  and events reach WebKit correctly even though the visible cursor stays put
+  under VMware.
+- **IM send auto-resolve**: `im_send_message` now automatically resolves the
+  IM binding from the current `session_id` when no explicit `binding_key` or
+  `channel`+`recipient` is provided, so IM-driven replies don't need explicit
+  addressing parameters.
+- Minor borrow fix in `pisci-kernel::agent::loop_` cancellation path.
+
+### Changed
+- `screen_capture` default `grid_spacing` is now 100 (was 200); label interval
+  auto-adjusts to every 2nd line when spacing is under 200px to avoid overlap.
+- Ball and target in the UIA test panel display screen-absolute coordinate
+  labels for debugging and verification.
+
 ## [Unreleased]
 
 ### Documentation
