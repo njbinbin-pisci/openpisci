@@ -31,18 +31,23 @@ const TOOL_TIMEOUT_SECS: u64 = 120;
 const LLM_MAX_RETRIES: u32 = 3;
 const READ_TOOL_MAX_CONCURRENCY: usize = 4;
 
-// ── Runtime guard thresholds (inspired by OpenClaw) ──────────────────────────
-// OpenClaw uses 10/20/30; we use slightly lower values for desktop scenarios
-// where iterations are more expensive and user patience is lower.
-const TOOL_CALL_HISTORY_SIZE: usize = 25;
-const WARNING_THRESHOLD: usize = 8;
-const CRITICAL_THRESHOLD: usize = 16;
-const CIRCUIT_BREAKER_THRESHOLD: usize = 25;
-const RESEARCH_WARNING_THRESHOLD: usize = 4;
-const RESEARCH_CRITICAL_THRESHOLD: usize = 6;
-const RESEARCH_RECENT_WINDOW: usize = 10;
-const PING_PONG_WARNING: usize = 8;
-const PING_PONG_CRITICAL: usize = 16;
+// ── Runtime guard thresholds ─────────────────────────────────────────────────
+// Purpose: ONLY prevent true infinite loops / dead loops where the agent is
+// stuck making zero progress with identical input+output.  We do NOT restrict
+// exploration — agents must be free to try, fail, retry, and iterate through
+// multi-step workflows (browser navigation, desktop automation, search
+// refinement, etc.).  Thresholds are deliberately high so they only fire as
+// a last-resort safety net, never as a premature "you called this too many
+// times" nag.
+const TOOL_CALL_HISTORY_SIZE: usize = 128;
+const WARNING_THRESHOLD: usize = 64;
+const CRITICAL_THRESHOLD: usize = 128;
+const CIRCUIT_BREAKER_THRESHOLD: usize = 64;
+const RESEARCH_WARNING_THRESHOLD: usize = 64;
+const RESEARCH_CRITICAL_THRESHOLD: usize = 128;
+const RESEARCH_RECENT_WINDOW: usize = 64;
+const PING_PONG_WARNING: usize = 64;
+const PING_PONG_CRITICAL: usize = 128;
 const TOOL_RESULT_HARD_MAX_CHARS: usize = 48_000;
 const CONTEXT_SINGLE_RESULT_SHARE: f64 = 0.5;
 const CHECKPOINT_MAX_BYTES: usize = 8_000_000;
