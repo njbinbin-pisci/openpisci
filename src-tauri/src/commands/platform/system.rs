@@ -200,7 +200,13 @@ pub async fn check_privilege_elevation() -> Result<Vec<PrivilegeElevationCheckIt
 }
 
 pub fn collect_system_dependencies(settings: &Settings) -> Vec<SystemDependencyItem> {
-    let tool_enabled = |tool_name: &str| settings.builtin_tool_enabled.get(tool_name).copied().unwrap_or(true);
+    let tool_enabled = |tool_name: &str| {
+        settings
+            .builtin_tool_enabled
+            .get(tool_name)
+            .copied()
+            .unwrap_or(true)
+    };
 
     let mut items = Vec::new();
 
@@ -288,7 +294,9 @@ pub fn collect_system_dependencies(settings: &Settings) -> Vec<SystemDependencyI
             desktop_enabled,
             None,
             "Used for window listing, activation, and some fallback automation on macOS.",
-            Some("osascript ships with macOS. If unavailable, check shell PATH / system integrity."),
+            Some(
+                "osascript ships with macOS. If unavailable, check shell PATH / system integrity.",
+            ),
             None,
         ));
 
@@ -644,7 +652,10 @@ fn dependency_action_for_key(key: &str) -> Option<SystemDependencyAction> {
             "macos-accessibility" => Some(SystemDependencyAction {
                 kind: "open_settings".into(),
                 command: None,
-                url: Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility".into()),
+                url: Some(
+                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+                        .into(),
+                ),
             }),
             _ => None,
         };
@@ -657,7 +668,9 @@ fn dependency_action_for_key(key: &str) -> Option<SystemDependencyAction> {
                 if command_exists("winget") {
                     Some(SystemDependencyAction {
                         kind: "install_command".into(),
-                        command: Some("winget install --id Microsoft.PowerShell --source winget".into()),
+                        command: Some(
+                            "winget install --id Microsoft.PowerShell --source winget".into(),
+                        ),
                         url: None,
                     })
                 } else {
@@ -809,7 +822,11 @@ fn open_with_system(target: &str) -> Result<(), String> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        let cmd = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let cmd = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
         std::process::Command::new(cmd)
             .arg(target)
             .spawn()
@@ -837,7 +854,10 @@ fn launch_terminal_command(command: &str) -> Result<(), String> {
             let mut process = std::process::Command::new(terminal);
             process.args(prefix);
             if terminal == "xfce4-terminal" {
-                process.arg(format!("bash -lc \"{}; exec bash\"", shell_escape_double(command)));
+                process.arg(format!(
+                    "bash -lc \"{}; exec bash\"",
+                    shell_escape_double(command)
+                ));
             } else {
                 process.arg(format!("{}; exec bash", command));
             }
@@ -866,7 +886,15 @@ fn launch_terminal_command(command: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("cmd")
-            .args(["/C", "start", "", "powershell", "-NoExit", "-Command", command])
+            .args([
+                "/C",
+                "start",
+                "",
+                "powershell",
+                "-NoExit",
+                "-Command",
+                command,
+            ])
             .spawn()
             .map_err(|e| format!("Failed to open terminal: {e}"))?;
         Ok(())
@@ -963,11 +991,17 @@ fn detect_linux_polkit_agent() -> Option<String> {
         ),
         (
             "lxqt-policykit-agent",
-            ["/usr/bin/lxqt-policykit-agent", "/usr/libexec/lxqt-policykit-agent"],
+            [
+                "/usr/bin/lxqt-policykit-agent",
+                "/usr/libexec/lxqt-policykit-agent",
+            ],
         ),
         (
             "mate-polkit",
-            ["/usr/lib/mate-polkit/polkit-mate-authentication-agent-1", "/usr/libexec/polkit-mate-authentication-agent-1"],
+            [
+                "/usr/lib/mate-polkit/polkit-mate-authentication-agent-1",
+                "/usr/libexec/polkit-mate-authentication-agent-1",
+            ],
         ),
     ];
 

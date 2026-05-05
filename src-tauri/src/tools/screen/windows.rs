@@ -1,18 +1,18 @@
 use anyhow::Result;
 use pisci_kernel::agent::tool::ToolResult;
 use serde_json::Value;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDCA, DeleteDC, DeleteObject,
-    EnumDisplayMonitors, GetDIBits, GetDC, GetMonitorInfoW, MonitorFromWindow,
-    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
-    MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, SRCCOPY,
+    EnumDisplayMonitors, GetDC, GetDIBits, GetMonitorInfoW, MonitorFromWindow, ReleaseDC,
+    SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, MONITORINFOEXW,
+    MONITOR_DEFAULTTONEAREST, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FindWindowW, GetAncestor, GetDesktopWindow, GetWindowRect, GetWindowTextW,
     IsIconic, IsWindowVisible, GA_ROOT,
 };
-use windows::core::PCWSTR;
 
 pub async fn list_monitors() -> Result<ToolResult> {
     // Step 1: enumerate monitors
@@ -28,7 +28,8 @@ pub async fn list_monitors() -> Result<ToolResult> {
         _lprect: *mut RECT,
         lparam: LPARAM,
     ) -> BOOL {
-        let list = &mut *(lparam.0 as *mut Vec<(windows::Win32::Graphics::Gdi::HMONITOR, MonitorInfo)>);
+        let list =
+            &mut *(lparam.0 as *mut Vec<(windows::Win32::Graphics::Gdi::HMONITOR, MonitorInfo)>);
         let mut info = MONITORINFOEXW::default();
         info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
         if GetMonitorInfoW(hmon, &mut info.monitorInfo as *mut _ as *mut _).as_bool() {
@@ -57,17 +58,10 @@ pub async fn list_monitors() -> Result<ToolResult> {
 
     // Step 2: enumerate windows and map each to its nearest monitor
     struct WinData {
-        windows: Vec<(
-            windows::Win32::Graphics::Gdi::HMONITOR,
-            String,
-            RECT,
-        )>,
+        windows: Vec<(windows::Win32::Graphics::Gdi::HMONITOR, String, RECT)>,
     }
 
-    unsafe extern "system" fn win_enum_proc(
-        hwnd: HWND,
-        lparam: LPARAM,
-    ) -> BOOL {
+    unsafe extern "system" fn win_enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let data = &mut *(lparam.0 as *mut WinData);
         if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
             return BOOL(1);

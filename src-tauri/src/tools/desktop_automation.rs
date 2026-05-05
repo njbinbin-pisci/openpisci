@@ -160,14 +160,27 @@ async fn run_cmd(program: &str, args: &[&str]) -> Result<ToolResult> {
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    tracing::info!("run_cmd result: success={} stdout='{}' stderr='{}'", output.status.success(), stdout, stderr);
+    tracing::info!(
+        "run_cmd result: success={} stdout='{}' stderr='{}'",
+        output.status.success(),
+        stdout,
+        stderr
+    );
 
     if !output.status.success() {
         let detail = if stderr.is_empty() { stdout } else { stderr };
         return Ok(ToolResult::err(format!("{} failed: {}", program, detail)));
     }
 
-    Ok(ToolResult::ok(format!("{} succeeded{}", program, if stdout.is_empty() { String::new() } else { format!(": {}", stdout) })))
+    Ok(ToolResult::ok(format!(
+        "{} succeeded{}",
+        program,
+        if stdout.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", stdout)
+        }
+    )))
 }
 
 // ── X11 native backend (XIWarpPointer + XTest) ─────────────────────────────
@@ -184,12 +197,16 @@ fn xi_helper_path() -> String {
     if let Ok(exe) = std::env::current_exe() {
         let dir = exe.parent().unwrap_or(std::path::Path::new("."));
         let p = dir.join("pisci-xi-helper");
-        if p.exists() { return p.to_string_lossy().to_string(); }
+        if p.exists() {
+            return p.to_string_lossy().to_string();
+        }
     }
     // 2) OUT_DIR from build.rs (dev builds)
     if let Ok(out_dir) = std::env::var("OUT_DIR") {
         let p = std::path::Path::new(&out_dir).join("pisci-xi-helper");
-        if p.exists() { return p.to_string_lossy().to_string(); }
+        if p.exists() {
+            return p.to_string_lossy().to_string();
+        }
     }
     // 3) Fallback: /tmp (where we built it manually during development)
     "/tmp/xi_warp".to_string()
@@ -213,7 +230,10 @@ fn xi_move_mouse(x: i32, y: i32) -> Result<()> {
                 .output()
                 .map_err(|e| anyhow::anyhow!("xdotool mousemove failed: {}", e))?;
             if !out.status.success() {
-                return Err(anyhow::anyhow!("xdotool mousemove failed: {}", String::from_utf8_lossy(&out.stderr)));
+                return Err(anyhow::anyhow!(
+                    "xdotool mousemove failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
             }
         }
     }
@@ -233,9 +253,18 @@ fn xi_click(x: i32, y: i32, button: u8, repeat: u8) -> Result<()> {
         .output()
         .map_err(|e| anyhow::anyhow!("xdotool click failed: {}", e))?;
     if !output.status.success() {
-        return Err(anyhow::anyhow!("xdotool click failed: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err(anyhow::anyhow!(
+            "xdotool click failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
-    tracing::info!("xi_click: button={} repeat={} at ({},{})", button, repeat, x, y);
+    tracing::info!(
+        "xi_click: button={} repeat={} at ({},{})",
+        button,
+        repeat,
+        x,
+        y
+    );
     Ok(())
 }
 
@@ -247,7 +276,13 @@ fn xi_drag(sx: i32, sy: i32, ex: i32, ey: i32) -> Result<()> {
     // and is required for WebKit/Chromium to detect the drag gesture.
     let helper = xi_helper_path();
     let output = std::process::Command::new(&helper)
-        .args(["drag", &sx.to_string(), &sy.to_string(), &ex.to_string(), &ey.to_string()])
+        .args([
+            "drag",
+            &sx.to_string(),
+            &sy.to_string(),
+            &ex.to_string(),
+            &ey.to_string(),
+        ])
         .output();
     match output {
         Ok(out) if out.status.success() => {
@@ -264,7 +299,10 @@ fn xi_drag(sx: i32, sy: i32, ex: i32, ey: i32) -> Result<()> {
                 .output()
                 .map_err(|e| anyhow::anyhow!("xdotool mousedown failed: {}", e))?;
             if !out.status.success() {
-                return Err(anyhow::anyhow!("xdotool mousedown failed: {}", String::from_utf8_lossy(&out.stderr)));
+                return Err(anyhow::anyhow!(
+                    "xdotool mousedown failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
             }
 
             // Generate intermediate mousemove events for smooth drag
@@ -283,9 +321,18 @@ fn xi_drag(sx: i32, sy: i32, ex: i32, ey: i32) -> Result<()> {
                 .output()
                 .map_err(|e| anyhow::anyhow!("xdotool mouseup failed: {}", e))?;
             if !out.status.success() {
-                return Err(anyhow::anyhow!("xdotool mouseup failed: {}", String::from_utf8_lossy(&out.stderr)));
+                return Err(anyhow::anyhow!(
+                    "xdotool mouseup failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
             }
-            tracing::info!("xdotool_drag (fallback): ({},{}) -> ({},{})", sx, sy, ex, ey);
+            tracing::info!(
+                "xdotool_drag (fallback): ({},{}) -> ({},{})",
+                sx,
+                sy,
+                ex,
+                ey
+            );
         }
     }
     Ok(())
@@ -299,15 +346,28 @@ mod imp {
 
     pub async fn click(input: &Value, button: u8) -> Result<ToolResult> {
         let (x, y) = require_coords(input)?;
-        let btn_label = match button { 1 => "left", 2 => "double", 3 => "right", _ => "left" };
-        let xi_btn = match button { 1 => 1, 2 => 1, 3 => 3, _ => 1 };
+        let btn_label = match button {
+            1 => "left",
+            2 => "double",
+            3 => "right",
+            _ => "left",
+        };
+        let xi_btn = match button {
+            1 => 1,
+            2 => 1,
+            3 => 3,
+            _ => 1,
+        };
         xi_move_mouse(x, y)?;
         if button == 2 {
             xi_click(x, y, xi_btn, 2)?;
             Ok(ToolResult::ok(format!("Double-click at ({},{})", x, y)))
         } else {
             xi_click(x, y, xi_btn, 1)?;
-            Ok(ToolResult::ok(format!("Click {} at ({},{})", btn_label, x, y)))
+            Ok(ToolResult::ok(format!(
+                "Click {} at ({},{})",
+                btn_label, x, y
+            )))
         }
     }
 
@@ -315,26 +375,36 @@ mod imp {
         let (x, y) = require_coords(input)?;
         let to_x = match input["to_x"].as_i64() {
             Some(v) => v as i32,
-            None => return Ok(ToolResult::err(
-                "drag requires parameter 'to_x' (target X coordinate). \
+            None => {
+                return Ok(ToolResult::err(
+                    "drag requires parameter 'to_x' (target X coordinate). \
                  Use action='drag' with x, y, to_x, to_y for explicit start/end, \
-                 or action='drag_to' with only to_x, to_y to drag from current cursor position."
-            )),
+                 or action='drag_to' with only to_x, to_y to drag from current cursor position.",
+                ))
+            }
         };
         let to_y = match input["to_y"].as_i64() {
             Some(v) => v as i32,
-            None => return Ok(ToolResult::err(
-                "drag requires parameter 'to_y' (target Y coordinate). \
+            None => {
+                return Ok(ToolResult::err(
+                    "drag requires parameter 'to_y' (target Y coordinate). \
                  Use action='drag' with x, y, to_x, to_y for explicit start/end, \
-                 or action='drag_to' with only to_x, to_y to drag from current cursor position."
-            )),
+                 or action='drag_to' with only to_x, to_y to drag from current cursor position.",
+                ))
+            }
         };
         tracing::info!(
             "desktop_automation.drag: x={}, y={}, to_x={}, to_y={}",
-            x, y, to_x, to_y
+            x,
+            y,
+            to_x,
+            to_y
         );
         xi_drag(x, y, to_x, to_y)?;
-        Ok(ToolResult::ok(format!("Dragged from ({},{}) to ({},{})", x, y, to_x, to_y)))
+        Ok(ToolResult::ok(format!(
+            "Dragged from ({},{}) to ({},{})",
+            x, y, to_x, to_y
+        )))
     }
 
     /// drag_to: drag from current cursor position to (to_x, to_y).
@@ -353,14 +423,23 @@ mod imp {
             let (cx, cy) = get_cursor_pos().await?;
             (cx, cy)
         } else {
-            (input["x"].as_i64().unwrap_or(0) as i32, input["y"].as_i64().unwrap_or(0) as i32)
+            (
+                input["x"].as_i64().unwrap_or(0) as i32,
+                input["y"].as_i64().unwrap_or(0) as i32,
+            )
         };
         tracing::info!(
             "desktop_automation.drag_to: start=({}, {}) to=({}, {})",
-            start_x, start_y, to_x, to_y
+            start_x,
+            start_y,
+            to_x,
+            to_y
         );
         xi_drag(start_x, start_y, to_x, to_y)?;
-        Ok(ToolResult::ok(format!("Dragged from ({},{}) to ({},{})", start_x, start_y, to_x, to_y)))
+        Ok(ToolResult::ok(format!(
+            "Dragged from ({},{}) to ({},{})",
+            start_x, start_y, to_x, to_y
+        )))
     }
 
     async fn get_cursor_pos() -> Result<(i32, i32)> {
@@ -373,8 +452,12 @@ mod imp {
         let mut x = 0i32;
         let mut y = 0i32;
         for line in stdout.lines() {
-            if let Some(v) = line.strip_prefix("X=") { x = v.parse().unwrap_or(0); }
-            if let Some(v) = line.strip_prefix("Y=") { y = v.parse().unwrap_or(0); }
+            if let Some(v) = line.strip_prefix("X=") {
+                x = v.parse().unwrap_or(0);
+            }
+            if let Some(v) = line.strip_prefix("Y=") {
+                y = v.parse().unwrap_or(0);
+            }
         }
         Ok((x, y))
     }
@@ -395,8 +478,12 @@ mod imp {
         let mut x = 0i32;
         let mut y = 0i32;
         for line in stdout.lines() {
-            if let Some(v) = line.strip_prefix("X=") { x = v.parse().unwrap_or(0); }
-            if let Some(v) = line.strip_prefix("Y=") { y = v.parse().unwrap_or(0); }
+            if let Some(v) = line.strip_prefix("X=") {
+                x = v.parse().unwrap_or(0);
+            }
+            if let Some(v) = line.strip_prefix("Y=") {
+                y = v.parse().unwrap_or(0);
+            }
         }
         Ok(ToolResult::ok(format!("Cursor at ({},{})", x, y)))
     }
@@ -417,7 +504,10 @@ mod imp {
             use tokio::io::AsyncWriteExt;
             let _ = stdin.write_all(text.as_bytes()).await;
         }
-        let status = child.wait().await.map_err(|e| anyhow::anyhow!("xclip wait: {}", e))?;
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| anyhow::anyhow!("xclip wait: {}", e))?;
         if !status.success() {
             // xclip not available, fall back to xdotool type
             let output = Command::new("xdotool")
@@ -444,8 +534,15 @@ mod imp {
 
     pub async fn hotkey(input: &Value) -> Result<ToolResult> {
         let keys: Vec<String> = match input["keys"].as_array() {
-            Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
-            None => return Ok(ToolResult::err("Missing required parameter: keys (array of strings)")),
+            Some(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect(),
+            None => {
+                return Ok(ToolResult::err(
+                    "Missing required parameter: keys (array of strings)",
+                ))
+            }
         };
         if keys.is_empty() {
             return Ok(ToolResult::err("keys array must not be empty"));
@@ -482,9 +579,15 @@ mod imp {
         }
 
         if lines.is_empty() {
-            Ok(ToolResult::ok("No visible windows found (wmctrl returned nothing). Try installing wmctrl."))
+            Ok(ToolResult::ok(
+                "No visible windows found (wmctrl returned nothing). Try installing wmctrl.",
+            ))
         } else {
-            Ok(ToolResult::ok(format!("Found {} window(s):\n{}", lines.len(), lines.join("\n"))))
+            Ok(ToolResult::ok(format!(
+                "Found {} window(s):\n{}",
+                lines.len(),
+                lines.join("\n")
+            )))
         }
     }
 
@@ -526,10 +629,16 @@ mod imp {
                     .await
                     .map_err(|e| anyhow::anyhow!("wmctrl activate by id failed: {}", e))?;
                 if output.status.success() {
-                    return Ok(ToolResult::ok(format!("Activated window matching '{}'", title)));
+                    return Ok(ToolResult::ok(format!(
+                        "Activated window matching '{}'",
+                        title
+                    )));
                 }
             }
-            Ok(ToolResult::err(format!("Window '{}' not found or cannot be activated", title)))
+            Ok(ToolResult::err(format!(
+                "Window '{}' not found or cannot be activated",
+                title
+            )))
         }
     }
 
@@ -544,11 +653,24 @@ mod imp {
             "right" => "7",
             _ => "5",
         };
-        run_cmd("xdotool", &[
-            "mousemove", "--sync", &x.to_string(), &y.to_string(),
-            "click", "--repeat", &amount.to_string(), btn,
-        ]).await?;
-        Ok(ToolResult::ok(format!("Scrolled {} {} at ({},{})", amount, dir, x, y)))
+        run_cmd(
+            "xdotool",
+            &[
+                "mousemove",
+                "--sync",
+                &x.to_string(),
+                &y.to_string(),
+                "click",
+                "--repeat",
+                &amount.to_string(),
+                btn,
+            ],
+        )
+        .await?;
+        Ok(ToolResult::ok(format!(
+            "Scrolled {} {} at ({},{})",
+            amount, dir, x, y
+        )))
     }
 
     pub async fn launch_app(input: &Value) -> Result<ToolResult> {
@@ -558,26 +680,26 @@ mod imp {
         };
 
         // Try gtk-launch first (XDG desktop file)
-        let gtk_result = Command::new("gtk-launch")
-            .arg(app_name)
-            .output()
-            .await;
+        let gtk_result = Command::new("gtk-launch").arg(app_name).output().await;
 
         if let Ok(out) = &gtk_result {
             if out.status.success() {
-                return Ok(ToolResult::ok(format!("Launched '{}' via gtk-launch", app_name)));
+                return Ok(ToolResult::ok(format!(
+                    "Launched '{}' via gtk-launch",
+                    app_name
+                )));
             }
         }
 
         // Try xdg-open
-        let xdg_result = Command::new("xdg-open")
-            .arg(app_name)
-            .output()
-            .await;
+        let xdg_result = Command::new("xdg-open").arg(app_name).output().await;
 
         if let Ok(out) = &xdg_result {
             if out.status.success() {
-                return Ok(ToolResult::ok(format!("Launched '{}' via xdg-open", app_name)));
+                return Ok(ToolResult::ok(format!(
+                    "Launched '{}' via xdg-open",
+                    app_name
+                )));
             }
         }
 
@@ -608,7 +730,12 @@ mod imp {
 
     pub async fn click(input: &Value, button: u8) -> Result<ToolResult> {
         let (x, y) = require_coords(input)?;
-        let btn = match button { 1 => "c", 2 => "dc", 3 => "rc", _ => "c" };
+        let btn = match button {
+            1 => "c",
+            2 => "dc",
+            3 => "rc",
+            _ => "c",
+        };
         let action = if button == 2 {
             format!("dc:{},{}", x, y)
         } else {
@@ -622,12 +749,19 @@ mod imp {
         let (x, y) = require_coords(input)?;
         let to_x = input["to_x"].as_i64().unwrap_or(0) as i32;
         let to_y = input["to_y"].as_i64().unwrap_or(0) as i32;
-        run_cmd("cliclick", &[
-            &format!("dd:{},{}", x, y),
-            &format!("dm:{},{}", to_x, to_y),
-            &format!("du:{},{}", to_x, to_y),
-        ]).await?;
-        Ok(ToolResult::ok(format!("Dragged from ({},{}) to ({},{})", x, y, to_x, to_y)))
+        run_cmd(
+            "cliclick",
+            &[
+                &format!("dd:{},{}", x, y),
+                &format!("dm:{},{}", to_x, to_y),
+                &format!("du:{},{}", to_x, to_y),
+            ],
+        )
+        .await?;
+        Ok(ToolResult::ok(format!(
+            "Dragged from ({},{}) to ({},{})",
+            x, y, to_x, to_y
+        )))
     }
 
     pub async fn drag_to(input: &Value) -> Result<ToolResult> {
@@ -642,21 +776,32 @@ mod imp {
         // If x/y provided, move there first; otherwise drag from current position
         if input["x"].is_null() || input["y"].is_null() {
             // cliclick dd:. = mouse down at current position, then move and up
-            run_cmd("cliclick", &[
-                &format!("dd:."),
-                &format!("dm:{},{}", to_x, to_y),
-                &format!("du:{},{}", to_x, to_y),
-            ]).await?;
+            run_cmd(
+                "cliclick",
+                &[
+                    &format!("dd:."),
+                    &format!("dm:{},{}", to_x, to_y),
+                    &format!("du:{},{}", to_x, to_y),
+                ],
+            )
+            .await?;
             Ok(ToolResult::ok(format!("Dragged to ({},{})", to_x, to_y)))
         } else {
             let start_x = input["x"].as_i64().unwrap_or(0) as i32;
             let start_y = input["y"].as_i64().unwrap_or(0) as i32;
-            run_cmd("cliclick", &[
-                &format!("dd:{},{}", start_x, start_y),
-                &format!("dm:{},{}", to_x, to_y),
-                &format!("du:{},{}", to_x, to_y),
-            ]).await?;
-            Ok(ToolResult::ok(format!("Dragged from ({},{}) to ({},{})", start_x, start_y, to_x, to_y)))
+            run_cmd(
+                "cliclick",
+                &[
+                    &format!("dd:{},{}", start_x, start_y),
+                    &format!("dm:{},{}", to_x, to_y),
+                    &format!("du:{},{}", to_x, to_y),
+                ],
+            )
+            .await?;
+            Ok(ToolResult::ok(format!(
+                "Dragged from ({},{}) to ({},{})",
+                start_x, start_y, to_x, to_y
+            )))
         }
     }
 
@@ -668,7 +813,10 @@ mod imp {
 
     pub async fn get_cursor_position() -> Result<ToolResult> {
         let output = Command::new("osascript")
-            .args(["-e", "tell application \"System Events\" to get position of mouse"])
+            .args([
+                "-e",
+                "tell application \"System Events\" to get position of mouse",
+            ])
             .output()
             .await
             .map_err(|e| anyhow::anyhow!("osascript failed: {}", e))?;
@@ -687,16 +835,36 @@ mod imp {
 
     pub async fn hotkey(input: &Value) -> Result<ToolResult> {
         let keys: Vec<String> = match input["keys"].as_array() {
-            Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
-            None => return Ok(ToolResult::err("Missing required parameter: keys (array of strings)")),
+            Some(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect(),
+            None => {
+                return Ok(ToolResult::err(
+                    "Missing required parameter: keys (array of strings)",
+                ))
+            }
         };
         if keys.is_empty() {
             return Ok(ToolResult::err("keys array must not be empty"));
         }
         let combo = keys.join("+");
         // Convert to cliclick format: kd:key1,key2 ku:key2,key1
-        let kd = format!("kd:{}", keys.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(","));
-        let ku = format!("ku:{}", keys.iter().rev().map(|k| k.as_str()).collect::<Vec<_>>().join(","));
+        let kd = format!(
+            "kd:{}",
+            keys.iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let ku = format!(
+            "ku:{}",
+            keys.iter()
+                .rev()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
         run_cmd("cliclick", &[&kd, &ku]).await?;
         Ok(ToolResult::ok(format!("Hotkey '{}' sent", combo)))
     }
@@ -742,7 +910,10 @@ mod imp {
             amount, key
         );
         run_cmd("osascript", &["-e", &script2]).await?;
-        Ok(ToolResult::ok(format!("Scrolled {} {} times", amount, _dir)))
+        Ok(ToolResult::ok(format!(
+            "Scrolled {} {} times",
+            amount, _dir
+        )))
     }
 
     pub async fn launch_app(input: &Value) -> Result<ToolResult> {
@@ -799,7 +970,9 @@ mod imp {
     }
 
     pub async fn get_cursor_position() -> Result<ToolResult> {
-        Ok(ToolResult::ok("Use uia tool for cursor position on Windows".to_string()))
+        Ok(ToolResult::ok(
+            "Use uia tool for cursor position on Windows".to_string(),
+        ))
     }
 
     pub async fn type_text(input: &Value) -> Result<ToolResult> {
@@ -807,26 +980,44 @@ mod imp {
             Some(t) => t,
             None => return Ok(ToolResult::err("Missing required parameter: text")),
         };
-        run_cmd("powershell", &["-Command", &format!("[System.Windows.Forms.SendKeys]::SendWait('{}')", text)]).await?;
+        run_cmd(
+            "powershell",
+            &[
+                "-Command",
+                &format!("[System.Windows.Forms.SendKeys]::SendWait('{}')", text),
+            ],
+        )
+        .await?;
         Ok(ToolResult::ok(format!("Typed text ({} chars)", text.len())))
     }
 
     pub async fn hotkey(input: &Value) -> Result<ToolResult> {
         let keys: Vec<String> = match input["keys"].as_array() {
-            Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+            Some(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect(),
             None => return Ok(ToolResult::err("Missing keys array")),
         };
         let combo = keys.join("+");
         // Convert to SendKeys format: ^ for Ctrl, % for Alt, + for Shift
-        let sk: String = keys.iter().map(|k| {
-            match k.to_lowercase().as_str() {
+        let sk: String = keys
+            .iter()
+            .map(|k| match k.to_lowercase().as_str() {
                 "ctrl" | "control" => "^",
                 "alt" => "%",
                 "shift" => "+",
                 other => other,
-            }
-        }).collect();
-        run_cmd("powershell", &["-Command", &format!("[System.Windows.Forms.SendKeys]::SendWait('{}')", sk)]).await?;
+            })
+            .collect();
+        run_cmd(
+            "powershell",
+            &[
+                "-Command",
+                &format!("[System.Windows.Forms.SendKeys]::SendWait('{}')", sk),
+            ],
+        )
+        .await?;
         Ok(ToolResult::ok(format!("Hotkey '{}' sent", combo)))
     }
 
@@ -858,7 +1049,9 @@ if ($hwnd) {{ [Win32]::SetForegroundWindow($hwnd); Write-Output "activated" }} e
     }
 
     pub async fn scroll(_input: &Value) -> Result<ToolResult> {
-        Ok(ToolResult::ok("Scroll not implemented on Windows via desktop_automation — use uia tool".to_string()))
+        Ok(ToolResult::ok(
+            "Scroll not implemented on Windows via desktop_automation — use uia tool".to_string(),
+        ))
     }
 
     pub async fn launch_app(input: &Value) -> Result<ToolResult> {

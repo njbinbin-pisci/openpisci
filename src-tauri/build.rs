@@ -29,8 +29,10 @@ fn build_xi_helper() {
     let status = std::process::Command::new("gcc")
         .args([
             src.to_str().unwrap(),
-            "-o", out_path.to_str().unwrap(),
-            "-lX11", "-lXi",
+            "-o",
+            out_path.to_str().unwrap(),
+            "-lX11",
+            "-lXi",
             "-O2",
         ])
         .status()
@@ -38,8 +40,11 @@ fn build_xi_helper() {
 
     if !status.success() {
         // Not fatal — xdotool fallback will be used
-        eprintln!("WARNING: Failed to build pisci-xi-helper (gcc exit {:?}). \
-                  Xdotool fallback will be used for mouse positioning.", status.code());
+        eprintln!(
+            "WARNING: Failed to build pisci-xi-helper (gcc exit {:?}). \
+                  Xdotool fallback will be used for mouse positioning.",
+            status.code()
+        );
     }
 }
 

@@ -121,12 +121,8 @@ pub(crate) async fn release_managed_run_slot(
         let app_cl = app.clone();
         let db_cl = db_arc.clone();
         tokio::spawn(async move {
-            match crate::pool::bridge::activate_pending_todos_arc(
-                &app_cl,
-                db_cl,
-                Some(&psid_owned),
-            )
-            .await
+            match crate::pool::bridge::activate_pending_todos_arc(&app_cl, db_cl, Some(&psid_owned))
+                .await
             {
                 Ok(n) if n > 0 => tracing::info!(
                     target: "pool::runtime",

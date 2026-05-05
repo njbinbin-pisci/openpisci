@@ -372,10 +372,7 @@ fn parse_text_callback(frame: &Value) -> Option<InboundMessage> {
 
     let sender = body["from"]["userid"].as_str()?.trim().to_string();
     let (content, media) = match msgtype {
-        "text" => (
-            body["text"]["content"].as_str()?.trim().to_string(),
-            None,
-        ),
+        "text" => (body["text"]["content"].as_str()?.trim().to_string(), None),
         "voice" | "audio" => {
             let media_id = body[msgtype]["media_id"]
                 .as_str()

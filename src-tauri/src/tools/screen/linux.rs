@@ -135,8 +135,11 @@ pub async fn capture_region(input: &Value) -> Result<ToolResult> {
     };
 
     let monitor = Monitor::from_point(x, y).or_else(|_| {
-        Monitor::all()
-            .map(|m| m.into_iter().next().ok_or_else(|| anyhow::anyhow!("No displays")))?
+        Monitor::all().map(|m| {
+            m.into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("No displays"))
+        })?
     })?;
 
     let rel_x = (x - monitor.x().unwrap_or(0)).max(0) as u32;

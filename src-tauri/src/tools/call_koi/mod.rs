@@ -517,13 +517,10 @@ impl CallKoiTool {
             }
         };
 
-                // Merge board_state and kb/ into the pool_chat_ctx so they
+        // Merge board_state and kb/ into the pool_chat_ctx so they
         // appear in the project-environment layer without changing the
         // build_koi_task_system_prompt signature.
-        let combined_env_ctx = format!(
-            "{}{}{}",
-            board_state_ctx, kb_ctx, pool_chat_ctx
-        );
+        let combined_env_ctx = format!("{}{}{}", board_state_ctx, kb_ctx, pool_chat_ctx);
 
         let system_prompt = build_koi_task_system_prompt(
             &koi_def.system_prompt,

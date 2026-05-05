@@ -127,8 +127,6 @@ fn current_os_platform() -> &'static str {
 fn findable_dir() -> &'static str {
     if cfg!(target_os = "windows") {
         r"C:\Windows\System32"
-    } else if cfg!(target_os = "macos") {
-        "/usr/bin"
     } else {
         "/usr/bin"
     }
@@ -198,8 +196,6 @@ fn shell_memory_info_cmd() -> &'static str {
 fn shell_top_mem_cmd() -> &'static str {
     if cfg!(target_os = "windows") {
         "Get-Process | Sort-Object WorkingSet -Descending | Select -First 5 Name,Id"
-    } else if cfg!(target_os = "macos") {
-        "ps aux --sort=-%mem | head -6"
     } else {
         "ps aux --sort=-%mem | head -6"
     }
@@ -417,7 +413,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "Web Search".into(),
             description: "执行混合网络搜索（SearXNG + 本地引擎），验证网络访问是否正常".into(),
             description_en: "Run a hybrid web search (SearXNG + local engines) to verify network access".into(),
-            prompt: format!("请搜索 '{} 最新版本' 并告诉我找到了什么", os_display_name()).into(),
+            prompt: format!("请搜索 '{} 最新版本' 并告诉我找到了什么", os_display_name()),
             expected_keywords: vec![],
             expected_tools: vec!["web_search".into()],
             requires_config: None,
@@ -1627,8 +1623,16 @@ pub async fn test_mouse_control() -> Result<String, String> {
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             .unwrap_or_default();
 
-        let bx: i32 = before.lines().find(|l| l.starts_with("X=")).and_then(|l| l[2..].parse().ok()).unwrap_or(-1);
-        let by: i32 = before.lines().find(|l| l.starts_with("Y=")).and_then(|l| l[2..].parse().ok()).unwrap_or(-1);
+        let bx: i32 = before
+            .lines()
+            .find(|l| l.starts_with("X="))
+            .and_then(|l| l[2..].parse().ok())
+            .unwrap_or(-1);
+        let by: i32 = before
+            .lines()
+            .find(|l| l.starts_with("Y="))
+            .and_then(|l| l[2..].parse().ok())
+            .unwrap_or(-1);
 
         if has_helper {
             let _ = tokio::process::Command::new(helper)
@@ -1642,8 +1646,16 @@ pub async fn test_mouse_control() -> Result<String, String> {
                 .await
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                 .unwrap_or_default();
-            let ax: i32 = after.lines().find(|l| l.starts_with("X=")).and_then(|l| l[2..].parse().ok()).unwrap_or(-1);
-            let ay: i32 = after.lines().find(|l| l.starts_with("Y=")).and_then(|l| l[2..].parse().ok()).unwrap_or(-1);
+            let ax: i32 = after
+                .lines()
+                .find(|l| l.starts_with("X="))
+                .and_then(|l| l[2..].parse().ok())
+                .unwrap_or(-1);
+            let ay: i32 = after
+                .lines()
+                .find(|l| l.starts_with("Y="))
+                .and_then(|l| l[2..].parse().ok())
+                .unwrap_or(-1);
 
             // Restore
             let _ = tokio::process::Command::new("xdotool")
@@ -1667,8 +1679,16 @@ pub async fn test_mouse_control() -> Result<String, String> {
                 .await
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                 .unwrap_or_default();
-            let ax: i32 = after.lines().find(|l| l.starts_with("X=")).and_then(|l| l[2..].parse().ok()).unwrap_or(-1);
-            let ay: i32 = after.lines().find(|l| l.starts_with("Y=")).and_then(|l| l[2..].parse().ok()).unwrap_or(-1);
+            let ax: i32 = after
+                .lines()
+                .find(|l| l.starts_with("X="))
+                .and_then(|l| l[2..].parse().ok())
+                .unwrap_or(-1);
+            let ay: i32 = after
+                .lines()
+                .find(|l| l.starts_with("Y="))
+                .and_then(|l| l[2..].parse().ok())
+                .unwrap_or(-1);
 
             // Restore
             let _ = tokio::process::Command::new("xdotool")
@@ -1961,12 +1981,17 @@ pub async fn run_uia_drag_test(
     }
 
     // Use the vision model as the primary model for this test
-    let (effective_provider, effective_model, effective_api_key, effective_base_url) = if vision_use_main_llm {
-        (provider, model, api_key, base_url)
-    } else {
-        let vb = if vision_base_url.is_empty() { base_url } else { vision_base_url };
-        (vision_provider, vision_model, vision_api_key, vb)
-    };
+    let (effective_provider, effective_model, effective_api_key, effective_base_url) =
+        if vision_use_main_llm {
+            (provider, model, api_key, base_url)
+        } else {
+            let vb = if vision_base_url.is_empty() {
+                base_url
+            } else {
+                vision_base_url
+            };
+            (vision_provider, vision_model, vision_api_key, vb)
+        };
 
     if effective_api_key.is_empty() {
         return Err("api_key_not_configured".into());
@@ -2035,7 +2060,8 @@ pub async fn run_uia_drag_test(
     // Use explicit coordinates passed from frontend when available.
     // The frontend computes these precisely from window position + DOM element rect,
     // which is FAR more reliable than vision-based OCR of a screenshot.
-    let have_coords = ball_x.is_some() && ball_y.is_some() && target_x.is_some() && target_y.is_some();
+    let have_coords =
+        ball_x.is_some() && ball_y.is_some() && target_x.is_some() && target_y.is_some();
 
     let prompt = if have_coords {
         let bx = ball_x.unwrap();
@@ -2043,16 +2069,28 @@ pub async fn run_uia_drag_test(
         let tx = target_x.unwrap();
         let ty = target_y.unwrap();
         let mut s = String::from("任务：将橙色小球从 起点 拖拽到 终点。\n\n");
-        s.push_str(&format!("【精确坐标（物理屏幕绝对坐标，单位：像素）】\n"));
+        s.push_str("【精确坐标（物理屏幕绝对坐标，单位：像素）】\n");
         s.push_str(&format!("- 起点（橙色小球中心）：x={}, y={}\n", bx, by));
-        s.push_str(&format!("- 终点（绿色目标区域中心）：x={}, y={}\n\n", tx, ty));
+        s.push_str(&format!(
+            "- 终点（绿色目标区域中心）：x={}, y={}\n\n",
+            tx, ty
+        ));
         s.push_str("【执行步骤】\n");
-        s.push_str(&format!("1. 直接调用 {} 工具的 {} 操作，使用上面给出的精确坐标：\n", drag_tool, drag_action));
-        s.push_str(&format!("   参数：x={}, y={}, {}={}, {}={}\n\n", bx, by, end_x_param, tx, end_y_param, ty));
+        s.push_str(&format!(
+            "1. 直接调用 {} 工具的 {} 操作，使用上面给出的精确坐标：\n",
+            drag_tool, drag_action
+        ));
+        s.push_str(&format!(
+            "   参数：x={}, y={}, {}={}, {}={}\n\n",
+            bx, by, end_x_param, tx, end_y_param, ty
+        ));
         s.push_str("【重要提示】\n");
         s.push_str("- 坐标已经精确给出，无需截图、无需识别、无需估算。\n");
         s.push_str("- 不要调用 screen_capture。不要调用 get_cursor_position。\n");
-        s.push_str(&format!("- 直接一步完成：调用 {} {} 即可。\n", drag_tool, drag_action));
+        s.push_str(&format!(
+            "- 直接一步完成：调用 {} {} 即可。\n",
+            drag_tool, drag_action
+        ));
         s
     } else {
         // Fallback (vision-based) path for callers that don't provide coords
@@ -2060,7 +2098,10 @@ pub async fn run_uia_drag_test(
         s.push_str("1. 用 screen_capture 工具（action=list_monitors）查看显示器布局\n");
         s.push_str("2. 用 screen_capture 工具截取该显示器截图（action=capture, grid=true, grid_spacing=100）\n");
         s.push_str("3. 找到橙色小球和绿色目标区域的中心坐标\n");
-        s.push_str(&format!("4. 调用 {} {} 从小球中心拖拽到目标中心\n", drag_tool, drag_action));
+        s.push_str(&format!(
+            "4. 调用 {} {} 从小球中心拖拽到目标中心\n",
+            drag_tool, drag_action
+        ));
         s
     };
 
@@ -2134,11 +2175,14 @@ pub async fn run_uia_drag_test(
             match event {
                 AgentEvent::ToolStart { id, name, input } => {
                     let input_summary = summarize_input(&name, &input);
-                    let _ = app_handle.emit("uia_drag_test_event", serde_json::json!({
-                        "type": "tool_start",
-                        "tool_name": name,
-                        "input_summary": input_summary,
-                    }));
+                    let _ = app_handle.emit(
+                        "uia_drag_test_event",
+                        serde_json::json!({
+                            "type": "tool_start",
+                            "tool_name": name,
+                            "input_summary": input_summary,
+                        }),
+                    );
                     tool_starts_clone
                         .lock()
                         .await
@@ -2155,19 +2199,25 @@ pub async fn run_uia_drag_test(
                         starts
                             .remove(&id)
                             .map(|(_, t, input)| {
-                                (t.elapsed().as_millis() as u64, summarize_input(&name, &input))
+                                (
+                                    t.elapsed().as_millis() as u64,
+                                    summarize_input(&name, &input),
+                                )
                             })
                             .unwrap_or((0, String::new()))
                     };
                     let result_summary: String = result.chars().take(500).collect();
-                    let _ = app_handle.emit("uia_drag_test_event", serde_json::json!({
-                        "type": "tool_end",
-                        "tool_name": name,
-                        "input_summary": input_summary,
-                        "result_summary": result_summary,
-                        "is_error": is_error,
-                        "duration_ms": dur,
-                    }));
+                    let _ = app_handle.emit(
+                        "uia_drag_test_event",
+                        serde_json::json!({
+                            "type": "tool_end",
+                            "tool_name": name,
+                            "input_summary": input_summary,
+                            "result_summary": result_summary,
+                            "is_error": is_error,
+                            "duration_ms": dur,
+                        }),
+                    );
                     tool_records_clone.lock().await.push(ToolCallRecord {
                         tool_name: name,
                         input_summary,

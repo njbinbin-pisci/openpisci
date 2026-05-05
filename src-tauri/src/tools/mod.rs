@@ -5,13 +5,13 @@ pub mod call_fish;
 pub mod call_koi;
 pub mod chat_ui;
 pub mod desktop_automation;
-pub mod system_info;
 pub mod im_send;
 #[cfg(target_os = "windows")]
 pub mod office;
 #[cfg(target_os = "windows")]
 pub mod powershell;
 pub mod skill_list;
+pub mod system_info;
 #[cfg(target_os = "windows")]
 pub mod wmi_tool;
 

@@ -103,7 +103,13 @@ impl SystemInfoTool {
 async fn cpu_info() -> String {
     let lines = read_commands(&[
         ("lscpu", &["-e=CPU,MAXMHZ,MHZ"]),
-        ("sh", &["-c", "grep 'model name' /proc/cpuinfo | head -1 | cut -d: -f2"]),
+        (
+            "sh",
+            &[
+                "-c",
+                "grep 'model name' /proc/cpuinfo | head -1 | cut -d: -f2",
+            ],
+        ),
         ("sh", &["-c", "nproc"]),
     ])
     .await;
@@ -111,12 +117,15 @@ async fn cpu_info() -> String {
         "=== CPU ===\n  Model: {}\n  Cores: {}\n  Frequencies (MHz):\n{}",
         lines.get(1).map(|s| s.trim()).unwrap_or("unknown"),
         lines.get(2).map(|s| s.trim()).unwrap_or("unknown"),
-        lines.first().map(|s| {
-            s.lines()
-                .map(|l| format!("    {}", l.trim()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or_default(),
+        lines
+            .first()
+            .map(|s| {
+                s.lines()
+                    .map(|l| format!("    {}", l.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
     )
 }
 
@@ -124,35 +133,48 @@ async fn cpu_info() -> String {
 async fn memory_info() -> String {
     let lines = read_commands(&[
         ("free", &["-h"]),
-        ("sh", &["-c", "grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo"]),
+        (
+            "sh",
+            &[
+                "-c",
+                "grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo",
+            ],
+        ),
     ])
     .await;
     format!(
         "=== Memory ===\n{}\n\n  /proc/meminfo:\n{}",
         lines.first().map(|s| s.as_str()).unwrap_or(""),
-        lines.get(1).map(|s| {
-            s.lines()
-                .map(|l| format!("    {}", l.trim().replace(":", ": ")))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or_default(),
+        lines
+            .get(1)
+            .map(|s| {
+                s.lines()
+                    .map(|l| format!("    {}", l.trim().replace(":", ": ")))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
     )
 }
 
 #[cfg(target_os = "linux")]
 async fn disk_info() -> String {
-    let lines = read_commands(&[
-        ("df", &["-h", "-x", "tmpfs", "-x", "devtmpfs", "-x", "squashfs"]),
-    ])
+    let lines = read_commands(&[(
+        "df",
+        &["-h", "-x", "tmpfs", "-x", "devtmpfs", "-x", "squashfs"],
+    )])
     .await;
     format!(
         "=== Disk ===\n{}",
-        lines.first().map(|s| {
-            s.lines()
-                .map(|l| format!("    {}", l.trim()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or_default(),
+        lines
+            .first()
+            .map(|s| {
+                s.lines()
+                    .map(|l| format!("    {}", l.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
     )
 }
 
@@ -165,13 +187,16 @@ async fn network_info() -> String {
     .await;
     format!(
         "=== Network ===\n  Interfaces:\n{}\n  Default route: {}",
-        lines.first().map(|s| {
-            s.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| format!("    {}", l.trim()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or_default(),
+        lines
+            .first()
+            .map(|s| {
+                s.lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(|l| format!("    {}", l.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
         lines.get(1).map(|s| s.trim()).unwrap_or("none"),
     )
 }
@@ -186,30 +211,40 @@ async fn os_info() -> String {
     format!(
         "=== OS ===\n  Kernel: {}\n  Release:\n{}",
         lines.first().map(|s| s.trim()).unwrap_or(""),
-        lines.get(1).map(|s| {
-            s.lines()
-                .filter(|l| !l.trim().is_empty() && l.contains('='))
-                .map(|l| format!("    {}", l.trim().replace("=", " = ")))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or_default(),
+        lines
+            .get(1)
+            .map(|s| {
+                s.lines()
+                    .filter(|l| !l.trim().is_empty() && l.contains('='))
+                    .map(|l| format!("    {}", l.trim().replace("=", " = ")))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
     )
 }
 
 #[cfg(target_os = "linux")]
 async fn gpu_info() -> String {
-    let lines = read_commands(&[
-        ("sh", &["-c", "lspci | grep -i -E 'vga|3d|display' 2>/dev/null || echo 'No GPU detected'"]),
-    ])
+    let lines = read_commands(&[(
+        "sh",
+        &[
+            "-c",
+            "lspci | grep -i -E 'vga|3d|display' 2>/dev/null || echo 'No GPU detected'",
+        ],
+    )])
     .await;
     format!(
         "=== GPU ===\n{}",
-        lines.first().map(|s| {
-            s.lines()
-                .map(|l| format!("    {}", l.trim()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or_else(|| "    No GPU detected".to_string()),
+        lines
+            .first()
+            .map(|s| {
+                s.lines()
+                    .map(|l| format!("    {}", l.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_else(|| "    No GPU detected".to_string()),
     )
 }
 
@@ -231,7 +266,10 @@ async fn process_list(top_n: usize) -> Result<ToolResult> {
         "Top {} processes (by memory):\n  {}\n{}",
         body.len(),
         header,
-        body.iter().map(|l| format!("  {}", l.trim())).collect::<Vec<_>>().join("\n"),
+        body.iter()
+            .map(|l| format!("  {}", l.trim()))
+            .collect::<Vec<_>>()
+            .join("\n"),
     )))
 }
 
@@ -253,7 +291,11 @@ async fn service_list() -> Result<ToolResult> {
         Ok(ToolResult::ok(format!(
             "Services (first {}):\n{}",
             lines.len().min(40),
-            lines.iter().map(|l| format!("  {}", l.trim())).collect::<Vec<_>>().join("\n"),
+            lines
+                .iter()
+                .map(|l| format!("  {}", l.trim()))
+                .collect::<Vec<_>>()
+                .join("\n"),
         )))
     }
 }
@@ -276,22 +318,24 @@ async fn cpu_info() -> String {
 
 #[cfg(target_os = "macos")]
 async fn memory_info() -> String {
-    let lines = read_commands(&[
-        ("vm_stat", &[]),
-        ("sysctl", &["hw.memsize"]),
-    ])
-    .await;
-    let total_bytes: u64 = lines.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+    let lines = read_commands(&[("vm_stat", &[]), ("sysctl", &["hw.memsize"])]).await;
+    let total_bytes: u64 = lines
+        .get(1)
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
     let total_gb = total_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
     format!(
         "=== Memory ===\n  Total: {:.1} GB\n  VM Stats:\n{}",
         total_gb,
-        lines.first().map(|s| {
-            s.lines()
-                .map(|l| format!("    {}", l.trim()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or_default(),
+        lines
+            .first()
+            .map(|s| {
+                s.lines()
+                    .map(|l| format!("    {}", l.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
     )
 }
 
@@ -300,12 +344,15 @@ async fn disk_info() -> String {
     let lines = read_commands(&[("df", &["-h"])]).await;
     format!(
         "=== Disk ===\n{}",
-        lines.first().map(|s| {
-            s.lines()
-                .map(|l| format!("    {}", l.trim()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or_default(),
+        lines
+            .first()
+            .map(|s| {
+                s.lines()
+                    .map(|l| format!("    {}", l.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
     )
 }
 
@@ -318,52 +365,56 @@ async fn network_info() -> String {
     .await;
     format!(
         "=== Network ===\n  Interfaces:\n{}\n  Default route: {}",
-        lines.first().map(|s| {
-            s.lines()
-                .filter(|l| !l.trim().is_empty() && (l.contains("flags=") || l.contains("inet ")))
-                .map(|l| format!("    {}", l.trim()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or_default(),
+        lines
+            .first()
+            .map(|s| {
+                s.lines()
+                    .filter(|l| {
+                        !l.trim().is_empty() && (l.contains("flags=") || l.contains("inet "))
+                    })
+                    .map(|l| format!("    {}", l.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
         lines.get(1).map(|s| s.trim()).unwrap_or("none"),
     )
 }
 
 #[cfg(target_os = "macos")]
 async fn os_info() -> String {
-    let lines = read_commands(&[
-        ("sw_vers", &[]),
-        ("uname", &["-a"]),
-    ])
-    .await;
+    let lines = read_commands(&[("sw_vers", &[]), ("uname", &["-a"])]).await;
     format!(
         "=== OS ===\n  Version:\n{}\n  Kernel: {}",
-        lines.first().map(|s| {
-            s.lines()
-                .map(|l| format!("    {}", l.trim()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or_default(),
+        lines
+            .first()
+            .map(|s| {
+                s.lines()
+                    .map(|l| format!("    {}", l.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
         lines.get(1).map(|s| s.trim()).unwrap_or(""),
     )
 }
 
 #[cfg(target_os = "macos")]
 async fn gpu_info() -> String {
-    let lines = read_commands(&[
-        ("system_profiler", &["SPDisplaysDataType"]),
-    ])
-    .await;
+    let lines = read_commands(&[("system_profiler", &["SPDisplaysDataType"])]).await;
     format!(
         "=== GPU ===\n{}",
-        lines.first().map(|s| {
-            s.lines()
-                .filter(|l| !l.trim().is_empty() && !l.starts_with("Graphics"))
-                .map(|l| format!("    {}", l.trim()))
-                .take(30)
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or("    No GPU info"),
+        lines
+            .first()
+            .map(|s| {
+                s.lines()
+                    .filter(|l| !l.trim().is_empty() && !l.starts_with("Graphics"))
+                    .map(|l| format!("    {}", l.trim()))
+                    .take(30)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or("    No GPU info"),
     )
 }
 
@@ -384,7 +435,10 @@ async fn process_list(top_n: usize) -> Result<ToolResult> {
         "Top {} processes:\n  {}\n{}",
         body.len(),
         header,
-        body.iter().map(|l| format!("  {}", l.trim())).collect::<Vec<_>>().join("\n"),
+        body.iter()
+            .map(|l| format!("  {}", l.trim()))
+            .collect::<Vec<_>>()
+            .join("\n"),
     )))
 }
 
@@ -397,14 +451,22 @@ async fn service_list() -> Result<ToolResult> {
         .map_err(|e| anyhow::anyhow!("launchctl failed: {}", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).take(30).collect();
+    let lines: Vec<&str> = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(30)
+        .collect();
 
     if lines.is_empty() {
         Ok(ToolResult::ok("No service information available."))
     } else {
         Ok(ToolResult::ok(format!(
             "Services (first 30):\n{}",
-            lines.iter().map(|l| format!("  {}", l.trim())).collect::<Vec<_>>().join("\n"),
+            lines
+                .iter()
+                .map(|l| format!("  {}", l.trim()))
+                .collect::<Vec<_>>()
+                .join("\n"),
         )))
     }
 }
@@ -414,8 +476,20 @@ async fn service_list() -> Result<ToolResult> {
 #[cfg(target_os = "windows")]
 async fn cpu_info() -> String {
     let lines = read_commands(&[
-        ("powershell", &["-Command", "Get-WmiObject Win32_Processor | Select-Object -ExpandProperty Name"]),
-        ("powershell", &["-Command", "(Get-WmiObject Win32_ComputerSystem).NumberOfLogicalProcessors"]),
+        (
+            "powershell",
+            &[
+                "-Command",
+                "Get-WmiObject Win32_Processor | Select-Object -ExpandProperty Name",
+            ],
+        ),
+        (
+            "powershell",
+            &[
+                "-Command",
+                "(Get-WmiObject Win32_ComputerSystem).NumberOfLogicalProcessors",
+            ],
+        ),
     ])
     .await;
     format!(
@@ -433,12 +507,15 @@ async fn memory_info() -> String {
     .await;
     format!(
         "=== Memory ===\n{}",
-        lines.first().map(|s| {
-            s.lines()
-                .map(|l| format!("    {}", l.trim()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }).unwrap_or_default(),
+        lines
+            .first()
+            .map(|s| {
+                s.lines()
+                    .map(|l| format!("    {}", l.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default(),
     )
 }
 
@@ -469,8 +546,14 @@ async fn network_info() -> String {
 #[cfg(target_os = "windows")]
 async fn os_info() -> String {
     let lines = read_commands(&[
-        ("powershell", &["-Command", "(Get-WmiObject Win32_OperatingSystem).Caption"]),
-        ("powershell", &["-Command", "(Get-WmiObject Win32_OperatingSystem).Version"]),
+        (
+            "powershell",
+            &["-Command", "(Get-WmiObject Win32_OperatingSystem).Caption"],
+        ),
+        (
+            "powershell",
+            &["-Command", "(Get-WmiObject Win32_OperatingSystem).Version"],
+        ),
     ])
     .await;
     format!(
@@ -482,9 +565,13 @@ async fn os_info() -> String {
 
 #[cfg(target_os = "windows")]
 async fn gpu_info() -> String {
-    let lines = read_commands(&[
-        ("powershell", &["-Command", "Get-WmiObject Win32_VideoController | Select-Object Name,DriverVersion | Format-List"]),
-    ])
+    let lines = read_commands(&[(
+        "powershell",
+        &[
+            "-Command",
+            "Get-WmiObject Win32_VideoController | Select-Object Name,DriverVersion | Format-List",
+        ],
+    )])
     .await;
     format!(
         "=== GPU ===\n{}",
@@ -508,24 +595,39 @@ async fn process_list(top_n: usize) -> Result<ToolResult> {
     Ok(ToolResult::ok(format!(
         "Top {} processes:\n{}",
         top_n,
-        stdout.lines().map(|l| format!("  {}", l)).collect::<Vec<_>>().join("\n"),
+        stdout
+            .lines()
+            .map(|l| format!("  {}", l))
+            .collect::<Vec<_>>()
+            .join("\n"),
     )))
 }
 
 #[cfg(target_os = "windows")]
 async fn service_list() -> Result<ToolResult> {
     let output = Command::new("powershell")
-        .args(["-Command", "Get-Service | Select-Object Name,Status,DisplayName | Format-Table -AutoSize"])
+        .args([
+            "-Command",
+            "Get-Service | Select-Object Name,Status,DisplayName | Format-Table -AutoSize",
+        ])
         .output()
         .await
         .map_err(|e| anyhow::anyhow!("Get-Service failed: {}", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).take(30).collect();
+    let lines: Vec<&str> = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(30)
+        .collect();
 
     Ok(ToolResult::ok(format!(
         "Services (first 30):\n{}",
-        lines.iter().map(|l| format!("  {}", l.trim())).collect::<Vec<_>>().join("\n"),
+        lines
+            .iter()
+            .map(|l| format!("  {}", l.trim()))
+            .collect::<Vec<_>>()
+            .join("\n"),
     )))
 }
 
@@ -536,10 +638,7 @@ async fn read_commands(commands: &[(&str, &[&str])]) -> Vec<String> {
     let futures: Vec<_> = commands
         .iter()
         .map(|(cmd, args)| async move {
-            let output = Command::new(*cmd)
-                .args(*args)
-                .output()
-                .await;
+            let output = Command::new(*cmd).args(*args).output().await;
             match output {
                 Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
                 Err(e) => format!("[{} error: {}]", cmd, e),

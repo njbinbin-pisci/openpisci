@@ -175,127 +175,123 @@ impl Tool for ImSendMessageTool {
             None => None,
         };
 
-        let outbound = if let Some(key) = binding_key {
-            // Explicit binding_key provided — look it up directly.
-            let db = match self.db.as_ref() {
-                Some(d) => d.clone(),
-                None => {
-                    return Ok(ToolResult::err(
-                        "database handle unavailable; cannot resolve binding_key",
-                    ))
-                }
-            };
-            let binding = {
-                let db = db.lock().await;
-                match db.get_im_session_binding(key) {
-                    Ok(Some(b)) => b,
-                    Ok(None) => {
-                        return Ok(ToolResult::err(format!("IM binding '{}' not found", key)))
+        let outbound =
+            if let Some(key) = binding_key {
+                // Explicit binding_key provided — look it up directly.
+                let db = match self.db.as_ref() {
+                    Some(d) => d.clone(),
+                    None => {
+                        return Ok(ToolResult::err(
+                            "database handle unavailable; cannot resolve binding_key",
+                        ))
                     }
-                    Err(err) => {
-                        return Ok(ToolResult::err(format!(
-                            "failed to look up binding '{}': {}",
-                            key, err
-                        )))
+                };
+                let binding = {
+                    let db = db.lock().await;
+                    match db.get_im_session_binding(key) {
+                        Ok(Some(b)) => b,
+                        Ok(None) => {
+                            return Ok(ToolResult::err(format!("IM binding '{}' not found", key)))
+                        }
+                        Err(err) => {
+                            return Ok(ToolResult::err(format!(
+                                "failed to look up binding '{}': {}",
+                                key, err
+                            )))
+                        }
                     }
+                };
+                let routing_state = binding
+                    .routing_state_json
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+                let recipient = if binding.latest_reply_target.trim().is_empty() {
+                    binding.peer_id.clone()
+                } else {
+                    binding.latest_reply_target.clone()
+                };
+                OutboundMessage {
+                    channel: binding.channel.clone(),
+                    recipient,
+                    content: text,
+                    reply_to: input["reply_to"].as_str().map(|s| s.to_string()),
+                    media: media.clone(),
+                    routing_state,
                 }
-            };
-            let routing_state = binding
-                .routing_state_json
-                .as_deref()
-                .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-            let recipient = if binding.latest_reply_target.trim().is_empty() {
-                binding.peer_id.clone()
-            } else {
-                binding.latest_reply_target.clone()
-            };
-            OutboundMessage {
-                channel: binding.channel.clone(),
-                recipient,
-                content: text,
-                reply_to: input["reply_to"].as_str().map(|s| s.to_string()),
-                media: media.clone(),
-                routing_state,
-            }
-        } else if channel_arg.is_some() || recipient_arg.is_some() {
-            // Explicit channel + recipient provided.
-            let channel = match channel_arg {
-                Some(c) => c.to_string(),
-                None => {
-                    return Ok(ToolResult::err(
+            } else if channel_arg.is_some() || recipient_arg.is_some() {
+                // Explicit channel + recipient provided.
+                let channel = match channel_arg {
+                    Some(c) => c.to_string(),
+                    None => return Ok(ToolResult::err(
                         "'channel' is required when 'recipient' is provided without 'binding_key'",
-                    ))
-                }
-            };
-            let recipient = match recipient_arg {
-                Some(r) => r.to_string(),
-                None => {
-                    return Ok(ToolResult::err(
+                    )),
+                };
+                let recipient = match recipient_arg {
+                    Some(r) => r.to_string(),
+                    None => return Ok(ToolResult::err(
                         "'recipient' is required when 'channel' is provided without 'binding_key'",
-                    ))
+                    )),
+                };
+                let routing_state = input.get("routing_state").cloned().filter(|v| !v.is_null());
+                OutboundMessage {
+                    channel,
+                    recipient,
+                    content: text,
+                    reply_to: input["reply_to"].as_str().map(|s| s.to_string()),
+                    media,
+                    routing_state,
                 }
-            };
-            let routing_state = input.get("routing_state").cloned().filter(|v| !v.is_null());
-            OutboundMessage {
-                channel,
-                recipient,
-                content: text,
-                reply_to: input["reply_to"].as_str().map(|s| s.to_string()),
-                media,
-                routing_state,
-            }
-        } else {
-            // No explicit addressing — auto-resolve from current session.
-            let db = match self.db.as_ref() {
-                Some(d) => d.clone(),
-                None => {
-                    return Ok(ToolResult::err(
-                        "either 'binding_key' or both 'channel' and 'recipient' are required \
-                         (no database handle to auto-resolve from session)",
-                    ))
-                }
-            };
-            let binding = {
-                let db = db.lock().await;
-                match db.find_im_session_binding_for_session(&_ctx.session_id) {
-                    Ok(Some(b)) => b,
-                    Ok(None) => {
-                        return Ok(ToolResult::err(format!(
-                            "no IM binding found for current session '{}'; \
-                             provide 'binding_key' or 'channel' + 'recipient'",
-                            _ctx.session_id
-                        )))
-                    }
-                    Err(err) => {
-                        return Ok(ToolResult::err(format!(
-                            "failed to look up binding for session '{}': {}",
-                            _ctx.session_id, err
-                        )))
-                    }
-                }
-            };
-            info!(
-                "im_send_message: auto-resolved binding_key='{}' from session_id='{}'",
-                binding.binding_key, _ctx.session_id
-            );
-            let routing_state = binding
-                .routing_state_json
-                .as_deref()
-                .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-            let recipient = if binding.latest_reply_target.trim().is_empty() {
-                binding.peer_id.clone()
             } else {
-                binding.latest_reply_target.clone()
+                // No explicit addressing — auto-resolve from current session.
+                let db =
+                    match self.db.as_ref() {
+                        Some(d) => d.clone(),
+                        None => return Ok(ToolResult::err(
+                            "either 'binding_key' or both 'channel' and 'recipient' are required \
+                         (no database handle to auto-resolve from session)",
+                        )),
+                    };
+                let binding = {
+                    let db = db.lock().await;
+                    match db.find_im_session_binding_for_session(&_ctx.session_id) {
+                        Ok(Some(b)) => b,
+                        Ok(None) => {
+                            return Ok(ToolResult::err(format!(
+                                "no IM binding found for current session '{}'; \
+                             provide 'binding_key' or 'channel' + 'recipient'",
+                                _ctx.session_id
+                            )))
+                        }
+                        Err(err) => {
+                            return Ok(ToolResult::err(format!(
+                                "failed to look up binding for session '{}': {}",
+                                _ctx.session_id, err
+                            )))
+                        }
+                    }
+                };
+                info!(
+                    "im_send_message: auto-resolved binding_key='{}' from session_id='{}'",
+                    binding.binding_key, _ctx.session_id
+                );
+                let routing_state = binding
+                    .routing_state_json
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+                let recipient = if binding.latest_reply_target.trim().is_empty() {
+                    binding.peer_id.clone()
+                } else {
+                    binding.latest_reply_target.clone()
+                };
+                OutboundMessage {
+                    channel: binding.channel.clone(),
+                    recipient,
+                    content: text,
+                    reply_to: input["reply_to"].as_str().map(|s| s.to_string()),
+                    media,
+                    routing_state,
+                }
             };
-            OutboundMessage {
-                channel: binding.channel.clone(),
-                recipient,
-                content: text,
-                reply_to: input["reply_to"].as_str().map(|s| s.to_string()),
-                media,
-                routing_state,
-            }
-        };
 
         match gateway.send(&outbound).await {
             Ok(()) => {

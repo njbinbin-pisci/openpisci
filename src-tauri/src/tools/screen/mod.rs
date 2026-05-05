@@ -262,12 +262,7 @@ pub(crate) fn encode_and_return_with_offset(
 
 /// Draw a coordinate grid on an RGBA image.
 /// Grid lines are semi-transparent white/black. Labels show absolute screen coords.
-fn draw_coordinate_grid(
-    img: &mut image::RgbaImage,
-    origin_x: i32,
-    origin_y: i32,
-    spacing: u32,
-) {
+fn draw_coordinate_grid(img: &mut image::RgbaImage, origin_x: i32, origin_y: i32, spacing: u32) {
     let (w, h) = img.dimensions();
 
     // Find the first grid line >= 0 in image space
@@ -328,7 +323,7 @@ fn draw_coordinate_grid(
             if xi % label_interval == 0 && yi % label_interval == 0 {
                 let screen_x = origin_x + lx as i32;
                 let screen_y = origin_y + ly as i32;
-                let label = format!("{},{}" , screen_x, screen_y);
+                let label = format!("{},{}", screen_x, screen_y);
                 draw_label(img, lx + 2, ly + 2, &label);
             }
             ly += spacing;

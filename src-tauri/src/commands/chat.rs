@@ -1604,8 +1604,12 @@ pub async fn run_agent_headless(
                     String::new()
                 } else {
                     let db = state.db.lock().await;
-                    match db.search_memories_scoped(&query, &memory_owner_id, pool_session_id.as_deref(), 5)
-                    {
+                    match db.search_memories_scoped(
+                        &query,
+                        &memory_owner_id,
+                        pool_session_id.as_deref(),
+                        5,
+                    ) {
                         Ok(mems) if !mems.is_empty() => {
                             let mut ctx = String::from("\n\n## Relevant Memory\n");
                             for m in &mems {
