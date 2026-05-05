@@ -2740,7 +2740,7 @@ impl AgentLoop {
         // for this turn so they don't pollute the conversation history.
         let was_cancelled = cancel.load(Ordering::Relaxed);
         if was_cancelled {
-            if let (Some(ref db_arc), Some(idx)) = (self.db.as_ref(), turn_index) {
+            if let (Some(db_arc), Some(idx)) = (self.db.as_ref(), turn_index) {
                 let db = db_arc.lock().await;
                 match db.delete_messages_by_turn_index(&ctx.session_id, idx) {
                     Ok(deleted) if deleted > 0 => {

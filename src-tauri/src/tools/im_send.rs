@@ -9,7 +9,7 @@
 //! *same* connection to push outbound messages without requiring a
 //! second HTTP roundtrip or a separate token cache.
 //!
-//! Two addressing modes:
+//! Two (+1 auto) addressing modes:
 //!   1. `binding_key` — preferred for replying to an inbound IM
 //!      conversation. Looks up [`crate::store::db::ImSessionBinding`]
 //!      and reuses its `latest_reply_target` + `routing_state_json`,
@@ -19,6 +19,11 @@
 //!      can address by raw recipient identifier (e.g. `userid` for
 //!      WeCom or `open_id` for Feishu). The channel must already be
 //!      registered with `GatewayManager`.
+//!   3. auto-resolve — when no explicit addressing is provided, the
+//!      tool resolves the IM binding from the current `session_id`
+//!      via [`Database::find_im_session_binding_for_session`]. This
+//!      works automatically in IM-driven sessions (WeChat, Feishu, etc.)
+//!      without the agent needing to know its `binding_key`.
 //!
 //! If the requested IM channel is not connected (`channel_enabled =
 //! false`), the tool returns a clean error rather than silently
@@ -51,6 +56,7 @@ impl Tool for ImSendMessageTool {
          \n\nADDRESSING (use one of):\
          \n- 'binding_key': preferred when replying to an existing IM conversation. The binding stores the channel name, the latest reply target, and any channel-specific routing state (e.g. WeCom 'req_id', DingTalk 'sessionWebhook'). Pass the 'binding_key' you received from an inbound IM message handler.\
          \n- 'channel' + 'recipient': for proactive (unprompted) messages. 'channel' is a registered channel name ('wecom', 'feishu', 'dingtalk', 'wechat', ...). 'recipient' is the channel-native target id (WeCom userid / Feishu open_id / DingTalk staffId / etc.). Optional 'routing_state' is forwarded verbatim if you know the channel-specific shape.\
+         \n- auto-resolve: when none of the above are provided, the tool automatically resolves the IM binding from the current session. This works when you are in an IM-driven conversation (e.g. replying to a WeChat/Feishu user) — no explicit addressing parameters are needed.\
          \n\nThis tool returns an error when the requested channel is not currently connected. Channels are configured separately under Settings → IM; this tool only consumes the existing transport, it does NOT enable a channel.\
          \n\nOptional 'file_path' sends a local file attachment when the channel supports media upload. WeChat supports image/* and generic file attachments through iLink CDN upload. \
          \n\nKeep messages short and use Markdown for emphasis where the underlying channel supports it. Avoid sending walls of debug output."
@@ -170,6 +176,7 @@ impl Tool for ImSendMessageTool {
         };
 
         let outbound = if let Some(key) = binding_key {
+            // Explicit binding_key provided — look it up directly.
             let db = match self.db.as_ref() {
                 Some(d) => d.clone(),
                 None => {
@@ -210,12 +217,13 @@ impl Tool for ImSendMessageTool {
                 media: media.clone(),
                 routing_state,
             }
-        } else {
+        } else if channel_arg.is_some() || recipient_arg.is_some() {
+            // Explicit channel + recipient provided.
             let channel = match channel_arg {
                 Some(c) => c.to_string(),
                 None => {
                     return Ok(ToolResult::err(
-                        "either 'binding_key' or both 'channel' and 'recipient' are required",
+                        "'channel' is required when 'recipient' is provided without 'binding_key'",
                     ))
                 }
             };
@@ -223,13 +231,64 @@ impl Tool for ImSendMessageTool {
                 Some(r) => r.to_string(),
                 None => {
                     return Ok(ToolResult::err(
-                        "'recipient' is required when sending without 'binding_key'",
+                        "'recipient' is required when 'channel' is provided without 'binding_key'",
                     ))
                 }
             };
             let routing_state = input.get("routing_state").cloned().filter(|v| !v.is_null());
             OutboundMessage {
                 channel,
+                recipient,
+                content: text,
+                reply_to: input["reply_to"].as_str().map(|s| s.to_string()),
+                media,
+                routing_state,
+            }
+        } else {
+            // No explicit addressing — auto-resolve from current session.
+            let db = match self.db.as_ref() {
+                Some(d) => d.clone(),
+                None => {
+                    return Ok(ToolResult::err(
+                        "either 'binding_key' or both 'channel' and 'recipient' are required \
+                         (no database handle to auto-resolve from session)",
+                    ))
+                }
+            };
+            let binding = {
+                let db = db.lock().await;
+                match db.find_im_session_binding_for_session(&_ctx.session_id) {
+                    Ok(Some(b)) => b,
+                    Ok(None) => {
+                        return Ok(ToolResult::err(format!(
+                            "no IM binding found for current session '{}'; \
+                             provide 'binding_key' or 'channel' + 'recipient'",
+                            _ctx.session_id
+                        )))
+                    }
+                    Err(err) => {
+                        return Ok(ToolResult::err(format!(
+                            "failed to look up binding for session '{}': {}",
+                            _ctx.session_id, err
+                        )))
+                    }
+                }
+            };
+            info!(
+                "im_send_message: auto-resolved binding_key='{}' from session_id='{}'",
+                binding.binding_key, _ctx.session_id
+            );
+            let routing_state = binding
+                .routing_state_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+            let recipient = if binding.latest_reply_target.trim().is_empty() {
+                binding.peer_id.clone()
+            } else {
+                binding.latest_reply_target.clone()
+            };
+            OutboundMessage {
+                channel: binding.channel.clone(),
                 recipient,
                 content: text,
                 reply_to: input["reply_to"].as_str().map(|s| s.to_string()),
