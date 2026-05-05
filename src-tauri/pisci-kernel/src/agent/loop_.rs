@@ -201,8 +201,11 @@ impl LoopDetectorState {
         if is_research {
             // Count only calls with the same tool+input — different operations
             // like browser launch/navigate/type/press are not repetitions.
-            let same_input_count =
-                self.count_recent_tool_family_same_input(pending_name, pending_hash, RESEARCH_RECENT_WINDOW) + 1;
+            let same_input_count = self.count_recent_tool_family_same_input(
+                pending_name,
+                pending_hash,
+                RESEARCH_RECENT_WINDOW,
+            ) + 1;
             if same_input_count >= RESEARCH_CRITICAL_THRESHOLD {
                 return LoopDetectionResult {
                     level: LoopLevel::Critical,

@@ -398,11 +398,7 @@ impl ProcessControlTool {
                 )))
             } else {
                 let lines: Vec<&str> = stdout.lines().collect();
-                let header = format!(
-                    "{} process(es) matching '{}':",
-                    lines.len(),
-                    filter
-                );
+                let header = format!("{} process(es) matching '{}':", lines.len(), filter);
                 let body = lines
                     .iter()
                     .enumerate()
@@ -480,9 +476,7 @@ if (-not $found) {{
                 .await
             {
                 Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout)
-                        .trim()
-                        .to_string();
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     if !stdout.is_empty() {
                         let window_ids: Vec<&str> = stdout.lines().collect();
                         return Ok(ToolResult::ok(format!(
@@ -534,9 +528,7 @@ if (-not $found) {{
                 .await
             {
                 Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout)
-                        .trim()
-                        .to_string();
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     if !stdout.is_empty() && stdout != "missing value" {
                         return Ok(ToolResult::ok(format!(
                             "Found windows matching '{}':\n{}",
@@ -545,10 +537,7 @@ if (-not $found) {{
                     }
                 }
                 Err(e) => {
-                    return Ok(ToolResult::err(format!(
-                        "osascript failed: {}",
-                        e
-                    )));
+                    return Ok(ToolResult::err(format!("osascript failed: {}", e)));
                 }
             }
             sleep(Duration::from_millis(500)).await;

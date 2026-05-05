@@ -173,17 +173,8 @@ pub async fn execute_todo_turn(
     }
 
     let koi_id_for_restore = koi.id.clone();
-    let result = execute_todo_turn_inner(
-        store,
-        sink,
-        subagent,
-        cfg,
-        koi,
-        todo,
-        pool_session,
-        args,
-    )
-    .await;
+    let result =
+        execute_todo_turn_inner(store, sink, subagent, cfg, koi, todo, pool_session, args).await;
 
     // Always restore Koi to idle regardless of success or failure.
     {
@@ -813,11 +804,7 @@ pub async fn resume_blocked_todo(
     let cfg_cl = cfg.clone();
     let owner_id = owner.id.clone();
     let todo_id = todo.id.clone();
-    let session_id = format!(
-        "koi_task_{}_{}",
-        owner.id,
-        &todo.id[..8.min(todo.id.len())]
-    );
+    let session_id = format!("koi_task_{}_{}", owner.id, &todo.id[..8.min(todo.id.len())]);
     let pool_id_for_task = pool_session.as_ref().map(|p| p.id.clone());
     tokio::spawn(async move {
         let args = ExecuteTodoArgs {
@@ -1085,7 +1072,11 @@ pub async fn handle_mention(
         let cfg_cl = cfg.clone();
         let owner_id = target.koi.id.clone();
         let todo_id = todo.id.clone();
-        let session_id = format!("koi_task_{}_{}", target.koi.id, &todo.id[..8.min(todo.id.len())]);
+        let session_id = format!(
+            "koi_task_{}_{}",
+            target.koi.id,
+            &todo.id[..8.min(todo.id.len())]
+        );
         let sink_cl = sink.clone();
         tokio::spawn(async move {
             let args = ExecuteTodoArgs {
@@ -1294,7 +1285,11 @@ pub async fn assign_and_execute(
         koi_id: koi_def.id.clone(),
         todo_id: todo.id.clone(),
         assign_msg_id: None,
-        session_id: format!("koi_task_{}_{}", koi_def.id, &todo.id[..8.min(todo.id.len())]),
+        session_id: format!(
+            "koi_task_{}_{}",
+            koi_def.id,
+            &todo.id[..8.min(todo.id.len())]
+        ),
         extra_tool_profile: Vec::new(),
         extra_system_context: None,
     };

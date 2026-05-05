@@ -185,7 +185,9 @@ impl Tool for ShellTool {
             .map(|env_obj| {
                 env_obj
                     .iter()
-                    .filter_map(|(key, value)| value.as_str().map(|val| (key.clone(), val.to_string())))
+                    .filter_map(|(key, value)| {
+                        value.as_str().map(|val| (key.clone(), val.to_string()))
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -420,7 +422,7 @@ fn is_permission_error(exit_code: i32, stdout: &str, stderr: &str) -> bool {
     let combined = format!("{} {}", stdout, stderr).to_lowercase();
     #[cfg(target_os = "windows")]
     {
-    // Common Windows permission error strings
+        // Common Windows permission error strings
         return combined.contains("access is denied")
             || combined.contains("access denied")
             || combined.contains("拒绝访问")
