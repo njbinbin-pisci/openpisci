@@ -6,6 +6,31 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.7.11] - 2026-05-05
+
+### Fixed
+- **WeChat IM duplicate reply**: fixed reply routing in `run_im_agent_and_send_reply` to use
+  `msg.reply_target` directly instead of the overridden DB binding, preventing cascading
+  reply-target conflicts when multiple IM messages arrive in quick succession.
+- **WeChat IM message ordering**: fixed `im_session_updated` handler to clear `frozenBubble`
+  before starting a new agent run, preventing stale collapsed bubbles from a previous turn
+  from appearing in the middle of the message list when displayed via
+  `setMessagesWithFrozen`.
+
+---
+
+## [0.7.10] - 2026-05-05
+
+### Fixed
+- **CI**: cross-platform compilation and clippy fixes.
+- **Loop detection**: raised loop-detection thresholds to prevent premature tool blocking.
+
+### Changed
+- `desktop_automation` / `uia` code formatting (`cargo fmt`).
+- `system_info` platform-specific refactoring.
+
+---
+
 ## [0.7.9] - 2026-05-05
 
 ### Fixed
