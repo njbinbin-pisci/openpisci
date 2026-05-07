@@ -26,10 +26,17 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex, Notify};
 use tracing::{info, warn};
+
+/// TTL for the inbound-message dedup cache. iLink occasionally re-delivers
+/// the same `message_id` after a transient network/cursor hiccup; without
+/// dedup we would run the agent multiple times for the same user turn and
+/// emit duplicate replies.
+const SEEN_MESSAGE_TTL_SECS: u64 = 300;
 
 type Aes128EcbEnc = ecb::Encryptor<aes::Aes128>;
 
@@ -67,6 +74,9 @@ struct WechatState {
     sync_buf: Mutex<String>,
     /// Latest reply routing context keyed by WeChat peer id.
     reply_contexts: Mutex<HashMap<String, ReplyContext>>,
+    /// Message IDs we have already forwarded to the agent, with the time we
+    /// saw them. Used to drop duplicate deliveries from iLink.
+    seen_messages: Mutex<HashMap<String, Instant>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -82,7 +92,26 @@ impl WechatState {
             notify: Notify::new(),
             sync_buf: Mutex::new(String::new()),
             reply_contexts: Mutex::new(HashMap::new()),
+            seen_messages: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Return true if this is the first time we have seen `message_id`.
+    /// Expires entries older than `SEEN_MESSAGE_TTL_SECS` on every call so
+    /// the map cannot grow without bound.
+    async fn mark_message_fresh(&self, message_id: &str) -> bool {
+        if message_id.is_empty() {
+            // No stable id — cannot dedup, treat as fresh.
+            return true;
+        }
+        let mut seen = self.seen_messages.lock().await;
+        let now = Instant::now();
+        seen.retain(|_, t| now.duration_since(*t).as_secs() < SEEN_MESSAGE_TTL_SECS);
+        if seen.contains_key(message_id) {
+            return false;
+        }
+        seen.insert(message_id.to_string(), now);
+        true
     }
 
     async fn remember_reply_context(&self, user_id: &str, session_id: &str, context_token: &str) {
@@ -408,6 +437,13 @@ async fn listen_ilink_updates(
 
         cache_reply_contexts_from_payload(&state, &payload).await;
         for inbound in extract_inbound_messages(&payload) {
+            if !state.mark_message_fresh(&inbound.id).await {
+                info!(
+                    "WeChat dropping duplicate inbound message id={} from {}",
+                    inbound.id, inbound.sender
+                );
+                continue;
+            }
             let sender = inbound.sender.clone();
             let preview = inbound.content.chars().take(60).collect::<String>();
             info!("WeChat inbound from {}: {}", sender, preview);
@@ -564,6 +600,13 @@ async fn handle_getupdates(
     // `msgs` is present (push-style variant).
     cache_reply_contexts_from_payload(state, body).await;
     for inbound in extract_inbound_messages(body) {
+        if !state.mark_message_fresh(&inbound.id).await {
+            info!(
+                "WeChat dropping duplicate inbound message id={} from {}",
+                inbound.id, inbound.sender
+            );
+            continue;
+        }
         let _ = tx.send(inbound).await;
     }
 
@@ -1115,9 +1158,18 @@ fn weixin_message_to_inbound(msg: &Value) -> Option<InboundMessage> {
         return None;
     }
 
+    // iLink may serialize `message_id` either as a number or as a string —
+    // accept both so the id stays stable across re-deliveries and lets the
+    // dedup cache in WechatState actually match duplicates.
     let msg_id = msg["message_id"]
         .as_u64()
         .map(|n| n.to_string())
+        .or_else(|| {
+            msg["message_id"]
+                .as_str()
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     // Extract text from the first TEXT item.
@@ -1521,6 +1573,43 @@ mod tests {
         assert_eq!(file["type"], MESSAGE_ITEM_TYPE_FILE);
         assert_eq!(file["file_item"]["file_name"], "doc.pdf");
         assert_eq!(file["file_item"]["len"], "42");
+    }
+
+    #[tokio::test]
+    async fn mark_message_fresh_rejects_duplicate_ids() {
+        let state = WechatState::new();
+        assert!(state.mark_message_fresh("msg-1").await);
+        assert!(!state.mark_message_fresh("msg-1").await);
+        assert!(state.mark_message_fresh("msg-2").await);
+        // Empty id is not cacheable — always considered fresh so we do not
+        // accidentally collapse unrelated messages that lack a stable id.
+        assert!(state.mark_message_fresh("").await);
+        assert!(state.mark_message_fresh("").await);
+    }
+
+    #[test]
+    fn extracts_stable_msg_id_from_string_form_message_id() {
+        // iLink has been observed to serialize `message_id` as a string in
+        // some payload variants; the inbound must keep a stable id so the
+        // dedup cache in WechatState can match re-deliveries.
+        let payload = json!({
+            "msgs": [{
+                "message_id": "wx-msg-abc",
+                "from_user_id": "wx-user-1",
+                "session_id": "",
+                "message_type": 1,
+                "create_time_ms": 1700000000_u64,
+                "context_token": "ctx-str",
+                "item_list": [{
+                    "type": 1,
+                    "text_item": { "text": "hi" }
+                }]
+            }]
+        });
+
+        let messages = extract_inbound_messages(&payload);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, "wx-msg-abc");
     }
 
     #[tokio::test]

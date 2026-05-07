@@ -6,6 +6,31 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.7.13] - 2026-05-07
+
+### Fixed
+- **WeChat IM duplicate replies**: the iLink gateway now deduplicates inbound
+  messages by `message_id` (5-minute TTL) so the agent is not re-run on
+  re-deliveries from `getupdates`. Previously, when iLink replayed the same
+  `message_id` after a transient network/cursor hiccup, the agent would run
+  again with an essentially identical context and emit the same reply to the
+  user — making it look like the bot was stuck in a loop, replying with the
+  same text regardless of what the user asked next.
+- **Stable `message_id` parsing**: `weixin_message_to_inbound` now accepts
+  both numeric and string forms of `message_id` (iLink has been observed to
+  serialize it as a string in some payload variants). Falling back to a
+  random UUID for a known id would have defeated the new dedup cache, so
+  the UUID fallback is now reserved only for payloads that truly carry no id.
+
+### Added
+- `WechatState::seen_messages` cache and `mark_message_fresh` helper, wired
+  into both the direct long-poll path (`listen_ilink_updates`) and the
+  local HTTP plugin fallback (`handle_getupdates`).
+- Tests `mark_message_fresh_rejects_duplicate_ids` and
+  `extracts_stable_msg_id_from_string_form_message_id`.
+
+---
+
 ## [0.7.12] - 2026-05-07
 
 ### Fixed
