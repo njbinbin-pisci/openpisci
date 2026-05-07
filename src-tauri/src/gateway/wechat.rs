@@ -1179,7 +1179,17 @@ fn weixin_message_to_inbound(msg: &Value) -> Option<InboundMessage> {
 }
 
 fn wechat_non_text_content(items: &[Value]) -> Option<String> {
-    if items.iter().any(is_wechat_voice_item) {
+    if let Some(voice_item) = items.iter().find(|it| is_wechat_voice_item(it)) {
+        // iLink performs server-side ASR on short voice messages and returns
+        // the transcript in `voice_item.text`. If present, inline it so the
+        // agent sees something like `[语音消息] 再测试一下`
+        // instead of the bare `[语音消息]` placeholder.
+        if let Some(text) = extract_wechat_voice_text(voice_item) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(format!("[语音消息] {}", trimmed));
+            }
+        }
         return Some("[语音消息]".to_string());
     }
     if items
@@ -1210,8 +1220,40 @@ fn is_wechat_voice_item(item: &Value) -> bool {
         || item.get("speech_item").is_some()
 }
 
+/// Extract the server-side ASR transcript iLink returns inside a voice item.
+///
+/// The iLink payload places the transcript at `voice_item.text`, but we also
+/// check `audio_item.text` / `speech_item.text` and a top-level `text` field
+/// defensively in case the protocol wire format differs across versions.
+fn extract_wechat_voice_text(item: &Value) -> Option<String> {
+    for key in ["voice_item", "audio_item", "speech_item"] {
+        if let Some(inner) = item.get(key) {
+            if let Some(t) = inner.get("text").and_then(|v| v.as_str()) {
+                if !t.is_empty() {
+                    return Some(t.to_string());
+                }
+            }
+        }
+    }
+    item.get("text")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 fn wechat_media_placeholder(msg_id: &str, items: &[Value]) -> Option<MediaAttachment> {
-    if items.iter().any(is_wechat_voice_item) {
+    if let Some(voice_item) = items.iter().find(|it| is_wechat_voice_item(it)) {
+        // If iLink already gave us the transcript, we expose the text as the
+        // inbound content (see `wechat_non_text_content`) and intentionally
+        // skip the media placeholder so downstream code does NOT tell the
+        // agent to "try to transcribe/fetch" a file that was never written
+        // to disk.
+        let has_transcript = extract_wechat_voice_text(voice_item)
+            .map(|t| !t.trim().is_empty())
+            .unwrap_or(false);
+        if has_transcript {
+            return None;
+        }
         return Some(MediaAttachment {
             media_type: "audio/unknown".to_string(),
             url: Some(format!("wechat://message/{}", msg_id)),
@@ -1332,7 +1374,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_wechat_voice_message_placeholder() {
+    fn preserves_wechat_voice_message_placeholder_when_no_transcript() {
         let payload = json!({
             "ret": 0,
             "msgs": [{
@@ -1355,6 +1397,41 @@ mod tests {
         let media = messages[0].media.as_ref().expect("voice media placeholder");
         assert_eq!(media.media_type, "audio/unknown");
         assert_eq!(media.url.as_deref(), Some("wechat://message/456"));
+    }
+
+    #[test]
+    fn inlines_wechat_voice_transcript_when_provided() {
+        // iLink's getupdates response carries a server-side ASR transcript in
+        // `voice_item.text` whenever the audio is short enough. In that case
+        // we must deliver the transcript to the agent instead of a useless
+        // placeholder + fabricated `.bin` filename.
+        let payload = json!({
+            "ret": 0,
+            "msgs": [{
+                "message_id": 789,
+                "from_user_id": "wx-user-1",
+                "session_id": "",
+                "message_type": 1,
+                "create_time_ms": 1700000000_u64,
+                "context_token": "ctx-voice-2",
+                "item_list": [{
+                    "type": 3,
+                    "voice_item": {
+                        "playtime": 2614,
+                        "sample_rate": 16000,
+                        "text": "再测试一下"
+                    }
+                }]
+            }]
+        });
+
+        let messages = extract_inbound_messages(&payload);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "[语音消息] 再测试一下");
+        assert!(
+            messages[0].media.is_none(),
+            "transcript path must not attach fake media placeholder"
+        );
     }
 
     #[test]

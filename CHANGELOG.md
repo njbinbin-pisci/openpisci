@@ -6,6 +6,29 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.7.12] - 2026-05-07
+
+### Fixed
+- **WeChat voice messages now deliver ASR transcript**: iLink's `getupdates`
+  payload carries a server-side transcript in `voice_item.text`. Previously
+  the WeChat gateway discarded this field and handed the agent a fake
+  `wechat_voice_<id>.bin` filename + `wechat://message/<id>` URL with no
+  bytes, causing the agent to waste turns trying to `find` / `ls` a file
+  that was never written to disk. The gateway now inlines the transcript
+  as `[语音消息] <transcript>` and skips the media placeholder entirely
+  when a transcript is present.
+  (Non-WeChat IM channels have not been audited for the same defect and
+  are deferred to a later release.)
+
+### Added
+- Helper `extract_wechat_voice_text` in `gateway/wechat.rs` that pulls
+  `voice_item.text` / `audio_item.text` / `speech_item.text` defensively.
+- Test `inlines_wechat_voice_transcript_when_provided` covering the new
+  transcript path; renamed the legacy test to
+  `preserves_wechat_voice_message_placeholder_when_no_transcript`.
+
+---
+
 ## [0.7.11] - 2026-05-05
 
 ### Fixed
