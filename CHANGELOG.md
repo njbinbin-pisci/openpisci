@@ -6,6 +6,18 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.7.18] - 2026-05-07
+
+### Fixed
+- **WeChat image attachment "expired or cleared"**: the `image_item` payload
+  was missing the `"len"` field (raw file size in bytes). The `file_item`
+  already carried `len` and `mid_size` after v0.7.15, but `image_item` only
+  had `mid_size`. WeChat clients use `len` to validate the decrypted image
+  size before rendering; without it the client shows "image expired or cleared".
+  Fixed in [wechat.rs](src-tauri/src/gateway/wechat.rs) `build_media_message_item`.
+
+---
+
 ## [0.7.17] - 2026-05-07
 
 ### Fixed

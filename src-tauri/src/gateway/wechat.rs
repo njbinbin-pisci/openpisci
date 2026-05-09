@@ -1048,6 +1048,7 @@ fn build_media_message_item(media: &MediaAttachment, uploaded: &UploadedWechatMe
                     "aes_key": aes_key_b64,
                     "encrypt_type": 1
                 },
+                "len": uploaded.raw_size,
                 "mid_size": uploaded.encrypted_size
             }
         })
@@ -1560,6 +1561,7 @@ mod tests {
             image["image_item"]["media"]["encrypt_query_param"],
             "dl-param"
         );
+        assert_eq!(image["image_item"]["len"], 42);
         assert_eq!(image["image_item"]["mid_size"], 48);
 
         let file = build_media_message_item(
