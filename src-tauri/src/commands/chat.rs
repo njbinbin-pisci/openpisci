@@ -1567,8 +1567,9 @@ pub async fn run_agent_headless(
             );
         } else {
             tracing::info!(
-                "run_agent_headless: inserting user message for {}",
-                session_id
+                "run_agent_headless: inserting user message for {}, content_preview={}",
+                session_id,
+                effective_user_message.chars().take(100).collect::<String>()
             );
             let _ = db.append_message(session_id, "user", &effective_user_message);
         }
@@ -1772,6 +1773,32 @@ pub async fn run_agent_headless(
         session_context.llm_messages.len(),
         session_id
     );
+    // Log the last 3 messages in context for debugging
+    for (i, msg) in session_context.llm_messages.iter().rev().take(3).enumerate() {
+        let preview = match &msg.content {
+            pisci_kernel::llm::MessageContent::Text(t) => t.chars().take(80).collect::<String>(),
+            pisci_kernel::llm::MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| {
+                    if let pisci_kernel::llm::ContentBlock::Text { text } = b {
+                        Some(text.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("")
+                .chars()
+                .take(80)
+                .collect::<String>(),
+        };
+        tracing::info!(
+            "run_agent_headless: context msg[-{}] role={} preview={}",
+            i + 1,
+            msg.role,
+            preview
+        );
+    }
     let mut llm_messages = sanitize_tool_use_result_pairing(session_context.llm_messages);
     tracing::info!(
         "run_agent_headless: context has {} LLM messages after sanitize for {}",
