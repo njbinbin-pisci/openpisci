@@ -628,6 +628,12 @@ fn run_impl() {
                                     let _session_guard = session_lock.lock().await;
                                     info!("IM session lock acquired for {}", session_id);
 
+                                    // Track processed message IDs to prevent duplicate agent runs
+                                    // when the same message slips through the gateway dedup cache
+                                    // (race condition during rapid re-deliveries).
+                                    let mut processed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+                                    processed_ids.insert(msg.id.clone());
+
                                     run_im_agent_and_send_reply(&state_ref, &gw, &session_id, &msg).await;
 
                                     // Drain any queued messages
@@ -640,6 +646,15 @@ fn run_impl() {
                                         };
 
                                         if let Some(queued_msg) = next_msg {
+                                            // Skip if we've already processed this message ID
+                                            if !processed_ids.insert(queued_msg.id.clone()) {
+                                                info!(
+                                                    "Skipping duplicate queued message id={} for session {}",
+                                                    queued_msg.id, session_id
+                                                );
+                                                continue;
+                                            }
+
                                             info!("Processing queued message for session {}", session_id);
                                             let _ = state_ref.app_handle.emit("im_session_updated", &session_id);
                                             run_im_agent_and_send_reply(&state_ref, &gw, &session_id, &queued_msg).await;
