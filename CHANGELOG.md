@@ -6,6 +6,34 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.7.17] - 2026-05-07
+
+### Fixed
+- **IM agent repeats stale reply / context never updates (clock-skew bug)**:
+  the message store ordered conversation history with `ORDER BY created_at DESC`.
+  When the system clock briefly jumped forward (timezone confusion or NTP
+  correction), messages persisted during that window received future-dated
+  timestamps. After the clock returned to normal, every newly-inserted user
+  message had an *earlier* `created_at` than those stuck messages, so SQL
+  sorting permanently kept the stale future-dated turn at the "latest"
+  position. This caused two cascading failures in IM sessions:
+  1. The `already_inserted` dedup check (which compares against the latest
+     row by `created_at`) always saw a stuck assistant message and re-inserted
+     the same user message twice per turn.
+  2. `build_session_message_context_from_db` loaded conversation history with
+     the new user message ranked older than the stuck turn, so the agent
+     received a context where the latest user message was an empty
+     tool-results carrier — and replied by repeating the same stale assistant
+     turn no matter what the user actually wrote.
+  
+  Fixed by switching `get_messages_latest`, `get_messages`, and
+  `get_messages_older` in [db.rs](src-tauri/pisci-kernel/src/store/db.rs) to
+  sort by `rowid` (SQLite insert order) instead of `created_at`. `rowid` is
+  monotonically increasing and immune to clock drift, so insert order is the
+  source of truth for "newest message" regardless of system time anomalies.
+
+---
+
 ## [0.7.16] - 2026-05-07
 
 ### Fixed

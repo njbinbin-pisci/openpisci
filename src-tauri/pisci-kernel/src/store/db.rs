@@ -1328,9 +1328,11 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<ChatMessage>> {
+        // Sort by rowid (insert order) rather than created_at to be robust against
+        // system clock drift. See `get_messages_latest` for full rationale.
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index \
-             FROM messages WHERE session_id = ?1 ORDER BY created_at ASC, rowid ASC LIMIT ?2 OFFSET ?3"
+             FROM messages WHERE session_id = ?1 ORDER BY rowid ASC LIMIT ?2 OFFSET ?3"
         )?;
         let rows = stmt.query_map(params![session_id, limit, offset], |r| {
             Ok(ChatMessage {
@@ -1353,6 +1355,7 @@ impl Database {
 
     /// Fetch `limit` messages older than the newest `offset` messages, in chronological order.
     /// Used for scroll-up pagination: skip the newest `offset` rows, return the next `limit` older rows.
+    /// Sorts by rowid (insert order) for clock-skew robustness.
     pub fn get_messages_older(
         &self,
         session_id: &str,
@@ -1364,8 +1367,8 @@ impl Database {
              FROM ( \
                SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index \
                FROM messages WHERE session_id = ?1 \
-               ORDER BY created_at DESC, rowid DESC LIMIT ?2 OFFSET ?3 \
-             ) ORDER BY created_at ASC, rowid ASC",
+               ORDER BY rowid DESC LIMIT ?2 OFFSET ?3 \
+             ) ORDER BY rowid ASC",
         )?;
         let rows = stmt.query_map(params![session_id, limit, offset], |r| {
             Ok(ChatMessage {
@@ -1389,10 +1392,17 @@ impl Database {
     /// Fetch the latest `limit` messages for a session, ordered chronologically (oldest first).
     /// Unlike `get_messages`, this always includes the most recent messages rather than the oldest,
     /// which is critical for building LLM context when a session has many messages.
+    ///
+    /// Sorts by `rowid DESC` (insert order) rather than `created_at DESC` to be robust
+    /// against system clock drift. Once a message gets a future-dated timestamp (e.g., due to
+    /// timezone confusion or clock adjustment), `created_at`-based sorting would cause that
+    /// message to permanently dominate the "latest" position, causing the agent to repeatedly
+    /// see stale conversation context. `rowid` reflects true SQLite insert order and is immune
+    /// to clock skew.
     pub fn get_messages_latest(&self, session_id: &str, limit: i64) -> Result<Vec<ChatMessage>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, role, content, created_at, tool_calls_json, tool_results_json, turn_index \
-             FROM messages WHERE session_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2"
+             FROM messages WHERE session_id = ?1 ORDER BY rowid DESC LIMIT ?2"
         )?;
         let rows = stmt.query_map(params![session_id, limit], |r| {
             Ok(ChatMessage {

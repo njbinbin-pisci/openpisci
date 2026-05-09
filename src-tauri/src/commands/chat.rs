@@ -250,6 +250,16 @@ async fn build_session_message_context_from_db(
         .find(|m| m.role == "user" && !m.content.trim().is_empty())
         .map(|m| m.content.clone())
         .unwrap_or_default();
+    // Diagnostic: log the last 5 DB messages to see if there's an empty user message
+    for (i, msg) in history.iter().rev().take(5).enumerate() {
+        tracing::info!(
+            "build_session_message_context: DB msg[-{}] role={} content_len={} content_preview={}",
+            i + 1,
+            msg.role,
+            msg.content.len(),
+            msg.content.chars().take(50).collect::<String>()
+        );
+    }
     let rolling_summary_opt =
         if context_toggles.disable_rolling_summary || rolling_summary.trim().is_empty() {
             None
@@ -1774,7 +1784,13 @@ pub async fn run_agent_headless(
         session_id
     );
     // Log the last 3 messages in context for debugging
-    for (i, msg) in session_context.llm_messages.iter().rev().take(3).enumerate() {
+    for (i, msg) in session_context
+        .llm_messages
+        .iter()
+        .rev()
+        .take(3)
+        .enumerate()
+    {
         let preview = match &msg.content {
             pisci_kernel::llm::MessageContent::Text(t) => t.chars().take(80).collect::<String>(),
             pisci_kernel::llm::MessageContent::Blocks(blocks) => blocks
