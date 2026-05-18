@@ -151,6 +151,10 @@ impl Tool for AppControlTool {
          \n  Use sparingly. Typical cases: human escalation after unrecoverable failures, Pisci needs an explicit user decision,\
          \n  or a long-running project reached a milestone the user should know about. Do NOT use for chatty progress updates.\
          \
+         \n\nACTIONS — Session Artifacts:\
+         \n- 'artifact_submit': Add a generated result to the current chat session's Artifacts panel. Required: artifact_name. Optional: artifact_type, uri/path/url, content_summary, metadata. The tool result includes the URI so Pisci can mention it in the chat reply.\
+         \n- 'artifact_list': List generated artifacts for the current session. Optional: session_id, limit.\
+         \
          \n\nACTIONS — Built-in Tools:\
          \n- 'builtin_tool_list': List built-in tools and whether each one is enabled.\
          \n- 'builtin_tool_toggle': Enable or disable a built-in tool. Required: tool_name, enabled.\
@@ -189,6 +193,7 @@ impl Tool for AppControlTool {
                     "enum": [
                         "task_list", "task_create", "task_update", "task_delete", "task_run_now",
                         "settings_get", "settings_set",
+                        "artifact_submit", "artifact_list",
                         "runtime_check", "runtime_set_path",
                         "ssh_list", "ssh_upsert", "ssh_delete",
                         "ui_set_theme", "ui_set_theme_border", "ui_enter_minimal_mode", "ui_exit_minimal_mode", "window_move",
@@ -211,6 +216,16 @@ impl Tool for AppControlTool {
                 "description": { "type": "string" },
                 "cron_expression": { "type": "string", "description": "5-field cron, e.g. '0 * * * *'" },
                 "task_prompt": { "type": "string", "description": "Prompt sent to agent when task fires" },
+                // Artifact fields
+                "artifact_name": { "type": "string", "description": "Human-readable name for artifact_submit" },
+                "artifact_type": { "type": "string", "description": "Artifact kind, e.g. file|document|image|report|link" },
+                "uri": { "type": "string", "description": "Artifact URI or local path for artifact_submit" },
+                "path": { "type": "string", "description": "Local file path for artifact_submit; used if uri is omitted" },
+                "url": { "type": "string", "description": "URL for artifact_submit; used if uri and path are omitted" },
+                "content_summary": { "type": "string", "description": "Short description of the generated artifact" },
+                "metadata": { "type": "object", "description": "Optional JSON metadata for artifact_submit" },
+                "session_id": { "type": "string", "description": "Optional session id override for artifact_list/artifact_submit; defaults to the current tool context session" },
+                "limit": { "type": "integer", "description": "Maximum artifact count for artifact_list" },
                 "notify_targets": {
                     "type": "array",
                     "items": { "type": "string" },
@@ -318,7 +333,7 @@ impl Tool for AppControlTool {
         false
     }
 
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+    async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let action = match input["action"].as_str() {
             Some(a) => a,
             None => return Ok(ToolResult::err("'action' field is required")),
@@ -332,6 +347,8 @@ impl Tool for AppControlTool {
             "task_run_now"    => self.task_run_now(&input).await,
             "settings_get"    => self.settings_get().await,
             "settings_set"    => self.settings_set(&input).await,
+            "artifact_submit" => self.artifact_submit(&input, ctx).await,
+            "artifact_list"   => self.artifact_list(&input, ctx).await,
             "runtime_check"   => self.runtime_check().await,
             "runtime_set_path"=> self.runtime_set_path(&input).await,
             "ssh_list"        => self.ssh_list().await,
@@ -358,8 +375,145 @@ impl Tool for AppControlTool {
             "koi_update"      => self.koi_update(&input).await,
             "koi_delete"      => self.koi_delete(&input).await,
             other => Ok(ToolResult::err(format!(
-                "Unknown action '{}'. Valid actions: task_list, task_create, task_update, task_delete, task_run_now, settings_get, settings_set, runtime_check, runtime_set_path, ssh_list, ssh_upsert, ssh_delete, ui_set_theme, ui_set_theme_border, ui_enter_minimal_mode, ui_exit_minimal_mode, window_move, notify_user, builtin_tool_list, builtin_tool_toggle, user_tool_list, user_tool_config_get, user_tool_config_set, skill_list, skill_search, skill_install, skill_toggle, skill_uninstall, koi_list, koi_create, koi_update, koi_delete",
+                "Unknown action '{}'. Valid actions: task_list, task_create, task_update, task_delete, task_run_now, settings_get, settings_set, artifact_submit, artifact_list, runtime_check, runtime_set_path, ssh_list, ssh_upsert, ssh_delete, ui_set_theme, ui_set_theme_border, ui_enter_minimal_mode, ui_exit_minimal_mode, window_move, notify_user, builtin_tool_list, builtin_tool_toggle, user_tool_list, user_tool_config_get, user_tool_config_set, skill_list, skill_search, skill_install, skill_toggle, skill_uninstall, koi_list, koi_create, koi_update, koi_delete",
                 other
+            ))),
+        }
+    }
+}
+
+// ── Session Artifacts ────────────────────────────────────────────────────────
+
+impl AppControlTool {
+    fn target_session_id<'a>(input: &'a Value, ctx: &'a ToolContext) -> &'a str {
+        input["session_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&ctx.session_id)
+    }
+
+    async fn artifact_submit(
+        &self,
+        input: &Value,
+        ctx: &ToolContext,
+    ) -> anyhow::Result<ToolResult> {
+        let session_id = Self::target_session_id(input, ctx);
+        let name = match input["artifact_name"]
+            .as_str()
+            .or_else(|| input["name"].as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(value) => value,
+            None => {
+                return Ok(ToolResult::err(
+                    "'artifact_name' is required for artifact_submit",
+                ))
+            }
+        };
+        let uri = input["uri"]
+            .as_str()
+            .or_else(|| input["path"].as_str())
+            .or_else(|| input["url"].as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let artifact_type = input["artifact_type"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                if input["url"].as_str().is_some()
+                    || uri.is_some_and(|value| value.starts_with("http"))
+                {
+                    "link"
+                } else {
+                    "file"
+                }
+            });
+        let content_summary = input["content_summary"]
+            .as_str()
+            .or_else(|| input["description"].as_str())
+            .unwrap_or("");
+        let metadata_json = match input.get("metadata") {
+            Some(value) if !value.is_null() => match serde_json::to_string(value) {
+                Ok(encoded) => Some(encoded),
+                Err(err) => return Ok(ToolResult::err(format!("Invalid metadata: {}", err))),
+            },
+            _ => None,
+        };
+
+        let artifact = {
+            let db = self.db.lock().await;
+            match db.add_session_artifact(
+                session_id,
+                name,
+                artifact_type,
+                uri,
+                content_summary,
+                Some("app_control"),
+                input["tool_use_id"].as_str(),
+                metadata_json.as_deref(),
+            ) {
+                Ok(artifact) => artifact,
+                Err(err) => {
+                    return Ok(ToolResult::err(format!(
+                        "Failed to submit artifact: {}",
+                        err
+                    )))
+                }
+            }
+        };
+
+        if let Some(app) = &self.app_handle {
+            let _ = app.emit(
+                &format!("session_artifacts_updated_{}", session_id),
+                &artifact,
+            );
+        }
+
+        let location = artifact.uri.as_deref().unwrap_or("(no URI)");
+        Ok(ToolResult::ok(format!(
+            "Artifact submitted.\nName: {}\nType: {}\nURI: {}\nSummary: {}",
+            artifact.name, artifact.artifact_type, location, artifact.content_summary
+        )))
+    }
+
+    async fn artifact_list(&self, input: &Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        let session_id = Self::target_session_id(input, ctx);
+        let limit = input["limit"].as_i64().unwrap_or(20).clamp(1, 100);
+        let db = self.db.lock().await;
+        match db.list_session_artifacts(session_id, limit) {
+            Ok(items) if items.is_empty() => {
+                Ok(ToolResult::ok("No artifacts registered for this session."))
+            }
+            Ok(items) => {
+                let lines = items
+                    .iter()
+                    .map(|artifact| {
+                        format!(
+                            "- {} [{}] {}{}",
+                            artifact.name,
+                            artifact.artifact_type,
+                            artifact.uri.as_deref().unwrap_or("(no URI)"),
+                            if artifact.content_summary.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" - {}", artifact.content_summary)
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Ok(ToolResult::ok(format!(
+                    "{} artifact(s):\n{}",
+                    items.len(),
+                    lines
+                )))
+            }
+            Err(err) => Ok(ToolResult::err(format!(
+                "Failed to list artifacts: {}",
+                err
             ))),
         }
     }

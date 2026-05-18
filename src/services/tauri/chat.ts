@@ -45,6 +45,19 @@ export interface ChatMessage {
   turn_index?: number | null;
 }
 
+export interface SessionArtifact {
+  id: string;
+  session_id: string;
+  name: string;
+  artifact_type: string;
+  uri?: string | null;
+  content_summary: string;
+  source_tool?: string | null;
+  tool_use_id?: string | null;
+  metadata_json?: string | null;
+  created_at: string;
+}
+
 export const sessionsApi = {
   create: (title?: string) => invoke<Session>("create_session", { title }),
   list: (limit = 20, offset = 0) =>
@@ -56,6 +69,13 @@ export const sessionsApi = {
   /** Set or clear per-session workspace override. Pass null to revert to global. */
   setWorkspace: (sessionId: string, workspaceRoot: string | null) =>
     invoke<void>("set_session_workspace", { sessionId, workspaceRoot }),
+};
+
+export const artifactsApi = {
+  list: (sessionId: string, limit = 100) =>
+    invoke<SessionArtifact[]>("list_session_artifacts", { sessionId, limit }),
+  onUpdated: (sessionId: string, handler: (artifact: SessionArtifact) => void): Promise<UnlistenFn> =>
+    listen<SessionArtifact>(`session_artifacts_updated_${sessionId}`, (event) => handler(event.payload)),
 };
 
 // ---------------------------------------------------------------------------

@@ -1263,6 +1263,7 @@ fn run_impl() {
             commands::chat::rename_session,
             commands::chat::set_session_workspace,
             commands::chat::get_messages,
+            commands::chat::list_session_artifacts,
             commands::chat::chat_send,
             commands::chat::chat_cancel,
             commands::chat::get_context_preview,

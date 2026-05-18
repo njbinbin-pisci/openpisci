@@ -128,6 +128,20 @@ pub struct ChatMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionArtifact {
+    pub id: String,
+    pub session_id: String,
+    pub name: String,
+    pub artifact_type: String,
+    pub uri: Option<String>,
+    pub content_summary: String,
+    pub source_tool: Option<String>,
+    pub tool_use_id: Option<String>,
+    pub metadata_json: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Memory {
     pub id: String,
     pub content: String,
@@ -438,6 +452,23 @@ impl Database {
 
             CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log(session_id, timestamp);
             CREATE INDEX IF NOT EXISTS idx_audit_tool ON audit_log(tool_name, timestamp);
+
+            CREATE TABLE IF NOT EXISTS session_artifacts (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                artifact_type TEXT NOT NULL DEFAULT 'file',
+                uri TEXT,
+                content_summary TEXT NOT NULL DEFAULT '',
+                source_tool TEXT,
+                tool_use_id TEXT,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_session_artifacts_session
+                ON session_artifacts(session_id, created_at DESC);
         ",
         )?;
 
@@ -1504,6 +1535,101 @@ impl Database {
         let mut msgs: Vec<ChatMessage> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         msgs.reverse(); // Return in chronological order (oldest first)
         Ok(msgs)
+    }
+
+    // ------------------------------------------------------------------
+    // Session artifacts
+    // ------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_session_artifact(
+        &self,
+        session_id: &str,
+        name: &str,
+        artifact_type: &str,
+        uri: Option<&str>,
+        content_summary: &str,
+        source_tool: Option<&str>,
+        tool_use_id: Option<&str>,
+        metadata_json: Option<&str>,
+    ) -> Result<SessionArtifact> {
+        let trimmed_name = name.trim();
+        if trimmed_name.is_empty() {
+            return Err(anyhow::anyhow!("artifact name is required"));
+        }
+        if self.get_session(session_id)?.is_none() {
+            return Err(anyhow::anyhow!("session '{}' not found", session_id));
+        }
+
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+        let normalized_type = artifact_type.trim().to_ascii_lowercase();
+        let normalized_type = if normalized_type.is_empty() {
+            "file".to_string()
+        } else {
+            normalized_type
+        };
+        self.conn.execute(
+            "INSERT INTO session_artifacts \
+             (id, session_id, name, artifact_type, uri, content_summary, source_tool, tool_use_id, metadata_json, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                id,
+                session_id,
+                trimmed_name,
+                normalized_type,
+                uri,
+                content_summary.trim(),
+                source_tool,
+                tool_use_id,
+                metadata_json,
+                now_str
+            ],
+        )?;
+
+        Ok(SessionArtifact {
+            id,
+            session_id: session_id.to_string(),
+            name: trimmed_name.to_string(),
+            artifact_type: normalized_type,
+            uri: uri.map(ToOwned::to_owned),
+            content_summary: content_summary.trim().to_string(),
+            source_tool: source_tool.map(ToOwned::to_owned),
+            tool_use_id: tool_use_id.map(ToOwned::to_owned),
+            metadata_json: metadata_json.map(ToOwned::to_owned),
+            created_at: now,
+        })
+    }
+
+    pub fn list_session_artifacts(
+        &self,
+        session_id: &str,
+        limit: i64,
+    ) -> Result<Vec<SessionArtifact>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, name, artifact_type, uri, content_summary, source_tool, tool_use_id, metadata_json, created_at \
+             FROM session_artifacts WHERE session_id = ?1 ORDER BY rowid DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit.max(1)], |r| {
+            Ok(SessionArtifact {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                name: r.get(2)?,
+                artifact_type: r.get(3)?,
+                uri: r.get(4)?,
+                content_summary: r.get(5)?,
+                source_tool: r.get(6)?,
+                tool_use_id: r.get(7)?,
+                metadata_json: r.get(8)?,
+                created_at: r
+                    .get::<_, String>(9)?
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     // ------------------------------------------------------------------
@@ -3882,6 +4008,46 @@ mod tests {
     use super::{
         is_disallowed_koi_name_char, normalize_koi_name, Database, ImSessionBindingUpsert,
     };
+
+    #[test]
+    fn session_artifacts_roundtrip_by_session() {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let session = db.create_session(Some("Artifacts")).expect("session");
+        let other = db.create_session(Some("Other")).expect("other session");
+
+        let artifact = db
+            .add_session_artifact(
+                &session.id,
+                "Report",
+                "file",
+                Some("/tmp/report.md"),
+                "Generated report",
+                Some("app_control"),
+                Some("tu_123"),
+                Some(r#"{"kind":"markdown"}"#),
+            )
+            .expect("artifact");
+        assert_eq!(artifact.name, "Report");
+
+        db.add_session_artifact(
+            &other.id,
+            "Other",
+            "file",
+            Some("/tmp/other.md"),
+            "Other report",
+            None,
+            None,
+            None,
+        )
+        .expect("other artifact");
+
+        let artifacts = db
+            .list_session_artifacts(&session.id, 20)
+            .expect("list artifacts");
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].id, artifact.id);
+        assert_eq!(artifacts[0].uri.as_deref(), Some("/tmp/report.md"));
+    }
 
     #[test]
     fn session_context_state_defaults_and_updates_roundtrip() {

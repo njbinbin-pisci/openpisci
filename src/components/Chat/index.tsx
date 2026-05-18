@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { RootState, chatActions, sessionsActions, ToolStep, StreamingState, PlanTodoItem, ContextUsageSnapshot } from "../../store";
-import { chatApi, sessionsApi, gatewayApi, AgentEventType, ChannelInfo, ChatAttachment, type Session, type ChatMessage } from "../../services/tauri";
+import { artifactsApi, chatApi, sessionsApi, gatewayApi, AgentEventType, ChannelInfo, ChatAttachment, type Session, type ChatMessage, type SessionArtifact } from "../../services/tauri";
 import { settingsApi } from "../../services/tauri";
 import type { Settings } from "../../services/tauri";
 import ReactMarkdown from "react-markdown";
@@ -499,6 +499,7 @@ export default function Chat() {
   const messagesAreaRef = useRef<HTMLDivElement>(null);
   const toolStepsScrollRef = useRef<HTMLDivElement>(null);
   const unlistenRef = useRef<UnlistenFn | null>(null);
+  const artifactsUnlistenRef = useRef<UnlistenFn | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Whether the user is scrolled near the bottom (so we auto-scroll on new messages)
   const isNearBottomRef = useRef(true);
@@ -644,10 +645,11 @@ export default function Chat() {
   const steps = activeSessionId ? toolSteps[activeSessionId] ?? [] : [];
   const activePlan = activeSessionId ? planBySession[activeSessionId] ?? [] : [];
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+  const [activeArtifacts, setActiveArtifacts] = useState<SessionArtifact[]>([]);
 
-  const hasTaskPanel = activePlan.length > 0 || steps.length > 0;
+  const hasTaskPanel = activePlan.length > 0 || steps.length > 0 || activeArtifacts.length > 0;
   const [taskPanelOpen, setTaskPanelOpen] = useState(true);
-  const [taskPanelTab, setTaskPanelTab] = useState<"todo" | "tools">("todo");
+  const [taskPanelTab, setTaskPanelTab] = useState<"todo" | "tools" | "artifacts">("todo");
 
   // Plan resume dialog: shown when user sends a message while unfinished todos exist
   const [planResumeDialog, setPlanResumeDialog] = useState<{
@@ -660,18 +662,28 @@ export default function Chat() {
       setTaskPanelOpen(true);
       if (activePlan.length === 0 && steps.length > 0) {
         setTaskPanelTab("tools");
+      } else if (activePlan.length === 0 && steps.length === 0 && activeArtifacts.length > 0) {
+        setTaskPanelTab("artifacts");
       }
     }
     prevRunningRef.current = running;
-  }, [running, activePlan.length, steps.length]);
+  }, [running, activePlan.length, steps.length, activeArtifacts.length]);
   useEffect(() => {
     if (!hasTaskPanel) return;
     if (taskPanelTab === "todo" && activePlan.length === 0 && steps.length > 0) {
       setTaskPanelTab("tools");
+    } else if (taskPanelTab === "todo" && activePlan.length === 0 && steps.length === 0 && activeArtifacts.length > 0) {
+      setTaskPanelTab("artifacts");
     } else if (taskPanelTab === "tools" && steps.length === 0 && activePlan.length > 0) {
       setTaskPanelTab("todo");
+    } else if (taskPanelTab === "tools" && steps.length === 0 && activePlan.length === 0 && activeArtifacts.length > 0) {
+      setTaskPanelTab("artifacts");
+    } else if (taskPanelTab === "artifacts" && activeArtifacts.length === 0 && activePlan.length > 0) {
+      setTaskPanelTab("todo");
+    } else if (taskPanelTab === "artifacts" && activeArtifacts.length === 0 && steps.length > 0) {
+      setTaskPanelTab("tools");
     }
-  }, [taskPanelTab, activePlan.length, steps.length, hasTaskPanel]);
+  }, [taskPanelTab, activePlan.length, steps.length, activeArtifacts.length, hasTaskPanel]);
   const activeSessionKind = classifySession(activeSession);
   const isImSession = activeSessionKind === "im";
   isImSessionRef.current = isImSession;
@@ -691,13 +703,16 @@ export default function Chat() {
     historyDraftRef.current = "";
     prevLastChatIdRef.current = null;
     isNearBottomRef.current = true;
+    setActiveArtifacts([]);
 
     const load = async () => {
       try {
-        const [messages, { sessions: fresh }] = await Promise.all([
+        const [messages, { sessions: fresh }, artifacts] = await Promise.all([
           sessionsApi.getMessages(activeSessionId, CHAT_INITIAL_SIZE, 0),
           sessionsApi.list(),
+          artifactsApi.list(activeSessionId),
         ]);
+        setActiveArtifacts(artifacts);
         seedContextUsage(activeSessionId);
         // Use setMessagesWithFrozen: if a frozenBubble exists for this session (set during
         // a recent agent run), it is preserved as a single collapsed bubble. For sessions
@@ -725,6 +740,40 @@ export default function Chat() {
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, dispatch]);
+
+  useEffect(() => {
+    if (artifactsUnlistenRef.current) {
+      artifactsUnlistenRef.current();
+      artifactsUnlistenRef.current = null;
+    }
+    if (!activeSessionId) return;
+
+    let cancelled = false;
+    const sessionId = activeSessionId;
+    artifactsApi.onUpdated(sessionId, () => {
+      artifactsApi.list(sessionId)
+        .then((artifacts) => {
+          if (!cancelled) setActiveArtifacts(artifacts);
+        })
+        .catch(() => {});
+    })
+      .then((unlisten) => {
+        if (cancelled) {
+          unlisten();
+        } else {
+          artifactsUnlistenRef.current = unlisten;
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+      if (artifactsUnlistenRef.current) {
+        artifactsUnlistenRef.current();
+        artifactsUnlistenRef.current = null;
+      }
+    };
+  }, [activeSessionId]);
 
   // Load CHAT_LAZY_STEP older messages (incremental prepend), triggered by scrolling to top
   const loadMoreHistory = useCallback(() => {
@@ -884,6 +933,13 @@ export default function Chat() {
               turnDone: true,
             }));
           }).catch(() => {});
+          artifactsApi.list(boundSessionId)
+            .then((artifacts) => {
+              if (activeSessionIdRef.current === boundSessionId) {
+                setActiveArtifacts(artifacts);
+              }
+            })
+            .catch(() => {});
           break;
         case "cancelled":
           flushBufferedDelta(boundSessionId);
@@ -1645,6 +1701,11 @@ export default function Chat() {
                         Tools {running ? t("chat.agentWorking") : t("chat.agentSteps", { count: steps.length })}
                       </span>
                     )}
+                    {activeArtifacts.length > 0 && (
+                      <span className="session-task-panel-badge">
+                        Artifacts {activeArtifacts.length}
+                      </span>
+                    )}
                   </div>
                   <span className="session-task-panel-chevron">{taskPanelOpen ? "▲" : "▼"}</span>
                 </button>
@@ -1671,6 +1732,16 @@ export default function Chat() {
                       >
                         Tools
                         {steps.length > 0 && <span className="session-task-tab-count">{steps.length}</span>}
+                      </button>
+                      <button
+                        className={`session-task-tab ${taskPanelTab === "artifacts" ? "active" : ""}`}
+                        onClick={() => setTaskPanelTab("artifacts")}
+                        disabled={activeArtifacts.length === 0}
+                        role="tab"
+                        aria-selected={taskPanelTab === "artifacts"}
+                      >
+                        Artifacts
+                        {activeArtifacts.length > 0 && <span className="session-task-tab-count">{activeArtifacts.length}</span>}
                       </button>
                     </div>
 
@@ -1703,6 +1774,11 @@ export default function Chat() {
                               }}
                             />
                           ))}
+                        </div>
+                      )}
+                      {taskPanelTab === "artifacts" && activeArtifacts.length > 0 && (
+                        <div className="tool-steps-scroll">
+                          <ArtifactsPanel artifacts={activeArtifacts} />
                         </div>
                       )}
                     </div>
@@ -2366,6 +2442,68 @@ function PlanPanel({ items }: { items: PlanTodoItem[] }) {
               {item.status === "in_progress" && <span className="step-spinner" style={{ width: 10, height: 10, marginRight: 4 }} />}
               {planStatusLabel(t, item.status)}
             </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function artifactIcon(type: string): string {
+  switch (type.toLowerCase()) {
+    case "image":
+      return "IMG";
+    case "link":
+    case "url":
+      return "URL";
+    case "report":
+      return "RPT";
+    case "document":
+      return "DOC";
+    default:
+      return "FILE";
+  }
+}
+
+function formatArtifactTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function isWebUri(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function ArtifactsPanel({ artifacts }: { artifacts: SessionArtifact[] }) {
+  return (
+    <div className="artifacts-panel">
+      {artifacts.map((artifact) => (
+        <div key={artifact.id} className="artifact-card">
+          <div className="artifact-icon" aria-hidden="true">{artifactIcon(artifact.artifact_type)}</div>
+          <div className="artifact-main">
+            <div className="artifact-title-row">
+              <span className="artifact-title">{artifact.name}</span>
+              <span className="artifact-type">{artifact.artifact_type}</span>
+            </div>
+            {artifact.content_summary && (
+              <div className="artifact-summary">{artifact.content_summary}</div>
+            )}
+            {artifact.uri && (
+              isWebUri(artifact.uri) ? (
+                <a className="artifact-uri" href={artifact.uri} target="_blank" rel="noreferrer">
+                  {artifact.uri}
+                </a>
+              ) : (
+                <button className="artifact-uri artifact-uri-button" onClick={() => openPath(artifact.uri!)}>
+                  {artifact.uri}
+                </button>
+              )
+            )}
+            <div className="artifact-meta">
+              {artifact.source_tool && <span>{artifact.source_tool}</span>}
+              <span>{formatArtifactTime(artifact.created_at)}</span>
+            </div>
           </div>
         </div>
       ))}

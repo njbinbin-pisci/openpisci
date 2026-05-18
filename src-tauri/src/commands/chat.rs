@@ -10,7 +10,8 @@ use crate::commands::config::scene::{
     PoolSnapshotMode, SceneKind, ScenePolicy,
 };
 use crate::store::{
-    db::ChatMessage, db::Session, db::SessionContextState, db::TaskSpine, db::TaskState, AppState,
+    db::ChatMessage, db::Session, db::SessionArtifact, db::SessionContextState, db::TaskSpine,
+    db::TaskState, AppState,
 };
 use pisci_core::project_state::build_coordination_event_digest;
 use pisci_kernel::agent::messages::AgentEvent;
@@ -684,6 +685,17 @@ pub async fn get_messages(
         db.get_messages_older(&session_id, lim, off)
             .map_err(|e| e.to_string())
     }
+}
+
+#[tauri::command]
+pub async fn list_session_artifacts(
+    state: State<'_, AppState>,
+    session_id: String,
+    limit: Option<i64>,
+) -> Result<Vec<SessionArtifact>, String> {
+    let db = state.db.lock().await;
+    db.list_session_artifacts(&session_id, limit.unwrap_or(100))
+        .map_err(|e| e.to_string())
 }
 
 /// Send a user message and run the agent loop.
@@ -4084,9 +4096,9 @@ mod tests {
     use super::{
         build_context_messages, build_headless_scene_system_prompt, build_main_chat_system_prompt,
         collapse_superseded_tool_failures, derive_headless_session_source,
-        extract_tool_minimals_from_history,
-        minimal_tool_result_blocks, resolve_headless_scene_kind, HeadlessRunOptions,
-        SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL, SESSION_SOURCE_PISCI_POOL,
+        extract_tool_minimals_from_history, minimal_tool_result_blocks,
+        resolve_headless_scene_kind, HeadlessRunOptions, SESSION_SOURCE_PISCI_HEARTBEAT_GLOBAL,
+        SESSION_SOURCE_PISCI_POOL,
     };
     use crate::commands::config::scene::{SceneKind, ScenePolicy};
     use crate::store::db::ChatMessage;
@@ -4316,7 +4328,8 @@ mod tests {
         );
         assert!(pool.contains(personal));
 
-        let im = build_headless_scene_system_prompt(SceneKind::IMHeadless, "feishu", false, personal);
+        let im =
+            build_headless_scene_system_prompt(SceneKind::IMHeadless, "feishu", false, personal);
         assert!(!im.contains(personal));
         assert!(!im.contains("## Personal Pisci Prompt"));
     }
@@ -4326,7 +4339,9 @@ mod tests {
         assert!(ScenePolicy::for_kind(SceneKind::MainChat).project_instructions_enabled(true));
         assert!(ScenePolicy::for_kind(SceneKind::HeartbeatSupervisor)
             .project_instructions_enabled(true));
-        assert!(ScenePolicy::for_kind(SceneKind::PoolCoordinator).project_instructions_enabled(true));
+        assert!(
+            ScenePolicy::for_kind(SceneKind::PoolCoordinator).project_instructions_enabled(true)
+        );
         assert!(!ScenePolicy::for_kind(SceneKind::IMHeadless).project_instructions_enabled(true));
         assert!(!ScenePolicy::for_kind(SceneKind::KoiTask).project_instructions_enabled(true));
     }
