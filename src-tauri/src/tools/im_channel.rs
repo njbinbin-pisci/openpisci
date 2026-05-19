@@ -638,9 +638,11 @@ mod tests {
 
     #[test]
     fn configured_channels_reflect_enabled_settings() {
-        let mut settings = Settings::default();
-        settings.feishu_enabled = true;
-        settings.wechat_enabled = true;
+        let settings = Settings {
+            feishu_enabled: true,
+            wechat_enabled: true,
+            ..Settings::default()
+        };
         let channels = configured_channels_from_settings(&settings);
         assert_eq!(channels, vec!["feishu", "wechat"]);
     }

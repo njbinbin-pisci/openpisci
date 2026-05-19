@@ -1,7 +1,28 @@
 use anyhow::Result;
 use pisci_kernel::agent::tool::ToolResult;
 use serde_json::Value;
+use tokio::process::Command;
 use xcap::{Monitor, Window};
+
+async fn cursor_position() -> Option<(i32, i32)> {
+    let output = Command::new("osascript")
+        .args([
+            "-e",
+            "tell application \"System Events\" to get position of mouse",
+        ])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut parts = stdout.trim().split(',').map(str::trim);
+    let x = parts.next()?.parse::<i32>().ok()?;
+    let y = parts.next()?.parse::<i32>().ok()?;
+    Some((x, y))
+}
 
 pub async fn list_monitors() -> Result<ToolResult> {
     let monitors = Monitor::all().map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -80,7 +101,7 @@ pub async fn capture_full(input: &Value) -> Result<ToolResult> {
     let x = monitor.x().unwrap_or(0);
     let y = monitor.y().unwrap_or(0);
 
-    super::encode_and_return_with_offset(&rgba, width, height, input, x, y)
+    super::encode_and_return_with_cursor_offset(&rgba, width, height, input, x, y, cursor_position().await)
 }
 
 pub async fn capture_window(input: &Value) -> Result<ToolResult> {
@@ -119,7 +140,7 @@ pub async fn capture_window(input: &Value) -> Result<ToolResult> {
     let x = win.x().unwrap_or(0);
     let y = win.y().unwrap_or(0);
 
-    super::encode_and_return_with_offset(&rgba, width, height, input, x, y)
+    super::encode_and_return_with_cursor_offset(&rgba, width, height, input, x, y, cursor_position().await)
 }
 
 pub async fn capture_region(input: &Value) -> Result<ToolResult> {
@@ -151,5 +172,5 @@ pub async fn capture_region(input: &Value) -> Result<ToolResult> {
     let (width, height) = image.dimensions();
     let rgba = image.into_raw();
 
-    super::encode_and_return_with_offset(&rgba, width, height, input, x, y)
+    super::encode_and_return_with_cursor_offset(&rgba, width, height, input, x, y, cursor_position().await)
 }

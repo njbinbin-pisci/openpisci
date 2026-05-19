@@ -814,7 +814,10 @@ pub async fn execute_task(
         ) {
             Ok(content) => content,
             Err(error) => {
-                warn!("Scheduled task {} failed to load project instructions: {}", task_id, error);
+                warn!(
+                    "Scheduled task {} failed to load project instructions: {}",
+                    task_id, error
+                );
                 String::new()
             }
         }

@@ -127,8 +127,6 @@ fn current_os_platform() -> &'static str {
 fn findable_dir() -> &'static str {
     if cfg!(target_os = "windows") {
         r"C:\Windows\System32"
-    } else if cfg!(target_os = "macos") {
-        "/usr/bin"
     } else {
         "/usr/bin"
     }
@@ -198,8 +196,6 @@ fn shell_memory_info_cmd() -> &'static str {
 fn shell_top_mem_cmd() -> &'static str {
     if cfg!(target_os = "windows") {
         "Get-Process | Sort-Object WorkingSet -Descending | Select -First 5 Name,Id"
-    } else if cfg!(target_os = "macos") {
-        "ps aux --sort=-%mem | head -6"
     } else {
         "ps aux --sort=-%mem | head -6"
     }
@@ -417,7 +413,7 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             name_en: "Web Search".into(),
             description: "执行混合网络搜索（SearXNG + 本地引擎），验证网络访问是否正常".into(),
             description_en: "Run a hybrid web search (SearXNG + local engines) to verify network access".into(),
-            prompt: format!("请搜索 '{} 最新版本' 并告诉我找到了什么", os_display_name()).into(),
+            prompt: format!("请搜索 '{} 最新版本' 并告诉我找到了什么", os_display_name()),
             expected_keywords: vec![],
             expected_tools: vec!["web_search".into()],
             requires_config: None,
@@ -1891,12 +1887,17 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
     }
 
     // Use the vision model as the primary model for this test
-    let (effective_provider, effective_model, effective_api_key, effective_base_url) = if vision_use_main_llm {
-        (provider, model, api_key, base_url)
-    } else {
-        let vb = if vision_base_url.is_empty() { base_url } else { vision_base_url };
-        (vision_provider, vision_model, vision_api_key, vb)
-    };
+    let (effective_provider, effective_model, effective_api_key, effective_base_url) =
+        if vision_use_main_llm {
+            (provider, model, api_key, base_url)
+        } else {
+            let vb = if vision_base_url.is_empty() {
+                base_url
+            } else {
+                vision_base_url
+            };
+            (vision_provider, vision_model, vision_api_key, vb)
+        };
 
     if effective_api_key.is_empty() {
         return Err("api_key_not_configured".into());
@@ -1963,39 +1964,68 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
     };
 
     let prompt = {
-        let mut s = String::from("任务：将橙色小球拖拽到绿色目标区域。
+        let mut s = String::from(
+            "任务：将橙色小球拖拽到绿色目标区域。
 
 步骤：
-");
+",
+        );
         s.push_str("1. 用 screen_capture 工具（action=list_monitors）查看显示器布局和各显示器上的窗口分布，
 ");
-        s.push_str("   找到 OpenPisci 窗口在哪个显示器（monitor_index）
-");
+        s.push_str(
+            "   找到 OpenPisci 窗口在哪个显示器（monitor_index）
+",
+        );
         s.push_str("2. 用 screen_capture 工具截取该显示器截图（action=capture, monitor_index=N, grid=true）
 ");
-        s.push_str("3. 仔细观察截图中的坐标网格（每200像素一条线，标签显示绝对物理屏幕坐标）
-");
-        s.push_str("4. 找到橙色圆形小球的中心坐标（读取最近的网格线标签，精确估算）
-");
-        s.push_str("5. 找到绿色虚线矩形（目标区域）的中心坐标（读取最近的网格线标签，精确估算）
-");
-        s.push_str(&format!("6. 用 {} 工具的 {} 操作，从小球中心拖拽到目标区域中心
-", drag_tool, drag_action));
-        s.push_str(&format!("   参数：x=小球中心X y=小球中心Y {}={} {}={}
-", end_x_param, "目标中心X", end_y_param, "目标中心Y"));
-        s.push_str("
+        s.push_str(
+            "3. 仔细观察截图中的坐标网格（每200像素一条线，标签显示绝对物理屏幕坐标）
+",
+        );
+        s.push_str(
+            "4. 找到橙色圆形小球的中心坐标（读取最近的网格线标签，精确估算）
+",
+        );
+        s.push_str(
+            "5. 找到绿色虚线矩形（目标区域）的中心坐标（读取最近的网格线标签，精确估算）
+",
+        );
+        s.push_str(&format!(
+            "6. 用 {} 工具的 {} 操作，从小球中心拖拽到目标区域中心
+",
+            drag_tool, drag_action
+        ));
+        s.push_str(&format!(
+            "   参数：x=小球中心X y=小球中心Y {}={} {}={}
+",
+            end_x_param, "目标中心X", end_y_param, "目标中心Y"
+        ));
+        s.push_str(
+            "
 重要提示：
-");
-        s.push_str(&format!("- 网格标签显示的是物理屏幕绝对坐标，可直接用于 {} {}（无需任何转换）
-", drag_tool, drag_action));
-        s.push_str("- 读取坐标时，先找最近的网格线，再根据元素与网格线的相对位置微调
-");
-        s.push_str("- 橙色小球是一个橙色圆形，直径约40像素
-");
-        s.push_str("- 目标区域是一个绿色虚线矩形（有发光效果），约120x120像素，位于测试区域右侧
-");
-        s.push_str("- 拖拽时 from 是小球中心坐标，to 是目标区域中心坐标
-");
+",
+        );
+        s.push_str(&format!(
+            "- 网格标签显示的是物理屏幕绝对坐标，可直接用于 {} {}（无需任何转换）
+",
+            drag_tool, drag_action
+        ));
+        s.push_str(
+            "- 读取坐标时，先找最近的网格线，再根据元素与网格线的相对位置微调
+",
+        );
+        s.push_str(
+            "- 橙色小球是一个橙色圆形，直径约40像素
+",
+        );
+        s.push_str(
+            "- 目标区域是一个绿色虚线矩形（有发光效果），约120x120像素，位于测试区域右侧
+",
+        );
+        s.push_str(
+            "- 拖拽时 from 是小球中心坐标，to 是目标区域中心坐标
+",
+        );
         s.push_str("- 如果 OpenPisci 在主显示器，可直接用 monitor_index=0（默认）");
         s
     };

@@ -20,7 +20,7 @@ impl Tool for ScreenTool {
          \
          Cross-platform UI automation workflow: \
             1. Take a screenshot with grid=true — this overlays a 100x100 pixel grid with coordinate labels \
-                and, on Windows, marks the current mouse position with a crosshair \
+                and marks the current mouse position with a crosshair \
          2. The Vision model identifies the target UI element in the image \
          3. Use desktop_automation.click(x, y) with the exact coordinates from the grid \
          \
@@ -78,7 +78,7 @@ impl Tool for ScreenTool {
                 },
                 "grid": {
                     "type": "boolean",
-                    "description": "Overlay a coordinate grid on the screenshot. Grid lines default to every 100px with coordinate labels. Labels show absolute screen coordinates that can be used directly with desktop_automation click/drag/hotkey. On Windows, the current mouse position is also marked with a crosshair. Essential for Vision AI to precisely locate and interact with UI elements."
+                    "description": "Overlay a coordinate grid on the screenshot. Grid lines default to every 100px with coordinate labels. Labels show absolute screen coordinates that can be used directly with desktop_automation click/drag/hotkey. The current mouse position is also marked with a crosshair. Essential for Vision AI to precisely locate and interact with UI elements."
                 },
                 "grid_spacing": {
                     "type": "integer",
@@ -129,20 +129,6 @@ mod macos;
 use macos as platform;
 
 // ─── Shared encoding / grid helpers ────────────────────────────────────────
-
-/// Encode pixels to image, optionally overlay a coordinate grid, and return as ToolResult.
-/// `origin_x/origin_y`: screen coordinates of the image's top-left corner.
-/// When grid=true, labels show absolute screen coords (origin + image offset).
-pub(crate) fn encode_and_return_with_offset(
-    rgba: &[u8],
-    width: u32,
-    height: u32,
-    input: &Value,
-    origin_x: i32,
-    origin_y: i32,
-) -> Result<ToolResult> {
-    encode_and_return_with_cursor_offset(rgba, width, height, input, origin_x, origin_y, None)
-}
 
 pub(crate) fn encode_and_return_with_cursor_offset(
     rgba: &[u8],
@@ -252,14 +238,22 @@ pub(crate) fn encode_and_return_with_cursor_offset(
         {
             let target_tool = "desktop_automation";
             let grid_note = if draw_grid {
+                let cursor_note = cursor_pos
+                    .map(|(cx, cy)| {
+                        format!(
+                            "\nCrosshair: the mouse pointer was at absolute screen coordinates ({},{}) when the screenshot was taken.",
+                            cx, cy
+                        )
+                    })
+                    .unwrap_or_default();
                 format!(
                     "\n## Coordinate System (grid=true, spacing={grid_sp}x)\n\
                     Image: {w}x{h} px | Origin: ({ox},{oy}) screen coords\n\
-                    Grid lines are drawn as high-contrast XOR-style overlays to preserve underlying content.\n\
+                    Grid lines and cursor crosshair are drawn as high-contrast XOR-style overlays to preserve underlying content.\n\
                     Coordinate labels are edge-aligned to reduce occlusion; labels are absolute screen pixels.\n\
                     → Find element via grid labels, then: {tt}.click(x, y) | {tt}.drag(x, y, to_x, to_y) | {tt}.hotkey(keys)\n\
-                    Tip: if the screenshot shows incomplete content, loading spinners, or progress bars, treat that as a wait state and recapture using real elapsed time with exponential backoff before acting.",
-                    grid_sp = grid_spacing, w = width, h = height, ox = origin_x, oy = origin_y, tt = target_tool
+                    Tip: if the screenshot shows incomplete content, loading spinners, or progress bars, treat that as a wait state and recapture using real elapsed time with exponential backoff before acting.{cursor_note}",
+                    grid_sp = grid_spacing, w = width, h = height, ox = origin_x, oy = origin_y, tt = target_tool, cursor_note = cursor_note
                 )
             } else {
                 String::new()
