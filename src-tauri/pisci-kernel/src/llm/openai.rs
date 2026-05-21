@@ -342,7 +342,10 @@ impl OpenAiClient {
                 // Prepend a short text placeholder to keep the array valid.
                 let mut flushed = std::mem::take(&mut pending_vision);
                 if !flushed.iter().any(|v| v["type"] == "text") {
-                    flushed.insert(0, json!({"type": "text", "text": "[Tool-generated image(s)]"}));
+                    flushed.insert(
+                        0,
+                        json!({"type": "text", "text": "[Tool-generated image(s)]"}),
+                    );
                 }
                 result.push(json!({
                     "role": "user",
@@ -507,7 +510,10 @@ impl OpenAiClient {
             // Same as above: prepend text placeholder for providers that
             // reject content arrays containing only image items.
             if !pending_vision.iter().any(|v| v["type"] == "text") {
-                pending_vision.insert(0, json!({"type": "text", "text": "[Tool-generated image(s)]"}));
+                pending_vision.insert(
+                    0,
+                    json!({"type": "text", "text": "[Tool-generated image(s)]"}),
+                );
             }
             result.push(json!({
                 "role": "user",
