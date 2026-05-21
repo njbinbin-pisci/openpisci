@@ -152,8 +152,18 @@ fn require_coords(input: &Value) -> anyhow::Result<(i32, i32)> {
 async fn run_cmd(program: &str, args: &[&str]) -> Result<ToolResult> {
     let args_display = args.join(" ");
     tracing::info!("run_cmd: {} {}", program, args_display);
-    let output = Command::new(program)
-        .args(args)
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    #[cfg(target_os = "windows")]
+    {
+        // CREATE_NO_WINDOW: prevents a blue console window from flashing
+        // on screen during desktop automation (move_mouse, type_text, etc.).
+        // Without this, every PowerShell/cmd invocation steals focus and can
+        // obscure screen captures.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = cmd
         .output()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to execute {}: {}", program, e))?;
