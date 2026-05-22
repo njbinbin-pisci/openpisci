@@ -159,6 +159,8 @@ pub struct HarnessConfig {
     pub confirm_flags: ConfirmFlags,
     /// User-configured vision override (None = auto from model id).
     pub vision_override: Option<bool>,
+    /// Optional separate vision model client for image analysis delegation.
+    pub vision_delegate: Option<Box<dyn crate::llm::LlmClient>>,
 
     /// Derived token budget + tier classifier.
     pub budget: LayeredBudget,
@@ -230,6 +232,7 @@ impl HarnessConfig {
         context_window: u32,
         confirm_flags: ConfirmFlags,
         vision_override: Option<bool>,
+        vision_delegate: Option<Box<dyn crate::llm::LlmClient>>,
         auto_compact_input_tokens_threshold: u32,
         compaction: CompactionSettings,
         db: Arc<Mutex<Database>>,
@@ -242,6 +245,7 @@ impl HarnessConfig {
             .with_context_window(context_window)
             .with_confirm_flags(confirm_flags)
             .with_vision_override(vision_override)
+            .with_vision_delegate(vision_delegate)
             .with_auto_compact_threshold(auto_compact_input_tokens_threshold)
             .with_compaction_settings(&compaction)
             .with_persistence(db)
@@ -263,6 +267,7 @@ impl HarnessConfig {
         max_tokens: u32,
         context_window: u32,
         vision_override: Option<bool>,
+        vision_delegate: Option<Box<dyn crate::llm::LlmClient>>,
         auto_compact_input_tokens_threshold: u32,
         compaction: CompactionSettings,
         db: Arc<Mutex<Database>>,
@@ -273,6 +278,7 @@ impl HarnessConfig {
             .with_max_tokens(max_tokens)
             .with_context_window(context_window)
             .with_vision_override(vision_override)
+            .with_vision_delegate(vision_delegate)
             .with_auto_compact_threshold(auto_compact_input_tokens_threshold)
             .with_compaction_settings(&compaction)
             .with_persistence(db)
@@ -434,6 +440,7 @@ impl HarnessConfig {
             confirmation_responses,
             confirm_flags: self.confirm_flags.into(),
             vision_override: self.vision_override,
+            vision_delegate: self.vision_delegate,
             notification_rx: notification_rx.map(tokio::sync::Mutex::new),
             auto_compact_input_tokens_threshold: self.auto_compact_input_tokens_threshold,
             enable_streaming: self.enable_streaming,
@@ -466,6 +473,7 @@ impl HarnessConfigBuilder {
             policy,
             confirm_flags: ConfirmFlags::default(),
             vision_override: None,
+            vision_delegate: None,
             budget: LayeredBudget::default(),
             provider_kind,
             auto_compact_input_tokens_threshold: 0,
@@ -508,6 +516,11 @@ impl HarnessConfigBuilder {
 
     pub fn with_vision_override(mut self, ov: Option<bool>) -> Self {
         self.inner.vision_override = ov;
+        self
+    }
+
+    pub fn with_vision_delegate(mut self, client: Option<Box<dyn crate::llm::LlmClient>>) -> Self {
+        self.inner.vision_delegate = client;
         self
     }
 

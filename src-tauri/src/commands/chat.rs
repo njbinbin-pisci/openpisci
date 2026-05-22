@@ -1013,6 +1013,23 @@ pub async fn chat_send(
             settings.enable_streaming,
         )
     };
+    // Vision delegate: when using a separate vision model (vision_use_main_llm=false),
+    // create a dedicated LLM client for image analysis. The main LLM gets vision_override=false,
+    // and images are analyzed by the separate vision model before being sent as text.
+    let vision_delegate: Option<Box<dyn pisci_kernel::llm::LlmClient>> = if !vision_use_main_llm
+        && !vision_provider.is_empty()
+        && !vision_model.is_empty()
+        && !vision_api_key.is_empty()
+    {
+        Some(pisci_kernel::llm::build_client(
+            &vision_provider,
+            &vision_api_key,
+            None,
+        ))
+    } else {
+        None
+    };
+
     let agent = pisci_kernel::agent::harness::HarnessConfig::for_main_chat(
         model.clone(),
         fallback_models,
@@ -1026,6 +1043,7 @@ pub async fn chat_send(
             confirm_file_write,
         },
         Some(vision_capable),
+        vision_delegate,
         auto_compact_input_tokens_threshold,
         compaction_settings,
         state.db.clone(),
@@ -1761,6 +1779,22 @@ pub async fn run_agent_headless(
             pisci_kernel::agent::harness::config::CompactionSettings::from_settings(&settings),
         )
     };
+    // Vision delegate for headless path (same logic as chat_send)
+    let headless_vision_delegate: Option<Box<dyn pisci_kernel::llm::LlmClient>> =
+        if !vision_use_main_llm
+            && !vision_provider.is_empty()
+            && !vision_model.is_empty()
+            && !vision_api_key.is_empty()
+        {
+            Some(pisci_kernel::llm::build_client(
+                &vision_provider,
+                &vision_api_key,
+                None,
+            ))
+        } else {
+            None
+        };
+
     let agent = pisci_kernel::agent::harness::HarnessConfig::for_main_headless(
         model,
         headless_fallback_models,
@@ -1770,6 +1804,7 @@ pub async fn run_agent_headless(
         max_tokens,
         context_window,
         Some(vision_capable),
+        headless_vision_delegate,
         scene_policy.effective_auto_compact_threshold(auto_compact_input_tokens_threshold),
         headless_compaction_settings,
         state.db.clone(),

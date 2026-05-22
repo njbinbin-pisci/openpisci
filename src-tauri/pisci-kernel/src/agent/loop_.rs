@@ -1252,6 +1252,11 @@ pub struct AgentLoop {
     /// User-configured vision override (from settings.vision_enabled).
     /// None = auto-detect from model name.
     pub vision_override: Option<bool>,
+    /// Optional separate vision model client for image analysis delegation.
+    /// When set, images from vision artifacts are sent to this client for
+    /// analysis, and the resulting text description is injected instead.
+    /// Used when vision_use_main_llm=false and a separate vision model is configured.
+    pub vision_delegate: Option<Box<dyn crate::llm::LlmClient>>,
     /// Receives runtime notifications (e.g. @mention alerts) injected into the
     /// message stream so the agent can react mid-execution.
     pub notification_rx: Option<Mutex<mpsc::Receiver<String>>>,
@@ -1619,6 +1624,120 @@ impl AgentLoop {
             });
         }
         blocks
+    }
+
+    /// Delegate image analysis to a separate vision model.
+    /// Finds the last user message with image blocks, sends them to the vision
+    /// model for analysis, and replaces image blocks with text descriptions.
+    async fn delegate_vision_analysis(
+        messages: &[crate::llm::LlmMessage],
+        vision_client: &dyn crate::llm::LlmClient,
+    ) -> Vec<crate::llm::LlmMessage> {
+        use crate::llm::{ContentBlock, LlmMessage, LlmRequest, MessageContent};
+
+        // Find the last user message that contains image blocks
+        let last_vision_idx = messages.iter().rposition(|m| {
+            m.role == "user" && matches!(&m.content, MessageContent::Blocks(blocks) if blocks.iter().any(|b| matches!(b, ContentBlock::Image { .. })))
+        });
+
+        let Some(idx) = last_vision_idx else {
+            return messages.to_vec();
+        };
+
+        let msg = &messages[idx];
+        let MessageContent::Blocks(blocks) = &msg.content else {
+            return messages.to_vec();
+        };
+
+        // Extract image blocks and text blocks
+        let images: Vec<&ContentBlock> = blocks
+            .iter()
+            .filter(|b| matches!(b, ContentBlock::Image { .. }))
+            .collect();
+        let text_parts: Vec<String> = blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+
+        if images.is_empty() {
+            return messages.to_vec();
+        }
+
+        // Build a vision request: send images + instruction to the vision model
+        let mut vision_blocks: Vec<ContentBlock> = Vec::new();
+        vision_blocks.push(ContentBlock::Text {
+            text: "Describe what you see in these screenshots in detail. Focus on UI elements, text content, layout, and any actionable information. Respond in the same language as the original text.".to_string(),
+        });
+        for img in &images {
+            vision_blocks.push((*img).clone());
+        }
+
+        let vision_req = LlmRequest {
+            messages: vec![LlmMessage {
+                role: "user".into(),
+                content: MessageContent::Blocks(vision_blocks),
+            }],
+            system: None,
+            tools: vec![],
+            model: String::new(), // vision client already knows its model
+            max_tokens: 2048,
+            stream: false,
+            vision_override: Some(true),
+        };
+
+        tracing::info!(
+            "vision_delegate: analyzing {} image(s) via separate vision model",
+            images.len()
+        );
+
+        match vision_client.complete(vision_req).await {
+            Ok(resp) if !resp.content.is_empty() => {
+                tracing::info!(
+                    "vision_delegate: got {} chars description",
+                    resp.content.len()
+                );
+                // Replace the image message with text-only description
+                let mut result = messages.to_vec();
+                let mut new_blocks: Vec<ContentBlock> = Vec::new();
+                // Keep original text parts
+                for t in &text_parts {
+                    new_blocks.push(ContentBlock::Text { text: t.clone() });
+                }
+                // Add vision analysis result
+                new_blocks.push(ContentBlock::Text {
+                    text: format!("\n[视觉模型分析结果]\n{}", resp.content.trim()),
+                });
+                result[idx] = LlmMessage {
+                    role: "user".into(),
+                    content: MessageContent::Blocks(new_blocks),
+                };
+                result
+            }
+            Ok(_) => {
+                tracing::warn!("vision_delegate: empty response from vision model");
+                messages.to_vec()
+            }
+            Err(e) => {
+                tracing::warn!("vision_delegate: vision model failed: {}", e);
+                // On failure, strip images and add error note
+                let mut result = messages.to_vec();
+                let mut new_blocks: Vec<ContentBlock> = Vec::new();
+                for t in &text_parts {
+                    new_blocks.push(ContentBlock::Text { text: t.clone() });
+                }
+                new_blocks.push(ContentBlock::Text {
+                    text: format!("\n[视觉模型分析失败: {}]", e),
+                });
+                result[idx] = LlmMessage {
+                    role: "user".into(),
+                    content: MessageContent::Blocks(new_blocks),
+                };
+                result
+            }
+        }
     }
 
     async fn check_tool_rate_limit(&self, ctx: &ToolContext) -> Option<String> {
@@ -2159,6 +2278,14 @@ impl AgentLoop {
                     );
                     let req_messages =
                         vision::inject_selected_context(&demoted_messages, &ctx.session_id).await;
+                    // Vision delegation: if a separate vision model is configured
+                    // and there are image blocks in the messages, send them to the
+                    // vision model for analysis and replace with text descriptions.
+                    let req_messages = if let Some(ref vision_client) = self.vision_delegate {
+                        Self::delegate_vision_analysis(&req_messages, vision_client.as_ref()).await
+                    } else {
+                        req_messages
+                    };
                     // Route through RequestBuilder so provider-specific
                     // ceilings (e.g. Anthropic's 8192 max_tokens cap) are
                     // applied in one place instead of leaking into every
@@ -3342,6 +3469,7 @@ mod tests {
                 confirm_file_write: false,
             },
             vision_override: Some(false),
+            vision_delegate: None,
             notification_rx: None,
             auto_compact_input_tokens_threshold: 0,
             enable_streaming: true,
