@@ -829,8 +829,11 @@ pub async fn chat_send(
     // Resolve attachment: convert FrontendAttachment → MediaAttachment
     // For non-vision models or non-image files, we append the path to the message text.
     // For vision models + image data, we pass through as MediaAttachment for inline injection.
+    // vision_capable: user setting AND model auto-detection must both agree.
+    // vision_enabled alone is not enough — text-only models (e.g. qwen3.7-max)
+    // would reject image content arrays with 400 errors.
     let vision_capable = if vision_use_main_llm {
-        vision_enabled || model_supports_vision(&provider, &model)
+        vision_enabled && model_supports_vision(&provider, &model)
     } else {
         !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
     };
@@ -1440,10 +1443,10 @@ pub async fn run_agent_headless(
         resolve_headless_scene_kind(channel, &desired_session_source, options.as_ref());
     let scene_policy = ScenePolicy::for_kind(scene_kind);
 
-    // vision_capable: user override OR auto-detection by provider/model name
+    // vision_capable: user setting AND model auto-detection must both agree.
     // Also accounts for separate vision model when vision_use_main_llm is false.
     let vision_capable = if vision_use_main_llm {
-        vision_setting || model_supports_vision(&provider, &model)
+        vision_setting && model_supports_vision(&provider, &model)
     } else {
         !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
     };

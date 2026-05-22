@@ -946,4 +946,18 @@ mod tests {
 
         assert!(body.get("thinking").is_none());
     }
+
+    #[test]
+    fn qwen_text_only_models_are_not_vision() {
+        // Regression: qwen3.7-max is a text-only model; must NOT be treated as vision.
+        // Sending image content arrays to it causes DashScope 400 errors.
+        assert!(!model_supports_vision("qwen3.7-max"));
+        assert!(!model_supports_vision("qwen3-max"));
+        assert!(!model_supports_vision("qwen3-235b-a22b"));
+        assert!(!model_supports_vision("qwen-plus"));
+        // But VL variants should be detected
+        assert!(model_supports_vision("qwen3-vl-plus"));
+        assert!(model_supports_vision("qwen-vl-max"));
+        assert!(model_supports_vision("qwen2.5-vl-72b"));
+    }
 }
