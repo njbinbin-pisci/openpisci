@@ -838,7 +838,14 @@ pub async fn chat_send(
     //   Images are injected into the main LLM's messages by the vision artifact
     //   system; stripping them would make the agent permanently blind.
     let vision_capable = if vision_use_main_llm {
-        vision_enabled && model_supports_vision(&provider, &model)
+        if vision_enabled {
+            // User explicitly confirmed the main model supports vision — trust them.
+            // This covers models like qwen3.6-plus where auto-detection doesn't match.
+            true
+        } else {
+            // No manual override; rely on auto-detection
+            model_supports_vision(&provider, &model)
+        }
     } else {
         !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
     };
@@ -1472,7 +1479,11 @@ pub async fn run_agent_headless(
     //   vision model is configured — the main LLM's vision pipeline is needed for
     //   the screen_capture → vision_context → inject workflow.
     let vision_capable = if vision_use_main_llm {
-        vision_setting && model_supports_vision(&provider, &model)
+        if vision_setting {
+            true // trust user's manual confirmation
+        } else {
+            model_supports_vision(&provider, &model)
+        }
     } else {
         !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
     };

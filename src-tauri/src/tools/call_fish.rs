@@ -212,7 +212,11 @@ When you need to wait for an external event, background process, Koi/Fish respon
         }
 
         let vision_capable = if vision_use_main_llm {
-            vision_enabled && crate::commands::chat::model_supports_vision(&provider, &model)
+            if vision_enabled {
+                true // trust user's manual confirmation
+            } else {
+                crate::commands::chat::model_supports_vision(&provider, &model)
+            }
         } else {
             !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
         };
