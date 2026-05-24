@@ -212,13 +212,13 @@ When you need to wait for an external event, background process, Koi/Fish respon
         }
 
         let vision_capable = if vision_use_main_llm {
-            if vision_enabled {
-                true // trust user's manual confirmation
-            } else {
-                crate::commands::chat::model_supports_vision(&provider, &model)
-            }
+            vision_enabled
         } else {
-            !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
+            if !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty() {
+                true
+            } else {
+                vision_enabled
+            }
         };
 
         // Build a fresh message list: only the task as a single user message

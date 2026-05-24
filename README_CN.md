@@ -18,14 +18,12 @@ OpenPisci 是一款本地优先的 AI Agent 桌面应用，基于 Tauri 2 + Rust
 
 ---
 
-## 🆕 v0.7.25 更新摘要
+## 🆕 v0.7.36 更新摘要
 
-- **Windows 桌面自动化不再弹出终端窗口**：`desktop_automation` 操作（`move_mouse`、`click`、`type_text` 等）不再闪烁可见的 PowerShell/cmd 窗口，全部在后台静默运行，避免抢走焦点或遮挡截图。
-- **视觉模型 400 错误修复**：使用视觉模型搭配 DashScope 等 OpenAI 兼容提供商时，纯图片的 content 数组现在会先插入文本占位，API 不再报 "Unexpected item type in content"。
-- **Koi 重复待办修复**：`assign_koi` 向 Koi 派发任务时不再创建重复待办。每次任务分配现在只产出一个待办项，在看板中按正常生命周期流转。
-- **Koi 观察室现已显示任务会话**：鱼池 UI 的 Koi 观察室标签页现在能正确显示 Koi 任务运行时会话（此前只有通知和内部会话可见）。
-- **Koi 激活提示词加固**：当 Koi 被 @mention 唤醒时，会先检查是否已存在匹配的待办，再决定是否创建新的——作为防止重复工作的第二层防线。
-- **工作区下拉菜单国际化修复**：聊天输入区的工作区目录下拉菜单现已显示正确的翻译文本，不再出现原始 i18n key。
+- **独立视觉模型委派修复**：独立视觉模型（如 qwen3.6-plus）现在会正确将模型名和 Base URL 传入 API 请求 — 此前模型名被静默丢弃，导致 "missing model parameter" 错误。视觉委派管道（`HarnessConfig` → `AgentLoop` → `delegate_vision_analysis`）现已端到端传递配置的视觉模型。
+- **保存时真实 API 验证**：配置视觉模型时，Pisci 现在会发送一张测试图片进行真实 API 调用来验证模型是否真正支持视觉，验证不通过则拒绝保存。
+- **视觉逻辑尊重用户意图**：`vision_capable` 标志现在严格遵循你的 `vision_enabled` 复选框 — 不再在你明确关闭视觉时静默自动检测并启用。
+- **更好的模型检测**：`model_supports_vision()` 现在能识别 `qwen3.6-plus`、`qwen3-plus`、`qwen-omni`、`o4`、`claude-4` 等之前遗漏的模型。
 
 ## ✨ 核心特性
 

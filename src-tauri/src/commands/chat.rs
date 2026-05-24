@@ -738,6 +738,7 @@ pub async fn chat_send(
         vision_provider,
         vision_model,
         vision_api_key,
+        vision_base_url,
         llm_read_timeout_secs,
         auto_compact_input_tokens_threshold,
         project_instruction_budget_chars,
@@ -767,6 +768,7 @@ pub async fn chat_send(
             settings.vision_provider.clone(),
             settings.vision_model.clone(),
             settings.vision_api_key.clone(),
+            settings.vision_base_url.clone(),
             settings.llm_read_timeout_secs,
             settings.auto_compact_input_tokens_threshold,
             settings.project_instruction_budget_chars,
@@ -830,24 +832,23 @@ pub async fn chat_send(
     // For non-vision models or non-image files, we append the path to the message text.
     // For vision models + image data, we pass through as MediaAttachment for inline injection.
     // vision_capable controls vision_override on the MAIN LLM.
-    // When vision_use_main_llm=true: both user setting AND model support must agree
-    //   (prevents forcing vision on text-only models like qwen3.7-max).
-    // When vision_use_main_llm=false: vision_capable is still true if a separate
-    //   vision model is configured, because the main LLM's vision pipeline is needed
-    //   for the screen_capture → vision_context → inject_selected_context workflow.
-    //   Images are injected into the main LLM's messages by the vision artifact
-    //   system; stripping them would make the agent permanently blind.
+    // Logic per user requirements:
+    // 1. If vision_use_main_llm=true: use main model for vision IFF vision_enabled=true
+    //    (validated at config save time via real API call).
+    // 2. If vision_use_main_llm=false with separate model configured: use separate model
+    //    (validated at config save time). Main LLM's vision pipeline is still needed for
+    //    screen_capture → vision_context → inject workfow.
+    // 3. If vision_use_main_llm=false but NO separate model configured:
+    //    fall back to main model rules (vision_enabled flag).
     let vision_capable = if vision_use_main_llm {
-        if vision_enabled {
-            // User explicitly confirmed the main model supports vision — trust them.
-            // This covers models like qwen3.6-plus where auto-detection doesn't match.
+        vision_enabled
+    } else {
+        if !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty() {
             true
         } else {
-            // No manual override; rely on auto-detection
-            model_supports_vision(&provider, &model)
+            // No separate vision model — fall back to main model logic
+            vision_enabled
         }
-    } else {
-        !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
     };
     let (effective_content, media_attachment): (String, Option<crate::gateway::MediaAttachment>) =
         if let Some(att) = attachment {
@@ -1031,7 +1032,11 @@ pub async fn chat_send(
         Some(pisci_kernel::llm::build_client(
             &vision_provider,
             &vision_api_key,
-            None,
+            if vision_base_url.is_empty() {
+                None
+            } else {
+                Some(&vision_base_url)
+            },
         ))
     } else {
         None
@@ -1051,6 +1056,7 @@ pub async fn chat_send(
         },
         Some(vision_capable),
         vision_delegate,
+        vision_model.clone(),
         auto_compact_input_tokens_threshold,
         compaction_settings,
         state.db.clone(),
@@ -1216,9 +1222,11 @@ pub async fn chat_send(
     Ok(())
 }
 
-/// Run the agent for a single message (used by both frontend chat_send and IM gateway).
-/// Returns the assistant response text.
 /// Returns true if the given provider+model supports vision (image input).
+/// NOTE: This is a best-effort heuristic based on known model naming patterns.
+/// The authoritative validation should be done at config save time via a real
+/// API call (see `validate_vision_model`).
+#[allow(dead_code)]
 pub fn model_supports_vision(provider: &str, model: &str) -> bool {
     let m = model.to_lowercase();
     let p = provider.to_lowercase();
@@ -1227,11 +1235,14 @@ pub fn model_supports_vision(provider: &str, model: &str) -> bool {
         return m.contains("gpt-4o")
             || m.contains("gpt-4-vision")
             || m.contains("gpt-4-turbo")
-            || m.contains("o1");
+            || m.contains("o1")
+            || m.contains("o3")
+            || m.contains("o4");
     }
     // Anthropic Claude 3+
     if p == "anthropic" || p.contains("claude") || m.contains("claude") {
         return m.contains("claude-3")
+            || m.contains("claude-4")
             || m.contains("claude-opus")
             || m.contains("claude-sonnet")
             || m.contains("claude-haiku");
@@ -1240,14 +1251,28 @@ pub fn model_supports_vision(provider: &str, model: &str) -> bool {
     if p == "google" || p.contains("gemini") || m.contains("gemini") {
         return true;
     }
-    // Qwen VL models
-    if m.contains("qwen-vl")
-        || m.contains("qwen2-vl")
-        || m.contains("qwen2.5-vl")
-        || m.contains("qwen3-vl")
-        || m.contains("qvq")
-    {
-        return true;
+    // Qwen / DashScope — multimodal models include:
+    //   qwen-vl-*, qwen2-vl-*, qwen2.5-vl-*, qwen3-vl-*, qvq-*
+    //   PLUS qwen3.6-plus (the default multimodal model),
+    //   qwen-plus with vision capability, etc.
+    if p == "qwen" || p == "tongyi" || p.contains("qwen") || p.contains("tongyi") {
+        // Explicit VL/Vision models
+        if m.contains("qwen-vl")
+            || m.contains("qwen2-vl")
+            || m.contains("qwen2.5-vl")
+            || m.contains("qwen3-vl")
+            || m.contains("qvq")
+            || m.contains("qwen-omni")
+        {
+            return true;
+        }
+        // Qwen3.6-plus and qwen3.x-plus are multimodal
+        if m.contains("qwen3.6-plus") || m.contains("qwen3-plus") {
+            return true;
+        }
+        // Qwen3.x-max may also support vision in some configurations
+        // but we conservatively exclude it; user must use vision_enabled override
+        return false;
     }
     // Kimi / Moonshot vision models
     if p.contains("kimi") || p.contains("moonshot") {
@@ -1263,6 +1288,107 @@ pub fn model_supports_vision(provider: &str, model: &str) -> bool {
     }
     // DeepSeek — no vision support currently
     false
+}
+
+/// Validate that a provider+model actually supports vision by making a real API call
+/// with a minimal test image. Returns Ok(()) if vision is supported, Err(msg) otherwise.
+///
+/// This should be called at config save time as the authoritative check, to replace
+/// the heuristic `model_supports_vision` name-based matching.
+pub async fn validate_vision_model(
+    provider: &str,
+    api_key: &str,
+    model: &str,
+    base_url: Option<&str>,
+) -> Result<(), String> {
+    // Minimal 1x1 transparent PNG in base64
+    const MINI_PNG_B64: &str =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+    use pisci_kernel::llm::{ContentBlock, ImageSource, LlmMessage, LlmRequest, MessageContent};
+
+    let client = pisci_kernel::llm::build_client(provider, api_key, base_url);
+
+    let req = LlmRequest {
+        messages: vec![LlmMessage {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Text {
+                    text: "Describe this image in one word.".into(),
+                },
+                ContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "base64".into(),
+                        media_type: "image/png".into(),
+                        data: MINI_PNG_B64.into(),
+                    },
+                },
+            ]),
+        }],
+        system: None,
+        tools: vec![],
+        model: model.to_string(),
+        max_tokens: 16,
+        stream: false,
+        vision_override: Some(true),
+    };
+
+    match client.complete(req).await {
+        Ok(resp) if !resp.content.is_empty() => {
+            let lower = resp.content.to_lowercase();
+            // Heuristic: if the response contains common "I can't see / no vision" phrases,
+            // the model likely doesn't support vision properly.
+            if lower.contains("unable to")
+                || lower.contains("cannot see")
+                || lower.contains("not support")
+                || lower.contains("no image")
+                || lower.contains("text only")
+            {
+                Err(format!(
+                    "Model '{}' does not appear to support vision: {}",
+                    model, resp.content
+                ))
+            } else {
+                tracing::info!(
+                    "vision_validate: model '{}' supports vision (response: {})",
+                    model,
+                    resp.content
+                );
+                Ok(())
+            }
+        }
+        Ok(_) => {
+            tracing::warn!("vision_validate: model '{}' returned empty response", model);
+            // Empty response might mean the model processed the image but had nothing to say.
+            // Treat as success — the request wasn't rejected.
+            Ok(())
+        }
+        Err(e) => {
+            let err_msg = e.to_string().to_lowercase();
+            if err_msg.contains("model")
+                || err_msg.contains("not found")
+                || err_msg.contains("unsupported")
+                || err_msg.contains("invalid")
+                || err_msg.contains("image")
+                || err_msg.contains("vision")
+                || err_msg.contains("multimodal")
+                || err_msg.contains("not support")
+            {
+                Err(format!(
+                    "Model '{}' does not support vision: {}",
+                    model, e
+                ))
+            } else {
+                // Unknown error — might be transient network issue; don't block save
+                tracing::warn!(
+                    "vision_validate: model '{}' got unexpected error (allowing save): {}",
+                    model,
+                    e
+                );
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Return value: (text_reply, optional_image_bytes, optional_image_mime)
@@ -1386,6 +1512,7 @@ pub async fn run_agent_headless(
         vision_provider,
         vision_model,
         vision_api_key,
+        vision_base_url,
         llm_read_timeout_secs,
         auto_compact_input_tokens_threshold,
         project_instruction_budget_chars,
@@ -1413,6 +1540,7 @@ pub async fn run_agent_headless(
             settings.vision_provider.clone(),
             settings.vision_model.clone(),
             settings.vision_api_key.clone(),
+            settings.vision_base_url.clone(),
             settings.llm_read_timeout_secs,
             settings.auto_compact_input_tokens_threshold,
             settings.project_instruction_budget_chars,
@@ -1474,18 +1602,15 @@ pub async fn run_agent_headless(
     let scene_policy = ScenePolicy::for_kind(scene_kind);
 
     // vision_capable controls vision_override on the MAIN LLM.
-    // When vision_use_main_llm=true: both user setting AND model support must agree.
-    // When vision_use_main_llm=false: vision_capable is still true if a separate
-    //   vision model is configured — the main LLM's vision pipeline is needed for
-    //   the screen_capture → vision_context → inject workflow.
+    // Same logic as chat_send: save-time validated, trust the config.
     let vision_capable = if vision_use_main_llm {
-        if vision_setting {
-            true // trust user's manual confirmation
-        } else {
-            model_supports_vision(&provider, &model)
-        }
+        vision_setting
     } else {
-        !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
+        if !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty() {
+            true
+        } else {
+            vision_setting
+        }
     };
 
     // Build the effective user message text, handling inbound media.
@@ -1800,7 +1925,11 @@ pub async fn run_agent_headless(
             Some(pisci_kernel::llm::build_client(
                 &vision_provider,
                 &vision_api_key,
-                None,
+                if vision_base_url.is_empty() {
+                    None
+                } else {
+                    Some(&vision_base_url)
+                },
             ))
         } else {
             None
@@ -1816,6 +1945,7 @@ pub async fn run_agent_headless(
         context_window,
         Some(vision_capable),
         headless_vision_delegate,
+        vision_model,
         scene_policy.effective_auto_compact_threshold(auto_compact_input_tokens_threshold),
         headless_compaction_settings,
         state.db.clone(),

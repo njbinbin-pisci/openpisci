@@ -1257,6 +1257,10 @@ pub struct AgentLoop {
     /// analysis, and the resulting text description is injected instead.
     /// Used when vision_use_main_llm=false and a separate vision model is configured.
     pub vision_delegate: Option<Box<dyn crate::llm::LlmClient>>,
+    /// The model id for the vision delegate. Used to populate the `model` field
+    /// in vision analysis requests so the provider knows which model to route to.
+    /// Empty when no separate vision model is configured.
+    pub vision_model: String,
     /// Receives runtime notifications (e.g. @mention alerts) injected into the
     /// message stream so the agent can react mid-execution.
     pub notification_rx: Option<Mutex<mpsc::Receiver<String>>>,
@@ -1632,6 +1636,7 @@ impl AgentLoop {
     async fn delegate_vision_analysis(
         messages: &[crate::llm::LlmMessage],
         vision_client: &dyn crate::llm::LlmClient,
+        vision_model: &str,
     ) -> Vec<crate::llm::LlmMessage> {
         use crate::llm::{ContentBlock, LlmMessage, LlmRequest, MessageContent};
 
@@ -1682,7 +1687,7 @@ impl AgentLoop {
             }],
             system: None,
             tools: vec![],
-            model: String::new(), // vision client already knows its model
+            model: vision_model.to_string(),
             max_tokens: 2048,
             stream: false,
             vision_override: Some(true),
@@ -2283,7 +2288,7 @@ impl AgentLoop {
                     // vision model for analysis and replace with text descriptions.
                     let req_messages = if let Some(ref vision_client) = self.vision_delegate {
                         let delegated =
-                            Self::delegate_vision_analysis(&req_messages, vision_client.as_ref())
+                            Self::delegate_vision_analysis(&req_messages, vision_client.as_ref(), &self.vision_model)
                                 .await;
                         // Safety net: strip any remaining image blocks that the delegate
                         // didn't process (e.g. from older tool results kept by strip_images).
@@ -3488,6 +3493,7 @@ mod tests {
             },
             vision_override: Some(false),
             vision_delegate: None,
+            vision_model: String::new(),
             notification_rx: None,
             auto_compact_input_tokens_threshold: 0,
             enable_streaming: true,

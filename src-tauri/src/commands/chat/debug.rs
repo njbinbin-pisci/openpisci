@@ -1661,9 +1661,14 @@ pub async fn get_debug_report(state: State<'_, AppState>) -> Result<DebugReport,
         let vision_configured = if settings.vision_use_main_llm {
             settings.vision_enabled
         } else {
-            !settings.vision_provider.is_empty()
+            if !settings.vision_provider.is_empty()
                 && !settings.vision_model.is_empty()
                 && !settings.vision_api_key.is_empty()
+            {
+                true
+            } else {
+                settings.vision_enabled
+            }
         };
 
         let info = SystemInfo {
@@ -1876,10 +1881,15 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
     };
 
     // Determine effective vision configuration
+    // Same logic as chat_send: save-time validated, trust the config.
     let vision_configured = if vision_use_main_llm {
         vision_enabled
     } else {
-        !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty()
+        if !vision_provider.is_empty() && !vision_model.is_empty() && !vision_api_key.is_empty() {
+            true
+        } else {
+            vision_enabled
+        }
     };
 
     if !vision_configured {

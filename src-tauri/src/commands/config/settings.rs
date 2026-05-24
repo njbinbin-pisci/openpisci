@@ -408,6 +408,88 @@ pub async fn save_settings(state: State<'_, AppState>, updates: Value) -> Result
             .collect();
     }
 
+    // ── Vision model validation ────────────────────────────────────────────
+    // Validate that the configured vision model actually supports vision by
+    // making a real API call. This replaces the old string-matching heuristic.
+    // Skip validation if no vision-related fields were changed.
+    let vision_fields_changed = updates["vision_enabled"].as_bool().is_some()
+        || updates["vision_use_main_llm"].as_bool().is_some()
+        || updates["vision_provider"].as_str().is_some()
+        || updates["vision_model"].as_str().is_some()
+        || updates["vision_api_key"].as_str().is_some();
+
+    if vision_fields_changed {
+        if settings.vision_use_main_llm {
+            // User chose to use main LLM as vision model — validate if vision is enabled
+            if settings.vision_enabled {
+                let main_api_key = settings.active_api_key().to_string();
+                if !main_api_key.is_empty() && !settings.model.is_empty() {
+                    let main_base_url = if settings.custom_base_url.is_empty() {
+                        None
+                    } else {
+                        Some(settings.custom_base_url.as_str())
+                    };
+                    match crate::commands::chat::validate_vision_model(
+                        &settings.provider,
+                        &main_api_key,
+                        &settings.model,
+                        main_base_url,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            info!(
+                                "Vision validation: main model '{}' supports vision",
+                                settings.model
+                            );
+                        }
+                        Err(msg) => {
+                            tracing::warn!("Vision validation failed: {}", msg);
+                            return Err(format!(
+                                "主模型 '{}' 不支持视觉功能，无法启用。请配置独立的视觉模型，或更换支持视觉的主模型。\nTechnical: {}",
+                                settings.model, msg
+                            ));
+                        }
+                    }
+                }
+            }
+        } else {
+            // User configured a separate vision model — validate it
+            if !settings.vision_provider.is_empty()
+                && !settings.vision_model.is_empty()
+                && !settings.vision_api_key.is_empty()
+            {
+                let vis_base_url = if settings.vision_base_url.is_empty() {
+                    None
+                } else {
+                    Some(settings.vision_base_url.as_str())
+                };
+                match crate::commands::chat::validate_vision_model(
+                    &settings.vision_provider,
+                    &settings.vision_api_key,
+                    &settings.vision_model,
+                    vis_base_url,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        info!(
+                            "Vision validation: separate model '{}' supports vision",
+                            settings.vision_model
+                        );
+                    }
+                    Err(msg) => {
+                        tracing::warn!("Vision validation failed: {}", msg);
+                        return Err(format!(
+                            "独立视觉模型 '{}' 不支持视觉功能，无法保存配置。请检查模型名称是否正确，或更换支持视觉的模型。\nTechnical: {}",
+                            settings.vision_model, msg
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     let headless = settings.browser_headless;
     settings.save().map_err(|e| e.to_string())?;
     let saved = settings.clone();

@@ -20,6 +20,8 @@ pub struct OpenAiClient {
 /// Returns true if the model name indicates vision/multimodal capability.
 /// Conservative: only well-known vision models are listed.
 /// Unknown models → no vision (safe default to avoid 400 errors).
+/// NOTE: The authoritative vision validation is done at config save time
+/// via `validate_vision_model` in the chat commands layer.
 pub fn model_supports_vision(model: &str) -> bool {
     let m = model.to_lowercase();
     // OpenAI vision-capable models
@@ -27,14 +29,19 @@ pub fn model_supports_vision(model: &str) -> bool {
         || m.contains("gpt-4-vision")
         || m.contains("gpt-4-turbo")
         || m.contains("o3")
-        // Qwen — qwen-vl and qwen*-vl models support vision;
+        || m.contains("o4")
+        // Qwen — qwen-vl, qwen*-vl, qwen3.6-plus models support vision;
         // plain "qwen3" text models (e.g. qwen3-235b-a22b) do NOT.
         || m.contains("qwen-vl")
         || m.contains("qwen3-vl")
         || m.contains("qwen2.5-vl")
         || m.contains("qvq")
+        || m.contains("qwen3.6-plus")
+        || m.contains("qwen3-plus")
+        || m.contains("qwen-omni")
         // Claude 3+ (all support vision)
         || m.contains("claude-3")
+        || m.contains("claude-4")
         || m.contains("claude-sonnet")
         || m.contains("claude-haiku")
         || m.contains("claude-opus")

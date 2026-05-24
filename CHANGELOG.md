@@ -6,6 +6,23 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+---
+
+## [0.7.36] - 2026-05-24
+
+### Fixed
+- **Vision model delegation broken: separate vision model ignored, "missing model parameter" error**: when a non-vision main model was paired with a separate vision model (e.g. DeepSeek + qwen3.6-plus), the vision model name was never passed to the API — `delegate_vision_analysis()` always used `model: ""` in the request, causing providers to reject it. Additionally, `vision_base_url` was never forwarded to the vision delegate client, breaking custom endpoints (DashScope, etc.). Fixed by:
+  - Threading `vision_model` through `HarnessConfig` → `AgentLoop` → `delegate_vision_analysis()` so the actual configured model name reaches the API.
+  - Passing `vision_base_url` to `build_client()` when constructing the vision delegate.
+  - Adding `vision_model: String` to both `AgentLoop` and `HarnessConfig` structs with builder support.
+- **Vision capability detection relied on brittle name-matching**: `model_supports_vision()` used substring checks (`qwen-vl`, `qwen3-vl`, etc.) that missed real multimodal models like `qwen3.6-plus`. While the heuristic is retained as a fallback, the authoritative check is now a **real API call at config save time** — if a configured vision model doesn't actually support images, the save is rejected with a clear error message.
+- **Vision logic overrides user intent**: when `vision_use_main_llm=true` and `vision_enabled=false`, the old code still called `model_supports_vision()` to auto-detect vision — silently enabling vision on a text-only model when the user explicitly left it off. Fixed: `vision_capable` now strictly follows the user's `vision_enabled` flag; no silent auto-detection.
+- **Updated `model_supports_vision()` patterns**: added `qwen3.6-plus`, `qwen3-plus`, `qwen-omni`, `o4`, `claude-4` to both the kernel-level (`openai.rs`) and command-level (`chat.rs`) heuristics for improved first-guess accuracy.
+
+### Changed
+- **Vision model validation at settings save time**: when vision-related fields change, `save_settings` now calls `validate_vision_model()` — a real API call with a minimal test image — to verify the configured model actually supports vision. If validation fails, the settings are not saved and an error is returned to the frontend.
+- **Unified `vision_capable` logic** across all 5 call sites (`chat_send`, `run_agent_headless`, `call_fish`, `call_koi`, debug paths): no more scattered inline comments and divergent logic.
+
 ## [0.7.25] - 2026-05-21
 
 ### Fixed

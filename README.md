@@ -18,14 +18,12 @@ OpenPisci is a local-first AI Agent desktop application built with Tauri 2 + Rus
 
 ---
 
-## 🆕 What's New in v0.7.25
+## 🆕 What's New in v0.7.36
 
-- **Silent desktop automation on Windows**: `desktop_automation` actions (`move_mouse`, `click`, `type_text`, etc.) no longer flash visible PowerShell/cmd windows — they now run silently in the background, preventing focus theft and obscured screen captures.
-- **Vision model 400 error fixed**: when using a vision model with DashScope or similar OpenAI-compatible providers, image-only content arrays now include a leading text placeholder so the API accepts the request without "Unexpected item type in content" errors.
-- **Koi duplicate-todo fix**: `assign_koi` no longer creates a duplicate todo when delegating work to a Koi. Each task assignment now produces exactly one todo that moves through the Kanban lifecycle.
-- **Koi Observer now shows task sessions**: the Koi Observer tab in the Pond UI now correctly displays Koi task runtime sessions (previously only notification and internal sessions were visible).
-- **Koi activation prompt hardened**: when a Koi is @mentioned and wakes up, it now checks existing todos first before creating new ones — a second-layer defense against duplicate work.
-- **Workspace dropdown i18n fix**: the chat input area's workspace directory dropdown now shows proper translated labels instead of raw i18n keys.
+- **Vision model delegation fixed**: separate vision models (e.g. qwen3.6-plus) now properly receive the model name and base URL in API requests — previously the model was silently dropped, causing \"missing model parameter\" errors. The vision delegate pipeline (`HarnessConfig` → `AgentLoop` → `delegate_vision_analysis`) now threads the configured vision model end-to-end.
+- **Real API validation at save time**: when you configure a vision model, Pisci now makes a real API call with a test image to verify the model actually supports vision before saving. No more silent misconfiguration.
+- **Vision logic respects user intent**: the `vision_capable` flag now strictly follows your `vision_enabled` checkbox — no more silent auto-detection that could enable vision on text-only models when you explicitly left it off.
+- **Better model detection**: `model_supports_vision()` now recognizes `qwen3.6-plus`, `qwen3-plus`, `qwen-omni`, `o4`, and `claude-4` in addition to previously supported models.
 
 ## ✨ Key Features
 
