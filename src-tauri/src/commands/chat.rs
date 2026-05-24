@@ -2182,6 +2182,10 @@ pub fn build_system_prompt_with_env(
         "linux" => "Linux",
         other => other,
     };
+    // Inject full local datetime so the agent has accurate time perception.
+    // Includes: date, day-of-week, time (HH:MM:SS), and UTC offset.
+    let now = chrono::Local::now();
+    let date_str = now.format("%Y-%m-%d (%A) %H:%M:%S %Z").to_string();
     let os_identity = format!(
         "You are Pisci, a powerful AI Agent. You run on the user's local {os_display} machine and can control the entire desktop environment."
     );
@@ -2606,7 +2610,7 @@ Older tool results are automatically demoted to a one-line receipt to keep your 
 - If you only need the high-level signal (success/failure, file path, byte count), trust the receipt.
 - If you need the original full output (e.g. re-read a long file you saw earlier, inspect specific shell stdout, look up a row inside a previous search), call `recall_tool_result(tool_use_id="tu_abc123")` — never re-run the original tool just to see its output again.
 - Recall costs context, so only call it when the receipt is genuinely insufficient.{memory}"#,
-        date = chrono::Utc::now().format("%Y-%m-%d"),
+        date = date_str,
         memory = memory_context,
         os_identity = os_identity,
     )

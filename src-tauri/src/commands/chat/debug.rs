@@ -1392,7 +1392,7 @@ pub async fn run_debug_scenario(
          Complete the task in as few tool calls as possible.",
         os_display_name(),
         scenario.name,
-        chrono::Utc::now().format("%Y-%m-%d"),
+        chrono::Local::now().format("%Y-%m-%d (%A) %H:%M:%S %Z").to_string(),
         effective_workspace.display(),
         tools_hint
     );
@@ -2032,7 +2032,7 @@ pub async fn run_uia_drag_test(state: State<'_, AppState>) -> Result<UiaDragTest
 
     let system_prompt = format!(
         "You are Pisci, a cross-platform AI Agent running a precision drag test.\nToday's date: {}\nWorkspace directory: {}\nUse ONLY these tools: screen_capture, {}. Do not call any other tools.\nExecute the task precisely. Do not ask for confirmation.",
-        chrono::Utc::now().format("%Y-%m-%d"),
+        chrono::Local::now().format("%Y-%m-%d (%A) %H:%M:%S %Z").to_string(),
         effective_workspace.display(),
         drag_tool,
     );

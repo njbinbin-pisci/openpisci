@@ -837,7 +837,7 @@ pub async fn execute_task(
          4. `im_send_message(binding_key=\"<resolved binding_key>\", text=\"<short result summary>\")`\n\
          If step 3 returns no candidates, state that there is no bound IM target for that channel instead of pretending the message was delivered.{}{}{}{}",
         task_id,
-        chrono::Utc::now().format("%Y-%m-%d"),
+        chrono::Local::now().format("%Y-%m-%d (%A) %H:%M:%S %Z").to_string(),
         personal_prompt_section,
         project_instruction_section,
         task_notify_targets_section,
