@@ -2322,6 +2322,13 @@ impl AgentLoop {
                             })
                             .collect()
                     } else {
+                        // Main model handles vision directly.  Still clear the
+                        // selection so the same images are not re-injected on
+                        // subsequent iterations, which would waste tokens and
+                        // could confuse the model into re-processing images it
+                        // already described.  The model's response (persisted
+                        // to `messages`) will capture what it learned.
+                        vision::clear_selection(&ctx.session_id).await;
                         req_messages
                     };
                     // Route through RequestBuilder so provider-specific
