@@ -1301,9 +1301,12 @@ pub async fn validate_vision_model(
     model: &str,
     base_url: Option<&str>,
 ) -> Result<(), String> {
-    // Minimal 1x1 transparent PNG in base64
-    const MINI_PNG_B64: &str =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    // Use the project's own pisci icon as the vision test image.
+    // This is large enough for all model providers (Qwen requires >= 10x10 pixels).
+    const PISCI_PNG_BYTES: &[u8] = include_bytes!("../../../public/pisci.png");
+
+    use base64::Engine;
+    let pisci_png_b64 = base64::engine::general_purpose::STANDARD.encode(PISCI_PNG_BYTES);
 
     use pisci_kernel::llm::{ContentBlock, ImageSource, LlmMessage, LlmRequest, MessageContent};
 
@@ -1320,7 +1323,7 @@ pub async fn validate_vision_model(
                     source: ImageSource {
                         source_type: "base64".into(),
                         media_type: "image/png".into(),
-                        data: MINI_PNG_B64.into(),
+                        data: pisci_png_b64.clone(),
                     },
                 },
             ]),
@@ -1364,15 +1367,35 @@ pub async fn validate_vision_model(
             Ok(())
         }
         Err(e) => {
-            let err_msg = e.to_string().to_lowercase();
-            if err_msg.contains("model")
-                || err_msg.contains("not found")
-                || err_msg.contains("unsupported")
-                || err_msg.contains("invalid")
-                || err_msg.contains("image")
-                || err_msg.contains("vision")
-                || err_msg.contains("multimodal")
-                || err_msg.contains("not support")
+            let err_msg_lower = e.to_string().to_lowercase();
+            // The model rejected the image due to size/dimension restrictions —
+            // this actually means it DOES support vision, our test image just
+            // didn't meet its minimum requirements.
+            let is_image_size_error = err_msg_lower.contains("image")
+                && (err_msg_lower.contains("length")
+                    || err_msg_lower.contains("width")
+                    || err_msg_lower.contains("height")
+                    || err_msg_lower.contains("dimension")
+                    || err_msg_lower.contains("larger than")
+                    || err_msg_lower.contains("small")
+                    || err_msg_lower.contains("size")
+                    || err_msg_lower.contains("restriction")
+                    || err_msg_lower.contains("too "));
+            if is_image_size_error {
+                tracing::info!(
+                    "vision_validate: model '{}' supports vision (image-size rejection indicates vision capability)",
+                    model
+                );
+                return Ok(());
+            }
+            if err_msg_lower.contains("model")
+                || err_msg_lower.contains("not found")
+                || err_msg_lower.contains("unsupported")
+                || err_msg_lower.contains("invalid")
+                || err_msg_lower.contains("image")
+                || err_msg_lower.contains("vision")
+                || err_msg_lower.contains("multimodal")
+                || err_msg_lower.contains("not support")
             {
                 Err(format!("Model '{}' does not support vision: {}", model, e))
             } else {
