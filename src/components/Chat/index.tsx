@@ -1003,11 +1003,7 @@ export default function Chat() {
       if (isNearBottomRef.current) setUnreadCount(0);
       // Trigger lazy-load when scrolled near the top
       if (el.scrollTop < 60 && hasMoreHistory && !loadingMoreRef.current) {
-        const prevScrollHeight = el.scrollHeight;
         loadMoreHistory();
-        requestAnimationFrame(() => {
-          el.scrollTop = el.scrollHeight - prevScrollHeight;
-        });
       }
     };
     el.addEventListener("scroll", onScroll, { passive: true });

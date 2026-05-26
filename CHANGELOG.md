@@ -6,6 +6,14 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.5] - 2026-05-27
+
+### Fixed
+- **Lazy load scroll locked at 0**: scrolling to the top of IM/chat sessions to load older messages would lock the scrollbar at position 0, preventing both further lazy loads and scroll-back. Root cause: the `onScroll` handler called `requestAnimationFrame` to restore scroll position BEFORE `loadMoreHistory`'s async fetch completed, setting `el.scrollTop = 0` prematurely. Fixed by removing the redundant outer `rAF` — `loadMoreHistory` already handles scroll restoration correctly after messages are prepended.
+- **JSON parse errors in package.json and tauri.conf.json**: missing trailing commas after the version field (from the v0.8.4 version bump) caused `npm test` and `cargo build` to fail on CI.
+
+---
+
 ## [0.8.4] - 2026-05-26
 
 ### Fixed
