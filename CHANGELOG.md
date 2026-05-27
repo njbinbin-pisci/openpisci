@@ -6,6 +6,13 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.9] - 2026-05-28
+
+### Added
+- **VS Code-style toggle on explorer/search/git icon strip**: clicking an already-active IDE view icon (explorer / search / git) now collapses the IDE side panel, and clicking again expands it. Switching to a different view from a collapsed state automatically re-expands the side panel. The icon's active highlight mirrors the collapse state — a collapsed IDE view shows as un-highlighted, matching VS Code's activity-bar feedback. Non-IDE views (chat, board, inbox, koiObserver) are unaffected.
+
+---
+
 ## [0.8.8] - 2026-05-28
 
 ### Fixed
