@@ -52,10 +52,32 @@ const TOOL_RESULT_HARD_MAX_CHARS: usize = 48_000;
 const CONTEXT_SINGLE_RESULT_SHARE: f64 = 0.5;
 const CHECKPOINT_MAX_BYTES: usize = 8_000_000;
 
+// ── Vision-loop (screenshot-heavy) nudge ────────────────────────────────
+// Desktop-automation vision agents (WeChat/QQ input, screen-control tasks)
+// frequently fall into "describe-then-verify" loops: move → screenshot →
+// analyze → move → screenshot → analyze, repeating the same observation
+// 3–5 times without actually executing the target action (click, type,
+// press Enter). Generic detectors miss this pattern because the tool
+// inputs/outputs differ across iterations (different coordinates, fresh
+// screenshots each time). Instead we detect by *density*: if screenshots
+// / vision-analyze calls dominate a recent sliding window of tool calls,
+// we nudge the model to stop verifying and commit to a concrete action.
+const VISION_LOOP_WINDOW: usize = 8;
+const VISION_LOOP_THRESHOLD: usize = 3;
+/// Minimum number of non-screenshot ("real action") calls between two
+/// nudge emissions — prevents the nudge from firing on every single turn
+/// when the model is legitimately doing heavy vision work.
+const VISION_LOOP_COOLDOWN: usize = 3;
+
 /// Tools that are known polling/status-checking tools. These get stricter
 /// no-progress detection (inspired by OpenClaw's known_poll_no_progress).
 const KNOWN_POLL_TOOLS: &[&str] = &["process_control", "shell", "powershell_query"];
 const KNOWLEDGE_GATHERING_TOOLS: &[&str] = &["web_search", "browser"];
+/// Keywords that identify screenshot / vision-analyze tools. Substring
+/// match (case-insensitive) — covers typical names like
+/// `take_screenshot`, `screen_analyze`, `vision_context`, `screen_capture`,
+/// `vision_analyze`, `screenshot`, etc. without requiring exact names.
+const VISION_LOOP_KEYWORDS: &[&str] = &["screenshot", "screen_analyze", "vision_analyze", "screen_capture", "vision_context"];
 
 static TOOL_RATE_STATE: Lazy<Mutex<HashMap<String, Vec<std::time::Instant>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -94,6 +116,11 @@ enum LoopDetector {
     KnownPollNoProgress,
     PingPong,
     GlobalCircuitBreaker,
+    /// Vision-agent screenshot-analyze loop: the agent is spending too much
+    /// time re-describing the scene with screenshots instead of committing
+    /// to concrete actions (click, type, press). Nudges the model to
+    /// execute rather than observe.
+    VisionLoop,
 }
 
 /// Result of loop detection analysis.
@@ -137,6 +164,11 @@ struct AgentCheckpointPayload {
 /// Maintains a sliding window of recent tool calls (like OpenClaw's toolCallHistory).
 struct LoopDetectorState {
     history: Vec<ToolCallRecord>,
+    /// Number of non-vision-loop tool calls since the last vision-loop
+    /// nudge was emitted. Used to throttle the nudge so the model is not
+    /// bombarded on every turn when it legitimately needs several
+    /// screenshots in a row (e.g., complex UI inspection).
+    turns_since_vision_nudge: usize,
 }
 
 impl LoopDetectorState {
@@ -151,10 +183,14 @@ impl LoopDetectorState {
         if self.history.len() > TOOL_CALL_HISTORY_SIZE {
             self.history.remove(0);
         }
+        // Count every recorded call toward the vision-nudge cooldown,
+        // so after a nudge the model has a few real-action turns to
+        // respond before we consider re-nudging.
+        self.turns_since_vision_nudge = self.turns_since_vision_nudge.saturating_add(1);
     }
 
     /// Run all detectors against the current history, return the most severe result.
-    fn detect(&self, pending_name: &str, pending_input: &serde_json::Value) -> LoopDetectionResult {
+    fn detect(&mut self, pending_name: &str, pending_input: &serde_json::Value) -> LoopDetectionResult {
         let pending_hash = stable_hash_input(pending_name, pending_input);
 
         // 1. Global circuit breaker: same tool+input with no progress
@@ -258,6 +294,38 @@ impl LoopDetectorState {
                     ping_pong_count
                 ),
             };
+        }
+
+        // 3.5. Vision-loop (screenshot-analyze) density detection.
+        //
+        // Desktop-automation vision agents repeatedly do:
+        //   move_mouse → take_screenshot → screen_analyze → move_mouse → …
+        // and never actually commit to the target action (click the input,
+        // type the message, press Enter). Generic detectors miss this
+        // because each call uses different coordinates / fresh screenshots,
+        // so hashes differ. Detect by *density*: if vision tools dominate
+        // the last VISION_LOOP_WINDOW calls and we haven't nudged in the
+        // last VISION_LOOP_COOLDOWN real-action turns, inject a nudge.
+        //
+        // IMPORTANT: this is Warning-only (never Critical) — we never
+        // *block* the screenshot. We just tell the model to stop
+        // over-verifying and commit to a concrete action sequence.
+        if self.turns_since_vision_nudge >= VISION_LOOP_COOLDOWN {
+            let (vision_count, window_size) = self.count_recent_vision_density(VISION_LOOP_WINDOW);
+            if window_size > 0 && vision_count >= VISION_LOOP_THRESHOLD {
+                // Reset the cooldown counter now so subsequent turns in
+                // the same screenshot-heavy stretch don't spam nudges.
+                self.turns_since_vision_nudge = 0;
+                return LoopDetectionResult {
+                    level: LoopLevel::Warning,
+                    detector: Some(LoopDetector::VisionLoop),
+                    count: vision_count,
+                    message: format!(
+                        "[视觉循环检测] 最近{}次工具调用中，有{}次是截图/视觉分析。你正在陷入“移动→截图→分析→再截图”的反复验证循环，没有执行任何实质性动作（点击输入框、输入文字、按回车）。请立即执行以下操作：(1) 点击输入框获得焦点（一次 click）；(2) 在同一回合内直接输入目标文本；(3) 按回车发送。不要再截图验证，不要再移动鼠标确认位置。",
+                        window_size, vision_count
+                    ),
+                };
+            }
         }
 
         // 4. Generic repeat: same tool+input appearing too many times
@@ -378,6 +446,25 @@ impl LoopDetectorState {
             }
         }
         alternations
+    }
+
+    /// Returns `(vision_calls, window_size)` over the last `window` tool
+    /// calls in history. Vision calls are identified by substring match
+    /// against `VISION_LOOP_KEYWORDS` (covers `take_screenshot`,
+    /// `screen_analyze`, `screen_capture`, `vision_analyze`, `vision_context`,
+    /// etc.). `window_size` may be smaller than `window` if history hasn't
+    /// yet accumulated that many entries.
+    fn count_recent_vision_density(&self, window: usize) -> (usize, usize) {
+        let start = self.history.len().saturating_sub(window);
+        let slice = &self.history[start..];
+        let mut vision = 0usize;
+        for rec in slice {
+            let lower = rec.name.to_lowercase();
+            if VISION_LOOP_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
+                vision += 1;
+            }
+        }
+        (vision, slice.len())
     }
 }
 
@@ -2001,6 +2088,7 @@ impl AgentLoop {
         let max_iterations = ctx.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS as u32) as usize;
         let mut loop_detector = LoopDetectorState {
             history: restored_loop_history.unwrap_or_default(),
+            turns_since_vision_nudge: 0,
         };
         let mut rolling_summary = String::new();
         let mut seen_notifications: HashSet<String> =

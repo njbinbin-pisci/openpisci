@@ -6,6 +6,13 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.10] - 2026-05-28
+
+### Fixed
+- **Vision-model screenshot-analyze loop**: when driving desktop automation through a vision model (WeChat/QQ input, screen-control tasks), the agent occasionally gets stuck in a "describe-then-verify" loop — `move_mouse → take_screenshot → screen_analyze → move → screenshot → analyze …` — repeatedly re-describing the scene without ever committing to the target action (click, type, press Enter). Generic loop detectors (same-input repeat, no-progress streak, ping-pong) all miss this because each iteration uses fresh coordinates / fresh screenshots / different analysis prompts, so hashes differ. Added a dedicated **VisionLoop density detector** in `pisci-kernel/src/agent/loop_.rs`: if 3 or more of the last 8 tool calls are screenshot / vision-analyze (matched by substring against `screenshot`, `screen_analyze`, `screen_capture`, `vision_analyze`, `vision_context`), a Warning-level nudge is injected telling the model to stop over-verifying and commit to a concrete action sequence (click input → type text → press Enter, all in one turn, no more screenshots). A cooldown of 3 real-action turns prevents the nudge from firing on every single iteration. The screenshot tool itself is never *blocked* (only nudged) — legitimate multi-step vision work still proceeds, just with periodic prompts to keep the agent on-task.
+
+---
+
 ## [0.8.9] - 2026-05-28
 
 ### Added
