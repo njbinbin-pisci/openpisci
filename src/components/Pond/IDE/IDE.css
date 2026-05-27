@@ -143,6 +143,30 @@
   background: var(--bg-hover);
 }
 
+/* Inline name input for new file/folder creation (VS Code style) */
+.file-tree-inline-input {
+  cursor: default;
+}
+
+.file-tree-inline-input:hover {
+  background: transparent;
+}
+
+.file-tree-name-input {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  padding: 0 4px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  outline: none;
+  line-height: 20px;
+}
+
 .file-tree-item.active {
   background: var(--accent-dim);
   border-left-color: var(--accent);
