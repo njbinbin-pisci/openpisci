@@ -145,7 +145,16 @@
   overflow: hidden;
 }
 
-/* IDE side panel (file tree / search / git) — placed to right of center */
+/* When an IDE view (explorer/search/git) is active, lay out the side
+   panel and the main editor area horizontally inside the content area
+   so the bottom terminal/assistant panel can span the full width of
+   .collab-center. */
+.collab-content-area.collab-content-area--with-side {
+  flex-direction: row;
+}
+
+/* IDE side panel (file tree / search / git) — sibling of .collab-ide-main
+   inside .collab-content-area when an IDE view is active. */
 .collab-ide-side {
   width: 260px;
   min-width: 180px;
@@ -154,11 +163,6 @@
   background: var(--bg-secondary);
   overflow-y: auto;
   overflow-x: hidden;
-}
-
-.collab-ide-side.collab-ide-side-right {
-  border-right: none;
-  border-left: 1px solid var(--border);
 }
 
 .collab-ide-main {

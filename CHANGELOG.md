@@ -6,6 +6,18 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.8] - 2026-05-28
+
+### Fixed
+- **Chat-room scroll lands at top when re-entering from another view**: switching `contentView` from `explorer`/`search`/`git`/`board`/`inbox` back to `chat` unmounts and remounts the message scroll container, but the scroll-to-bottom effect only depended on `activeSessionId` and `messages.length` so the new mount stayed at `scrollTop=0`. Added `contentView` to the effect dependency and changed the pin key from session id to `${session}|${contentView}` so each entry into chat re-pins to the bottom.
+- **Terminal squeezed by IDE side panel in explorer/search/git views**: the IDE side panel (260 px) sat between `.collab-center` and `.collab-right`, eating horizontal space from the terminal/assistant slot at the bottom of `.collab-center`. Restructured the layout so the IDE side panel now lives *inside* `.collab-content-area` (which becomes `flex-direction: row` via the `--with-side` modifier when an IDE view is active). The bottom panel now spans the full width of `.collab-center` regardless of which view is active.
+- **IDE Explorer inline-create UX**: replaced the system `window.prompt()` dialog with a VS Code–style inline text input that appears at the correct depth in the file tree. Inside-directory selection creates inside that directory; file selection creates at sibling level; no selection creates at project root. Enter commits, Escape cancels, the target directory auto-expands, and the input auto-focuses.
+
+### Added
+- **Pisci CLI assistant panel**: new 🤖 button in the right-side icon strip (above the terminal toggle) opens a CLI-style chat in the same bottom slot as the terminal. Designed for users unfamiliar with shell commands — ask in plain language ("build the project", "git status", "find TODOs in src/") and Pisci runs the corresponding actions through its standard tool stack. Implementation: `src/components/Pond/IDE/AssistantPanel.tsx` lazily creates a per-project `Pisci CLI — {project}` session bound to the project workspace, streams `agent_event_*` `text_delta` to a monospaced log, and surfaces tool start/end + errors as muted lines. Terminal and assistant are mutually exclusive in the bottom slot; toggling one closes the other. Localized via `ide.assistant`, `ide.assistantTitle`, `ide.assistantHint`, `ide.assistantInputPlaceholder`, `ide.assistantSend`, `ide.assistantClear`.
+
+---
+
 ## [0.8.7] - 2026-05-28
 
 ### Fixed

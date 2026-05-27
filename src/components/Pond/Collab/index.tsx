@@ -8,6 +8,7 @@ import FileTree from "../IDE/FileTree";
 import EditorTabs from "../IDE/EditorTabs";
 import CodeEditor from "../IDE/CodeEditor";
 import TerminalPanel from "../IDE/Terminal";
+import AssistantPanel from "../IDE/AssistantPanel";
 import GitPanel from "../IDE/GitPanel";
 import SearchPanel from "../IDE/SearchPanel";
 import Board from "../Board";
@@ -271,6 +272,7 @@ export default function Collab() {
   const [gitModified, setGitModified] = useState<Set<string>>(new Set());
   const [gitAdded, setGitAdded] = useState<Set<string>>(new Set());
   const [showTerminal, setShowTerminal] = useState(false);
+  const [showAssistant, setShowAssistant] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(200);
   const activeTab = tabs.find((t) => t.path === activeTabPath) || null;
 
@@ -385,9 +387,16 @@ export default function Collab() {
   // mount. We pin to the bottom for a short window (~600ms) using a
   // ResizeObserver, then mark this session as scrolled so subsequent
   // appends use the existing near-bottom heuristic.
+  //
+  // Also fires when the user switches *back* into the chat view from
+  // explorer/search/git/board/inbox — the chat scroll container is
+  // unmounted while those views are active, so the new mount needs to
+  // be re-pinned (key includes contentView so each entry re-pins).
   useEffect(() => {
+    if (contentView !== "chat") return;
     if (!activeSessionId || messages.length === 0) return;
-    if (scrolledSessionRef.current === activeSessionId) return;
+    const pinKey = `${activeSessionId}|${contentView}`;
+    if (scrolledSessionRef.current === pinKey) return;
     const el = messagesContainerRef.current;
     if (!el) return;
 
@@ -396,8 +405,8 @@ export default function Collab() {
 
     const pin = () => {
       if (cancelled) return;
-      if (scrolledSessionRef.current === sessionAtStart) return;
-      // Only scroll if we're still on the same session.
+      if (scrolledSessionRef.current === pinKey) return;
+      // Only scroll if we're still on the same session + chat view.
       if (activeSessionId !== sessionAtStart) return;
       el.scrollTop = el.scrollHeight;
     };
@@ -415,10 +424,10 @@ export default function Collab() {
       cancelled = true;
       ro.disconnect();
       // Final pin in case a late layout pass landed exactly on this tick.
-      if (scrolledSessionRef.current !== sessionAtStart && activeSessionId === sessionAtStart) {
+      if (scrolledSessionRef.current !== pinKey && activeSessionId === sessionAtStart) {
         el.scrollTop = el.scrollHeight;
       }
-      scrolledSessionRef.current = sessionAtStart;
+      scrolledSessionRef.current = pinKey;
     }, 600);
 
     return () => {
@@ -426,7 +435,7 @@ export default function Collab() {
       ro.disconnect();
       window.clearTimeout(finalize);
     };
-  }, [activeSessionId, messages.length]);
+  }, [activeSessionId, messages.length, contentView]);
 
   // Real-time append: trim FIFO, auto-scroll
   useEffect(() => {
@@ -925,9 +934,36 @@ export default function Collab() {
         </div>
       )}
 
-      {/* CENTER: content area (top) + terminal (bottom) */}
+      {/* CENTER: content area (top: sidebar+main horizontal) + bottom panel
+          (terminal or assistant) spanning full width */}
       <div className="collab-center">
-        <div className="collab-content-area">
+        <div
+          className={`collab-content-area${(contentView === "explorer" || contentView === "search" || contentView === "git") ? " collab-content-area--with-side" : ""}`}
+        >
+          {/* IDE side panel (file tree / search / git) — placed to the
+              LEFT of the main editor when an IDE view is active. Living
+              inside content-area means the bottom terminal/assistant
+              panel keeps the full center width. */}
+          {(contentView === "explorer" || contentView === "search" || contentView === "git") && (
+            <div className="collab-ide-side">
+              {projectDir ? (
+                <>
+                  {contentView === "explorer" && (
+                    <FileTree nodes={fileTree} activePath={activeTabPath} gitModified={gitModified} gitAdded={gitAdded} projectDir={projectDir} onFileClick={(node) => openFile(node.path)} onRefresh={() => { loadFileTree(); loadGitStatus(); }} />
+                  )}
+                  {contentView === "search" && (
+                    <SearchPanel projectDir={projectDir} onResultClick={(path, _line) => openFile(path)} />
+                  )}
+                  {contentView === "git" && (
+                    <GitPanel projectDir={projectDir} onDiffClick={(path) => openDiff(path)} onRefresh={loadGitStatus} />
+                  )}
+                </>
+              ) : (
+                <div className="ide-no-project"><div className="icon">📂</div><div>{t("ide.noProjectDir") || "No project directory configured."}</div><button className="chatpool-btn chatpool-btn-primary" onClick={handleBindProjectDir} style={{ marginTop: 10 }}>{t("pool.bindProjectDir") || "Associate / Create Project Directory"}</button></div>
+              )}
+            </div>
+          )}
+
           {/* Chat view */}
           {contentView === "chat" && (
             <>
@@ -995,35 +1031,22 @@ export default function Collab() {
           {contentView === "koiObserver" && <PisciInbox mode="koiObserver" />}
         </div>
 
-        {/* Terminal panel - persistent across views, only when project bound and toggled */}
-        {showTerminal && projectDir && (
+        {/* Bottom panel — either terminal or assistant. Spans the full
+            width of .collab-center because the IDE side panel now lives
+            inside .collab-content-area instead of as a sibling. */}
+        {showTerminal && projectDir && !showAssistant && (
           <>
             <div className="ide-resize-handle-v" onMouseDown={startTerminalResize} />
             <TerminalPanel projectDir={projectDir} visible={showTerminal} onClose={() => setShowTerminal(false)} height={terminalHeight} />
           </>
         )}
+        {showAssistant && (
+          <>
+            <div className="ide-resize-handle-v" onMouseDown={startTerminalResize} />
+            <AssistantPanel projectDir={projectDir} visible={showAssistant} onClose={() => setShowAssistant(false)} height={terminalHeight} />
+          </>
+        )}
       </div>
-
-      {/* IDE side panel (between center and right icon strip, only for explorer/search/git) */}
-      {(contentView === "explorer" || contentView === "search" || contentView === "git") && (
-        <div className="collab-ide-side collab-ide-side-right">
-          {projectDir ? (
-            <>
-              {contentView === "explorer" && (
-                <FileTree nodes={fileTree} activePath={activeTabPath} gitModified={gitModified} gitAdded={gitAdded} projectDir={projectDir} onFileClick={(node) => openFile(node.path)} onRefresh={() => { loadFileTree(); loadGitStatus(); }} />
-              )}
-              {contentView === "search" && (
-                <SearchPanel projectDir={projectDir} onResultClick={(path, _line) => openFile(path)} />
-              )}
-              {contentView === "git" && (
-                <GitPanel projectDir={projectDir} onDiffClick={(path) => openDiff(path)} onRefresh={loadGitStatus} />
-              )}
-            </>
-          ) : (
-            <div className="ide-no-project"><div className="icon">📂</div><div>{t("ide.noProjectDir") || "No project directory configured."}</div><button className="chatpool-btn chatpool-btn-primary" onClick={handleBindProjectDir} style={{ marginTop: 10 }}>{t("pool.bindProjectDir") || "Associate / Create Project Directory"}</button></div>
-          )}
-        </div>
-      )}
 
       {/* RIGHT: Icon tab strip (always visible, no collapse) */}
       <div className="collab-right">
@@ -1035,7 +1058,18 @@ export default function Collab() {
             </button>
           ))}
           <div style={{ flex: 1 }} />
-          <button className={`collab-right-icon${showTerminal ? " active" : ""}`} onClick={() => setShowTerminal((v) => !v)} title={t("ide.terminal") || "Terminal"}>
+          <button
+            className={`collab-right-icon${showAssistant ? " active" : ""}`}
+            onClick={() => { setShowAssistant((v) => !v); if (!showAssistant) setShowTerminal(false); }}
+            title={t("ide.assistant") || "Assistant"}
+          >
+            <span className="activity-icon">🤖</span>
+          </button>
+          <button
+            className={`collab-right-icon${showTerminal ? " active" : ""}`}
+            onClick={() => { setShowTerminal((v) => !v); if (!showTerminal) setShowAssistant(false); }}
+            title={t("ide.terminal") || "Terminal"}
+          >
             <span className="activity-icon">⌨</span>
           </button>
         </div>
