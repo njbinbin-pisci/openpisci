@@ -4,6 +4,10 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { useTranslation } from "react-i18next";
 import { systemApi, settingsApi, RuntimeCheckItem, Settings, SystemDependencyItem, poolApi, koiApi, PoolMessage, KoiWithStats } from "../../services/tauri";
+import {
+  uiaCalibrationApi,
+  UiaCalibrationStatus,
+} from "../../services/tauri/platform";
 import { localizedDependencyRemediation } from "../../utils/systemDependencies";
 import "./Debug.css";
 
@@ -872,15 +876,19 @@ function UiaTestPanel() {
   const [testRunning, setTestRunning] = useState(false);
   const [testResult, setTestResult] = useState<UiaDragTestResult | null>(null);
   const [visionConfigured, setVisionConfigured] = useState<boolean | null>(null);
+  /** `std::env::consts::OS` from the debug report — "windows" | "linux" | "macos". */
+  const [hostOs, setHostOs] = useState<string | null>(null);
 
-  // Load vision status from report
+  // Load vision status + host OS from report (one IPC round-trip).
   useEffect(() => {
     invoke<{ system_info: SystemInfo }>("get_debug_report")
       .then((r) => {
         setVisionConfigured(r.system_info.vision_configured);
+        setHostOs(r.system_info.os);
       })
       .catch(() => {
         setVisionConfigured(false);
+        setHostOs(null);
       });
   }, []);
 
@@ -1097,6 +1105,236 @@ function UiaTestPanel() {
           <li>{t("debug.uiaStep4")}</li>
         </ol>
       </div>
+
+      {hostOs === "windows" && <UiaCalibrationSection />}
+    </div>
+  );
+}
+
+// ─── UIA Calibration Sub-Panel ────────────────────────────────────────────────
+
+function UiaCalibrationSection() {
+  const { t, i18n } = useTranslation();
+  const isEn = i18n.language.startsWith("en");
+  const [status, setStatus] = useState<UiaCalibrationStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [errMsg, setErrMsg] = useState<string>("");
+  const [selectedIdx, setSelectedIdx] = useState<number>(0);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setErrMsg("");
+    try {
+      const s = await uiaCalibrationApi.status();
+      setStatus(s);
+      // Clamp selected index to the available monitor count.
+      if (selectedIdx >= s.monitors.length) {
+        setSelectedIdx(0);
+      }
+    } catch (e) {
+      setErrMsg(String(e));
+      setStatus(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedIdx]);
+
+  useEffect(() => {
+    refresh();
+    // Refresh whenever the calibration overlay closes (it emits a close
+    // signal via the window-destroyed event we don't have, so just
+    // re-poll every time the user comes back to this tab).
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleStart = async () => {
+    if (busy) return;
+    setBusy(true);
+    setErrMsg("");
+    try {
+      await uiaCalibrationApi.openOverlay(selectedIdx);
+      // Overlay window takes over from here. Refresh status periodically
+      // so the calibration row updates when the user finishes (or aborts).
+      const id = setInterval(() => {
+        uiaCalibrationApi
+          .status()
+          .then(setStatus)
+          .catch(() => {});
+      }, 1500);
+      // Stop polling after 4 minutes — Phase 2 has a 3-min internal cap.
+      setTimeout(() => clearInterval(id), 4 * 60 * 1000);
+    } catch (e) {
+      setErrMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleClear = async () => {
+    setBusy(true);
+    setErrMsg("");
+    try {
+      await uiaCalibrationApi.clear();
+      await refresh();
+    } catch (e) {
+      setErrMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="dbg-uia-calibration">
+      <div className="dbg-uia-calibration-title">
+        {isEn ? "Mouse precision calibration" : "鼠标精度校准"}
+      </div>
+      <div className="dbg-uia-calibration-hint">
+        {isEn
+          ? "Per-monitor linear correction for any residual cursor offset after DPI awareness. Calibration is cached and auto-invalidated when monitor layout or DPI changes."
+          : "在已启用 Per-Monitor DPI 后，校准每台显示器残余的鼠标偏差。校准结果会被缓存，并在显示器布局或 DPI 改变时自动失效。"}
+      </div>
+
+      {/* Monitor selector + status table */}
+      {loading && !status && (
+        <div className="dbg-empty">{t("common.loading")}</div>
+      )}
+      {status && (
+        <>
+          <div className="dbg-uia-calibration-row">
+            <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              {isEn ? "Target monitor:" : "目标显示器："}
+            </label>
+            <select
+              value={selectedIdx}
+              onChange={(e) => setSelectedIdx(parseInt(e.target.value, 10))}
+              disabled={busy || loading}
+              style={{
+                padding: "4px 8px",
+                fontSize: 12,
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                color: "var(--text-primary)",
+              }}
+            >
+              {status.monitors.map((m) => {
+                const w = m.rect[2] - m.rect[0];
+                const h = m.rect[3] - m.rect[1];
+                const calibrated = status.monitors_calibrated.some(
+                  (c) => c.monitor_index === m.index,
+                );
+                const checkmark = calibrated && status.is_valid ? "✓ " : "";
+                return (
+                  <option key={m.index} value={m.index}>
+                    {checkmark}Monitor {m.index}
+                    {m.primary ? " (primary)" : ""} — {w}×{h} @ {m.scale_percent}%
+                  </option>
+                );
+              })}
+            </select>
+            <button
+              className="dbg-btn dbg-btn-primary"
+              onClick={handleStart}
+              disabled={busy || loading || status.monitors.length === 0}
+            >
+              {busy
+                ? t("debug.uiaRunning")
+                : isEn
+                ? "Start calibration"
+                : "开始校准"}
+            </button>
+            <button
+              className="dbg-btn dbg-btn-secondary"
+              onClick={refresh}
+              disabled={loading}
+              style={{ fontSize: 11, padding: "4px 10px" }}
+            >
+              {t("debug.refresh")}
+            </button>
+            {status.monitors_calibrated.length > 0 && (
+              <button
+                className="dbg-btn dbg-btn-secondary"
+                onClick={handleClear}
+                disabled={busy}
+                style={{ fontSize: 11, padding: "4px 10px" }}
+                title={isEn ? "Delete all saved calibration data" : "删除所有已保存的校准数据"}
+              >
+                {isEn ? "Clear" : "清除"}
+              </button>
+            )}
+          </div>
+
+          {/* Calibrated monitors summary */}
+          {status.monitors_calibrated.length > 0 ? (
+            <table className="dbg-table" style={{ marginTop: 10 }}>
+              <thead>
+                <tr>
+                  <th>Monitor</th>
+                  <th>{isEn ? "Scale (x, y)" : "缩放 (x, y)"}</th>
+                  <th>{isEn ? "Offset (x, y)" : "偏移 (x, y)"}</th>
+                  <th>{isEn ? "Residual RMS" : "残差 RMS"}</th>
+                  <th>{isEn ? "Saved at" : "保存时间"}</th>
+                  <th>{isEn ? "Status" : "状态"}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {status.monitors_calibrated.map((c) => (
+                  <tr key={c.monitor_index}>
+                    <td>#{c.monitor_index}</td>
+                    <td>
+                      {c.scale_x.toFixed(4)}, {c.scale_y.toFixed(4)}
+                    </td>
+                    <td>
+                      {c.offset_x.toFixed(1)}, {c.offset_y.toFixed(1)} px
+                    </td>
+                    <td>{c.residual_rms_px.toFixed(2)} px</td>
+                    <td style={{ fontSize: 11 }}>
+                      {new Date(c.calibrated_at).toLocaleString(i18n.language)}
+                    </td>
+                    <td>
+                      {status.is_valid ? (
+                        <span className="dbg-badge dbg-badge-pass">
+                          {isEn ? "Active" : "生效"}
+                        </span>
+                      ) : (
+                        <span className="dbg-badge dbg-badge-fail">
+                          {isEn ? "Stale" : "已失效"}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div
+              style={{
+                marginTop: 10,
+                fontSize: 12,
+                color: "var(--text-secondary)",
+              }}
+            >
+              {isEn
+                ? "No calibration saved yet."
+                : "尚未保存任何校准。"}
+            </div>
+          )}
+
+          {!status.is_valid && status.monitors_calibrated.length > 0 && (
+            <div className="dbg-warn-box" style={{ marginTop: 8 }}>
+              {isEn
+                ? "Monitor layout or DPI changed since last calibration — re-run to refresh the cache."
+                : "显示器布局或 DPI 自上次校准后发生变化，请重新运行校准以更新缓存。"}
+            </div>
+          )}
+        </>
+      )}
+
+      {errMsg && (
+        <div className="dbg-error-box" style={{ marginTop: 8 }}>
+          {errMsg}
+        </div>
+      )}
     </div>
   );
 }

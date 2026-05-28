@@ -288,16 +288,21 @@ pub(crate) fn encode_and_return_with_cursor_offset(
     // a base64 blob — there is no file to reference as an artifact. This
     // branch decodes the base64 and writes it to the requested path so
     // the caller can immediately submit it with
-    // `app_control(action="artifact_submit", path=<output_path>, ...)`. 
-    let save_note = if let Some(out_path) = input["output_path"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+    // `app_control(action="artifact_submit", path=<output_path>, ...)`.
+    let save_note = if let Some(out_path) = input["output_path"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         let path = std::path::Path::new(out_path);
-        let (ok, message) = match fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new("."))) {
-            Err(e) => (false, format!("could not create parent directory: {e}")),
-            Ok(()) => match fs::write(path, &encoded) {
-                Ok(()) => (true, out_path.to_string()),
-                Err(e) => (false, format!("write failed: {e}")),
-            },
-        };
+        let (ok, message) =
+            match fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new("."))) {
+                Err(e) => (false, format!("could not create parent directory: {e}")),
+                Ok(()) => match fs::write(path, &encoded) {
+                    Ok(()) => (true, out_path.to_string()),
+                    Err(e) => (false, format!("write failed: {e}")),
+                },
+            };
         if ok {
             format!("\nSaved to disk: {message} ({} KB). You MUST now call `app_control(action=\"artifact_submit\", artifact_name=\"<short label>\", path=\"{message}\", artifact_type=\"image\", content_summary=\"<1-line description>\")` so the file appears in the user's Artifacts panel.", size_kb)
         } else {

@@ -100,6 +100,96 @@ export const interactiveApi = {
 };
 
 // ---------------------------------------------------------------------------
+// UIA mouse-precision calibration (Windows only)
+// ---------------------------------------------------------------------------
+
+export interface MonitorSnapshot {
+  index: number;
+  primary: boolean;
+  /** [left, top, right, bottom] physical pixels. */
+  rect: [number, number, number, number];
+  dpi_x: number;
+  dpi_y: number;
+  scale_percent: number;
+  device: string;
+}
+
+export interface MonitorCalibration {
+  monitor_index: number;
+  monitor_rect: [number, number, number, number];
+  scale_x: number;
+  offset_x: number;
+  scale_y: number;
+  offset_y: number;
+  residual_rms_px: number;
+  sample_count: number;
+  calibrated_at: string;
+}
+
+export interface UiaCalibrationStatus {
+  virtual_screen: [number, number, number, number];
+  monitors: MonitorSnapshot[];
+  fingerprint: string;
+  is_valid: boolean;
+  monitors_calibrated: MonitorCalibration[];
+  file_path: string;
+}
+
+export interface UiaCalibrationOverlayInfo {
+  monitor_index: number;
+  monitor_rect: [number, number, number, number];
+  dpi_x: number;
+  dpi_y: number;
+  scale_percent: number;
+}
+
+export interface UiaCalibrationClickSample {
+  target: [number, number];
+  actual: [number, number] | null;
+  distance_px: number | null;
+  error: string | null;
+}
+
+export interface UiaCalibrationPhase2Result {
+  samples: UiaCalibrationClickSample[];
+  cancelled: boolean;
+  timed_out: boolean;
+  elapsed_ms: number;
+}
+
+export interface UiaCalibrationFinalizeResult {
+  monitor: MonitorCalibration;
+  file_path: string;
+}
+
+export const uiaCalibrationApi = {
+  status: () => invoke<UiaCalibrationStatus>("uia_calibration_status"),
+  clear: () => invoke<void>("uia_calibration_clear"),
+  openOverlay: (monitorIndex: number) =>
+    invoke<UiaCalibrationOverlayInfo>("uia_calibration_open_overlay", {
+      monitorIndex,
+    }),
+  closeOverlay: () => invoke<void>("uia_calibration_close_overlay"),
+  runPhase2: (monitorIndex: number, userPoints: [number, number][]) =>
+    invoke<UiaCalibrationPhase2Result>("uia_calibration_run_phase2", {
+      request: { monitor_index: monitorIndex, user_points: userPoints },
+    }),
+  cancelPhase2: () => invoke<void>("uia_calibration_cancel_phase2"),
+  finalize: (
+    monitorIndex: number,
+    userPoints: [number, number][],
+    pisciActuals: [number, number][],
+  ) =>
+    invoke<UiaCalibrationFinalizeResult>("uia_calibration_finalize", {
+      request: {
+        monitor_index: monitorIndex,
+        user_points: userPoints,
+        pisci_actuals: pisciActuals,
+      },
+    }),
+};
+
+// ---------------------------------------------------------------------------
 // File / Path utilities
 // ---------------------------------------------------------------------------
 

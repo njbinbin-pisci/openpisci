@@ -12,4 +12,46 @@
       />
     </dependentAssembly>
   </dependency>
+
+  <!--
+    DPI awareness.
+
+    Without this section the process is "DPI Unaware" and Windows virtualises
+    every coordinate API: GetSystemMetrics, GetCursorPos, SendInput,
+    BitBlt/GetDIBits, and uiautomation's bounding rectangles all return / accept
+    coordinates in a fake 96-DPI logical space. The cursor then lands on the
+    physical pixel that corresponds to the logical coordinate, which on a 125 %
+    or 150 % display is dozens of pixels off the target the agent identified
+    from the screenshot.
+
+    Declaring PerMonitorV2 (Win10 1703+) with a true/PM fallback for older
+    builds makes:
+        - screen_capture pixel grids,
+        - uiautomation get_bounding_rectangle,
+        - SendInput / SetCursorPos,
+        - GetSystemMetrics(SM_C*VIRTUALSCREEN), GetCursorPos,
+    all live in the same physical pixel space, which is what every code path
+    in `src/tools/uia.rs` and `src/tools/screen/windows.rs` assumes.
+
+    Any residual sub-pixel drift (RDP, exotic drivers, virtual machines) is
+    absorbed by the manual calibration feature in the Debug → UIA panel.
+  -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">True/PM</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2,PerMonitor</dpiAwareness>
+    </windowsSettings>
+  </application>
+
+  <!--
+    Long-path support.
+    Lets std::fs / GetFileAttributesW see paths longer than MAX_PATH on
+    Win10 1607+ when the user has also enabled the LongPathsEnabled policy.
+    Harmless on systems that don't have the policy set.
+  -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
 </assembly>

@@ -1502,3 +1502,36 @@
   gap: 2px;
   flex-shrink: 0;
 }
+
+/* ─── UIA Calibration Sub-Panel ──────────────────────────────────────────── */
+
+.dbg-uia-calibration {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dbg-uia-calibration-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dbg-uia-calibration-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.dbg-uia-calibration-row {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}

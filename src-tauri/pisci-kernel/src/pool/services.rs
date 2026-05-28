@@ -868,7 +868,8 @@ pub async fn assign_koi(
             None => {
                 let available = resolved.1;
                 let hint = if available.is_empty() {
-                    "No Kois are registered. Create one from the Koi settings page first.".to_string()
+                    "No Kois are registered. Create one from the Koi settings page first."
+                        .to_string()
                 } else {
                     format!("Available Kois: {}.", available.join(", "))
                 };

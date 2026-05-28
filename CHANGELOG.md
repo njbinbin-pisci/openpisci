@@ -6,6 +6,20 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.17] - 2026-05-28
+
+### Added
+- **Windows UIA mouse precision calibration** (Debug → UIA Test): full-screen 5-point overlay, user ground-truth clicks, Pisci real-click verification via `uia.click` + `GetCursorPos`, OLS linear fit per monitor, persisted to `uia_calibration.json` with DPI/layout fingerprint invalidation.
+- **Calibration applied to UIA mouse paths**: `click`, `double_click`, `right_click`, `hover`, `scroll`, and `drag_drop` automatically apply the active per-monitor transform; internal `_skip_calibration` bypass for the calibration run itself.
+
+### Fixed
+- **Windows DPI coordinate drift**: declare Per-Monitor V2 DPI awareness in `windows-app-manifest.xml` so screenshots, UIA bounding rects, `SendInput`, and `GetCursorPos` share the same physical pixel space.
+
+### Changed
+- **Non-Windows hosts**: calibration UI is hidden on Linux/macOS (calibration remains Windows-only; `desktop_automation` on other platforms is unchanged).
+
+---
+
 ## [0.8.16] - 2026-05-25
 
 ### Added

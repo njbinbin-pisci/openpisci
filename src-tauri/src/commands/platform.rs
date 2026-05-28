@@ -11,6 +11,7 @@
 //! Anything here is host-specific glue and has no bearing on chat / pool /
 //! config state.
 
+pub mod calibration;
 pub mod interactive;
 pub mod permission;
 pub mod system;

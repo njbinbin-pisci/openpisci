@@ -23,11 +23,16 @@ const About = lazy(() => import("./components/About"));
 const Onboarding = lazy(() => import("./components/Onboarding"));
 const OverlayApp = lazy(() => import("./components/Overlay"));
 const DebugPanel = lazy(() => import("./components/Debug"));
+const CalibrationOverlay = lazy(() => import("./components/Debug/CalibrationOverlay"));
 
 type Tab = "chat" | "memory" | "tools" | "fish" | "pond" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
 
 // Detect if we are running in the overlay window
 const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") === "1";
+// Detect if we are running in the UIA calibration overlay window. The
+// query param value carries the monitor index, e.g. `?calibration=1`.
+const IS_CALIBRATION_OVERLAY =
+  new URLSearchParams(window.location.search).get("calibration") !== null;
 
 function AppContent() {
   const dispatch = useDispatch();
@@ -278,6 +283,16 @@ export default function App() {
     return (
       <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>Loading Pisci...</p></div>}>
         <OverlayApp />
+      </Suspense>
+    );
+  }
+  if (IS_CALIBRATION_OVERLAY) {
+    // The calibration overlay is a self-contained fullscreen view that
+    // does not need the global Redux store, settings init, or chat
+    // session bootstrap — those are heavy and irrelevant here.
+    return (
+      <Suspense fallback={<div style={{ background: "#000", color: "#fff", padding: 40 }}>Loading…</div>}>
+        <CalibrationOverlay />
       </Suspense>
     );
   }

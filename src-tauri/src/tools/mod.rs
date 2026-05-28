@@ -30,6 +30,11 @@ pub mod wmi_tool;
 // trait handles all registration internally.
 pub use pisci_kernel::tools::{mcp, user_tool};
 
+// Calibration store for the UIA mouse-precision compensator. Lives in
+// the platform-neutral list so non-Windows builds can still compile
+// the `commands::platform::calibration` stubs; the heavy lifting only
+// happens behind `cfg(target_os = "windows")` inside the module.
+pub mod calibration;
 #[cfg(target_os = "windows")]
 pub mod com_invoke;
 #[cfg(target_os = "windows")]

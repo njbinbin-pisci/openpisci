@@ -331,6 +331,15 @@ fn run_impl() {
             };
             app.manage(managed_state);
 
+            // Warm the UIA-click calibration cache as early as possible
+            // so the very first `uia.click` after launch (e.g. via the
+            // headless agent) already benefits from any saved manual
+            // calibration. The cache is also refreshed on demand by
+            // every `uia_calibration_status` / `uia_calibration_finalize`
+            // command, so monitor-layout changes between launches are
+            // handled correctly.
+            commands::platform::calibration::refresh_cache_from_app(&app_handle);
+
             {
                 let db = tauri::async_runtime::block_on(state.db.lock());
                 let tasks = db.list_tasks().unwrap_or_default();
@@ -1388,6 +1397,13 @@ fn run_impl() {
             commands::platform::window::save_overlay_position,
             commands::platform::window::set_app_theme,
             commands::platform::window::set_window_theme_border,
+            commands::platform::calibration::uia_calibration_status,
+            commands::platform::calibration::uia_calibration_clear,
+            commands::platform::calibration::uia_calibration_open_overlay,
+            commands::platform::calibration::uia_calibration_close_overlay,
+            commands::platform::calibration::uia_calibration_run_phase2,
+            commands::platform::calibration::uia_calibration_cancel_phase2,
+            commands::platform::calibration::uia_calibration_finalize,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pisci Desktop");

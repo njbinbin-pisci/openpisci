@@ -128,7 +128,11 @@ impl Tool for UiaTool {
                 },
                 "logical_coords": {
                     "type": "boolean",
-                    "description": "If true, x/y/x2/y2 are treated as logical (DPI-unaware) pixel coordinates from a screenshot and will be automatically multiplied by the DPI scale factor to get physical screen coordinates. Use this when coordinates come from screen_capture image analysis."
+                    "description": "Deprecated. Coordinates from screen_capture are already physical pixels because the process is declared Per-Monitor DPI aware in the app manifest. This flag is kept for backwards compatibility only — it is a no-op."
+                },
+                "_skip_calibration": {
+                    "type": "boolean",
+                    "description": "INTERNAL — set to true only by the manual calibration Phase 2 runner so the cursor reaches the raw physical target without re-applying the (still-being-fit) calibration on top of itself. Do not use from agent prompts."
                 }
             },
             "required": ["action"]
@@ -575,12 +579,38 @@ impl UiaTool {
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
             // Coordinates are physical screen pixels (same as screen_capture grid labels).
-            // logical_coords is deprecated — no DPI conversion needed.
-            let (px, py) = (x as i32, y as i32);
+            // Apply any active manual calibration to compensate for residual drift
+            // (e.g. inside VMs, RDP, mixed-DPI multi-monitor). When no calibration
+            // is in effect this is a no-op.
+            let (raw_x, raw_y) = (x as i32, y as i32);
+            let bypass = input["_skip_calibration"].as_bool().unwrap_or(false);
+            let (px, py) = if bypass {
+                (raw_x, raw_y)
+            } else {
+                super::calibration::apply_active_calibration(raw_x, raw_y)
+            };
+            if (px, py) != (raw_x, raw_y) {
+                tracing::debug!(
+                    "uia.click calibration: ({},{}) -> ({},{})",
+                    raw_x,
+                    raw_y,
+                    px,
+                    py
+                );
+            }
             Mouse::new()
                 .click(&Point::new(px, py))
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
-            return Ok(ToolResult::ok(format!("Clicked at ({}, {})", px, py)));
+            return Ok(ToolResult::ok(format!(
+                "Clicked at ({}, {}){}",
+                px,
+                py,
+                if (px, py) != (raw_x, raw_y) {
+                    format!(" [calibrated from ({},{})]", raw_x, raw_y)
+                } else {
+                    String::new()
+                }
+            )));
         }
 
         let root = self.get_search_root(&automation, input)?;
@@ -626,10 +656,19 @@ impl UiaTool {
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
             // Physical screen pixel coordinates (same as screen_capture grid labels).
+            let (raw_x, raw_y) = (x as i32, y as i32);
+            let (px, py) = if input["_skip_calibration"].as_bool().unwrap_or(false) {
+                (raw_x, raw_y)
+            } else {
+                super::calibration::apply_active_calibration(raw_x, raw_y)
+            };
             Mouse::new()
-                .double_click(&Point::new(x as i32, y as i32))
+                .double_click(&Point::new(px, py))
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
-            return Ok(ToolResult::ok(format!("Double-clicked at ({}, {})", x, y)));
+            return Ok(ToolResult::ok(format!(
+                "Double-clicked at ({}, {})",
+                px, py
+            )));
         }
 
         let root = self.get_search_root(&automation, input)?;
@@ -664,10 +703,16 @@ impl UiaTool {
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
             // Physical screen pixel coordinates (same as screen_capture grid labels).
+            let (raw_x, raw_y) = (x as i32, y as i32);
+            let (px, py) = if input["_skip_calibration"].as_bool().unwrap_or(false) {
+                (raw_x, raw_y)
+            } else {
+                super::calibration::apply_active_calibration(raw_x, raw_y)
+            };
             Mouse::new()
-                .right_click(&Point::new(x as i32, y as i32))
+                .right_click(&Point::new(px, py))
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
-            return Ok(ToolResult::ok(format!("Right-clicked at ({}, {})", x, y)));
+            return Ok(ToolResult::ok(format!("Right-clicked at ({}, {})", px, py)));
         }
 
         let root = self.get_search_root(&automation, input)?;
@@ -703,8 +748,14 @@ impl UiaTool {
                 SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_MOVE,
                 MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
             };
+            let (raw_x, raw_y) = (x as i32, y as i32);
+            let (cx, cy) = if input["_skip_calibration"].as_bool().unwrap_or(false) {
+                (raw_x, raw_y)
+            } else {
+                super::calibration::apply_active_calibration(raw_x, raw_y)
+            };
             let (vx, vy, vw, vh) = Self::virtual_screen();
-            let (ax, ay) = Self::to_abs_virtualdesk(x as i32, y as i32, vx, vy, vw, vh);
+            let (ax, ay) = Self::to_abs_virtualdesk(cx, cy, vx, vy, vw, vh);
             let ev = [INPUT {
                 r#type: INPUT_MOUSE,
                 Anonymous: INPUT_0 {
@@ -721,7 +772,7 @@ impl UiaTool {
             unsafe {
                 SendInput(&ev, std::mem::size_of::<INPUT>() as i32);
             }
-            return Ok(ToolResult::ok(format!("Hovered at ({}, {})", x, y)));
+            return Ok(ToolResult::ok(format!("Hovered at ({}, {})", cx, cy)));
         }
 
         let automation = UIAutomation::new().map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -762,8 +813,14 @@ impl UiaTool {
 
         if let (Some(x), Some(y)) = (input["x"].as_i64(), input["y"].as_i64()) {
             // Move cursor using SendInput+VIRTUALDESK for multi-monitor support.
+            let (raw_x, raw_y) = (x as i32, y as i32);
+            let (cx, cy) = if input["_skip_calibration"].as_bool().unwrap_or(false) {
+                (raw_x, raw_y)
+            } else {
+                super::calibration::apply_active_calibration(raw_x, raw_y)
+            };
             let (vx, vy, vw, vh) = Self::virtual_screen();
-            let (ax, ay) = Self::to_abs_virtualdesk(x as i32, y as i32, vx, vy, vw, vh);
+            let (ax, ay) = Self::to_abs_virtualdesk(cx, cy, vx, vy, vw, vh);
             let ev = [INPUT {
                 r#type: INPUT_MOUSE,
                 Anonymous: INPUT_0 {
@@ -861,22 +918,25 @@ impl UiaTool {
         };
 
         // Coordinates are physical screen pixels (same as screen_capture grid labels).
-        // logical_coords is deprecated — coordinates from screenshots are already physical.
+        // Apply per-monitor manual calibration to both endpoints. The
+        // start and end may live on different monitors, so we calibrate
+        // each independently rather than translating the delta.
+        let (cx1, cy1, cx2, cy2) = if input["_skip_calibration"].as_bool().unwrap_or(false) {
+            (x1, y1, x2, y2)
+        } else {
+            let (a, b) = super::calibration::apply_active_calibration(x1, y1);
+            let (c, d) = super::calibration::apply_active_calibration(x2, y2);
+            (a, b, c, d)
+        };
+
         let (vx, vy, vw, vh) = Self::virtual_screen();
         tracing::info!(
-            "drag_drop: physical({},{})→({},{}) virtual_screen=({},{})+({}x{})",
-            x1,
-            y1,
-            x2,
-            y2,
-            vx,
-            vy,
-            vw,
-            vh
+            "drag_drop: physical({},{})→({},{}) calibrated=({},{})→({},{}) virtual_screen=({},{})+({}x{})",
+            x1, y1, x2, y2, cx1, cy1, cx2, cy2, vx, vy, vw, vh
         );
 
-        let (ax1, ay1) = Self::to_abs_virtualdesk(x1, y1, vx, vy, vw, vh);
-        let (ax2, ay2) = Self::to_abs_virtualdesk(x2, y2, vx, vy, vw, vh);
+        let (ax1, ay1) = Self::to_abs_virtualdesk(cx1, cy1, vx, vy, vw, vh);
+        let (ax2, ay2) = Self::to_abs_virtualdesk(cx2, cy2, vx, vy, vw, vh);
         tracing::info!("drag_drop: abs=({},{})→({},{})", ax1, ay1, ax2, ay2);
 
         // VIRTUALDESK: maps 0-65535 to the full virtual desktop (all monitors, physical pixels)
@@ -924,9 +984,14 @@ impl UiaTool {
             SendInput(&ev, std::mem::size_of::<INPUT>() as i32);
         }
 
+        let calib_note = if (cx1, cy1, cx2, cy2) != (x1, y1, x2, y2) {
+            format!(" [calibrated from ({},{})->({},{})]", x1, y1, x2, y2)
+        } else {
+            String::new()
+        };
         Ok(ToolResult::ok(format!(
-            "Dragged from ({},{}) to ({},{})",
-            x1, y1, x2, y2
+            "Dragged from ({},{}) to ({},{}){}",
+            cx1, cy1, cx2, cy2, calib_note
         )))
     }
 

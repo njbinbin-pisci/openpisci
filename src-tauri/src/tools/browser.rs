@@ -595,9 +595,15 @@ impl BrowserTool {
         // a base64 blob — there is no file to reference as an artifact. The
         // result message explicitly tells the caller whether the file was
         // written so the agent can chain into `app_control(action=\"artifact_submit\",\n        // path=save_path, artifact_type=\"image\")`.
-        let save_note = if let Some(out_path) = input["save_path"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        let save_note = if let Some(out_path) = input["save_path"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             let path = std::path::Path::new(out_path);
-            let (ok, message) = match std::fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new("."))) {
+            let (ok, message) = match std::fs::create_dir_all(
+                path.parent().unwrap_or_else(|| std::path::Path::new(".")),
+            ) {
                 Err(e) => (false, format!("could not create parent directory: {e}")),
                 Ok(()) => match std::fs::write(path, &png_bytes) {
                     Ok(()) => (true, out_path.to_string()),

@@ -225,13 +225,8 @@ pub fn spawn_mention_dispatch(
         match scan_attention_pools(&cloned).await {
             Ok(attentions) => {
                 if let Some(attention) = attentions.iter().find(|a| a.pool_id == pool_id) {
-                    if let Err(e) = dispatch_single_pool_attention(
-                        &cloned,
-                        &prompt,
-                        attention,
-                        channel,
-                    )
-                    .await
+                    if let Err(e) =
+                        dispatch_single_pool_attention(&cloned, &prompt, attention, channel).await
                     {
                         warn!(
                             "@!Pisci mention dispatch failed for pool {}: {}",

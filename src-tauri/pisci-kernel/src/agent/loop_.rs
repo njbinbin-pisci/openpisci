@@ -130,9 +130,7 @@ fn is_substantive_desktop_action(name: &str, input: &serde_json::Value) -> bool 
     // desktop_automation(action="click"|"type_text"|...) — substantive
     if name == "desktop_automation" {
         if let Some(action) = input.get("action").and_then(|v| v.as_str()) {
-            return SUBSTANTIVE_DESKTOP_ACTIONS
-                .iter()
-                .any(|a| *a == action);
+            return SUBSTANTIVE_DESKTOP_ACTIONS.contains(&action);
         }
     }
     // Windows UIA: any uia action (find, click, type, send_hotkey, …)
