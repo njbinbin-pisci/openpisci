@@ -6,6 +6,31 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.13] - 2026-05-25
+
+### Fixed
+- **Minimal-mode overlay right edge clipped on Windows at non-100% DPI scales** (125%/150%/175%). Root cause: `enter_minimal_mode` restored the saved `overlay_x/overlay_y` (physical pixels) verbatim, so a position saved at one DPI scale became stale after the scale changed, after a monitor swap, or after a resolution change — typically pushing the overlay's right edge past the monitor's physical right bound. Two-part fix in `src-tauri/src/commands/platform/window.rs`:
+  - Added `clamp_overlay_to_work_area()` helper that queries the current primary work area via `SPI_GETWORKAREA` (Windows) / 1920×1080 fallback (other platforms) and clamps the candidate position so the entire overlay stays inside the visible area. Applied in both `enter_minimal_mode` (saved-position restore and first-launch centering) and `enter_unattended_im_mode` (defense in depth).
+  - Explicitly call `overlay.set_size(LogicalSize(280, 56))` when the WebView inner size doesn't match the configured size, guarding against WebView2 viewport / window-size mismatches at high-DPI on Windows. This ensures the CSS pill (280×56 logical pixels) always fits within the drawable area.
+- First-launch centering math now uses `get_overlay_size()` instead of hardcoded `140` / `80` constants, so the pill is correctly centered at the bottom of the main window regardless of DPI scale or any future config change to the overlay size.
+
+---
+
+## [0.8.12] - 2026-05-28
+
+### Changed
+- **Default LLM max output tokens raised from 4096 to 8192.** Applies to:
+  - `Settings` form initial state (`src/components/Settings/index.tsx` — first-install default)
+  - `Settings` max-tokens input fallback (`?? 8192` instead of `?? 4096`, so an unset field renders as 8192)
+  - Rust `default_max_tokens()` in `pisci-kernel/src/store/settings.rs` (backend default when a user's config predates the field)
+  - The onboarding wizard saves only `provider/model/policy_mode/api_key`, so new users inherit the backend default — which is now 8192 automatically.
+- This bumps `compute_context_budget` from the 64k tier to the 128k tier for users who haven't set `context_window` manually — giving the agent more input room to work with on top of the larger per-response output allowance.
+
+### Fixed
+- **CI `cargo fmt --check` failure on `rust-kernel` job** (v0.8.11 tag run #287). The previous `detect()` method signature in `pisci-kernel/src/agent/loop_.rs` was formatted on one line, exceeding `rustfmt`'s 100-char width threshold. Re-formatted with `cargo fmt` so the signature spans multiple lines. This was the only failure on the last CI run; frontend / clippy / tests / headless / desktop-cross jobs were all green.
+
+---
+
 ## [0.8.11] - 2026-05-28
 
 ### Refactor

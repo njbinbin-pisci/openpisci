@@ -37,7 +37,7 @@ const DEFAULT_SETTINGS: SettingsData = {
   workspace_root: "",
   allow_outside_workspace: false,
   language: "zh",
-  max_tokens: 4096,
+  max_tokens: 8192,
   context_window: 0,
   confirm_shell_commands: true,
   confirm_file_writes: true,
@@ -846,7 +846,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
 
           <div className="form-group">
             <label className="label">{t("settings.maxTokens")}</label>
-            <input className="input" type="number" value={form.max_tokens ?? 4096} onChange={(e) => update("max_tokens", parseInt(e.target.value))} min={256} max={65536} />
+            <input className="input" type="number" value={form.max_tokens ?? 8192} onChange={(e) => update("max_tokens", parseInt(e.target.value))} min={256} max={65536} />
             <span className="hint">{t("settings.maxTokensHint")}</span>
           </div>
           <div className="form-group">

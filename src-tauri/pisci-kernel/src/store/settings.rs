@@ -640,7 +640,7 @@ fn default_language() -> String {
     "zh".into()
 }
 fn default_max_tokens() -> u32 {
-    4096
+    8192
 }
 fn default_true() -> bool {
     true

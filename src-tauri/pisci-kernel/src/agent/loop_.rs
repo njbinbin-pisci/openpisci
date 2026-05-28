@@ -77,7 +77,13 @@ const KNOWLEDGE_GATHERING_TOOLS: &[&str] = &["web_search", "browser"];
 /// match (case-insensitive) — covers typical names like
 /// `take_screenshot`, `screen_analyze`, `vision_context`, `screen_capture`,
 /// `vision_analyze`, `screenshot`, etc. without requiring exact names.
-const VISION_LOOP_KEYWORDS: &[&str] = &["screenshot", "screen_analyze", "vision_analyze", "screen_capture", "vision_context"];
+const VISION_LOOP_KEYWORDS: &[&str] = &[
+    "screenshot",
+    "screen_analyze",
+    "vision_analyze",
+    "screen_capture",
+    "vision_context",
+];
 
 static TOOL_RATE_STATE: Lazy<Mutex<HashMap<String, Vec<std::time::Instant>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -190,7 +196,11 @@ impl LoopDetectorState {
     }
 
     /// Run all detectors against the current history, return the most severe result.
-    fn detect(&mut self, pending_name: &str, pending_input: &serde_json::Value) -> LoopDetectionResult {
+    fn detect(
+        &mut self,
+        pending_name: &str,
+        pending_input: &serde_json::Value,
+    ) -> LoopDetectionResult {
         let pending_hash = stable_hash_input(pending_name, pending_input);
 
         // 1. Global circuit breaker: same tool+input with no progress

@@ -52,6 +52,47 @@ fn primary_work_area_bottom_right(app: &AppHandle) -> (i32, i32) {
     )
 }
 
+/// Clamp an overlay position so the entire window stays inside the primary
+/// monitor's work area. Essential on Windows where `overlay_x/overlay_y` are
+/// stored as physical pixels: a saved position from a different DPI scale
+/// (100% ↔ 125%/150%), a different monitor, or a resolution change can leave
+/// the overlay partially off-screen (typically the right edge clipped).
+#[cfg(target_os = "windows")]
+fn clamp_overlay_to_work_area(app: &AppHandle, x: i32, y: i32) -> (i32, i32) {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWORKAREA};
+
+    let (overlay_w, overlay_h) = get_overlay_size(app);
+    let mut rect = RECT::default();
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            Some((&mut rect as *mut RECT).cast()),
+            Default::default(),
+        )
+    }
+    .is_ok();
+
+    if !ok {
+        return (x.max(0), y.max(0));
+    }
+
+    let max_x = (rect.right - overlay_w).max(rect.left);
+    let max_y = (rect.bottom - overlay_h).max(rect.top);
+    (x.min(max_x).max(rect.left), y.min(max_y).max(rect.top))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn clamp_overlay_to_work_area(app: &AppHandle, x: i32, y: i32) -> (i32, i32) {
+    let (overlay_w, overlay_h) = get_overlay_size(app);
+    // Fallback assumes a 1920×1080 primary; still safer than trusting a
+    // stale saved position verbatim.
+    let max_x = (1920 - overlay_w).max(0);
+    let max_y = (1080 - overlay_h).max(0);
+    (x.min(max_x).max(0), y.min(max_y).max(0))
+}
+
 async fn persist_overlay_position(
     state: &State<'_, AppState>,
     x: i32,
@@ -74,7 +115,13 @@ pub async fn enter_unattended_im_mode(
         .get_webview_window("overlay")
         .ok_or("Overlay window not found")?;
 
-    let (x, y) = primary_work_area_bottom_right(app);
+    let (x, y) = {
+        let (px, py) = primary_work_area_bottom_right(app);
+        // Defense in depth: clamp to work area even though the helper
+        // already positions inside it. Protects against future changes
+        // that might feed raw coordinates in here.
+        clamp_overlay_to_work_area(app, px, py)
+    };
     overlay
         .set_position(tauri::PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
@@ -175,23 +222,46 @@ pub async fn enter_minimal_mode(app: AppHandle, state: State<'_, AppState>) -> R
         .get_webview_window("overlay")
         .ok_or("Overlay window not found")?;
 
-    // Determine overlay position
+    // Ensure the overlay window actually has its configured size before we
+    // compute positions. WebView2 on Windows can start with an unexpected
+    // small viewport at non-100% DPI scales; explicitly setting the size
+    // to the configured 280×56 logical pixels forces the WebView viewport
+    // to match, so the CSS pill (which is laid out in CSS px) is never
+    // wider than the window's drawable area.
+    if overlay
+        .inner_size()
+        .map(|s| s.width != 280 || s.height != 56)
+        .unwrap_or(true)
+    {
+        let _ = overlay.set_size(tauri::LogicalSize::new(280.0_f64, 56.0_f64));
+    }
+
+    // Determine overlay position.
+    // Saved overlay_x/overlay_y are physical pixels. They can become stale
+    // when the Windows DPI scale changes (100% ↔ 125%/150%), when the user
+    // switches monitors, or when the resolution changes — in which case the
+    // restored x + overlay_width can exceed the monitor's physical right
+    // edge and the overlay gets clipped. We always clamp to the current
+    // primary work area to guarantee the whole strip is visible.
     let (ox, oy) = {
         let settings = state.settings.lock().await;
         if let (Some(x), Some(y)) = (settings.overlay_x, settings.overlay_y) {
-            (x, y)
+            clamp_overlay_to_work_area(&app, x, y)
         } else {
-            // First launch: center overlay at the bottom-center of the main window
+            // First launch: center overlay at the bottom-center of the main window.
+            // Use the actual overlay size instead of hardcoded 280 so the math
+            // stays correct if the configured size ever changes.
+            let (overlay_w, overlay_h) = get_overlay_size(&app);
             if let Ok(pos) = main.outer_position() {
                 if let Ok(size) = main.outer_size() {
-                    let cx = pos.x + (size.width as i32) / 2 - 140; // 280/2
-                    let cy = pos.y + (size.height as i32) - 80; // near bottom
-                    (cx.max(0), cy.max(0))
+                    let cx = pos.x + (size.width as i32) / 2 - overlay_w / 2;
+                    let cy = pos.y + (size.height as i32) - overlay_h - OVERLAY_MARGIN;
+                    clamp_overlay_to_work_area(&app, cx.max(0), cy.max(0))
                 } else {
-                    (100, 100)
+                    primary_work_area_bottom_right(&app)
                 }
             } else {
-                (100, 100)
+                primary_work_area_bottom_right(&app)
             }
         }
     };
