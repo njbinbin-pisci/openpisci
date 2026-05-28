@@ -136,30 +136,37 @@
   overflow: hidden;
 }
 
-/* Top content area inside center (above terminal) */
-.collab-content-area {
+/* Top content shell inside center (main view + optional right-side IDE panel,
+   laid out as a horizontal row). Always row — the "conditional
+   direction" hack (--with-side modifier) has been removed. */
+.collab-content-shell {
   flex: 1;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   min-height: 0;
   overflow: hidden;
 }
 
-/* When an IDE view (explorer/search/git) is active, lay out the side
-   panel and the main editor area horizontally inside the content area
-   so the bottom terminal/assistant panel can span the full width of
-   .collab-center. */
-.collab-content-area.collab-content-area--with-side {
-  flex-direction: row;
+/* Main view host — takes up all available horizontal space inside
+   the content shell. The view type (chat, IDE editor, board, inbox,
+   koiObserver) switches inside this container. */
+.collab-main-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
-/* IDE side panel (file tree / search / git) — sibling of .collab-ide-main
-   inside .collab-content-area when an IDE view is active. */
+/* IDE side panel (file tree / search / git) — rendered LAST inside
+   .collab-content-shell so it sits to the RIGHT of the main view,
+   adjacent to the icon strip. VS Code / Cursor convention. */
 .collab-ide-side {
   width: 260px;
   min-width: 180px;
   flex-shrink: 0;
-  border-right: 1px solid var(--border);
+  border-left: 1px solid var(--border);
   background: var(--bg-secondary);
   overflow-y: auto;
   overflow-x: hidden;

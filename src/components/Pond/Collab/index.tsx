@@ -938,16 +938,94 @@ export default function Collab() {
         </div>
       )}
 
-      {/* CENTER: content area (top: sidebar+main horizontal) + bottom panel
-          (terminal or assistant) spanning full width */}
+      {/* ── CENTER ────────────────────────────────────────────────────
+          Vertical column:
+            1) .collab-content-shell  (horizontal: main view + optional
+               right-side IDE panel)
+            2) .ide-resize-handle-v + bottom panel (terminal OR assistant)
+               — spans the full center width, matching VS Code's
+               integrated terminal behavior.
+      ──────────────────────────────────────────────────────────────── */}
       <div className="collab-center">
-        <div
-          className={`collab-content-area${(contentView === "explorer" || contentView === "search" || contentView === "git") && !sideCollapsed ? " collab-content-area--with-side" : ""}`}
-        >
-          {/* IDE side panel (file tree / search / git) — placed to the
-              LEFT of the main editor when an IDE view is active and not
-              collapsed. Living inside content-area means the bottom
-              terminal/assistant panel keeps the full center width. */}
+        {/* ── Content shell (main view + optional right-side panel) ── */}
+        <div className="collab-content-shell">
+          {/* ── Main view host ───────────────────────────────────────
+              All mutually-exclusive views (chat, IDE editor, board,
+              inbox, koiObserver) live here. Future view additions
+              only need to add a new conditional child — the layout
+              structure above/below stays unchanged. ──────────────── */}
+          <div className="collab-main-view">
+            {/* Chat view */}
+            {contentView === "chat" && (
+              <>
+                <div className="collab-chat-area">
+                  {!activeSessionId ? (
+                    <div className="collab-empty"><span className="collab-empty-icon">💬</span><p>{t("pool.noSessions") || "No projects yet"}</p><button className="chatpool-btn chatpool-btn-primary" onClick={() => setShowNewDialog(true)} style={{ marginTop: 12 }}>+ {t("pool.newSession") || "New Project"}</button></div>
+                  ) : messages.length === 0 ? (
+                    <div className="collab-empty"><span className="collab-empty-icon">💬</span><p>{t("pool.noMessages") || "No messages yet"}</p></div>
+                  ) : (
+                    <div className="collab-messages-scroll" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
+                      {hasMore && <div className="chatpool-load-more">{loadingMore ? (t("common.loading") || "Loading...") : (t("common.loadMore") || "Load more")}</div>}
+                      {messages.map((msg) => (<MessageBubble key={msg.id} msg={msg} kois={kois} />))}
+                      <div ref={messagesEndRef} />
+                    </div>
+                  )}
+                  {unreadCount > 0 && <button className="chatpool-unread-badge" onClick={scrollToBottom}>↓ {unreadCount} 条新消息</button>}
+                </div>
+                <div className="collab-input-area">
+                  {mentionError && <div className="collab-mention-error">{mentionError}</div>}
+                  {mentionFilter !== null && filteredMentions.length > 0 && (
+                    <div className="collab-mention-dropdown">
+                      {filteredMentions.map((m, i) => (
+                        <div key={m.name} className={`collab-mention-item${i === mentionIndex ? " active" : ""}`}
+                          onMouseDown={(e) => { e.preventDefault(); insertMention(m.name); }} onMouseEnter={() => setMentionIndex(i)}>
+                          <span className="collab-mention-icon">{m.icon}</span>
+                          <span className="collab-mention-name">@!{m.name}</span>
+                          <span className="collab-mention-desc">{m.desc}</span>
+                        </div>
+                      ))}
+                      <div className="collab-mention-hint">↑↓ {t("common.navigate") || "navigate"} &nbsp; Enter {t("common.select") || "select"} &nbsp; Esc {t("common.dismiss") || "dismiss"}</div>
+                    </div>
+                  )}
+                  <div className="collab-input-row">
+                    <textarea className="collab-input" ref={inputRef} value={userInput} onChange={handleInputChange} onKeyDown={handleInputKeyDown} placeholder={t("pool.messageInputPlaceholder") || "Type a message..."} rows={2} disabled={!activeSessionId || sending} />
+                    <button className="chatpool-btn chatpool-btn-primary" onClick={handleSendMessage} disabled={sending || !userInput.trim() || !activeSessionId}>{sending ? "..." : t("common.send")}</button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* IDE editor view (file tabs + Monaco CodeEditor, or empty hint) */}
+            {(contentView === "explorer" || contentView === "search" || contentView === "git") && (
+              <div className="collab-ide-main">
+                {activeTab ? (
+                  <>
+                    <EditorTabs tabs={tabs} activeTabPath={activeTabPath} onTabClick={setActiveTabPath} onTabClose={closeTab} />
+                    <div className="ide-editor" style={{ flex: 1, minHeight: 120 }}><CodeEditor tab={activeTab} theme="violet" projectDir={projectDir} onChange={handleEditorChange} /></div>
+                  </>
+                ) : (
+                  <div className="collab-empty">
+                    <span className="collab-empty-icon">{contentView === "explorer" ? "📁" : contentView === "search" ? "🔍" : "⑂"}</span>
+                    <p>{contentView === "explorer" ? (t("ide.openFileHint") || "Select a file from the explorer") : contentView === "search" ? (t("ide.searchHint") || "Search for files in the project") : (t("ide.gitHint") || "View source control changes")}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Board view */}
+            {contentView === "board" && <Board />}
+
+            {/* Inbox view */}
+            {contentView === "inbox" && <PisciInbox mode="coordination" />}
+
+            {/* Koi Observer view */}
+            {contentView === "koiObserver" && <PisciInbox mode="koiObserver" />}
+          </div>
+
+          {/* ── IDE side panel (right side, adjacent to icon strip) ──
+              Rendered LAST inside .collab-content-shell so it sits to
+              the RIGHT of .collab-main-view (VS Code convention).
+              Visible only when an IDE view is active and not collapsed. */}
           {(contentView === "explorer" || contentView === "search" || contentView === "git") && !sideCollapsed && (
             <div className="collab-ide-side">
               {projectDir ? (
@@ -967,77 +1045,13 @@ export default function Collab() {
               )}
             </div>
           )}
-
-          {/* Chat view */}
-          {contentView === "chat" && (
-            <>
-              <div className="collab-chat-area">
-                {!activeSessionId ? (
-                  <div className="collab-empty"><span className="collab-empty-icon">💬</span><p>{t("pool.noSessions") || "No projects yet"}</p><button className="chatpool-btn chatpool-btn-primary" onClick={() => setShowNewDialog(true)} style={{ marginTop: 12 }}>+ {t("pool.newSession") || "New Project"}</button></div>
-                ) : messages.length === 0 ? (
-                  <div className="collab-empty"><span className="collab-empty-icon">💬</span><p>{t("pool.noMessages") || "No messages yet"}</p></div>
-                ) : (
-                  <div className="collab-messages-scroll" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
-                    {hasMore && <div className="chatpool-load-more">{loadingMore ? (t("common.loading") || "Loading...") : (t("common.loadMore") || "Load more")}</div>}
-                    {messages.map((msg) => (<MessageBubble key={msg.id} msg={msg} kois={kois} />))}
-                    <div ref={messagesEndRef} />
-                  </div>
-                )}
-                {unreadCount > 0 && <button className="chatpool-unread-badge" onClick={scrollToBottom}>↓ {unreadCount} 条新消息</button>}
-              </div>
-              <div className="collab-input-area">
-                {mentionError && <div className="collab-mention-error">{mentionError}</div>}
-                {mentionFilter !== null && filteredMentions.length > 0 && (
-                  <div className="collab-mention-dropdown">
-                    {filteredMentions.map((m, i) => (
-                      <div key={m.name} className={`collab-mention-item${i === mentionIndex ? " active" : ""}`}
-                        onMouseDown={(e) => { e.preventDefault(); insertMention(m.name); }} onMouseEnter={() => setMentionIndex(i)}>
-                        <span className="collab-mention-icon">{m.icon}</span>
-                        <span className="collab-mention-name">@!{m.name}</span>
-                        <span className="collab-mention-desc">{m.desc}</span>
-                      </div>
-                    ))}
-                    <div className="collab-mention-hint">↑↓ {t("common.navigate") || "navigate"} &nbsp; Enter {t("common.select") || "select"} &nbsp; Esc {t("common.dismiss") || "dismiss"}</div>
-                  </div>
-                )}
-                <div className="collab-input-row">
-                  <textarea className="collab-input" ref={inputRef} value={userInput} onChange={handleInputChange} onKeyDown={handleInputKeyDown} placeholder={t("pool.messageInputPlaceholder") || "Type a message..."} rows={2} disabled={!activeSessionId || sending} />
-                  <button className="chatpool-btn chatpool-btn-primary" onClick={handleSendMessage} disabled={sending || !userInput.trim() || !activeSessionId}>{sending ? "..." : t("common.send")}</button>
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* Explorer / Search / Git view: editor area only (side panel is rendered to the right of icon strip) */}
-          {(contentView === "explorer" || contentView === "search" || contentView === "git") && (
-            <div className="collab-ide-main">
-              {activeTab ? (
-                <>
-                  <EditorTabs tabs={tabs} activeTabPath={activeTabPath} onTabClick={setActiveTabPath} onTabClose={closeTab} />
-                  <div className="ide-editor" style={{ flex: 1, minHeight: 120 }}><CodeEditor tab={activeTab} theme="violet" projectDir={projectDir} onChange={handleEditorChange} /></div>
-                </>
-              ) : (
-                <div className="collab-empty">
-                  <span className="collab-empty-icon">{contentView === "explorer" ? "📁" : contentView === "search" ? "🔍" : "⑂"}</span>
-                  <p>{contentView === "explorer" ? (t("ide.openFileHint") || "Select a file from the explorer") : contentView === "search" ? (t("ide.searchHint") || "Search for files in the project") : (t("ide.gitHint") || "View source control changes")}</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Board view */}
-          {contentView === "board" && <Board />}
-
-          {/* Inbox view */}
-          {contentView === "inbox" && <PisciInbox mode="coordination" />}
-
-          {/* Koi Observer view */}
-          {contentView === "koiObserver" && <PisciInbox mode="koiObserver" />}
         </div>
 
-        {/* Bottom panel — either terminal or assistant. Spans the full
-            width of .collab-center because the IDE side panel now lives
-            inside .collab-content-area instead of as a sibling. */}
+        {/* ── Bottom panel (terminal / assistant, full-width) ──────────
+            Sibling of .collab-content-shell inside .collab-center, so
+            it spans both the main view and the IDE side panel —
+            matching VS Code's integrated terminal. Terminal and
+            assistant are mutually exclusive. */}
         {showTerminal && projectDir && !showAssistant && (
           <>
             <div className="ide-resize-handle-v" onMouseDown={startTerminalResize} />

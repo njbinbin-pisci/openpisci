@@ -6,6 +6,19 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.11] - 2026-05-28
+
+### Refactor
+- **Collab layout holistic restructure** to a clean VS Code-style 3-layer architecture:
+  - `collab-center` (vertical column) → `collab-content-shell` (horizontal row) → `collab-main-view` + `collab-ide-side`.
+  - The IDE side panel (explorer / search / git) is now rendered **last** inside the content shell, so it sits to the **right** of the main view, adjacent to the icon strip — matching VS Code / Cursor convention. Previously it was placed to the editor's left, which was a regression introduced during v0.8.8.
+  - The bottom panel (terminal / assistant) is a **sibling** of the content shell inside `collab-center`, so it spans both the main view and the side panel — matching VS Code's integrated terminal behavior.
+  - Introduced a single `collab-main-view` host node that wraps all five mutually-exclusive views (chat, IDE editor, board, inbox, koiObserver). Future view additions only need to add a new conditional child — the layout structure above/below stays unchanged.
+  - Eliminated the `.collab-content-area--with-side` conditional flex-direction hack. `.collab-content-shell` is now unconditionally `flex-direction: row`.
+- No behavioral changes: toggle-on-re-click to collapse the side panel, auto-expand on view switch, terminal/assistant mutual exclusion, left-panel resize, terminal resize — all preserved.
+
+---
+
 ## [0.8.10] - 2026-05-28
 
 ### Fixed
