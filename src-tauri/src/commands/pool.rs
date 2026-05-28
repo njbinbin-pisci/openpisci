@@ -175,15 +175,20 @@ pub async fn send_pool_message(
 
         // @!Pisci is not a Koi — `coordinator::handle_mention` records it
         // as a board todo with owner="pisci" but does not execute it,
-        // because Pisci runs through the heartbeat path. Without an
-        // immediate trigger, users would have to wait up to
-        // `heartbeat_interval_mins` for any response. Fan out a focused
-        // heartbeat dispatch right now so @!Pisci feels as responsive
-        // as @!Koi mentions.
+        // because Pisci normally runs through the heartbeat path. Fan out
+        // a mention-scoped dispatch right now so @!Pisci feels as
+        // responsive as @!Koi mentions. This path is NOT gated behind
+        // `heartbeat_enabled` — an explicit mention is an interactive
+        // request, so users who disable periodic heartbeats still get a
+        // direct Pisci reply in the pool.
         if input.sender_id != "pisci"
             && crate::pisci::heartbeat::content_targets_pisci(&input.content)
         {
-            crate::pisci::heartbeat::spawn_immediate_dispatch(&state, "mention");
+            crate::pisci::heartbeat::spawn_mention_dispatch(
+                &state,
+                input.session_id.clone(),
+                "mention",
+            );
         }
     }
 

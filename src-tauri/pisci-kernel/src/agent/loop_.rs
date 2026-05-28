@@ -59,15 +59,25 @@ const CHECKPOINT_MAX_BYTES: usize = 8_000_000;
 // 3–5 times without actually executing the target action (click, type,
 // press Enter). Generic detectors miss this pattern because the tool
 // inputs/outputs differ across iterations (different coordinates, fresh
-// screenshots each time). Instead we detect by *density*: if screenshots
-// / vision-analyze calls dominate a recent sliding window of tool calls,
-// we nudge the model to stop verifying and commit to a concrete action.
-const VISION_LOOP_WINDOW: usize = 8;
-const VISION_LOOP_THRESHOLD: usize = 3;
-/// Minimum number of non-screenshot ("real action") calls between two
-/// nudge emissions — prevents the nudge from firing on every single turn
-/// when the model is legitimately doing heavy vision work.
-const VISION_LOOP_COOLDOWN: usize = 3;
+// screenshots each time). Instead we detect by *consecutive vision-only
+// streak*: if the agent makes too many vision/observation calls in a row
+// without a substantive action (click, type, hotkey, drag, file edit,
+// shell command, etc.) in between, we nudge it to commit.
+//
+// The threshold is platform-aware:
+//   * Windows — UIA (`uia.find`/`uia.click`/`uia.get_value`) lets the
+//     agent act without re-screenshoting after every move, so a long
+//     vision-only streak is a genuine sign of over-verification. We use
+//     a tighter threshold.
+//   * Linux / macOS — the only automation path is `desktop_automation`
+//     (xdotool/AppleScript) combined with `screen_capture`. Visual
+//     verification between moves is the *correct* workflow, so we use
+//     a much more lenient threshold. Move→screenshot→move→screenshot
+//     is treated as normal iterative calibration, not a loop.
+#[cfg(target_os = "windows")]
+const VISION_LOOP_CONSECUTIVE_THRESHOLD: usize = 8;
+#[cfg(not(target_os = "windows"))]
+const VISION_LOOP_CONSECUTIVE_THRESHOLD: usize = 15;
 
 /// Tools that are known polling/status-checking tools. These get stricter
 /// no-progress detection (inspired by OpenClaw's known_poll_no_progress).
@@ -84,6 +94,93 @@ const VISION_LOOP_KEYWORDS: &[&str] = &[
     "screen_capture",
     "vision_context",
 ];
+
+/// Desktop-automation actions that produce a real side-effect on the desktop
+/// (clicking, typing, pressing keys, dragging, scrolling, launching apps).
+/// Observation-only actions (`move_mouse`, `get_cursor_position`,
+/// `list_windows`) are intentionally excluded — they do not change the state
+/// of the target application.
+const SUBSTANTIVE_DESKTOP_ACTIONS: &[&str] = &[
+    "click",
+    "double_click",
+    "right_click",
+    "type_text",
+    "hotkey",
+    "drag",
+    "drag_to",
+    "scroll",
+    "launch_app",
+    "activate_window",
+];
+
+/// Returns `true` if the tool name matches a vision / screenshot / analysis
+/// tool (substring match against `VISION_LOOP_KEYWORDS`).
+fn is_vision_tool(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    VISION_LOOP_KEYWORDS.iter().any(|kw| lower.contains(kw))
+}
+
+/// Returns `true` when the pending tool call is a *substantive* desktop
+/// automation action — i.e. one that actually changes application state
+/// (click, type, hotkey, drag, scroll, launch_app, activate_window).
+///
+/// On Windows, `uia` actions are also considered substantive (UIA is the
+/// preferred automation path and does not require screenshot verification).
+fn is_substantive_desktop_action(name: &str, input: &serde_json::Value) -> bool {
+    // desktop_automation(action="click"|"type_text"|...) — substantive
+    if name == "desktop_automation" {
+        if let Some(action) = input.get("action").and_then(|v| v.as_str()) {
+            return SUBSTANTIVE_DESKTOP_ACTIONS
+                .iter()
+                .any(|a| *a == action);
+        }
+    }
+    // Windows UIA: any uia action (find, click, type, send_hotkey, …)
+    // is substantive — UIA can target elements without visual verification.
+    #[cfg(target_os = "windows")]
+    if name == "uia" {
+        return true;
+    }
+    false
+}
+
+/// On non-Windows platforms, `desktop_automation(action="move_mouse")` is
+/// treated as part of a legitimate calibration cycle
+/// (move → screenshot → verify position → click). Returning `true` here
+/// causes the vision-loop detector to treat the turn as *non*-vision-only,
+/// effectively exempting the move→screenshot→move→screenshot pattern from
+/// the consecutive-vision streak counter.
+///
+/// On Windows, UIA handles positioning without visual verification, so
+/// move_mouse is never considered calibration — it always returns `false`.
+fn is_calibration_move(name: &str, input: &serde_json::Value) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (name, input);
+        return false;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if name == "desktop_automation" {
+            if let Some(action) = input.get("action").and_then(|v| v.as_str()) {
+                return action == "move_mouse" || action == "get_cursor_position";
+            }
+        }
+        false
+    }
+}
+
+/// Build the user-facing warning message for the vision-loop detector.
+fn vision_loop_warning(threshold: usize) -> String {
+    format!(
+        "[视觉循环检测] 已连续{}轮仅执行截图/视觉分析，未执行任何实质性动作\
+         （点击输入框、输入文字、按回车等）。请立即执行以下操作：\
+         (1) 点击输入框获得焦点（一次 click）；\
+         (2) 在同一回合内直接输入目标文本；\
+         (3) 按回车发送。不要再截图验证，不要再移动鼠标确认位置。",
+        threshold
+    )
+}
 
 static TOOL_RATE_STATE: Lazy<Mutex<HashMap<String, Vec<std::time::Instant>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -170,11 +267,13 @@ struct AgentCheckpointPayload {
 /// Maintains a sliding window of recent tool calls (like OpenClaw's toolCallHistory).
 struct LoopDetectorState {
     history: Vec<ToolCallRecord>,
-    /// Number of non-vision-loop tool calls since the last vision-loop
-    /// nudge was emitted. Used to throttle the nudge so the model is not
-    /// bombarded on every turn when it legitimately needs several
-    /// screenshots in a row (e.g., complex UI inspection).
-    turns_since_vision_nudge: usize,
+    /// Number of consecutive turns whose *only* tool calls were vision /
+    /// observation calls (screenshot, screen_capture, screen_analyze,
+    /// vision_context, desktop_automation(move_mouse),
+    /// desktop_automation(list_windows), uia(find), etc.). Reset to 0
+    /// the moment any substantive action runs (click, type, hotkey,
+    /// drag, file edit, shell command, …).
+    consecutive_vision_only_turns: usize,
 }
 
 impl LoopDetectorState {
@@ -189,17 +288,22 @@ impl LoopDetectorState {
         if self.history.len() > TOOL_CALL_HISTORY_SIZE {
             self.history.remove(0);
         }
-        // Count every recorded call toward the vision-nudge cooldown,
-        // so after a nudge the model has a few real-action turns to
-        // respond before we consider re-nudging.
-        self.turns_since_vision_nudge = self.turns_since_vision_nudge.saturating_add(1);
     }
 
     /// Run all detectors against the current history, return the most severe result.
+    ///
+    /// `batch` is the full set of tool calls being dispatched in the same
+    /// LLM turn as `pending_name`/`pending_input`. We consult it to decide
+    /// whether the pending turn contains a *substantive* action alongside
+    /// the vision call (e.g., `screen_capture` + `desktop_automation(click)`
+    /// dispatched in parallel) — that is exactly the “commit to action”
+    /// pattern the vision-loop detector is trying to encourage, so it
+    /// should reset the consecutive-vision streak.
     fn detect(
         &mut self,
         pending_name: &str,
         pending_input: &serde_json::Value,
+        batch: &[(String, String, serde_json::Value)],
     ) -> LoopDetectionResult {
         let pending_hash = stable_hash_input(pending_name, pending_input);
 
@@ -306,36 +410,58 @@ impl LoopDetectorState {
             };
         }
 
-        // 3.5. Vision-loop (screenshot-analyze) density detection.
+        // 3.5. Vision-loop (screenshot-analyze) streak detection.
         //
         // Desktop-automation vision agents repeatedly do:
         //   move_mouse → take_screenshot → screen_analyze → move_mouse → …
         // and never actually commit to the target action (click the input,
         // type the message, press Enter). Generic detectors miss this
         // because each call uses different coordinates / fresh screenshots,
-        // so hashes differ. Detect by *density*: if vision tools dominate
-        // the last VISION_LOOP_WINDOW calls and we haven't nudged in the
-        // last VISION_LOOP_COOLDOWN real-action turns, inject a nudge.
+        // so hashes differ. Detect by *consecutive vision-only streak*:
+        // count turns whose ONLY tool calls are vision/observation, reset
+        // to zero the moment any substantive action runs (click, type,
+        // hotkey, drag, file edit, shell command, …). When the streak
+        // crosses the platform-specific threshold, emit a Warning nudge
+        // and reset so we don't spam every subsequent turn.
         //
         // IMPORTANT: this is Warning-only (never Critical) — we never
         // *block* the screenshot. We just tell the model to stop
         // over-verifying and commit to a concrete action sequence.
-        if self.turns_since_vision_nudge >= VISION_LOOP_COOLDOWN {
-            let (vision_count, window_size) = self.count_recent_vision_density(VISION_LOOP_WINDOW);
-            if window_size > 0 && vision_count >= VISION_LOOP_THRESHOLD {
-                // Reset the cooldown counter now so subsequent turns in
-                // the same screenshot-heavy stretch don't spam nudges.
-                self.turns_since_vision_nudge = 0;
+        //
+        // Evaluate the *whole* pending batch: if the model is issuing
+        // e.g. `click + screen_capture` in parallel, treat the turn as
+        // substantive and reset the streak — that is exactly the kind
+        // of "commit to action" behavior we want to encourage.
+        let is_vision_only_turn = is_vision_tool(pending_name)
+            && !batch.iter().any(|(_, n, inp)| {
+                n.as_str() != pending_name || inp != pending_input
+            }) && !is_substantive_desktop_action(pending_name, pending_input)
+            && !batch.iter().any(|(_, n, inp)| {
+                !is_vision_tool(n) || is_substantive_desktop_action(n, inp)
+            })
+            // On Linux/macOS, a batch containing move_mouse + screen_capture
+            // is normal iterative calibration (move → verify → click), not
+            // a vision loop. Exempt it unconditionally: on Windows this
+            // always returns false so the check is a no-op.
+            && !batch.iter().any(|(_, n, inp)| is_calibration_move(n, inp));
+        if is_vision_only_turn {
+            self.consecutive_vision_only_turns =
+                self.consecutive_vision_only_turns.saturating_add(1);
+            if self.consecutive_vision_only_turns >= VISION_LOOP_CONSECUTIVE_THRESHOLD {
+                // Reset so the nudge doesn't re-fire on the very next
+                // vision-only call. If the model ignores the nudge and
+                // keeps taking screenshots, we'll warn again after
+                // another full streak of threshold turns.
+                self.consecutive_vision_only_turns = 0;
                 return LoopDetectionResult {
                     level: LoopLevel::Warning,
                     detector: Some(LoopDetector::VisionLoop),
-                    count: vision_count,
-                    message: format!(
-                        "[视觉循环检测] 最近{}次工具调用中，有{}次是截图/视觉分析。你正在陷入“移动→截图→分析→再截图”的反复验证循环，没有执行任何实质性动作（点击输入框、输入文字、按回车）。请立即执行以下操作：(1) 点击输入框获得焦点（一次 click）；(2) 在同一回合内直接输入目标文本；(3) 按回车发送。不要再截图验证，不要再移动鼠标确认位置。",
-                        window_size, vision_count
-                    ),
+                    count: VISION_LOOP_CONSECUTIVE_THRESHOLD,
+                    message: vision_loop_warning(VISION_LOOP_CONSECUTIVE_THRESHOLD),
                 };
             }
+        } else {
+            self.consecutive_vision_only_turns = 0;
         }
 
         // 4. Generic repeat: same tool+input appearing too many times
@@ -464,6 +590,7 @@ impl LoopDetectorState {
     /// `screen_analyze`, `screen_capture`, `vision_analyze`, `vision_context`,
     /// etc.). `window_size` may be smaller than `window` if history hasn't
     /// yet accumulated that many entries.
+    #[allow(dead_code)]
     fn count_recent_vision_density(&self, window: usize) -> (usize, usize) {
         let start = self.history.len().saturating_sub(window);
         let slice = &self.history[start..];
@@ -2098,7 +2225,7 @@ impl AgentLoop {
         let max_iterations = ctx.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS as u32) as usize;
         let mut loop_detector = LoopDetectorState {
             history: restored_loop_history.unwrap_or_default(),
-            turns_since_vision_nudge: 0,
+            consecutive_vision_only_turns: 0,
         };
         let mut rolling_summary = String::new();
         let mut seen_notifications: HashSet<String> =
@@ -2825,7 +2952,7 @@ impl AgentLoop {
             let mut blocked_tool_ids: Vec<String> = Vec::new();
             let mut warning_messages: Vec<String> = Vec::new();
             for (id, name, input) in &tool_calls {
-                let detection = loop_detector.detect(name, input);
+                let detection = loop_detector.detect(name, input, &tool_calls);
                 match detection.level {
                     LoopLevel::Critical => {
                         warn!(

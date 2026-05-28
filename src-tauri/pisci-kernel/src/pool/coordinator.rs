@@ -1040,6 +1040,19 @@ pub async fn handle_mention(
         let pool_id = pool_session_id.to_string();
         let todo = store
             .write(move |db| {
+                // The koi_todos.owner_id column references kois(id) via a
+                // FOREIGN KEY constraint. "pisci" is a synthetic owner that
+                // is not created by `ensure_starter_kois`, so we must
+                // upsert it here to avoid a cryptic
+                // "FOREIGN KEY constraint failed" error on INSERT.
+                // `upsert_koi_with_id` uses `INSERT OR IGNORE` so calling
+                // it on every mention is idempotent and cheap.
+                if let Err(e) = db.upsert_koi_with_id("pisci", "Pisci") {
+                    tracing::warn!(
+                        target: "pool::coordinator",
+                        "@!Pisci: failed to upsert sentinel kois row: {e}"
+                    );
+                }
                 db.create_koi_todo(
                     "pisci",
                     &title,

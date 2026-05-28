@@ -135,6 +135,10 @@ impl Tool for BrowserTool {
                     "type": "boolean",
                     "description": "Capture full page screenshot (default: false)"
                 },
+                "save_path": {
+                    "type": "string",
+                    "description": "For screenshot: optional absolute file path to persist the captured image to disk (e.g. '<workspace>/.pisci/screenshots/browser_<timestamp>.jpg'). The file is written BEFORE the tool returns, so the caller can immediately reference it via `app_control(action=\"artifact_submit\", path=save_path, artifact_type=\"image\")`. If omitted, no file is written and the image is returned only as base64. (Also used by download_file to set the target location.)"
+                },
                 "wait_condition": {
                     "type": "string",
                     "enum": ["navigation", "element", "element_hidden", "network_idle", "human_verification"],
@@ -160,10 +164,6 @@ impl Tool for BrowserTool {
                 "headless": {
                     "type": "boolean",
                     "description": "Launch in headless mode (for 'launch' action). Omit or set false for a visible browser window. Set true only when you explicitly want a background/hidden browser."
-                },
-                "save_path": {
-                    "type": "string",
-                    "description": "Save path for download_file action (default: workspace_root/downloads/<uuid>)"
                 },
                 "download_id": {
                     "type": "string",
@@ -590,9 +590,32 @@ impl BrowserTool {
             .and_then(|r| r.into_value::<String>().ok())
             .unwrap_or_default();
 
+        // ── Opt-in persistence: write the encoded bytes to `save_path` ──
+        // Without this, the screenshot lives only in the LLM's tool result as
+        // a base64 blob — there is no file to reference as an artifact. The
+        // result message explicitly tells the caller whether the file was
+        // written so the agent can chain into `app_control(action=\"artifact_submit\",\n        // path=save_path, artifact_type=\"image\")`.
+        let save_note = if let Some(out_path) = input["save_path"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            let path = std::path::Path::new(out_path);
+            let (ok, message) = match std::fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new("."))) {
+                Err(e) => (false, format!("could not create parent directory: {e}")),
+                Ok(()) => match std::fs::write(path, &png_bytes) {
+                    Ok(()) => (true, out_path.to_string()),
+                    Err(e) => (false, format!("write failed: {e}")),
+                },
+            };
+            if ok {
+                format!("\nSaved to disk: {message} ({} KB). You MUST now call `app_control(action=\"artifact_submit\", artifact_name=\"<short label>\", path=\"{message}\", artifact_type=\"image\", content_summary=\"<1-line description>\")` so the file appears in the user's Artifacts panel.", size_kb)
+            } else {
+                format!("\nWARNING: failed to save screenshot to '{}': {}. The base64 image is still returned inline.", out_path, message)
+            }
+        } else {
+            String::new()
+        };
+
         Ok(ToolResult::ok(format!(
-            "Screenshot captured: {} KB\nURL: {}\nTitle: {}\nFull page: {}",
-            size_kb, url, title, full_page
+            "Screenshot captured: {} KB\nURL: {}\nTitle: {}\nFull page: {}{}",
+            size_kb, url, title, full_page, save_note
         ))
         .with_image(ImageData::jpeg(b64)))
     }

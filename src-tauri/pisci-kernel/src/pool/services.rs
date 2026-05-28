@@ -844,17 +844,41 @@ pub async fn assign_koi(
         args.priority.clone()
     };
 
-    // Best-effort resolve the Koi display name so the mention looks
-    // nice in the pool_chat log.
-    let koi_name = {
+    // Resolve the target Koi to its canonical id. Without this step a raw
+    // display name or a stale id (e.g. a Koi that was deleted by the
+    // startup dedup or removed from configuration) would reach
+    // `create_koi_todo`, whose `owner_id` column carries
+    // `FOREIGN KEY(owner_id) REFERENCES kois(id)`, and SQLite would fail
+    // with the cryptic "FOREIGN KEY constraint failed" error.
+    let (koi_id, koi_name) = {
         let lookup = koi_id.clone();
-        store
-            .read(move |db| db.resolve_koi_identifier(&lookup))
-            .await
-            .ok()
-            .flatten()
-            .map(|k| k.name)
-            .unwrap_or_else(|| koi_id.clone())
+        let resolved = store
+            .read(move |db| {
+                let found = db.resolve_koi_identifier(&lookup)?;
+                let available: Vec<String> = db
+                    .list_kois()?
+                    .into_iter()
+                    .map(|k| format!("{} ({})", k.name, &k.id[..8.min(k.id.len())]))
+                    .collect();
+                Ok::<_, anyhow::Error>((found, available))
+            })
+            .await?;
+        match resolved.0 {
+            Some(koi) => (koi.id.clone(), koi.name),
+            None => {
+                let available = resolved.1;
+                let hint = if available.is_empty() {
+                    "No Kois are registered. Create one from the Koi settings page first.".to_string()
+                } else {
+                    format!("Available Kois: {}.", available.join(", "))
+                };
+                anyhow::bail!(
+                    "Cannot assign_koi: Koi '{}' was not found in the kois table. {}",
+                    koi_id,
+                    hint,
+                );
+            }
+        }
     };
 
     let mention = if args.timeout_secs > 0 {

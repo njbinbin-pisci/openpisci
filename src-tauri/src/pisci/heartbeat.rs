@@ -131,6 +131,11 @@ pub fn content_targets_pisci(content: &str) -> bool {
 /// Resolves the heartbeat prompt from settings and runs `dispatch_heartbeat`
 /// on a detached tokio task. No-ops silently when heartbeat is disabled
 /// or the prompt is empty (matches the periodic loop's behavior).
+///
+/// NOTE: Currently superseded by [`spawn_mention_dispatch`], which handles
+/// `@!Pisci` mentions with pool-scoped dispatch. Kept as a fallback entry
+/// point for future callers.
+#[allow(dead_code)]
 pub fn spawn_immediate_dispatch(state: &crate::store::AppState, channel: &'static str) {
     let cloned = crate::store::AppState {
         db: state.db.clone(),
@@ -166,6 +171,149 @@ pub fn spawn_immediate_dispatch(state: &crate::store::AppState, channel: &'stati
             warn!("immediate Pisci dispatch failed: {}", e);
         }
     });
+}
+
+/// Spawn an immediate Pisci turn in response to a direct `@!Pisci` mention
+/// in a specific pool. Unlike [`spawn_immediate_dispatch`], this path is NOT
+/// gated behind `heartbeat_enabled` — an explicit mention from a human is
+/// an interactive request and must be honored even if periodic heartbeats
+/// are disabled.
+///
+/// `pool_id` scopes the dispatch to a single pool. `scan_attention_pools`
+/// will pick that pool up (the new mention is an attention event, so the
+/// pool appears in the result set) and `dispatch_heartbeat` will run
+/// Pisci only in that pool's attention session.
+pub fn spawn_mention_dispatch(
+    state: &crate::store::AppState,
+    pool_id: String,
+    channel: &'static str,
+) {
+    let cloned = crate::store::AppState {
+        db: state.db.clone(),
+        settings: state.settings.clone(),
+        plan_state: state.plan_state.clone(),
+        browser: state.browser.clone(),
+        cancel_flags: state.cancel_flags.clone(),
+        confirmation_responses: state.confirmation_responses.clone(),
+        interactive_responses: state.interactive_responses.clone(),
+        app_handle: state.app_handle.clone(),
+        scheduler: state.scheduler.clone(),
+        scheduled_job_ids: state.scheduled_job_ids.clone(),
+        gateway: state.gateway.clone(),
+        pisci_heartbeat_cursor: state.pisci_heartbeat_cursor.clone(),
+        terminals: state.terminals.clone(),
+        file_watchers: state.file_watchers.clone(),
+        lsp_manager: state.lsp_manager.clone(),
+    };
+    tokio::spawn(async move {
+        let prompt = {
+            let s = cloned.settings.lock().await;
+            let raw = s.heartbeat_prompt.clone();
+            if raw.trim().is_empty() {
+                crate::store::settings::default_heartbeat_prompt()
+            } else {
+                raw
+            }
+        };
+        if prompt.trim().is_empty() {
+            return;
+        }
+        // Scope to the mentioning pool: scan, then dispatch only if the
+        // target pool is in the attention set. Reuse the heartbeat
+        // machinery so the Pisci turn runs in the pool's attention
+        // session (`Pisci · <pool>`) and posts back into pool_chat.
+        match scan_attention_pools(&cloned).await {
+            Ok(attentions) => {
+                if let Some(attention) = attentions.iter().find(|a| a.pool_id == pool_id) {
+                    if let Err(e) = dispatch_single_pool_attention(
+                        &cloned,
+                        &prompt,
+                        attention,
+                        channel,
+                    )
+                    .await
+                    {
+                        warn!(
+                            "@!Pisci mention dispatch failed for pool {}: {}",
+                            pool_id, e
+                        );
+                    }
+                } else {
+                    tracing::info!(
+                        target: "pool::pisci",
+                        pool_id = %pool_id,
+                        "@!Pisci mention: pool not flagged for attention; skipping immediate dispatch"
+                    );
+                }
+            }
+            Err(e) => warn!("scan_attention_pools failed for @!Pisci mention: {e}"),
+        }
+    });
+}
+
+/// Run Pisci in a single pool's attention session. Extracted from
+/// [`dispatch_heartbeat`] so both the periodic loop and the
+/// mention-triggered path can reuse the same per-pool dispatch logic.
+async fn dispatch_single_pool_attention(
+    state: &AppState,
+    base_prompt: &str,
+    attention: &pisci_core::heartbeat::PoolAttention,
+    channel: &str,
+) -> Result<(), String> {
+    ensure_heartbeat_session(
+        state,
+        &attention.session_id,
+        &format!("Pisci · {}", attention.pool_name),
+        HEARTBEAT_POOL_SOURCE,
+    )
+    .await?;
+
+    // Same human-escalation safety net used by the periodic heartbeat.
+    if matches!(
+        attention.assessment.decision,
+        ProjectDecision::EscalateToHuman
+    ) {
+        emit_auto_escalation_toast(state, attention).await;
+    }
+
+    let heartbeat_message = build_pool_heartbeat_message(base_prompt, attention);
+    run_agent_headless(
+        state,
+        &attention.session_id,
+        &heartbeat_message,
+        None,
+        channel,
+        Some(HeadlessRunOptions {
+            pool_session_id: Some(attention.pool_id.clone()),
+            extra_system_context: Some(format!(
+                "You are reviewing pool '{}' ({}) during a heartbeat scan.\n\
+                 Assessment: {} | Decision: {:?}\n\
+                 \n\
+                 Available coordination tools: pool_org (list, get_todos, get_messages, post_status, resume_todo, assign_koi, merge_branches, etc.).\n\
+                 Do not use pool_chat from heartbeat; Pisci heartbeat communicates through pool_org-controlled actions.\n\
+                 If you decide a human must be notified through IM, resolve the route explicitly: use im_channel_list, im_channel_connect if required, then im_channel_binding_lookup(pool_id=\"{}\") before im_send_message. If no binding exists, explain that gap instead of pretending the IM notification was sent.\n\
+                 If any todo is needs_review, stable state is not enough: inspect messages/todos and either close it out, route rework, or post a concrete status explaining the blocker.\n\
+                 If the pool has a project_dir and branches need merging, consider using merge_branches.\n\
+                 During heartbeat, NEVER archive a pool automatically — only the user can explicitly request archiving.\n\
+                 Reply HEARTBEAT_OK only after the review state has been handled, not merely because there were no new messages.",
+                attention.pool_name,
+                attention.pool_id,
+                attention.assessment.summary,
+                attention.assessment.decision,
+                attention.pool_id,
+            )),
+            session_title: Some(format!("Pisci · {}", attention.pool_name)),
+            session_source: Some(HEARTBEAT_POOL_SOURCE.into()),
+            scene_kind: Some(SceneKind::HeartbeatSupervisor),
+            ..HeadlessRunOptions::default()
+        }),
+    )
+    .await
+    .map(|_| ())?;
+
+    let mut cursor = state.pisci_heartbeat_cursor.lock().await;
+    cursor.insert(attention.pool_id.clone(), attention.latest_message_id);
+    Ok(())
 }
 
 pub async fn dispatch_heartbeat(
@@ -215,58 +363,7 @@ pub async fn dispatch_heartbeat(
         .map(|_| ())
     } else {
         for attention in attentions {
-            ensure_heartbeat_session(
-                state,
-                &attention.session_id,
-                &format!("Pisci · {}", attention.pool_name),
-                HEARTBEAT_POOL_SOURCE,
-            )
-            .await?;
-
-            // Safety-net: surface critical human-escalation states to the user via a
-            // toast in the main UI even if Pisci's own turn fails or is delayed.
-            if matches!(
-                attention.assessment.decision,
-                ProjectDecision::EscalateToHuman
-            ) {
-                emit_auto_escalation_toast(state, &attention).await;
-            }
-
-            let heartbeat_message = build_pool_heartbeat_message(base_prompt, &attention);
-            run_agent_headless(
-                state,
-                &attention.session_id,
-                &heartbeat_message,
-                None,
-                channel,
-                Some(HeadlessRunOptions {
-                    pool_session_id: Some(attention.pool_id.clone()),
-                    extra_system_context: Some(format!(
-                        "You are reviewing pool '{}' ({}) during a heartbeat scan.\n\
-                         Assessment: {} | Decision: {:?}\n\
-                         \n\
-                         Available coordination tools: pool_org (list, get_todos, get_messages, post_status, resume_todo, assign_koi, merge_branches, etc.).\n\
-                         Do not use pool_chat from heartbeat; Pisci heartbeat communicates through pool_org-controlled actions.\n\
-                         If you decide a human must be notified through IM, resolve the route explicitly: use im_channel_list, im_channel_connect if required, then im_channel_binding_lookup(pool_id=\"{}\") before im_send_message. If no binding exists, explain that gap instead of pretending the IM notification was sent.\n\
-                         If any todo is needs_review, stable state is not enough: inspect messages/todos and either close it out, route rework, or post a concrete status explaining the blocker.\n\
-                         If the pool has a project_dir and branches need merging, consider using merge_branches.\n\
-                         During heartbeat, NEVER archive a pool automatically — only the user can explicitly request archiving.\n\
-                         Reply HEARTBEAT_OK only after the review state has been handled, not merely because there were no new messages.",
-                        attention.pool_name,
-                        attention.pool_id,
-                        attention.assessment.summary,
-                        attention.assessment.decision,
-                        attention.pool_id,
-                    )),
-                    session_title: Some(format!("Pisci · {}", attention.pool_name)),
-                    session_source: Some(HEARTBEAT_POOL_SOURCE.into()),
-                    scene_kind: Some(SceneKind::HeartbeatSupervisor),
-                    ..HeadlessRunOptions::default()
-                }),
-            )
-            .await?;
-            let mut cursor = state.pisci_heartbeat_cursor.lock().await;
-            cursor.insert(attention.pool_id.clone(), attention.latest_message_id);
+            dispatch_single_pool_attention(state, base_prompt, &attention, channel).await?;
         }
         Ok(())
     }

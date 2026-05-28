@@ -5,6 +5,7 @@ use base64::Engine;
 /// Supports full screen, specific window, region, and multi-monitor capture.
 use pisci_kernel::agent::tool::{ImageData, Tool, ToolContext, ToolResult};
 use serde_json::{json, Value};
+use std::fs;
 
 pub struct ScreenTool;
 
@@ -83,6 +84,10 @@ impl Tool for ScreenTool {
                 "grid_spacing": {
                     "type": "integer",
                     "description": "Grid line spacing in pixels (default: 100)"
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "Optional absolute file path to persist the screenshot to disk (e.g. '/tmp/shot.png' or project workspace). The file is written BEFORE the tool returns, so the caller can immediately reference it via `app_control(action=\"artifact_submit\", path=output_path, artifact_type=\"image\")`. If omitted, no file is written and the image is returned only as base64."
                 }
             },
             "required": ["action"]
@@ -273,14 +278,38 @@ pub(crate) fn encode_and_return_with_cursor_offset(
     };
 
     let image_data = if media_type == "image/png" {
-        ImageData::png(b64)
+        ImageData::png(b64.clone())
     } else {
-        ImageData::jpeg(b64)
+        ImageData::jpeg(b64.clone())
+    };
+
+    // ── Persist-to-disk path (opt-in via output_path) ──────────────────
+    // Without this, the screenshot lives only in the LLM's tool result as
+    // a base64 blob — there is no file to reference as an artifact. This
+    // branch decodes the base64 and writes it to the requested path so
+    // the caller can immediately submit it with
+    // `app_control(action="artifact_submit", path=<output_path>, ...)`. 
+    let save_note = if let Some(out_path) = input["output_path"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        let path = std::path::Path::new(out_path);
+        let (ok, message) = match fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new("."))) {
+            Err(e) => (false, format!("could not create parent directory: {e}")),
+            Ok(()) => match fs::write(path, &encoded) {
+                Ok(()) => (true, out_path.to_string()),
+                Err(e) => (false, format!("write failed: {e}")),
+            },
+        };
+        if ok {
+            format!("\nSaved to disk: {message} ({} KB). You MUST now call `app_control(action=\"artifact_submit\", artifact_name=\"<short label>\", path=\"{message}\", artifact_type=\"image\", content_summary=\"<1-line description>\")` so the file appears in the user's Artifacts panel.", size_kb)
+        } else {
+            format!("\nWARNING: failed to save screenshot to '{}': {}. The base64 image is still returned inline.", out_path, message)
+        }
+    } else {
+        String::new()
     };
 
     Ok(ToolResult::ok(format!(
-        "Screenshot: {}x{} px, {} KB ({}){}",
-        width, height, size_kb, media_type, coord_note
+        "Screenshot: {}x{} px, {} KB ({}){}{}",
+        width, height, size_kb, media_type, coord_note, save_note
     ))
     .with_image(image_data))
 }
