@@ -73,6 +73,7 @@ export const systemApi = {
 export const windowApi = {
   enterMinimalMode: () => invoke<void>("enter_minimal_mode"),
   exitMinimalMode: () => invoke<void>("exit_minimal_mode"),
+  quitApp: () => invoke<void>("quit_app"),
   setOverlayPosition: (x: number, y: number) =>
     invoke<void>("set_overlay_position", { x, y }),
   saveOverlayPosition: (x: number, y: number) =>

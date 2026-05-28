@@ -182,7 +182,7 @@ export default function OverlayApp() {
 
   const handleQuit = useCallback(() => {
     setShowMenu(false);
-    invoke("plugin:process|exit", { code: 0 }).catch(() => {
+    windowApi.quitApp().catch(() => {
       window.close();
     });
   }, []);

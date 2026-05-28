@@ -1239,7 +1239,7 @@ fn run_impl() {
                 }
             }
             "tray_quit" => {
-                app.exit(0);
+                crate::app::shutdown::request_app_exit(app.clone());
             }
             _ => {}
         })
@@ -1393,6 +1393,7 @@ fn run_impl() {
             commands::platform::interactive::respond_interactive_ui,
             commands::platform::window::enter_minimal_mode,
             commands::platform::window::exit_minimal_mode,
+            commands::platform::window::quit_app,
             commands::platform::window::set_overlay_position,
             commands::platform::window::save_overlay_position,
             commands::platform::window::set_app_theme,

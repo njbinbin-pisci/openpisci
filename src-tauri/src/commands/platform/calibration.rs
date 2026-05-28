@@ -349,11 +349,16 @@ async fn run_phase2_impl(_app: AppHandle, _request: Phase2Request) -> Result<Pha
 
 /// Allow the frontend (or the ESC keystroke handler) to cancel the
 /// in-flight Phase 2 loop.
-#[tauri::command]
-pub async fn uia_calibration_cancel_phase2() -> Result<(), String> {
+/// Signal an in-flight Phase 2 calibration loop to stop (no-op if idle).
+pub async fn cancel_phase2_if_running() {
     if let Some(flag) = take_phase2_cancel().await {
         flag.store(true, std::sync::atomic::Ordering::SeqCst);
     }
+}
+
+#[tauri::command]
+pub async fn uia_calibration_cancel_phase2() -> Result<(), String> {
+    cancel_phase2_if_running().await;
     Ok(())
 }
 

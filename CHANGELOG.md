@@ -6,6 +6,14 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.19] - 2026-05-28
+
+### Fixed
+- **Tray / overlay quit no longer hangs the process**: exit now runs a ordered shutdown (cancel agents, stop IM gateway, close browser, destroy PTY terminals, clear file watchers, stop LSP, cancel UIA calibration) before `app.exit`, with a force-exit backstop if teardown stalls.
+- **Unified quit path**: tray menu, overlay「退出」, and new `quit_app` command all use the same shutdown helper instead of calling `app.exit` / `plugin:process|exit` directly.
+
+---
+
 ## [0.8.18] - 2026-05-28
 
 ### Fixed

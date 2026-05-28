@@ -11,5 +11,6 @@ pub mod bootstrap;
 pub mod headless;
 pub mod logging;
 pub mod markers;
+pub mod shutdown;
 
 pub use bootstrap::run;

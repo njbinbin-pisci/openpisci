@@ -4,6 +4,7 @@
 //!   main    - 1200x800 main application window
 //!   overlay - 280x56 transparent always-on-top HUD strip
 
+use crate::app::shutdown;
 use crate::store::AppState;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tracing::info;
@@ -322,4 +323,10 @@ pub async fn save_overlay_position(
     y: i32,
 ) -> Result<(), String> {
     persist_overlay_position(&state, x, y).await
+}
+
+/// Quit the desktop app (tray menu, overlay, or frontend).
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    shutdown::request_app_exit(app);
 }
