@@ -46,6 +46,19 @@ pub fn rolling_summary_message(summary: &str) -> LlmMessage {
     }
 }
 
+/// Tool calls whose results are host-side polling noise and should not
+/// bloat long-lived chat context (still executed and visible for the
+/// current iteration until the next LLM request is built).
+pub fn is_ephemeral_tool_call(name: &str, input: &serde_json::Value) -> bool {
+    if name != "pool_org" {
+        return false;
+    }
+    matches!(
+        input.get("action").and_then(|v| v.as_str()),
+        Some("wait_for_koi")
+    )
+}
+
 fn tool_call_signature(name: &str, input: &serde_json::Value) -> String {
     let mut normalized = input.clone();
     if let Some(obj) = normalized.as_object_mut() {
@@ -217,6 +230,51 @@ pub fn collapse_superseded_tool_failures(mut msgs: Vec<LlmMessage>) -> Vec<LlmMe
     msgs
 }
 
+/// Remove `pool_org(action="wait_for_koi")` tool_use / tool_result pairs from
+/// the message log so polling waits do not accumulate in LLM context.
+pub fn strip_ephemeral_tool_exchanges(mut msgs: Vec<LlmMessage>) -> Vec<LlmMessage> {
+    let mut ephemeral_ids: HashSet<String> = HashSet::new();
+
+    for msg in &msgs {
+        let MessageContent::Blocks(blocks) = &msg.content else {
+            continue;
+        };
+        for block in blocks {
+            if let ContentBlock::ToolUse { id, name, input } = block {
+                if is_ephemeral_tool_call(name, input) {
+                    ephemeral_ids.insert(id.clone());
+                }
+            }
+        }
+    }
+
+    if ephemeral_ids.is_empty() {
+        return msgs;
+    }
+
+    for msg in msgs.iter_mut() {
+        let MessageContent::Blocks(blocks) = &mut msg.content else {
+            continue;
+        };
+        blocks.retain(|block| match block {
+            ContentBlock::ToolUse { id, .. } => !ephemeral_ids.contains(id),
+            ContentBlock::ToolResult { tool_use_id, .. } => !ephemeral_ids.contains(tool_use_id),
+            _ => true,
+        });
+    }
+
+    msgs.retain(|msg| match &msg.content {
+        MessageContent::Blocks(blocks) => !blocks.is_empty(),
+        MessageContent::Text(text) => !text.trim().is_empty(),
+    });
+
+    tracing::info!(
+        "strip_ephemeral_tool_exchanges: removed {} pool_org wait_for_koi exchange(s)",
+        ephemeral_ids.len()
+    );
+    msgs
+}
+
 /// Strip orphaned ToolUse blocks left over from a cancelled previous turn.
 pub fn sanitize_tool_use_result_pairing(mut msgs: Vec<LlmMessage>) -> Vec<LlmMessage> {
     let mut i = 0;
@@ -271,4 +329,55 @@ pub fn sanitize_tool_use_result_pairing(mut msgs: Vec<LlmMessage>) -> Vec<LlmMes
         i += 1;
     }
     msgs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::{ContentBlock, LlmMessage, MessageContent};
+
+    #[test]
+    fn is_ephemeral_only_for_pool_org_wait() {
+        assert!(is_ephemeral_tool_call(
+            "pool_org",
+            &serde_json::json!({"action": "wait_for_koi", "pool_id": "p1"})
+        ));
+        assert!(!is_ephemeral_tool_call(
+            "pool_org",
+            &serde_json::json!({"action": "get_todos", "pool_id": "p1"})
+        ));
+        assert!(!is_ephemeral_tool_call(
+            "shell",
+            &serde_json::json!({"command": "ls"})
+        ));
+    }
+
+    #[test]
+    fn strip_ephemeral_removes_wait_exchange() {
+        let msgs = vec![
+            LlmMessage {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "tu_wait".into(),
+                    name: "pool_org".into(),
+                    input: serde_json::json!({"action": "wait_for_koi", "pool_id": "p1"}),
+                }]),
+            },
+            LlmMessage {
+                role: "user".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "tu_wait".into(),
+                    content: "Waited 60000ms...".into(),
+                    is_error: false,
+                }]),
+            },
+            LlmMessage {
+                role: "assistant".into(),
+                content: MessageContent::text("继续处理"),
+            },
+        ];
+        let out = strip_ephemeral_tool_exchanges(msgs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].content.as_text(), "继续处理");
+    }
 }

@@ -611,9 +611,14 @@ async fn resolve_session_workspace_root(
 pub async fn create_session(
     state: State<'_, AppState>,
     title: Option<String>,
+    source: Option<String>,
 ) -> Result<Session, String> {
     let db = state.db.lock().await;
-    db.create_session(title.as_deref())
+    let source = source
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("chat");
+    db.create_session_with_source(title.as_deref(), source)
         .map_err(|e| e.to_string())
 }
 

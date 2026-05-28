@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::commands::chat::{run_agent_headless, HeadlessRunOptions, SESSION_SOURCE_PISCI_POOL};
 use crate::commands::config::scene::SceneKind;
 use crate::headless_cli::HeadlessContextToggles;
+use crate::runtime::koi_prompt::assemble_koi_task_system_prompt;
 use crate::store::AppState;
 
 #[derive(Clone)]
@@ -157,18 +158,30 @@ async fn run_in_process_koi_turn(
     }
 
     let state = app.state::<AppState>();
-    let options = HeadlessRunOptions {
-        pool_session_id: if request.pool_id.trim().is_empty() {
-            None
+    let pool_session_id = if request.pool_id.trim().is_empty() {
+        None
+    } else {
+        Some(request.pool_id.as_str())
+    };
+
+    let koi_system_prompt = {
+        let db = state.db.lock().await;
+        let koi_def = db.resolve_koi_identifier(&request.koi_id).ok().flatten();
+        drop(db);
+        if let Some(koi_def) = koi_def {
+            assemble_koi_task_system_prompt(&state, &koi_def, pool_session_id, &request.user_prompt)
+                .await
         } else {
-            Some(request.pool_id.clone())
-        },
-        extra_system_context: Some(
             request
                 .extra_system_context
                 .clone()
-                .unwrap_or_else(|| request.system_prompt.clone()),
-        ),
+                .unwrap_or_else(|| request.system_prompt.clone())
+        }
+    };
+
+    let options = HeadlessRunOptions {
+        pool_session_id: pool_session_id.map(|s| s.to_string()),
+        extra_system_context: Some(koi_system_prompt),
         session_title: None,
         session_source: Some(SESSION_SOURCE_PISCI_POOL.to_string()),
         scene_kind: Some(SceneKind::KoiTask),

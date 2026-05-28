@@ -108,6 +108,8 @@ This is the LAST thing you read. Treat it as a state check on the board, not as 
 \n\
 **Exit is permitted only when (1) is unambiguously \"no claimed todo of mine is in todo or in_progress\" AND (2) and (3) are satisfied as applicable.** The runtime enforces (1) for you: if you exit early, the runtime rewrites the stuck todo to `needs_review` and posts a `protocol_reminder` event in pool_chat under your name. That trace is permanent and visible to every agent that subsequently joins the pool \u{2014} it is a logged failure, not a redo.\n\
 \n\
+**Mandatory last action:** Your final tool call before stopping MUST be one of: `pool_org(action=\"complete_todo\", todo_id=..., summary=...)`, `pool_org(action=\"update_todo_status\", status=\"blocked\")`, or `pool_org(action=\"cancel_todo\", ...)`. Ending the run with only a text reply, only `pool_chat`, or only file/shell tools without one of these board transitions is always a protocol failure.\n\
+\n\
 Anti-pattern reminder: passing tests, writing files, drafting a spec, or believing the work is done does NOT complete the run. The run completes only when (a) `complete_todo` (or `blocked` / `cancel_todo`) has succeeded on every claimed todo, (b) the deliverable is visible in pool_chat, and (c) any required handoff has already been posted with the correct `[ProjectStatus]` signal.\n"
 }
 

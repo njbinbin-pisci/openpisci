@@ -814,8 +814,9 @@ pub fn build_request_messages(
     recent_full_turns: usize,
     recent_tool_carriers: usize,
 ) -> Vec<LlmMessage> {
-    let turn_cutoff = turn_based_recent_start(messages, recent_full_turns);
-    let tool_cutoff = tool_carrier_recent_start(messages, recent_tool_carriers);
+    let messages = crate::agent::message_utils::strip_ephemeral_tool_exchanges(messages.to_vec());
+    let turn_cutoff = turn_based_recent_start(&messages, recent_full_turns);
+    let tool_cutoff = tool_carrier_recent_start(&messages, recent_tool_carriers);
     // `min` = whichever boundary is *further back* (lower index) in the
     // message vector, i.e. preserves more messages at full fidelity.
     let mut recent_start = turn_cutoff.min(tool_cutoff);
@@ -825,7 +826,7 @@ pub fn build_request_messages(
     // the preserved region). Equivalently, if `recent_start` currently
     // points at a user message containing only `ToolResult` blocks, step
     // back one more so the preceding assistant `ToolUse` comes with it.
-    recent_start = snap_to_pair_boundary(messages, recent_start);
+    recent_start = snap_to_pair_boundary(&messages, recent_start);
 
     // Second pass: materialise the request vector. For indices below
     // `recent_start`, substitute `content` of each `ToolResult` block with its
@@ -3006,8 +3007,13 @@ impl AgentLoop {
             };
             new_messages.push(asst_tool_msg.clone());
             messages.push(asst_tool_msg.clone());
-            self.persist_message(&ctx.session_id, &asst_tool_msg, turn_index)
-                .await;
+            let persist_asst = crate::agent::message_utils::strip_ephemeral_tool_exchanges(vec![
+                asst_tool_msg.clone(),
+            ]);
+            if let Some(msg) = persist_asst.into_iter().next() {
+                self.persist_message(&ctx.session_id, &msg, turn_index)
+                    .await;
+            }
 
             // Execute tools — read-only concurrently, write serially.
             // Blocked tools (by loop detector) get a synthetic error result instead.
@@ -3114,6 +3120,9 @@ impl AgentLoop {
                     if let Some((_, name, input)) =
                         tool_calls.iter().find(|(id, _, _)| id == tool_use_id)
                     {
+                        if crate::agent::message_utils::is_ephemeral_tool_call(name, input) {
+                            continue;
+                        }
                         let rh = stable_hash_result(content);
                         loop_detector.record(name, input, rh);
                         let receipt = super::tool_receipt::render_receipt(
@@ -3158,15 +3167,24 @@ impl AgentLoop {
             };
             new_messages.push(tool_result_msg.clone());
             messages.push(tool_result_msg.clone());
-            self.persist_message_with_receipts(
-                &ctx.session_id,
-                &tool_result_msg,
-                turn_index,
-                Some(&tool_minimals),
-                Some(&tool_names_by_id),
-            )
-            .await;
+            let persist_results =
+                crate::agent::message_utils::strip_ephemeral_tool_exchanges(vec![
+                    tool_result_msg.clone()
+                ]);
+            if let Some(msg) = persist_results.into_iter().next() {
+                self.persist_message_with_receipts(
+                    &ctx.session_id,
+                    &msg,
+                    turn_index,
+                    Some(&tool_minimals),
+                    Some(&tool_names_by_id),
+                )
+                .await;
+            }
             messages = crate::agent::message_utils::collapse_superseded_tool_failures(messages);
+            messages = crate::agent::message_utils::strip_ephemeral_tool_exchanges(messages);
+            new_messages =
+                crate::agent::message_utils::strip_ephemeral_tool_exchanges(new_messages);
 
             if let Some(reminder) = warning_reminder {
                 let reminder_msg = LlmMessage {

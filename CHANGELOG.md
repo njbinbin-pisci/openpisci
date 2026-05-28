@@ -6,6 +6,29 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.18] - 2026-05-28
+
+### Fixed
+- **Tab switch no longer discards Chat / Pond state**: main views stay mounted (hidden) after first visit so switching pages does not remount and lose in-progress UI state.
+- **`@!pisci` pool mentions now trigger dispatch**: `contains_pisci_mention` recognizes `@!pisci` (previously only matched the `@pisci` substring, so forced-mention scheduling never fired).
+- **Koi observation console filtered by current project**: inbox / observation streams only show messages for the active pool session suffix and related todo sessions.
+- **Pisci coordination console shows pool traffic again**: coordination feed scoped to `pisci_pool_{id}` instead of an empty mixed filter.
+- **Kanban uses the current project only**: removed the redundant project dropdown; board always reflects `filterSessionId`.
+- **Collab IDE Explorer right-click menu**: same VS Code–style context menu wiring as the standalone Pond IDE view.
+- **Pond CLI tab lists existing CLI sessions**: sessions created with `source: "cli"` surface under「鱼池 CLI」; switching to the tab refreshes the session list; IDE assistant reuses existing `Pisci CLI —` sessions instead of duplicating.
+
+### Changed
+- **Heartbeat on by default** (`heartbeat_enabled` default `true`) with an updated default prompt covering inbox/todos, project convention checks (§3), and scheduled maintenance (§4).
+- **`pool_org` / `wait_for_koi` treated as ephemeral**: wait exchanges are not persisted and are stripped before subsequent LLM turns, reducing wasted context on coordination waits.
+- **Koi managed turns use the full six-layer protocol** on inbox, kanban, and `call_koi` paths (shared `runtime/koi_prompt.rs`); Stop Gate now mandates `complete_todo` as the last action when a todo is active.
+- **`koi_execute_todo` template** strengthened with an explicit completion checklist for Koi workers.
+
+### Added
+- **`create_session` optional `source`** (e.g. `"cli"`) for classifying Pond CLI sessions end-to-end.
+- **`isPondCliSession()`** helper and Redux/chat wiring for CLI session discovery.
+
+---
+
 ## [0.8.17] - 2026-05-28
 
 ### Added

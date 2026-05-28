@@ -59,7 +59,8 @@ export interface SessionArtifact {
 }
 
 export const sessionsApi = {
-  create: (title?: string) => invoke<Session>("create_session", { title }),
+  create: (title?: string, source?: string) =>
+    invoke<Session>("create_session", { title, source }),
   list: (limit = 20, offset = 0) =>
     invoke<{ sessions: Session[]; total: number }>("list_sessions", { limit, offset }),
   delete: (sessionId: string) => invoke<void>("delete_session", { sessionId }),

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useSelector, useDispatch } from "react-redux";
 import { listen } from "@tauri-apps/api/event";
-import { boardApi, koiApi, poolApi, KoiTodo, KoiWithStats, PoolSession } from "../../../services/tauri";
+import { boardApi, koiApi, KoiTodo, KoiWithStats } from "../../../services/tauri";
 import { RootState, boardActions, koiActions } from "../../../store";
 import "./Board.css";
 
@@ -461,8 +461,6 @@ export default function Board() {
   const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
   const [detailTodo, setDetailTodo] = useState<KoiTodo | null>(null);
-  const [sessions, setSessions] = useState<PoolSession[]>([]);
-
   const loadTodos = useCallback(async () => {
     try {
       dispatch(boardActions.setLoading(true));
@@ -479,7 +477,6 @@ export default function Board() {
     if (kois.length === 0) {
       koiApi.list().then((list) => dispatch(koiActions.setKois(list))).catch(() => {});
     }
-    poolApi.listSessions().then(setSessions).catch(() => {});
   }, [loadTodos, dispatch, kois.length]);
 
   useEffect(() => {
@@ -499,7 +496,8 @@ export default function Board() {
 
   const filtered = todos.filter((todo) => {
     if (filterPriority && todo.priority !== filterPriority) return false;
-    if (filterSessionId && todo.pool_session_id !== filterSessionId) return false;
+    if (!filterSessionId) return false;
+    if (todo.pool_session_id !== filterSessionId) return false;
     return true;
   });
 
@@ -585,18 +583,6 @@ export default function Board() {
             })}
           </select>
 
-          <select
-            className="board-filter-select"
-            value={filterSessionId ?? ""}
-            onChange={(e) =>
-              dispatch(boardActions.setFilterSessionId(e.target.value || null))
-            }
-          >
-            <option value="">{t("board.filterByProject")}: {t("board.filterAll")}</option>
-            {sessions.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
         </div>
 
         <button
@@ -607,7 +593,9 @@ export default function Board() {
         </button>
       </div>
 
-      {loading && todos.length === 0 ? (
+      {!filterSessionId ? (
+        <div className="board-empty">{t("board.selectProject") || t("pool.selectSession")}</div>
+      ) : loading && todos.length === 0 ? (
         <div className="board-empty">{t("common.loading")}</div>
       ) : (
         <div className="board-columns">

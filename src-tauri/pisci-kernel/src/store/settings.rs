@@ -440,7 +440,7 @@ pub struct Settings {
 
     // ── Heartbeat ───────────────────────────────────────────────────────────
     /// Whether the heartbeat runner is enabled
-    #[serde(default)]
+    #[serde(default = "default_heartbeat_enabled")]
     pub heartbeat_enabled: bool,
     /// Heartbeat interval in minutes (default 30)
     #[serde(default = "default_heartbeat_interval")]
@@ -594,6 +594,9 @@ fn default_koi_timeout_secs() -> u32 {
 fn default_heartbeat_interval() -> u32 {
     30
 }
+fn default_heartbeat_enabled() -> bool {
+    true
+}
 pub fn default_heartbeat_prompt() -> String {
     "这是你的例行心跳巡查。按以下清单逐项完成，然后回复 HEARTBEAT_OK。\n\n\
      ## 1. 活跃项目巡查\n\
@@ -613,9 +616,14 @@ pub fn default_heartbeat_prompt() -> String {
      只有用户明确要求启动新项目时，才能创建新的项目池。\n\n\
      ## 2. Koi 状态检查\n\
      查看是否有 Koi 异常（长时间 busy 但无活跃 todo）。如有，用 pool_org(action=\"post_status\") 说明，或分配新任务。\n\n\
-     ## 3. 定时任务检查\n\
+     ## 3. 检查项目规约\n\
+     对每个 active 池，用 pool_org(action=\"read\", pool_id=...) 阅读 org_spec（项目规约），对照 get_todos / get_messages 判断项目是否按规约推进、是否已收敛：\n\
+     - 若交付物、任务分解或协作节奏明显偏离 org_spec：用 pool_org(action=\"post_status\") 指出差距，并通过 pool_org(action=\"create_todo\") 或 pool_org(action=\"assign_koi\") 安排继续推进或迭代（补全缺失步骤、返工、拆分下一里程碑）。\n\
+     - 若规约要求的能力/角色尚未落地但板面已停滞：主动分配具体 todo，不要只发空泛提醒。\n\
+     - 若项目已按规约完成且板面干净：在 post_status 中说明收敛情况；勿自动归档（见第 1 节）。\n\n\
+     ## 4. 定时任务检查\n\
      用 app_control(action=\"list_scheduled_tasks\") 查看是否有应运行的计划任务，按需处理。\n\n\
-     完成以上全部巡查且已处理所有 needs_review/blocked/停滞状态后，回复 HEARTBEAT_OK。"
+     完成以上全部巡查且已处理所有 needs_review/blocked/停滞/规约偏差后，回复 HEARTBEAT_OK。"
         .into()
 }
 
@@ -736,7 +744,7 @@ impl Default for Settings {
             pisci_personal_prompt: String::new(),
             llm_read_timeout_secs: default_llm_read_timeout_secs(),
             koi_timeout_secs: default_koi_timeout_secs(),
-            heartbeat_enabled: false,
+            heartbeat_enabled: default_heartbeat_enabled(),
             heartbeat_interval_mins: default_heartbeat_interval(),
             heartbeat_prompt: default_heartbeat_prompt(),
             starter_kois_initialized: false,

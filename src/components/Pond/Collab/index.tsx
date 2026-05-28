@@ -276,7 +276,8 @@ export default function Collab() {
   const [showAssistant, setShowAssistant] = useState(false);
   // File tree multi-select + context menu
   const [collabFileTreeSelection, setCollabFileTreeSelection] = useState<Set<string>>(new Set());
-  const [_collabFileTreeContextMenu, setCollabFileTreeContextMenu] = useState<FileTreeContextMenu | null>(null);
+  const [collabFileTreeContextMenu, setCollabFileTreeContextMenu] = useState<FileTreeContextMenu | null>(null);
+  const collabFileTreeRef = useRef<HTMLDivElement | null>(null);
   // VS Code-style: clicking an already-active IDE view button collapses
   // the side panel; clicking again expands it. Only applies to
   // explorer / search / git — the views that own the side panel.
@@ -654,6 +655,22 @@ export default function Collab() {
     }
   }, [contentView, activeSessionId, dispatch]);
 
+  useEffect(() => {
+    if (!collabFileTreeContextMenu) return;
+    const dismiss = () => setCollabFileTreeContextMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
+    window.addEventListener("click", dismiss);
+    window.addEventListener("contextmenu", dismiss);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", dismiss, true);
+    return () => {
+      window.removeEventListener("click", dismiss);
+      window.removeEventListener("contextmenu", dismiss);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", dismiss, true);
+    };
+  }, [collabFileTreeContextMenu]);
+
   const startTerminalResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const startY = e.clientY;
@@ -1022,10 +1039,14 @@ export default function Collab() {
             {contentView === "board" && <Board />}
 
             {/* Inbox view */}
-            {contentView === "inbox" && <PisciInbox mode="coordination" />}
+            {contentView === "inbox" && (
+              <PisciInbox mode="coordination" poolSessionId={activeSessionId} />
+            )}
 
             {/* Koi Observer view */}
-            {contentView === "koiObserver" && <PisciInbox mode="koiObserver" />}
+            {contentView === "koiObserver" && (
+              <PisciInbox mode="koiObserver" poolSessionId={activeSessionId} />
+            )}
           </div>
 
           {/* ── IDE side panel (right side, adjacent to icon strip) ──
@@ -1058,6 +1079,7 @@ export default function Collab() {
                                             });
                                           }}
                                           onContextMenu={(menu) => setCollabFileTreeContextMenu(menu)}
+                                          containerRef={collabFileTreeRef}
                                         />
                   )}
                   {contentView === "search" && (
@@ -1143,6 +1165,55 @@ export default function Collab() {
           </button>
         </div>
       </div>
+
+      {collabFileTreeContextMenu && (
+        <div
+          className="ide-tab-context-menu"
+          style={{
+            position: "fixed",
+            left: collabFileTreeContextMenu.x,
+            top: collabFileTreeContextMenu.y,
+            zIndex: 1000,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button onClick={() => { openFile(collabFileTreeContextMenu.targetPath); setCollabFileTreeContextMenu(null); }}>
+            {t("ide.openFile") || "Open"}
+          </button>
+          <button onClick={() => { (collabFileTreeRef.current as HTMLDivElement & { renameActive?: () => void })?.renameActive?.(); setCollabFileTreeContextMenu(null); }}>
+            {t("ide.renameFile") || "Rename"}
+          </button>
+          <button onClick={() => { (collabFileTreeRef.current as HTMLDivElement & { deleteSelected?: () => void })?.deleteSelected?.(); setCollabFileTreeContextMenu(null); }}>
+            {t("ide.deleteFile") || "Delete"}
+          </button>
+          <div className="ide-tab-context-menu-sep" />
+          <button onClick={() => {
+            if (projectDir) navigator.clipboard.writeText(`${projectDir}/${collabFileTreeContextMenu.targetPath}`).catch(() => {});
+            setCollabFileTreeContextMenu(null);
+          }}>
+            {t("ide.copyPath") || "Copy Path"}
+          </button>
+          <button onClick={() => {
+            navigator.clipboard.writeText(collabFileTreeContextMenu.targetPath).catch(() => {});
+            setCollabFileTreeContextMenu(null);
+          }}>
+            {t("ide.copyRelPath") || "Copy Relative Path"}
+          </button>
+          <button onClick={() => {
+            if (projectDir) openPath(`${projectDir}/${collabFileTreeContextMenu.targetPath}`).catch(() => {});
+            setCollabFileTreeContextMenu(null);
+          }}>
+            {t("ide.revealInExplorer") || "Reveal in File Manager"}
+          </button>
+          <div className="ide-tab-context-menu-sep" />
+          <button onClick={() => { (collabFileTreeRef.current as HTMLDivElement & { startCreate?: (d: boolean) => void })?.startCreate?.(false); setCollabFileTreeContextMenu(null); }}>
+            {t("ide.newFile") || "New File"}
+          </button>
+          <button onClick={() => { (collabFileTreeRef.current as HTMLDivElement & { startCreate?: (d: boolean) => void })?.startCreate?.(true); setCollabFileTreeContextMenu(null); }}>
+            {t("ide.newFolder") || "New Folder"}
+          </button>
+        </div>
+      )}
 
       {/* Dialogs */}
       <ConfirmDialog open={!!deleteTarget} title={t("pool.confirmDeleteTitle") || "Delete Project"} message={t("pool.confirmDeleteMessage", { name: deleteTarget?.name ?? "" }) || "Delete this project?"} confirmLabel={t("common.delete") || "Delete"} cancelLabel={t("common.cancel") || "Cancel"} variant="danger" loading={deleting} onConfirm={confirmDeleteSession} onCancel={() => !deleting && setDeleteTarget(null)} />

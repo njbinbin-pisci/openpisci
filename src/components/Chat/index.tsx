@@ -15,7 +15,7 @@ import remarkGfm from "remark-gfm";
 import { openPath } from "../../services/tauri";
 import InteractiveCard from "./InteractiveCard";
 import ConfirmDialog from "../ConfirmDialog";
-import { isInternalSession } from "../../utils/session";
+import { isInternalSession, isPondCliSession } from "../../utils/session";
 import "./Chat.css";
 
 // ─── Mermaid diagram block ────────────────────────────────────────────────────
@@ -208,7 +208,7 @@ type SessionLike = { source?: string | null; id?: string | null };
 
 function classifySession(session: SessionLike | undefined | null): SessionKind {
   if (isInternalSession(session)) return "chat";
-  if (session?.source === "cli") return "cli";
+  if (isPondCliSession(session)) return "cli";
   if (!session?.source || session.source === "chat") return "chat";
   return "im";
 }
@@ -1069,6 +1069,16 @@ export default function Chat() {
       setSendError(t("chat.failedCreate", { error: String(e) }));
     }
   }, [dispatch, t]);
+
+  // Refresh the full session list when opening Pond CLI so assistant / headless
+  // sessions created outside the main chat flow appear in the sidebar.
+  useEffect(() => {
+    if (sessionFilter !== "cli") return;
+    sessionsApi
+      .list(200, 0)
+      .then(({ sessions: fresh }) => dispatch(sessionsActions.setSessions(fresh)))
+      .catch(() => {});
+  }, [sessionFilter, dispatch]);
 
   // Load gateway status on mount and when switching to IM filter
   useEffect(() => {

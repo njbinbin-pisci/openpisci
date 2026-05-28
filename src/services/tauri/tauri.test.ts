@@ -43,10 +43,10 @@ describe("sessionsApi", () => {
     expect(mockInvoke).toHaveBeenCalledWith("list_sessions", { limit: 20, offset: 0 });
   });
 
-  it("create() calls create_session with title", async () => {
+  it("create() calls create_session with title and optional source", async () => {
     mockInvoke.mockResolvedValueOnce({ id: "abc", title: "Test" });
-    await sessionsApi.create("Test");
-    expect(mockInvoke).toHaveBeenCalledWith("create_session", { title: "Test" });
+    await sessionsApi.create("Test", "cli");
+    expect(mockInvoke).toHaveBeenCalledWith("create_session", { title: "Test", source: "cli" });
   });
 
   it("delete() calls delete_session with sessionId", async () => {

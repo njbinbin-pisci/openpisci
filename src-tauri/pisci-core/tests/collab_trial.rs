@@ -267,6 +267,26 @@ fn collab_trial_collect_pool_attention_uses_shared_pool_pisci_session_id() {
 }
 
 #[test]
+fn collab_trial_collect_pool_attention_recognizes_delegated_pisci_mention() {
+    use pisci_core::project_state::contains_pisci_mention;
+
+    assert!(contains_pisci_mention("@!Pisci please review the board"));
+    assert!(!contains_pisci_mention("@!Koi do something"));
+
+    let pool = sample_pool();
+    let messages = vec![sample_message(
+        2,
+        "user",
+        "@!Pisci: unblock this project",
+        json!({}),
+        None,
+    )];
+    let attention = collect_pool_attention(&pool, &messages, &[], &[], 1)
+        .expect("@!Pisci mention should flag pool attention");
+    assert_eq!(attention.session_id, "pisci_pool_pool-1");
+}
+
+#[test]
 fn collab_trial_build_pool_heartbeat_message_keeps_no_archive_instruction() {
     let attention = PoolAttention {
         pool_id: "pool-1".into(),

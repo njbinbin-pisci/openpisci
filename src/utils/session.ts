@@ -1,3 +1,13 @@
+/** Pond / IDE assistant CLI sessions (`source === "cli"` or legacy title prefix). */
+export function isPondCliSession(
+  session: { source?: string | null; title?: string | null } | undefined | null,
+): boolean {
+  if (!session) return false;
+  if (session.source === "cli") return true;
+  const title = session.title ?? "";
+  return title.startsWith("Pisci CLI") || title === "Pisci CLI";
+}
+
 /** Returns true for sessions that are internal/system and should not appear in the
  *  user-facing session list (heartbeat, pisci_inbox, pool coordinators, etc.). */
 export function isInternalSession(session: { source?: string | null; id?: string | null } | undefined | null): boolean {

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useDispatch, useSelector } from "react-redux";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ChatMessage, Session, sessionsApi, poolApi, koiApi, openPath } from "../../../services/tauri";
+import { ChatMessage, Session, sessionsApi, boardApi, poolApi, koiApi, openPath } from "../../../services/tauri";
 import type { KoiWithStats } from "../../../services/tauri/pool";
 import { RootState, koiActions } from "../../../store";
 import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
@@ -17,6 +17,8 @@ type InboxMode = "coordination" | "koiObserver";
 
 type PisciInboxProps = {
   mode?: InboxMode;
+  /** Active pool session — scopes coordination / observer to this project. */
+  poolSessionId?: string | null;
 };
 
 function isKoiObserverSession(session: Session): boolean {
@@ -48,6 +50,17 @@ function extractKoiIdFromSessionId(sessionId: string): string | null {
 
 function isCoordinationSession(session: Session): boolean {
   return isInternalSession(session) && !isKoiObserverSession(session);
+}
+
+function sessionBelongsToPool(session: Session, poolId: string, mode: InboxMode): boolean {
+  const id = session.id ?? "";
+  if (mode === "coordination") {
+    return id === `pisci_pool_${poolId}`;
+  }
+  if (id.startsWith("koi_runtime_") || id.startsWith("koi_notify_")) {
+    return id.endsWith(`_${poolId}`);
+  }
+  return false;
 }
 
 function InboxMessageContent({ content }: { content: string }) {
@@ -143,7 +156,7 @@ function sessionKindLabel(t: (key: string) => string, mode: InboxMode, session: 
   return t("pond.inboxProject");
 }
 
-export default function PisciInbox({ mode = "coordination" }: PisciInboxProps) {
+export default function PisciInbox({ mode = "coordination", poolSessionId = null }: PisciInboxProps) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const kois = useSelector((s: RootState) => s.koi.kois) as KoiWithStats[];
@@ -161,9 +174,42 @@ export default function PisciInbox({ mode = "coordination" }: PisciInboxProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialLoadDoneRef = useRef<string | null>(null);
 
+  const [poolTodoSessionIds, setPoolTodoSessionIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (mode !== "koiObserver" || !poolSessionId) {
+      setPoolTodoSessionIds(new Set());
+      return;
+    }
+    boardApi
+      .listTodos()
+      .then((todos) => {
+        const poolTodos = todos.filter((todo) => todo.pool_session_id === poolSessionId);
+        const ids = new Set(
+          poolTodos.map((todo) => {
+            const koiId = todo.owner_id ?? "";
+            const short = todo.id.slice(0, 8);
+            return `koi_task_${koiId}_${short}`;
+          }),
+        );
+        setPoolTodoSessionIds(ids);
+      })
+      .catch(() => setPoolTodoSessionIds(new Set()));
+  }, [mode, poolSessionId]);
+
   const sessionFilter = useCallback(
-    (session: Session) => (mode === "koiObserver" ? isKoiObserverSession(session) : isCoordinationSession(session)),
-    [mode],
+    (session: Session) => {
+      const kindOk = mode === "koiObserver"
+        ? isKoiObserverSession(session)
+        : isCoordinationSession(session);
+      if (!kindOk) return false;
+      if (!poolSessionId) return true;
+      if (session.id?.startsWith("koi_task_")) {
+        return poolTodoSessionIds.has(session.id);
+      }
+      return sessionBelongsToPool(session, poolSessionId, mode);
+    },
+    [mode, poolSessionId, poolTodoSessionIds],
   );
 
   const internalSessions = useMemo(

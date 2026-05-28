@@ -173,6 +173,43 @@ pub fn spawn_immediate_dispatch(state: &crate::store::AppState, channel: &'stati
     });
 }
 
+/// Build pool attention for an explicit `@!Pisci` mention, using a cursor
+/// one message behind the latest so the just-posted mention is always counted
+/// as a new attention event even if the periodic scan already advanced the
+/// cursor past it.
+async fn collect_mention_pool_attention(state: &AppState, pool_id: &str) -> Option<PoolAttention> {
+    let cursor_last = {
+        let cursor = state.pisci_heartbeat_cursor.lock().await;
+        cursor.get(pool_id).copied().unwrap_or(0)
+    };
+    let (pool, messages, pool_todos, koi_ids) = {
+        let db = state.db.lock().await;
+        let pool = db.get_pool_session(pool_id).ok().flatten()?;
+        if pool.status == "archived" {
+            return None;
+        }
+        let messages = db.get_pool_messages(pool_id, 200, 0).ok()?;
+        let todos = db
+            .list_koi_todos(None)
+            .ok()?
+            .into_iter()
+            .filter(|t| t.pool_session_id.as_deref() == Some(pool_id))
+            .collect::<Vec<_>>();
+        let koi_ids = db
+            .list_kois()
+            .ok()?
+            .into_iter()
+            .map(|k| k.id)
+            .collect::<Vec<_>>();
+        (pool, messages, todos, koi_ids)
+    };
+    let latest_message_id = messages.last().map(|m| m.id).unwrap_or(cursor_last);
+    let last_seen = latest_message_id
+        .saturating_sub(1)
+        .max(cursor_last.saturating_sub(1));
+    collect_pool_attention(&pool, &messages, &pool_todos, &koi_ids, last_seen)
+}
+
 /// Spawn an immediate Pisci turn in response to a direct `@!Pisci` mention
 /// in a specific pool. Unlike [`spawn_immediate_dispatch`], this path is NOT
 /// gated behind `heartbeat_enabled` — an explicit mention from a human is
@@ -224,9 +261,14 @@ pub fn spawn_mention_dispatch(
         // session (`Pisci · <pool>`) and posts back into pool_chat.
         match scan_attention_pools(&cloned).await {
             Ok(attentions) => {
-                if let Some(attention) = attentions.iter().find(|a| a.pool_id == pool_id) {
+                let attention = attentions
+                    .iter()
+                    .find(|a| a.pool_id == pool_id)
+                    .cloned()
+                    .or(collect_mention_pool_attention(&cloned, &pool_id).await);
+                if let Some(attention) = attention {
                     if let Err(e) =
-                        dispatch_single_pool_attention(&cloned, &prompt, attention, channel).await
+                        dispatch_single_pool_attention(&cloned, &prompt, &attention, channel).await
                     {
                         warn!(
                             "@!Pisci mention dispatch failed for pool {}: {}",
@@ -241,7 +283,19 @@ pub fn spawn_mention_dispatch(
                     );
                 }
             }
-            Err(e) => warn!("scan_attention_pools failed for @!Pisci mention: {e}"),
+            Err(e) => {
+                warn!("scan_attention_pools failed for @!Pisci mention: {e}");
+                if let Some(attention) = collect_mention_pool_attention(&cloned, &pool_id).await {
+                    if let Err(e) =
+                        dispatch_single_pool_attention(&cloned, &prompt, &attention, channel).await
+                    {
+                        warn!(
+                            "@!Pisci mention fallback dispatch failed for pool {}: {}",
+                            pool_id, e
+                        );
+                    }
+                }
+            }
         }
     });
 }

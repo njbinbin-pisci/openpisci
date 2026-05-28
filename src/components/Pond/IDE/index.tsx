@@ -631,6 +631,7 @@ export default function IDE({ projectDir, poolSessionId: _poolSessionId }: IDEPr
               }}
               onSelect={handleFileTreeSelect}
               onContextMenu={handleFileTreeContextMenu}
+              containerRef={fileTreeRef}
             />
           )}
           {sidebarTab === "search" && (

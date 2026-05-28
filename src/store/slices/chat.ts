@@ -59,6 +59,15 @@ export const sessionsSlice = createSlice({
       const s = state.sessions.find((s) => s.id === action.payload.id);
       if (s) s.workspace_root = action.payload.workspace_root ?? undefined;
     },
+    /** Merge refreshed session metadata (message_count, status, updated_at). */
+    upsertSession: (state, action: PayloadAction<Session>) => {
+      const idx = state.sessions.findIndex((s) => s.id === action.payload.id);
+      if (idx >= 0) {
+        state.sessions[idx] = { ...state.sessions[idx], ...action.payload };
+      } else {
+        state.sessions.unshift(action.payload);
+      }
+    },
   },
 });
 

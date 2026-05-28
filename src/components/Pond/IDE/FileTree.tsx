@@ -1,4 +1,7 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import {
+  useState, useCallback, useRef, useEffect, useMemo,
+  type Ref, type MutableRefObject,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { ideApi } from "../../../services/tauri/ide";
 import type { FileNode } from "./types";
@@ -24,6 +27,8 @@ interface FileTreeProps {
   onRefresh: () => void;
   onSelect: (path: string, opts: { multi: boolean }) => void;
   onContextMenu: (menu: FileTreeContextMenu) => void;
+  /** Optional ref to the scrollable tree root (for context-menu actions). */
+  containerRef?: Ref<HTMLDivElement>;
   depth?: number;
 }
 
@@ -293,6 +298,7 @@ export default function FileTree({
   onRefresh,
   onSelect,
   onContextMenu,
+  containerRef,
 }: FileTreeProps) {
   const { t } = useTranslation();
   const [creating, setCreating] = useState<CreatingState | null>(null);
@@ -448,6 +454,16 @@ export default function FileTree({
     (el as unknown as { renameActive?: () => void }).renameActive = renameActive;
     (el as unknown as { startCreate?: (isDir: boolean) => void }).startCreate = startCreate;
   }, [deleteSelected, renameActive, startCreate]);
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || !containerRef) return;
+    if (typeof containerRef === "function") {
+      containerRef(el);
+    } else if ("current" in containerRef) {
+      (containerRef as MutableRefObject<HTMLDivElement | null>).current = el;
+    }
+  }, [containerRef, nodes.length, creating, renaming]);
 
   // Is the inline input at root level (parentPath === projectDir)?
   const isRootCreate = creating && creating.parentPath === projectDir;

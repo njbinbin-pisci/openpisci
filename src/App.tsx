@@ -39,10 +39,21 @@ function AppContent() {
   const { t } = useTranslation();
   const { showOnboarding, settings } = useSelector((s: RootState) => s.settings);
   const [activeTab, setActiveTab] = useState<Tab>("chat");
+  /** Tabs that have been opened at least once — stay mounted to preserve state. */
+  const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(() => new Set(["chat"]));
   const [initialized, setInitialized] = useState(false);
   const [theme, setTheme] = useState<'violet' | 'gold'>(() => {
     return (localStorage.getItem('pisci-theme') as 'violet' | 'gold') || 'violet';
   });
+
+  useEffect(() => {
+    setMountedTabs((prev) => {
+      if (prev.has(activeTab)) return prev;
+      const next = new Set(prev);
+      next.add(activeTab);
+      return next;
+    });
+  }, [activeTab]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -260,17 +271,43 @@ function AppContent() {
       </aside>
       <main className="main-content">
         <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>Loading Pisci...</p></div>}>
-          {activeTab === "chat" && <Chat />}
-          {activeTab === "memory" && <Memory />}
-          {activeTab === "tools" && <Tools />}
-          {activeTab === "pond" && <Pond />}
-          {activeTab === "fish" && <FishPage />}
-          {activeTab === "skills" && <Skills />}
-          {activeTab === "scheduler" && <Scheduler />}
-          {activeTab === "audit" && <AuditLog />}
-          {activeTab === "settings" && <Settings theme={theme} setTheme={setTheme} onOpenTools={() => setActiveTab("tools")} />}
-          {activeTab === "about" && <About />}
-          {activeTab === "debug" && <DebugPanel />}
+          {mountedTabs.has("chat") && (
+            <div className="tab-panel" hidden={activeTab !== "chat"}>
+              <Chat />
+            </div>
+          )}
+          {mountedTabs.has("memory") && (
+            <div className="tab-panel" hidden={activeTab !== "memory"}><Memory /></div>
+          )}
+          {mountedTabs.has("tools") && (
+            <div className="tab-panel" hidden={activeTab !== "tools"}><Tools /></div>
+          )}
+          {mountedTabs.has("pond") && (
+            <div className="tab-panel" hidden={activeTab !== "pond"}><Pond /></div>
+          )}
+          {mountedTabs.has("fish") && (
+            <div className="tab-panel" hidden={activeTab !== "fish"}><FishPage /></div>
+          )}
+          {mountedTabs.has("skills") && (
+            <div className="tab-panel" hidden={activeTab !== "skills"}><Skills /></div>
+          )}
+          {mountedTabs.has("scheduler") && (
+            <div className="tab-panel" hidden={activeTab !== "scheduler"}><Scheduler /></div>
+          )}
+          {mountedTabs.has("audit") && (
+            <div className="tab-panel" hidden={activeTab !== "audit"}><AuditLog /></div>
+          )}
+          {mountedTabs.has("settings") && (
+            <div className="tab-panel" hidden={activeTab !== "settings"}>
+              <Settings theme={theme} setTheme={setTheme} onOpenTools={() => setActiveTab("tools")} />
+            </div>
+          )}
+          {mountedTabs.has("about") && (
+            <div className="tab-panel" hidden={activeTab !== "about"}><About /></div>
+          )}
+          {mountedTabs.has("debug") && (
+            <div className="tab-panel" hidden={activeTab !== "debug"}><DebugPanel /></div>
+          )}
         </Suspense>
       </main>
       <Toaster />

@@ -75,7 +75,28 @@ pub fn detect_coordination_signal(content: &str) -> Option<CoordinationSignalKin
     }
 }
 
+/// True when a line delegates to Pisci via `@!Pisci` / `@!pisci` at line start.
+pub fn contains_delegated_pisci_mention(content: &str) -> bool {
+    let needle = "@!pisci";
+    content.lines().any(|line| {
+        let trimmed = line.trim_start();
+        let lower = trimmed.to_lowercase();
+        if !lower.starts_with(needle) {
+            return false;
+        }
+        trimmed[needle.len()..]
+            .chars()
+            .next()
+            .map(|ch| ch.is_whitespace() || matches!(ch, ':' | '：' | '-' | '—' | ',' | '，' | '.'))
+            .unwrap_or(true)
+    })
+}
+
+/// True when content mentions or delegates to Pisci (`@!Pisci` or legacy `@pisci`).
 pub fn contains_pisci_mention(content: &str) -> bool {
+    if contains_delegated_pisci_mention(content) {
+        return true;
+    }
     content.to_lowercase().contains("@pisci")
 }
 

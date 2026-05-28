@@ -15,7 +15,10 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useDispatch, useSelector } from "react-redux";
 import { sessionsApi, chatApi, type AgentEventType } from "../../../services/tauri/chat";
+import { RootState, sessionsActions } from "../../../store";
+import { isPondCliSession } from "../../../utils/session";
 
 interface AssistantPanelProps {
   projectDir: string | null;
@@ -37,6 +40,8 @@ export default function AssistantPanel({
   height,
 }: AssistantPanelProps) {
   const { t } = useTranslation();
+  const dispatch = useDispatch();
+  const storeSessions = useSelector((s: RootState) => s.sessions.sessions);
   const [lines, setLines] = useState<CliLine[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -74,19 +79,46 @@ export default function AssistantPanel({
   }, [scrollToBottom]);
 
   /** Lazily ensure a chat session exists. Bound to project dir so per-
-   *  project history doesn't bleed between projects. */
+   *  project history doesn't bleed between projects. Reuses an existing
+   *  Pond CLI session when one is already registered for this project. */
   const ensureSession = useCallback(async (): Promise<string> => {
     if (sessionIdRef.current) return sessionIdRef.current;
+
     const title = projectDir
       ? `Pisci CLI — ${projectDir.split(/[\\/]/).pop() ?? projectDir}`
       : "Pisci CLI";
-    const session = await sessionsApi.create(title);
+
+    const matchesProject = (s: { title?: string; workspace_root?: string | null }) => {
+      if (s.title === title) return true;
+      if (projectDir && s.workspace_root === projectDir) return true;
+      return false;
+    };
+
+    let existing = storeSessions.find((s) => isPondCliSession(s) && matchesProject(s));
+    if (!existing) {
+      try {
+        const { sessions } = await sessionsApi.list(200, 0);
+        existing = sessions.find((s) => isPondCliSession(s) && matchesProject(s));
+      } catch { /* ignore */ }
+    }
+
+    if (existing) {
+      sessionIdRef.current = existing.id;
+      dispatch(sessionsActions.upsertSession(existing));
+      return existing.id;
+    }
+
+    const session = await sessionsApi.create(title, "cli");
     sessionIdRef.current = session.id;
     if (projectDir) {
-      try { await sessionsApi.setWorkspace(session.id, projectDir); } catch { /* ignore */ }
+      try {
+        await sessionsApi.setWorkspace(session.id, projectDir);
+        session.workspace_root = projectDir;
+      } catch { /* ignore */ }
     }
+    dispatch(sessionsActions.addSession(session));
     return session.id;
-  }, [projectDir]);
+  }, [projectDir, storeSessions, dispatch]);
 
   /** Subscribe to agent events for the current session. Tears down any
    *  previous subscription. */
@@ -118,6 +150,10 @@ export default function AssistantPanel({
         case "done":
           streamingTextRef.current = "";
           setBusy(false);
+          sessionsApi.list(200, 0).then(({ sessions }) => {
+            const fresh = sessions.find((s) => s.id === sessionId);
+            if (fresh) dispatch(sessionsActions.upsertSession(fresh));
+          }).catch(() => {});
           break;
         case "cancelled":
           append({ kind: "info", text: "(cancelled)" });
