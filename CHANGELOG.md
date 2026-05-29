@@ -6,6 +6,13 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.20] - 2026-05-29
+
+### Fixed
+- **CI / clippy**: remove unnecessary `let _ =` on `app.exit(0)` in shutdown backstop (`clippy::let_unit_value`).
+
+---
+
 ## [0.8.19] - 2026-05-28
 
 ### Fixed

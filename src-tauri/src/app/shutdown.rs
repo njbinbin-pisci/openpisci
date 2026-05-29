@@ -70,7 +70,7 @@ pub fn request_app_exit(app: AppHandle) {
         move || {
             std::thread::sleep(FORCE_EXIT_BACKSTOP);
             info!("Shutdown: force-exit backstop");
-            let _ = app_backstop.exit(0);
+            app_backstop.exit(0);
             std::process::exit(0);
         }
     });
