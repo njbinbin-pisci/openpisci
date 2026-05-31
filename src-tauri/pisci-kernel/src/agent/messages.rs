@@ -103,6 +103,13 @@ pub enum AgentEvent {
         request_id: String,
         ui_definition: serde_json::Value,
     },
+    /// Live update to an existing chat_ui card (chat_ui_patch tool).
+    InteractiveUiPatch {
+        request_id: String,
+        patch: serde_json::Value,
+    },
+    /// Resume waiting for user submit on an existing card (chat_ui_listen tool).
+    InteractiveUiListen { request_id: String },
     /// A sub-agent (Fish) is executing — forwarded to the parent session so the user
     /// can see real-time progress without switching sessions.
     FishProgress {

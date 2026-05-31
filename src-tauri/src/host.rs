@@ -36,8 +36,8 @@ use crate::runtime::koi::DesktopInProcessSubagentRuntime;
 use crate::skills::loader::SkillLoader;
 use crate::store::{AppState, Database, Settings};
 use crate::tools::{
-    app_control, browser, call_fish, call_koi, chat_ui, desktop_automation, im_channel, im_send,
-    screen, skill_list, system_info,
+    app_control, browser, call_fish, call_koi, chat_ui, chat_ui_listen, chat_ui_patch,
+    desktop_automation, im_channel, im_send, screen, skill_list, system_info,
 };
 
 #[cfg(target_os = "windows")]
@@ -501,6 +501,12 @@ impl HostTools for DesktopHostTools {
         if self.is_enabled("chat_ui") {
             if let Some(ref app) = self.app_handle {
                 registry.register(Box::new(chat_ui::ChatUiTool { app: app.clone() }));
+                registry.register(Box::new(chat_ui_patch::ChatUiPatchTool {
+                    app: app.clone(),
+                }));
+                registry.register(Box::new(chat_ui_listen::ChatUiListenTool {
+                    app: app.clone(),
+                }));
             }
         }
         if self.is_enabled("app_control") {

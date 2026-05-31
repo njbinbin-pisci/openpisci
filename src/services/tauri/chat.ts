@@ -102,6 +102,8 @@ export type AgentEventType =
   | { type: "message_commit"; message: unknown }
   | { type: "permission_request"; request_id: string; tool_name: string; tool_input: unknown; description: string }
   | { type: "interactive_ui"; request_id: string; ui_definition: unknown }
+  | { type: "interactive_ui_patch"; request_id: string; patch: unknown }
+  | { type: "interactive_ui_listen"; request_id: string }
   | {
       type: "context_usage";
       estimated_input_tokens: number;

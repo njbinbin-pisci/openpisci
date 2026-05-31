@@ -4,6 +4,9 @@ pub mod browser;
 pub mod call_fish;
 pub mod call_koi;
 pub mod chat_ui;
+pub mod chat_ui_listen;
+pub mod chat_ui_patch;
+pub mod chat_ui_schema;
 pub mod desktop_automation;
 pub mod im_channel;
 pub mod im_send;
@@ -96,12 +99,30 @@ const HEADLESS_PISCI_DISABLED_TOOLS: &[(&str, &str)] = &[
         "chat_ui",
         "Disabled in headless modes: no interactive desktop chat UI is available.",
     ),
+    (
+        "chat_ui_patch",
+        "Disabled in headless modes: no interactive desktop chat UI is available.",
+    ),
+    (
+        "chat_ui_listen",
+        "Disabled in headless modes: no interactive desktop chat UI is available.",
+    ),
 ];
 
-const HEADLESS_COMMON_DISABLED_TOOLS: &[(&str, &str)] = &[(
-    "chat_ui",
-    "Disabled in headless modes: no interactive desktop chat UI is available.",
-)];
+const HEADLESS_COMMON_DISABLED_TOOLS: &[(&str, &str)] = &[
+    (
+        "chat_ui",
+        "Disabled in headless modes: no interactive desktop chat UI is available.",
+    ),
+    (
+        "chat_ui_patch",
+        "Disabled in headless modes: no interactive desktop chat UI is available.",
+    ),
+    (
+        "chat_ui_listen",
+        "Disabled in headless modes: no interactive desktop chat UI is available.",
+    ),
+];
 
 fn disable_tools(
     effective: &mut HashMap<String, bool>,

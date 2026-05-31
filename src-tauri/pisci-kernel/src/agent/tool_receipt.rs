@@ -106,6 +106,14 @@ pub fn render_receipt(
         "skill_list" | "skills_list" => render_skill_list(full),
         "vision_context" => render_vision(input, full),
         "chat_ui" => render_chat_ui(is_error),
+        "chat_ui_patch" => {
+            if is_error {
+                "chat_ui_patch FAIL".to_string()
+            } else {
+                "patched live chat_ui card".to_string()
+            }
+        }
+        "chat_ui_listen" => render_chat_ui(is_error),
         "screen_capture" => render_screen_capture(input, full, is_error),
         "call_fish" | "call_koi" | "pool_chat" | "pool_org" => {
             render_subagent(tool_name, input, full, is_error)

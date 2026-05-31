@@ -6,6 +6,18 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.23] - 2026-05-28
+
+### Added
+- **Chat UI Protocol v2**: wizard (`mode: "wizard"` + `steps`), layout blocks (`row` / `column` / `card`), display blocks (`image`, `code_preview`, `progress`, `link_list`), `file_picker`, and `data` model with `__data_model__` on submit/action.
+- **Non-terminal actions**: button `emit: "action"`; companion tools `chat_ui_patch` (live card updates) and `chat_ui_listen` (resume blocking submit on same `request_id`).
+- **Catalog**: `docs/pisci.chat.catalog.json` — allowed block types and agent authoring constraints.
+
+### Changed
+- Interactive card renderer and agent prompts updated for v2; v1 cards remain compatible.
+
+---
+
 ## [0.8.22] - 2026-05-28
 
 ### Fixed

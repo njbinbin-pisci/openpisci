@@ -14,6 +14,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openPath } from "../../services/tauri";
 import InteractiveCard from "./InteractiveCard";
+import { applyUiPatch, type UiPatch } from "./interactiveUi/patch";
 import ConfirmDialog from "../ConfirmDialog";
 import { isInternalSession, isPondCliSession } from "../../utils/session";
 import "./Chat.css";
@@ -410,7 +411,19 @@ export default function Chat() {
 
   // Pending interactive UI cards from chat_ui (per session; cleared on agent done)
   const [interactiveCardsBySession, setInteractiveCardsBySession] = useState<
-    Record<string, Record<string, { requestId: string; uiDefinition: any; submitted?: boolean }>>
+    Record<
+      string,
+      Record<
+        string,
+        {
+          requestId: string;
+          uiDefinition: import("./interactiveUi/protocol").UiDefinition;
+          submitted?: boolean;
+          listenOpen?: boolean;
+          wizardStepHint?: number;
+        }
+      >
+    >
   >({});
 
   // Context debug preview
@@ -940,13 +953,52 @@ export default function Chat() {
               ...(all[boundSessionId] ?? {}),
               [event.request_id]: {
                 requestId: event.request_id,
-                uiDefinition: event.ui_definition,
+                uiDefinition: event.ui_definition as import("./interactiveUi/protocol").UiDefinition,
+                listenOpen: false,
               },
             },
           }));
           if (activeSessionIdRef.current === boundSessionId) {
             setTimeout(() => scrollToBottom(true), 50);
           }
+          break;
+        case "interactive_ui_patch": {
+          const patch = event.patch as UiPatch;
+          setInteractiveCardsBySession((all) => {
+            const sessionCards = all[boundSessionId];
+            const card = sessionCards?.[event.request_id];
+            if (!card) return all;
+            return {
+              ...all,
+              [boundSessionId]: {
+                ...sessionCards,
+                [event.request_id]: {
+                  ...card,
+                  uiDefinition: applyUiPatch(card.uiDefinition, patch),
+                  listenOpen: patch.reopen_submit === true ? true : card.listenOpen,
+                  wizardStepHint: patch.wizard_step ?? card.wizardStepHint,
+                },
+              },
+            };
+          });
+          if (activeSessionIdRef.current === boundSessionId) {
+            setTimeout(() => scrollToBottom(true), 50);
+          }
+          break;
+        }
+        case "interactive_ui_listen":
+          setInteractiveCardsBySession((all) => {
+            const sessionCards = all[boundSessionId];
+            const card = sessionCards?.[event.request_id];
+            if (!card) return all;
+            return {
+              ...all,
+              [boundSessionId]: {
+                ...sessionCards,
+                [event.request_id]: { ...card, listenOpen: true },
+              },
+            };
+          });
           break;
         case "done":
           // Use boundSessionId (the session this listener was registered for) so that
@@ -1916,9 +1968,29 @@ export default function Chat() {
                       requestId={card.requestId}
                       uiDefinition={card.uiDefinition}
                       submittedValues={null}
+                      listenOpen={card.listenOpen}
+                      wizardStepHint={card.wizardStepHint}
                       onSubmitted={
                         activeSessionId
                           ? () => markInteractiveSubmitted(activeSessionId, card.requestId)
+                          : undefined
+                      }
+                      onActionSent={
+                        activeSessionId
+                          ? () => {
+                              setInteractiveCardsBySession((all) => {
+                                const sessionCards = all[activeSessionId];
+                                const c = sessionCards?.[card.requestId];
+                                if (!c) return all;
+                                return {
+                                  ...all,
+                                  [activeSessionId]: {
+                                    ...sessionCards,
+                                    [card.requestId]: { ...c, listenOpen: false },
+                                  },
+                                };
+                              });
+                            }
                           : undefined
                       }
                     />

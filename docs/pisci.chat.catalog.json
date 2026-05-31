@@ -1,0 +1,25 @@
+{
+  "$schema": "https://openpisci.app/schemas/chat-ui-catalog-v2.json",
+  "catalog_id": "https://openpisci.app/catalog/chat-ui/v2",
+  "protocol_versions": ["1", "2"],
+  "modes": ["form", "display", "wizard"],
+  "blocks": {
+    "display": ["text", "divider", "section", "image", "code_preview", "progress", "link_list"],
+    "layout": ["row", "column", "card"],
+    "input": [
+      "text_input", "number_input", "slider", "switch",
+      "date", "time", "datetime",
+      "select", "radio", "checkbox", "tags",
+      "koi_picker", "project_picker", "file_picker"
+    ],
+    "actions": ["actions", "confirm"]
+  },
+  "button_emit": ["submit", "action"],
+  "domain": {
+    "koi_picker": "Lists Koi from workspace; value is string[] of koi ids.",
+    "project_picker": "Lists pool sessions; value is session id or __new__.",
+    "file_picker": "Opens native file dialog; value is absolute path string."
+  },
+  "patch_ops": ["title", "description", "data", "blocks", "steps", "wizard_step"],
+  "security": "Agents may only use block types listed here. No HTML/JS execution."
+}

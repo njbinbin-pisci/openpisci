@@ -181,8 +181,70 @@ Errors show inline; submit is blocked until valid.
 }
 ```
 
+## Protocol v2 (extends v1)
+
+Set `protocol_version` to `"2"`. v1 cards remain valid (flat `blocks` only).
+
+### Modes
+
+| `mode` | Use |
+|--------|-----|
+| `form` | Default single-step form |
+| `wizard` | Use `steps[]`; each step has its own `blocks`; optional footer `blocks` on root |
+| `display` | Read-only emphasis (same blocks; agent should avoid required inputs) |
+
+### Data model
+
+- Optional top-level `data: { ... }` seeds field values (merged with block `default`).
+- Submit/action payloads include `__data_model__` (full snapshot) plus field keys.
+
+### Layout & display blocks
+
+| type | notes |
+|------|-------|
+| `row` / `column` / `card` | Nested `blocks[]` |
+| `image` | `url`, optional `alt` |
+| `code_preview` | `content`, optional `language` |
+| `progress` | `id`, numeric `value` via data model; `min`/`max` (default max=1) |
+| `link_list` | `options[]`; sets field `id` on click |
+| `file_picker` | Native dialog; value = path string |
+
+### Non-terminal actions
+
+Buttons may set `"emit": "action"` (vs `"submit"`):
+
+1. User click → tool returns `USER_INTERACTIVE_RESPONSE_JSON` with `__action_type__: "action"`.
+2. Agent may `chat_ui_patch` (update `data`, `blocks`, `progress`, `wizard_step`) and/or `chat_ui_listen` (re-open submit wait on same `request_id`).
+3. User final submit → `__action_type__: "submit"`.
+
+Patch tool: `chat_ui_patch { request_id, patch }`. Catalog: `docs/pisci.chat.catalog.json`.
+
+### Wizard example
+
+```json
+{
+  "protocol_version": "2",
+  "mode": "wizard",
+  "title": "Release",
+  "steps": [
+    { "id": "ver", "label": "Version", "blocks": [{ "type": "text_input", "id": "tag", "required": true }] },
+    { "id": "notes", "label": "Notes", "blocks": [{ "type": "text_input", "id": "notes", "multiline": true, "rows": 5 }] }
+  ],
+  "blocks": [
+    {
+      "type": "actions",
+      "buttons": [
+        { "id": "preview", "label": "Preview", "value": "preview", "emit": "action" },
+        { "id": "ok", "label": "Publish", "value": "publish", "style": "primary", "emit": "submit" }
+      ]
+    }
+  ]
+}
+```
+
 ## Desktop implementation
 
 - Renderer: `src/components/Chat/InteractiveCard.tsx`
 - Types & validation: `src/components/Chat/interactiveUi/`
-- Tool schema: `src-tauri/src/tools/chat_ui.rs`
+- Tools: `chat_ui`, `chat_ui_patch`, `chat_ui_listen` in `src-tauri/src/tools/`
+- Catalog: `docs/pisci.chat.catalog.json`

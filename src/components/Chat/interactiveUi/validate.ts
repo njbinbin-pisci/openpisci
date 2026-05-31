@@ -1,6 +1,7 @@
 import type { TFunction } from "i18next";
 import type { UiBlock } from "./protocol";
 import { CUSTOM_OPTION_VALUE, isValueBlock } from "./protocol";
+import { flattenBlocks } from "./flatten";
 import { isBlockVisible } from "./visibility";
 
 export type FieldErrors = Record<string, string>;
@@ -109,7 +110,7 @@ export function validateInteractiveForm(
 ): FieldErrors {
   const errors: FieldErrors = {};
 
-  for (const block of blocks) {
+  for (const block of flattenBlocks(blocks)) {
     if (!isValueBlock(block) || !block.id) continue;
     if (!isBlockVisible(block, values)) continue;
 
