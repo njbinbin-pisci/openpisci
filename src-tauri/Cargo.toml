@@ -5,7 +5,7 @@
 # hacking, add a `[patch."https://github.com/njbinbin-pisci/pisci-engine.git"]`
 # section pointing the crates at a local `../../pisci-engine` checkout.
 [workspace]
-members = []
+members = ["bench"]
 resolver = "2"
 
 # Workspace-wide lint policy. `cargo clippy --workspace` will treat all of
@@ -45,7 +45,7 @@ pisci-kernel = { git = "https://github.com/njbinbin-pisci/pisci-engine.git", pac
 
 [package]
 name = "pisci-desktop"
-version = "0.8.27"
+version = "0.8.28"
 autobins = false
 default-run = "pisci-desktop"
 description = "OpenPisci - Open-source Windows AI Agent Desktop"
@@ -62,17 +62,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "pisci-desktop"
 path = "src/main.rs"
 
-# Desktop-coupled compression benchmark tool (not bundled by Tauri — only
-# [[bin]] targets are copied into installers). Build with:
-#   cargo build -p pisci-desktop --features bench-compact --example pisci_compact_one
-[[example]]
-name = "pisci_compact_one"
-path = "src/bin/pisci_compact_one.rs"
-required-features = ["bench-compact"]
+# NOTE: the bench-only `pisci_compact_one` CLI used to live here as a target of
+# this crate, which made Tauri's bundler try to ship it. It now lives in the
+# `bench/` workspace member (crate `pisci-bench`) so it is never bundled.
+# Build it with: cargo build -p pisci-bench --release
 
 [features]
 default = []
-bench-compact = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

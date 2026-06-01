@@ -14,7 +14,7 @@
 
 ## 依赖
 
-- 已构建好的 `target/debug/examples/pisci_compact_one.exe`（`cargo build -p pisci-desktop --features bench-compact --example pisci_compact_one --manifest-path src-tauri/Cargo.toml`）
+- 已构建好的 `target/release/pisci_compact_one.exe`（`cargo build -p pisci-bench --release --manifest-path src-tauri/Cargo.toml`）
 - Python 3.9+：`pip install --user openai pyyaml tiktoken`
 - Pisci 的 `config.json` 里已配好 Qwen key（用于所有 LLM 压缩器和 judge）
 

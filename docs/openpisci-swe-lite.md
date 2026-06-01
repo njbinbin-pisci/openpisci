@@ -52,8 +52,8 @@
 ```powershell
 # openpisci-headless now lives in the extracted pisci-engine repo (sibling checkout):
 cargo build -p pisci-cli --bin openpisci-headless --manifest-path ../pisci-engine/Cargo.toml
-# pisci_compact_one links against pisci-desktop, so it stays in this repo behind a feature:
-cargo build -p pisci-desktop --features bench-compact --example pisci_compact_one --manifest-path src-tauri/Cargo.toml
+# pisci_compact_one links against pisci-desktop, so it stays in this repo as its own member crate:
+cargo build -p pisci-bench --release --manifest-path src-tauri/Cargo.toml
 ```
 
 然后执行：

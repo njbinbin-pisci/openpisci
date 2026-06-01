@@ -5,12 +5,13 @@
 //! compression benchmark (`scripts/bench_compression/run_bench.py`).
 //!
 //! This tool links against `pisci_desktop_lib` (for config/runtime
-//! resolution) so it lives in the desktop host crate rather than the
-//! extracted `pisci-engine`. Build with:
-//!   cargo build -p pisci-desktop --features bench-compact --example pisci_compact_one
+//! resolution) so it lives in this workspace rather than the extracted
+//! `pisci-engine`. It is its own crate (not a `pisci-desktop` target) so the
+//! Tauri bundler never ships it. Build with:
+//!   cargo build -p pisci-bench --release
 //!
 //! Usage (PowerShell):
-//!   Get-Content sample.json | .\target\debug\pisci_compact_one.exe
+//!   Get-Content sample.json | .\target\release\pisci_compact_one.exe
 
 use std::io::Read;
 
