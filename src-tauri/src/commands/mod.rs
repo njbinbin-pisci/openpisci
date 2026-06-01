@@ -20,5 +20,6 @@
 pub mod chat;
 pub mod config;
 pub mod ide;
+pub mod journal;
 pub mod platform;
 pub mod pool;

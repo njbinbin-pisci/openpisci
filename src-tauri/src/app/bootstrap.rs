@@ -1298,6 +1298,8 @@ fn run_impl() {
             commands::chat::list_session_artifacts,
             commands::chat::chat_send,
             commands::chat::chat_cancel,
+            commands::journal::journal_list_changes,
+            commands::journal::journal_undo_last,
             commands::chat::get_context_preview,
             commands::chat::scheduler::list_tasks,
             commands::chat::scheduler::create_task,

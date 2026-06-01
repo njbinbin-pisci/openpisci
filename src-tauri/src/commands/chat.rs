@@ -592,7 +592,7 @@ async fn build_chat_prompt_artifacts(
     })
 }
 
-async fn resolve_session_workspace_root(
+pub(crate) async fn resolve_session_workspace_root(
     state: &State<'_, AppState>,
     session_id: &str,
     default_workspace_root: String,
@@ -1047,6 +1047,19 @@ pub async fn chat_send(
         None
     };
 
+    // File-edit journal (shared kernel impl): snapshot pre-edit content so the
+    // UI can offer Undo/replay. Stored per-workspace, independent of the chat DB.
+    let journal = std::sync::Arc::new(
+        pisci_kernel::agent::file_journal::FileJournal::open(
+            &workspace_root,
+            std::path::Path::new(&workspace_root)
+                .join(".pisci")
+                .join("journal.db"),
+        )
+        .map_err(|e| e.to_string())?,
+    );
+    journal.begin_turn(&session_id);
+
     let agent = pisci_kernel::agent::harness::HarnessConfig::for_main_chat(
         model.clone(),
         fallback_models,
@@ -1068,6 +1081,7 @@ pub async fn chat_send(
         state.plan_state.clone(),
     )
     .with_streaming(enable_streaming)
+    .with_hooks(journal.clone())
     .into_agent_loop(client, None, Some(state.confirmation_responses.clone()));
 
     let ctx = ToolContext {

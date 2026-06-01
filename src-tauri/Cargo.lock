@@ -2717,7 +2717,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -4737,7 +4737,7 @@ dependencies = [
 [[package]]
 name = "pisci-core"
 version = "0.7.8"
-source = "git+https://github.com/njbinbin-pisci/pisci-engine.git#7c04d033a9fdc09118e27cb8b4b8122c89e037ad"
+source = "git+https://github.com/njbinbin-pisci/pisci-engine.git#628022575054580b4b9b429d6381bf54a06352f8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4748,7 +4748,7 @@ dependencies = [
 
 [[package]]
 name = "pisci-desktop"
-version = "0.8.25"
+version = "0.8.26"
 dependencies = [
  "aes",
  "anyhow",
@@ -4812,7 +4812,7 @@ dependencies = [
 [[package]]
 name = "pisci-kernel"
 version = "0.7.8"
-source = "git+https://github.com/njbinbin-pisci/pisci-engine.git#7c04d033a9fdc09118e27cb8b4b8122c89e037ad"
+source = "git+https://github.com/njbinbin-pisci/pisci-engine.git#628022575054580b4b9b429d6381bf54a06352f8"
 dependencies = [
  "anyhow",
  "async-trait",
