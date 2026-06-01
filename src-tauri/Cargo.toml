@@ -45,7 +45,7 @@ pisci-kernel = { git = "https://github.com/njbinbin-pisci/pisci-engine.git", pac
 
 [package]
 name = "pisci-desktop"
-version = "0.8.26"
+version = "0.8.27"
 autobins = false
 default-run = "pisci-desktop"
 description = "OpenPisci - Open-source Windows AI Agent Desktop"
