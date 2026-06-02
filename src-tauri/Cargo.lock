@@ -1398,7 +1398,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -2709,7 +2709,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -4621,7 +4621,7 @@ dependencies = [
 
 [[package]]
 name = "pisci-desktop"
-version = "0.8.34"
+version = "0.8.35"
 dependencies = [
  "aes",
  "anyhow",
@@ -5444,7 +5444,7 @@ dependencies = [
 [[package]]
 name = "robotz-automation"
 version = "0.1.0"
-source = "git+https://github.com/njbinbin-piscis/RobotZ.git?branch=master#818fa259f4a84e58e135072769ec6fda1d4f3ad4"
+source = "git+https://github.com/njbinbin-piscis/RobotZ.git?branch=master#4d04c963e5b3f82ee5b8e2c1f6d8f3a00cea2366"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5466,7 +5466,7 @@ dependencies = [
 [[package]]
 name = "robotz-browser"
 version = "0.1.0"
-source = "git+https://github.com/njbinbin-piscis/RobotZ.git?branch=master#818fa259f4a84e58e135072769ec6fda1d4f3ad4"
+source = "git+https://github.com/njbinbin-piscis/RobotZ.git?branch=master#4d04c963e5b3f82ee5b8e2c1f6d8f3a00cea2366"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5489,7 +5489,7 @@ dependencies = [
 [[package]]
 name = "robotz-core"
 version = "0.1.0"
-source = "git+https://github.com/njbinbin-piscis/RobotZ.git?branch=master#818fa259f4a84e58e135072769ec6fda1d4f3ad4"
+source = "git+https://github.com/njbinbin-piscis/RobotZ.git?branch=master#4d04c963e5b3f82ee5b8e2c1f6d8f3a00cea2366"
 dependencies = [
  "anyhow",
  "async-trait",
