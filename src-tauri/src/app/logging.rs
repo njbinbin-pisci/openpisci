@@ -45,7 +45,7 @@ pub fn init_logging() -> LoggingGuard {
     let (text_non_blocking, text_guard) = tracing_appender::non_blocking(text_file_appender);
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "pisci_desktop_lib=debug,info".into());
+        .unwrap_or_else(|_| "piscis_desktop_lib=debug,info".into());
 
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_target(true)

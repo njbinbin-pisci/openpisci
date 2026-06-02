@@ -124,7 +124,7 @@ async fn harness_live_smoke() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("info,pisci_desktop_lib=info")
+                tracing_subscriber::EnvFilter::new("info,piscis_desktop_lib=info")
             }),
         )
         .with_test_writer()

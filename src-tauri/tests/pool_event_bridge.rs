@@ -1,6 +1,6 @@
 //! Unit tests for the `DesktopEventSink` → Tauri event-name bridge.
 //!
-//! The real sink lives inside [`pisci_desktop_lib::host`] and calls
+//! The real sink lives inside [`piscis_desktop_lib::host`] and calls
 //! `AppHandle::emit`, which is impossible to drive in a plain
 //! integration test (constructing a test `AppHandle` would spin up the
 //! WebView2 loader on Windows and fail with the known
@@ -20,7 +20,7 @@ use pisci_core::host::{
     PoolEvent, PoolMessageSnapshot, PoolSessionSnapshot, PoolWaitSummary, TodoChangeAction,
     TodoSnapshot,
 };
-use pisci_desktop_lib::host::{pool_event_envelopes, POOL_EVENT_CANONICAL_CHANNEL};
+use piscis_desktop_lib::host::{pool_event_envelopes, POOL_EVENT_CANONICAL_CHANNEL};
 
 fn sample_pool_snapshot() -> PoolSessionSnapshot {
     PoolSessionSnapshot {

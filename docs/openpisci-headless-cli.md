@@ -6,7 +6,7 @@ OpenPiscis 面向自动化与 benchmark 只发布一个 headless 入口：
 |----------------------|-------------|-------------------------------------------|
 | `openpisci-headless` | `pisci-cli` | 无需 Tauri UI 的 kernel 驱动 CLI / 评测 / 自动化宿主 |
 
-`openpisci-headless` 支持 `chat`、`run`、`rpc`、`capabilities`、`version` 等子命令。它不是桌面 GUI 的必需 sidecar；桌面主聊天与默认 Koi 协同运行在 `pisci-desktop` 主进程内。
+`openpisci-headless` 支持 `chat`、`run`、`rpc`、`capabilities`、`version` 等子命令。它不是桌面 GUI 的必需 sidecar；桌面主聊天与默认 Koi 协同运行在 `piscis-desktop` 主进程内。
 
 ## 构建
 

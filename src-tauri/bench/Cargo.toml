@@ -1,6 +1,6 @@
-# Bench-only compression CLI. It links `pisci_desktop_lib`, so it must live in
+# Bench-only compression CLI. It links `piscis_desktop_lib`, so it must live in
 # this workspace rather than the extracted piscis-engine — but it is its OWN
-# crate (not a target of `pisci-desktop`) so Tauri's bundler never tries to
+# crate (not a target of `piscis-desktop`) so Tauri's bundler never tries to
 # ship it in the desktop installers. Build explicitly with:
 #   cargo build -p pisci-bench --release   (binary: target/release/pisci_compact_one)
 [package]
@@ -15,8 +15,8 @@ name = "pisci_compact_one"
 path = "src/main.rs"
 
 [dependencies]
-# Alias the dep key to the lib's crate name so `pisci_desktop_lib::…` resolves.
-pisci_desktop_lib = { path = "..", package = "pisci-desktop" }
+# Alias the dep key to the lib's crate name so `piscis_desktop_lib::…` resolves.
+piscis_desktop_lib = { path = "..", package = "piscis-desktop" }
 pisci-kernel = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

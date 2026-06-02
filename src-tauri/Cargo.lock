@@ -4600,8 +4600,8 @@ dependencies = [
 name = "pisci-bench"
 version = "0.0.0"
 dependencies = [
- "pisci-desktop",
  "pisci-kernel",
+ "piscis-desktop",
  "serde_json",
  "tokio",
  "tracing-subscriber",
@@ -4620,8 +4620,45 @@ dependencies = [
 ]
 
 [[package]]
-name = "pisci-desktop"
-version = "0.8.35"
+name = "pisci-kernel"
+version = "0.7.8"
+source = "git+https://github.com/njbinbin-piscis/piscis-engine.git#4c5d905cdfb8bbf5af0ab27975ec474fe4a5551a"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "chrono",
+ "dirs 5.0.1",
+ "encoding_rs",
+ "futures",
+ "getrandom 0.2.17",
+ "hex",
+ "image",
+ "lettre",
+ "lopdf",
+ "once_cell",
+ "pdf-extract",
+ "pisci-core",
+ "regex",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "russh",
+ "scraper",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-cron-scheduler",
+ "tracing",
+ "urlencoding",
+ "uuid",
+ "windows 0.58.0",
+]
+
+[[package]]
+name = "piscis-desktop"
+version = "0.8.36"
 dependencies = [
  "aes",
  "anyhow",
@@ -4677,43 +4714,6 @@ dependencies = [
  "uuid",
  "windows 0.58.0",
  "zip 2.4.2",
-]
-
-[[package]]
-name = "pisci-kernel"
-version = "0.7.8"
-source = "git+https://github.com/njbinbin-piscis/piscis-engine.git#4c5d905cdfb8bbf5af0ab27975ec474fe4a5551a"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "chacha20poly1305",
- "chrono",
- "dirs 5.0.1",
- "encoding_rs",
- "futures",
- "getrandom 0.2.17",
- "hex",
- "image",
- "lettre",
- "lopdf",
- "once_cell",
- "pdf-extract",
- "pisci-core",
- "regex",
- "reqwest 0.12.28",
- "rusqlite",
- "russh",
- "scraper",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tokio-cron-scheduler",
- "tracing",
- "urlencoding",
- "uuid",
- "windows 0.58.0",
 ]
 
 [[package]]

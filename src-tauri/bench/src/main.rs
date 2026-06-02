@@ -4,9 +4,9 @@
 //! to stdout. All tracing goes to stderr. Used by the cross-framework
 //! compression benchmark (`scripts/bench_compression/run_bench.py`).
 //!
-//! This tool links against `pisci_desktop_lib` (for config/runtime
+//! This tool links against `piscis_desktop_lib` (for config/runtime
 //! resolution) so it lives in this workspace rather than the extracted
-//! `piscis-engine`. It is its own crate (not a `pisci-desktop` target) so the
+//! `piscis-engine`. It is its own crate (not a `piscis-desktop` target) so the
 //! Tauri bundler never ships it. Build with:
 //!   cargo build -p pisci-bench --release
 //!
@@ -31,8 +31,8 @@ async fn main() {
     // / judge calls to the SAME endpoint Pisci is using, for fair comparison.
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--print-runtime") {
-        let config_path = pisci_desktop_lib::store::settings::Settings::default_config_path();
-        match pisci_desktop_lib::store::settings::Settings::load(&config_path) {
+        let config_path = piscis_desktop_lib::store::settings::Settings::default_config_path();
+        match piscis_desktop_lib::store::settings::Settings::load(&config_path) {
             Ok(s) => {
                 let provider_base_url = match s.provider.as_str() {
                     "qwen" => "https://dashscope.aliyuncs.com/compatible-mode/v1",

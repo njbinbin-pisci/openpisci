@@ -2,7 +2,7 @@
 
 **开源跨平台 AI Agent 桌面应用**
 
-OpenPiscis 是一款本地优先的跨平台 AI Agent 桌面应用，基于 Tauri 2 + Rust + React 构建。从 `v0.7.0` 起，项目经过了大规模重构，形成清晰的分层架构：`pisci-core`（纯协作与领域逻辑）、`pisci-kernel`（与操作系统 / UI 解耦的运行时内核）、`pisci-desktop`（Tauri 桌面外壳）、`pisci-cli`（无头 CLI 运行器）。**大鱼（Piscis）** 是主协调 Agent，**锦鲤（Koi）** 是持久化协作 Agent，**小鱼（Fish）** 是无状态临时子 Agent。
+OpenPiscis 是一款本地优先的跨平台 AI Agent 桌面应用，基于 Tauri 2 + Rust + React 构建。从 `v0.7.0` 起，项目经过了大规模重构，形成清晰的分层架构：`pisci-core`（纯协作与领域逻辑）、`pisci-kernel`（与操作系统 / UI 解耦的运行时内核）、`piscis-desktop`（Tauri 桌面外壳）、`pisci-cli`（无头 CLI 运行器）。**大鱼（Piscis）** 是主协调 Agent，**锦鲤（Koi）** 是持久化协作 Agent，**小鱼（Fish）** 是无状态临时子 Agent。
 
 **当前平台支持**
 - **Windows**：主要的桌面发行目标
@@ -246,7 +246,7 @@ OpenPiscis 是一款本地优先的跨平台 AI Agent 桌面应用，基于 Taur
 
 桌面安装包以单 GUI 主程序为中心。无头控制台二进制是可选的开发者 / 自动化资产，不是桌面应用运行时依赖：
 
-- `pisci-desktop`（或 `pisci-desktop.exe`）：GUI 桌面应用。
+- `piscis-desktop`（或 `piscis-desktop.exe`）：GUI 桌面应用。
 - `openpisci-headless`（或 `openpisci-headless.exe`）：可选的无头 Agent 运行器，用于 CLI、CI、评测和脚本自动化。
 
 直接双击或无参数运行 headless 版本会自动进入**交互式 REPL**（多轮对话、流式输出到 stdout，输入 `:help` 查看命令）；它与桌面版共享同一份 `pisci.db` / `config.json`。脚本场景可使用 `openpisci-headless run --prompt "..."` 做单轮执行，使用 `openpisci-headless capabilities` 查看当前构建启用了哪些工具。完整用法参见 `openpisci-headless --help`。
@@ -432,11 +432,11 @@ OpenPiscis
 - **Koi 协作交接稳定性修复**：修复 Koi 间任务交接中的多个竞态条件和状态不一致问题，减少协作中的误报 `blocked` 待办和丢失 mention
 
 ### v0.7.2
-- **桌面运行时纠偏**：Koi 协同默认恢复为 GUI 主进程内运行。源码仍按 `pisci-core` / `pisci-kernel` / `pisci-cli` / `pisci-desktop` 分层，但桌面产品的主聊天与 Koi 协同不再依赖 `openpisci-headless`。
+- **桌面运行时纠偏**：Koi 协同默认恢复为 GUI 主进程内运行。源码仍按 `pisci-core` / `pisci-kernel` / `pisci-cli` / `piscis-desktop` 分层，但桌面产品的主聊天与 Koi 协同不再依赖 `openpisci-headless`。
 - **打包收敛**：GUI 安装包取消对 `openpisci-headless` sidecar 的强依赖。Headless 仍可通过 `npm run build:headless` 或 `cargo build -p pisci-cli --release --bin openpisci-headless` 单独构建。
 
 ### v0.7.0
-- **重大架构重构**：Rust 代码库拆分为 `pisci-core`（纯协作与领域逻辑）、`pisci-kernel`（与 OS / UI 解耦的运行时内核）、`pisci-cli`（无头 CLI 运行器）、`pisci-desktop`（Tauri 外壳）四层，显著降低跨层耦合。
+- **重大架构重构**：Rust 代码库拆分为 `pisci-core`（纯协作与领域逻辑）、`pisci-kernel`（与 OS / UI 解耦的运行时内核）、`pisci-cli`（无头 CLI 运行器）、`piscis-desktop`（Tauri 外壳）四层，显著降低跨层耦合。
 - **桌面 / 内核解耦**：鱼池与多 Agent 编排逻辑从面向 UI 的代码路径中剥离，清理了遗留运行时残留，整体更接近干净的"核心 + 适配器"结构。
 - **主聊天流式输出**：主聊天界面可按增量流式呈现 LLM 输出，由用户可见的设置项控制开关。
 - **MCP 集成完成**：按场景装配的工具注册器会在合适的场景按需注册 MCP 工具，不再留下"只接了一半"的状态。

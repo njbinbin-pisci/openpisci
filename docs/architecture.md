@@ -19,7 +19,7 @@ src-tauri/
 ├── pisci-core/         # pure data model + host trait contracts
 ├── pisci-kernel/       # OS/UI-neutral agent runtime
 ├── pisci-cli/          # headless host adapter + openpisci-headless bin
-└── src/                # pisci-desktop: Tauri host adapter (the UI shell)
+└── src/                # piscis-desktop: Tauri host adapter (the UI shell)
 ```
 
 ## Crate responsibilities
@@ -98,7 +98,7 @@ environment:
   path owns tool registration, event-sink wiring, timeout semantics, and
   response shape.
 
-### `pisci-desktop` — Tauri host adapter
+### `piscis-desktop` — Tauri host adapter
 
 The pre-existing Tauri app. After the refactor its role is:
 
@@ -129,7 +129,7 @@ The pre-existing Tauri app. After the refactor its role is:
   `uia`, `powershell`, `wmi_tool`, `office`, `dpi`).
 * Transparently re-export kernel modules via `pub use pisci_kernel::...`
   so legacy `crate::agent::...`, `crate::llm::...`, `crate::store::...`
-  call sites inside `pisci-desktop` keep resolving without edits.
+  call sites inside `piscis-desktop` keep resolving without edits.
 
 ## Key design decisions
 
@@ -148,7 +148,7 @@ The pre-existing Tauri app. After the refactor its role is:
 * **Platform tools stay in the host crate.** Moving browser/UIA/screen
   tools into the kernel would drag `chromiumoxide`, `uiautomation` and
   Windows crates into every headless build. Instead they live next to
-  their glue code in `pisci-desktop` and reach the kernel via
+  their glue code in `piscis-desktop` and reach the kernel via
   `HostTools::register`.
 * **Shared headless schema.** `HeadlessCliRequest` / `Response` and the
   context toggles moved to `pisci-core` so Python benchmark scripts,
@@ -172,7 +172,7 @@ cargo test   -p pisci-core -p pisci-kernel -p pisci-cli --lib --bins
 cargo build -p pisci-cli --release --bin openpisci-headless
 
 # Full desktop build (Windows):
-cargo build --release -p pisci-desktop
+cargo build --release -p piscis-desktop
 ```
 
 Headless benchmark harnesses should invoke `openpisci-headless[.exe]`
@@ -206,7 +206,7 @@ verified in CI:
   `pisci_kernel::headless::run_pisci_turn` with a `CliHost` driver.
 * `openpisci-headless run` drives the CLI host through
   `pisci_cli::runner::run_pisci_once`; the desktop GUI uses its own
-  long-lived `pisci-desktop` runtime and no longer depends on a headless
+  long-lived `piscis-desktop` runtime and no longer depends on a headless
   sidecar for normal chat or Koi coordination.
 * Linux CI gained an opt-in end-to-end LLM smoke test
   (`e2e_run_returns_answer_with_real_api_key`) that skips silently when
@@ -216,10 +216,10 @@ verified in CI:
   `cargo test -p pisci-cli --test headless_cli` to guard the CLI
   surface (capabilities schema, pool rejection, arg validation, version
   banner) against drift.
-* `pisci-desktop::headless_cli` is a thin adapter — request /
+* `piscis-desktop::headless_cli` is a thin adapter — request /
   response / toggle schemas come from `pisci_core::host`. The desktop
   crate no longer depends on `pisci-cli`.
-* `pisci-desktop 0.7.0` drops several compatibility scaffolds: the
+* `piscis-desktop 0.7.0` drops several compatibility scaffolds: the
   `tools::build_registry` shim, the `RuntimeToolProfile::Desktop`
   no-op variant, the duplicate `strip_send_markers` in
   `commands/chat.rs`, and the `_unused_imports_placeholder` hook in

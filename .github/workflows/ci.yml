@@ -47,7 +47,7 @@ jobs:
   # fetches it automatically — no sibling checkout step is needed.
   # ──────────────────────────────────────────────────────────────────────────
   # Desktop host (Tauri) — cross-platform compile gate.
-  # Linux / macOS only run `cargo check -p pisci-desktop --lib` (plus a clippy
+  # Linux / macOS only run `cargo check -p piscis-desktop --lib` (plus a clippy
   # -D warnings pass over the library target). The Windows-specific tools
   # (UIA / screen / COM / PowerShell / …) are behind `#[cfg(target_os =
   # "windows")]`, so this job fails fast if someone forgets to gate a new
@@ -98,11 +98,11 @@ jobs:
             libdrm-dev \
             xdg-utils
 
-      - name: Cargo check (pisci-desktop lib)
-        run: cargo check -p pisci-desktop --lib
+      - name: Cargo check (piscis-desktop lib)
+        run: cargo check -p piscis-desktop --lib
 
-      - name: Clippy (pisci-desktop lib, -D warnings)
-        run: cargo clippy -p pisci-desktop --lib -- -D warnings
+      - name: Clippy (piscis-desktop lib, -D warnings)
+        run: cargo clippy -p piscis-desktop --lib -- -D warnings
 
   # ──────────────────────────────────────────────────────────────────────────
   # Desktop host (Tauri) — Windows-only because the current host links against
@@ -144,8 +144,8 @@ jobs:
       - name: Upload release binary
         uses: actions/upload-artifact@v4
         with:
-          name: pisci-desktop-windows
-          path: target/release/pisci-desktop.exe
+          name: piscis-desktop-windows
+          path: target/release/piscis-desktop.exe
           if-no-files-found: error
           retention-days: 14
 
@@ -248,7 +248,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: pisci-desktop-windows
+          name: piscis-desktop-windows
           path: |
             target/release/bundle/nsis/*.exe
             target/release/bundle/msi/*.msi
@@ -259,7 +259,7 @@ jobs:
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
-          name: pisci-desktop-macos
+          name: piscis-desktop-macos
           path: target/universal-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 30
@@ -268,7 +268,7 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: pisci-desktop-linux
+          name: piscis-desktop-linux
           path: |
             target/release/bundle/deb/*.deb
             target/release/bundle/appimage/*.AppImage

@@ -136,7 +136,7 @@ if (-not $SkipBuild) {
                 throw ($out | Select-String "error\[" | Out-String).Trim()
             }
             # Verify the binary exists
-            $exe = Join-Path $Tauri "target\release\pisci-desktop.exe"
+            $exe = Join-Path $Tauri "target\release\piscis-desktop.exe"
             if (-not (Test-Path $exe)) {
                 throw "Expected release binary not found: $exe"
             }

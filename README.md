@@ -2,7 +2,7 @@
 
 **Open-source cross-platform AI Agent Desktop**
 
-OpenPiscis is a local-first AI Agent desktop application built with Tauri 2 + Rust + React. As of `v0.7.0`, the project has been substantially refactored into a layered architecture: `pisci-core` (pure collaboration/domain logic), `pisci-kernel` (OS/UI-neutral runtime kernel), `pisci-desktop` (Tauri desktop shell), and `pisci-cli` (headless runner). **Piscis** is the main coordinator agent, **Koi** are persistent collaboration agents, and **Fish** are stateless temporary sub-agents.
+OpenPiscis is a local-first AI Agent desktop application built with Tauri 2 + Rust + React. As of `v0.7.0`, the project has been substantially refactored into a layered architecture: `pisci-core` (pure collaboration/domain logic), `pisci-kernel` (OS/UI-neutral runtime kernel), `piscis-desktop` (Tauri desktop shell), and `pisci-cli` (headless runner). **Piscis** is the main coordinator agent, **Koi** are persistent collaboration agents, and **Fish** are stateless temporary sub-agents.
 
 **Current platform status**
 - **Windows**: primary supported desktop release target
@@ -243,7 +243,7 @@ At the moment, Windows installers are the primary published artefact. `v0.7.0` a
 
 The desktop installer is centered on a single GUI application. The headless console binary is an optional developer / automation asset, not a runtime dependency of the desktop app:
 
-- `pisci-desktop` (or `pisci-desktop.exe`): the GUI application.
+- `piscis-desktop` (or `piscis-desktop.exe`): the GUI application.
 - `openpisci-headless` (or `openpisci-headless.exe`): an optional headless agent runner for CLI use, CI, evals, and scripted automation.
 
 Running the headless binary without arguments now drops into an **interactive REPL** (multi-turn conversation, streamed to stdout, `:help` for commands) that shares the same `pisci.db` / `config.json` as the desktop app. Use `openpisci-headless run --prompt "..."` for scripted one-shot invocations, or `openpisci-headless capabilities` to inspect which tools are available in the current build. See `openpisci-headless --help` for the full surface.
@@ -429,11 +429,11 @@ The `v0.7.0` line is the first release after a major internal cleanup:
 - **Koi collaboration handoff stabilization**: fixed several race conditions and state inconsistencies in Koi-to-Koi task handoffs, reducing spurious `blocked` todos and lost mentions during busy coordination
 
 ### v0.7.2
-- **Desktop runtime correction**: restored desktop Koi collaboration to the in-process GUI runtime. Source layering remains (`pisci-core` / `pisci-kernel` / `pisci-cli` / `pisci-desktop`), but the desktop product no longer depends on `openpisci-headless` for normal chat or Koi coordination.
+- **Desktop runtime correction**: restored desktop Koi collaboration to the in-process GUI runtime. Source layering remains (`pisci-core` / `pisci-kernel` / `pisci-cli` / `piscis-desktop`), but the desktop product no longer depends on `openpisci-headless` for normal chat or Koi coordination.
 - **Packaging simplification**: removed the GUI bundle's mandatory `openpisci-headless` sidecar requirement. Headless builds remain available via `npm run build:headless` or `cargo build -p pisci-cli --release --bin openpisci-headless`.
 
 ### v0.7.0
-- **Major architecture refactor**: split the Rust codebase into `pisci-core` (pure collaboration/domain logic), `pisci-kernel` (OS/UI-neutral runtime kernel), `pisci-cli` (headless runner), and `pisci-desktop` (Tauri shell), substantially reducing cross-layer coupling.
+- **Major architecture refactor**: split the Rust codebase into `pisci-core` (pure collaboration/domain logic), `pisci-kernel` (OS/UI-neutral runtime kernel), `pisci-cli` (headless runner), and `piscis-desktop` (Tauri shell), substantially reducing cross-layer coupling.
 - **Desktop / kernel decoupling**: pool and multi-agent orchestration logic were pulled out of UI-facing codepaths, legacy runtime leftovers were removed, and the codebase is now much closer to a clean "core + adapter" structure.
 - **Streaming main-chat output**: the main chat can now stream LLM output incrementally, controlled by a user-facing setting.
 - **MCP integration completed**: scene-aware tool registry assembly now registers MCP tools where appropriate instead of leaving the integration partially wired.

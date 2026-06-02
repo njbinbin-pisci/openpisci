@@ -44,22 +44,22 @@ pisci-core = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", pac
 pisci-kernel = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "pisci-kernel" }
 
 [package]
-name = "pisci-desktop"
-version = "0.8.35"
+name = "piscis-desktop"
+version = "0.8.36"
 autobins = false
-default-run = "pisci-desktop"
+default-run = "piscis-desktop"
 description = "OpenPiscis - Open-source cross-platform AI Agent Desktop"
-authors = ["Pisci Team"]
+authors = ["OpenPiscis Team"]
 license = "Apache-2.0"
 edition = "2021"
 rust-version = "1.77.2"
 
 [lib]
-name = "pisci_desktop_lib"
+name = "piscis_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "pisci-desktop"
+name = "piscis-desktop"
 path = "src/main.rs"
 
 # NOTE: the bench-only `pisci_compact_one` CLI used to live here as a target of
