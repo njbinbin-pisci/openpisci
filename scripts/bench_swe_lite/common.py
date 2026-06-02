@@ -30,11 +30,11 @@ def find_binary(stem: str, explicit: str | None = None) -> Path:
         raise FileNotFoundError(f"Binary override not found: {p}")
 
     # The desktop Rust workspace root is `src-tauri/`. The agent runtime
-    # crates were extracted into the sibling `pisci-engine` repo, so the
+    # crates were extracted into the sibling `piscis-engine` repo, so the
     # `openpisci-headless` CLI asset is now built there (its binary lands in
-    # `pisci-engine/target/{debug,release}/`). We search both trees so either
+    # `piscis-engine/target/{debug,release}/`). We search both trees so either
     # build location resolves.
-    engine_root = REPO_ROOT.parent / "pisci-engine"
+    engine_root = REPO_ROOT.parent / "piscis-engine"
     candidates = [
         engine_root / "target" / "release" / _exe_name(stem),
         engine_root / "target" / "debug" / _exe_name(stem),

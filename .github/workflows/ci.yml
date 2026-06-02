@@ -38,12 +38,12 @@ jobs:
 
   # ──────────────────────────────────────────────────────────────────────────
   # NOTE: the OS/UI-neutral agent runtime crates (pisci-core / pisci-kernel /
-  # pisci-cli) were extracted into the standalone `pisci-engine` repo, which
+  # pisci-cli) were extracted into the standalone `piscis-engine` repo, which
   # owns its own cross-platform fmt / clippy / test / headless CI. They are no
   # longer built or tested here.
   #
   # The desktop + package jobs below consume the engine as a Cargo *git*
-  # dependency (https://github.com/njbinbin-piscis/pisci-engine.git), so cargo
+  # dependency (https://github.com/njbinbin-piscis/piscis-engine.git), so cargo
   # fetches it automatically — no sibling checkout step is needed.
   # ──────────────────────────────────────────────────────────────────────────
   # Desktop host (Tauri) — cross-platform compile gate.

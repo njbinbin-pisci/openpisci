@@ -16,7 +16,7 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [0.8.25] - 2026-05-31
 
 ### Changed
-- **Heartbeat / org_spec**: consume `pisci-engine` with a stricter default heartbeat prompt — `HEARTBEAT_OK` is gated on `pool_org(read)` and explicit org_spec convergence checks (no hardcoded phase rules). Supervisor attention stays active when the board is quiet but global coordination may still be required.
+- **Heartbeat / org_spec**: consume `piscis-engine` with a stricter default heartbeat prompt — `HEARTBEAT_OK` is gated on `pool_org(read)` and explicit org_spec convergence checks (no hardcoded phase rules). Supervisor attention stays active when the board is quiet but global coordination may still be required.
 - **Kernel split**: pin `pisci-core` / `pisci-kernel` git dependency to the latest engine commit (`7c04d03`).
 
 ### Fixed

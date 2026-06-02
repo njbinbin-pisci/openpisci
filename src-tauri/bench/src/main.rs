@@ -6,7 +6,7 @@
 //!
 //! This tool links against `pisci_desktop_lib` (for config/runtime
 //! resolution) so it lives in this workspace rather than the extracted
-//! `pisci-engine`. It is its own crate (not a `pisci-desktop` target) so the
+//! `piscis-engine`. It is its own crate (not a `pisci-desktop` target) so the
 //! Tauri bundler never ships it. Build with:
 //!   cargo build -p pisci-bench --release
 //!

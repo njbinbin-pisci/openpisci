@@ -1,9 +1,9 @@
 # The agent runtime crates (pisci-core / pisci-kernel / pisci-cli) were
-# extracted into the standalone `pisci-engine` repo so that both `openpisci`
+# extracted into the standalone `piscis-engine` repo so that both `openpisci`
 # (this desktop host) and `codez` can share one kernel. They are consumed as
 # a git dependency (see `[workspace.dependencies]` below). For local engine
-# hacking, add a `[patch."https://github.com/njbinbin-piscis/pisci-engine.git"]`
-# section pointing the crates at a local `../../pisci-engine` checkout.
+# hacking, add a `[patch."https://github.com/njbinbin-piscis/piscis-engine.git"]`
+# section pointing the crates at a local `../../piscis-engine` checkout.
 [workspace]
 members = ["bench"]
 resolver = "2"
@@ -39,9 +39,9 @@ anyhow = "1"
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-# Shared agent runtime — the standalone pisci-engine repo (also consumed by codez).
-pisci-core = { git = "https://github.com/njbinbin-piscis/pisci-engine.git", package = "pisci-core" }
-pisci-kernel = { git = "https://github.com/njbinbin-piscis/pisci-engine.git", package = "pisci-kernel" }
+# Shared agent runtime — the standalone piscis-engine repo (also consumed by codez).
+pisci-core = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "pisci-core" }
+pisci-kernel = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "pisci-kernel" }
 
 [package]
 name = "pisci-desktop"

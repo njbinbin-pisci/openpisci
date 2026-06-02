@@ -1,5 +1,5 @@
 # Bench-only compression CLI. It links `pisci_desktop_lib`, so it must live in
-# this workspace rather than the extracted pisci-engine — but it is its OWN
+# this workspace rather than the extracted piscis-engine — but it is its OWN
 # crate (not a target of `pisci-desktop`) so Tauri's bundler never tries to
 # ship it in the desktop installers. Build explicitly with:
 #   cargo build -p pisci-bench --release   (binary: target/release/pisci_compact_one)

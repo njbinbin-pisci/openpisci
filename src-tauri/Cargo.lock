@@ -4610,7 +4610,7 @@ dependencies = [
 [[package]]
 name = "pisci-core"
 version = "0.7.8"
-source = "git+https://github.com/njbinbin-piscis/pisci-engine.git#4d2c15758d3065be310589913098d0223c0e5014"
+source = "git+https://github.com/njbinbin-piscis/piscis-engine.git#4d2c15758d3065be310589913098d0223c0e5014"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4685,7 +4685,7 @@ dependencies = [
 [[package]]
 name = "pisci-kernel"
 version = "0.7.8"
-source = "git+https://github.com/njbinbin-piscis/pisci-engine.git#4d2c15758d3065be310589913098d0223c0e5014"
+source = "git+https://github.com/njbinbin-piscis/piscis-engine.git#4d2c15758d3065be310589913098d0223c0e5014"
 dependencies = [
  "anyhow",
  "async-trait",
