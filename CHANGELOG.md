@@ -9,7 +9,7 @@ This project follows [Semantic Versioning](https://semver.org/) and
 ## [0.8.37] - 2026-06-04
 
 ### Changed
-- **Engine pin**: `piscis-core` / `piscis-kernel` git dependencies pinned to tag **`v0.7.38`** (pluggable loop/contrib compaction extensions), aligned with CodeZ and agent-workbench.
+- **Engine pin**: `piscis-core` / `piscis-kernel` git dependencies pinned to tag **`v0.8.38`** (pluggable loop/contrib compaction extensions), aligned with CodeZ and agent-workbench.
 
 ---
 
