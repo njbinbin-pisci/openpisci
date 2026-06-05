@@ -535,6 +535,12 @@ export default function Chat() {
   const isNearBottomRef = useRef(true);
   // Sync guard during loadMoreHistory (suppress auto-scroll + re-entrancy)
   const loadingMoreRef = useRef(false);
+  // Number of DB rows currently loaded from the newest end. This is the real
+  // pagination offset for "load more history" and is intentionally decoupled
+  // from the store array length: setMessagesWithFrozen collapses a completed
+  // agent turn (many DB rows) into a single synthetic bubble, so the store
+  // length is much smaller than the number of DB rows actually loaded.
+  const loadedDbCountRef = useRef(0);
   /** Restore scrollTop after older messages are prepended and painted. */
   const scrollRestoreRef = useRef<number | null>(null);
   const prevScrollTopRef = useRef(0);
@@ -790,6 +796,8 @@ export default function Chat() {
         // with no frozenBubble (old history, other sessions), it falls back to plain setMessages.
         // Do NOT auto-reconstruct frozenBubble from DB here — that would collapse all history.
         dispatch(chatActions.setMessagesWithFrozen({ sessionId: displaySessionId, messages }));
+        // Track the real DB-row offset (raw count fetched), not the possibly-collapsed store length.
+        loadedDbCountRef.current = messages.length;
         const s = fresh.find((x) => x.id === displaySessionId);
         const restored = reconstructPersistedTaskPanels(messages);
         dispatch(chatActions.restoreTaskPanels({
@@ -851,20 +859,29 @@ export default function Chat() {
     if (!displaySessionId || loadingMoreRef.current) return;
     const el = messagesAreaRef.current;
     const prevScrollHeight = el ? el.scrollHeight : 0;
-    const currentCount = messagesBySession[displaySessionId]?.length ?? 0;
+    // Use the real DB-row offset, not the store length: a collapsed agent turn
+    // makes the store much shorter than the rows already loaded, which would
+    // otherwise re-request rows inside the loaded window and never reach older history.
+    const offset = loadedDbCountRef.current;
     loadingMoreRef.current = true;
     setLoadingMoreHistory(true);
     scrollRestoreRef.current = prevScrollHeight;
-    sessionsApi.getMessages(displaySessionId, CHAT_LAZY_STEP, currentCount).then((older) => {
+    sessionsApi.getMessages(displaySessionId, CHAT_LAZY_STEP, offset).then((older) => {
       if (older.length > 0) {
+        // Advance the DB offset past every row we just consumed (including any that
+        // happen to already be displayed), so the next page continues strictly older.
+        loadedDbCountRef.current = offset + older.length;
         const existingIds = new Set((messagesBySession[displaySessionId] ?? []).map((m) => m.id));
         const newOnes = older.filter((m) => !existingIds.has(m.id));
+        setHasMoreHistory(older.length === CHAT_LAZY_STEP);
         if (newOnes.length > 0) {
           dispatch(chatActions.prependChatMessages({ sessionId: displaySessionId, messages: older }));
-          setCapacity((c) => c + CHAT_LAZY_STEP);
-          setHasMoreHistory(older.length === CHAT_LAZY_STEP);
-        } else if (newOnes.length === 0) {
-          setHasMoreHistory(false);
+          setCapacity((c) => c + newOnes.length);
+          // Scroll position is restored by the layout effect once the prepend paints.
+        } else {
+          // This page was entirely already-displayed rows. The store length is
+          // unchanged, so the scroll-restore layout effect won't fire — release
+          // the guards here so the next scroll-up can fetch the next older page.
           scrollRestoreRef.current = null;
           loadingMoreRef.current = false;
           setLoadingMoreHistory(false);
@@ -1081,6 +1098,11 @@ export default function Chat() {
           sessionsApi.getMessages(boundSessionId, CHAT_INITIAL_SIZE).then((messages) => {
             console.log('[Chat] done: reloaded', messages.length, 'messages for', boundSessionId);
             dispatch(chatActions.setMessagesWithFrozen({ sessionId: boundSessionId, messages }));
+            // Re-anchor the pagination offset to the freshly fetched newest window,
+            // since this reload replaces the loaded window (and collapses the last turn).
+            if (activeSessionIdRef.current === boundSessionId) {
+              loadedDbCountRef.current = messages.length;
+            }
             const restored = reconstructPersistedTaskPanels(messages);
             dispatch(chatActions.restoreTaskPanels({
               sessionId: boundSessionId,
@@ -1206,6 +1228,11 @@ export default function Chat() {
     if (displaySessionId && rawMessages.length > capacity) {
       dispatch(chatActions.trimChatMessages({ sessionId: displaySessionId, capacity }));
       setHasMoreHistory(true);
+      // After trim the oldest loaded row sits at `capacity` from the newest end,
+      // so the next "load more" must continue paginating from there.
+      if (loadedDbCountRef.current > capacity) {
+        loadedDbCountRef.current = capacity;
+      }
     }
     if (isNearBottomRef.current) {
       scrollToBottom();

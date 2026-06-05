@@ -51,6 +51,43 @@
   line-height: 1;
 }
 
+.ide-activity-bar .activity-icon--git {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.ide-activity-bar .activity-icon--git svg {
+  display: block;
+}
+
+/* Git SCM icon — subtle multi-color nodes to match emoji activity icons (📁 🔍). */
+.ide-activity-bar .activity-icon--git .git-node {
+  stroke: none;
+}
+
+.ide-activity-bar .activity-icon--git .git-node-top {
+  fill: var(--accent);
+}
+
+.ide-activity-bar .activity-icon--git .git-node-bottom {
+  fill: var(--success);
+}
+
+.ide-activity-bar .activity-icon--git .git-node-merge {
+  fill: var(--warning);
+}
+
+.ide-activity-bar .activity-icon--git .git-branch {
+  stroke: var(--accent-hover);
+}
+
+.ide-activity-bar button:hover .activity-icon--git .git-branch,
+.ide-activity-bar button.active .activity-icon--git .git-branch {
+  stroke: var(--accent);
+}
+
 .ide-activity-bar .activity-badge {
   position: absolute;
   top: 6px;
