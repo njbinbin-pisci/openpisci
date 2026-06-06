@@ -414,7 +414,17 @@
   margin-bottom: 6px;
 }
 
-.koi-input {
+/* Form <select> — inherits global select.input theming; match koi field sizing */
+.koi-form-field select.input {
+  padding: 8px 12px;
+  padding-right: 34px;
+  font-size: 13px;
+  border-radius: 8px;
+  background-color: var(--bg-secondary);
+}
+
+/* Text/number inputs only — <select> uses .input above */
+.koi-input:not(select) {
   width: 100%;
   padding: 8px 12px;
   background: var(--bg-secondary);

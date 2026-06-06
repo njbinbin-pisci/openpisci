@@ -160,9 +160,30 @@ export type AgentEventType =
       text_delta?: string;
     };
 
+export interface ChatSendOptions {
+  attachments?: ChatAttachment[];
+  /** @deprecated use attachments */
+  attachment?: ChatAttachment;
+  explicitSkills?: string[];
+  personaKoiId?: string;
+  clearPlan?: boolean;
+}
+
 export const chatApi = {
-  send: (sessionId: string, content: string, attachment?: ChatAttachment, clearPlan?: boolean) =>
-    invoke<void>("chat_send", { sessionId, content, attachment: attachment ?? null, clearPlan: clearPlan ?? true }),
+  send: (sessionId: string, content: string, options?: ChatSendOptions) => {
+    const attachments =
+      options?.attachments ??
+      (options?.attachment ? [options.attachment] : undefined);
+    return invoke<void>("chat_send", {
+      sessionId,
+      content,
+      attachment: options?.attachment ?? null,
+      attachments: attachments ?? null,
+      explicitSkills: options?.explicitSkills ?? null,
+      personaKoiId: options?.personaKoiId ?? null,
+      clearPlan: options?.clearPlan ?? true,
+    });
+  },
   cancel: (sessionId: string) =>
     invoke<void>("chat_cancel", { sessionId }),
   onEvent: (sessionId: string, handler: (event: AgentEventType) => void): Promise<UnlistenFn> =>

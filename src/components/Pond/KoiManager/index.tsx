@@ -456,7 +456,7 @@ function KoiDialog({
         <div className="koi-form-field">
           <label className="koi-form-label">{t("koi.llmProvider")}</label>
           <select
-            className="koi-input"
+            className="input"
             value={form.llm_provider_id}
             onChange={(e) => set("llm_provider_id", e.target.value)}
           >

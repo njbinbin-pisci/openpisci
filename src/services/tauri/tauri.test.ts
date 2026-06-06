@@ -72,6 +72,9 @@ describe("chatApi", () => {
       sessionId: "sess1",
       content: "hello",
       attachment: null,
+      attachments: null,
+      explicitSkills: null,
+      personaKoiId: null,
       clearPlan: true,
     });
   });

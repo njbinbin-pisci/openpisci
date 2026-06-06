@@ -18,17 +18,23 @@ OpenPiscis is a local-first AI Agent desktop application built with Tauri 2 + Ru
 
 ---
 
-## 🆕 What's New in v0.8.46
+## 🆕 What's New in v0.8.47
 
-**RobotZ clarity & UI polish** — builtin desktop automation only; MCP tab for external servers; Collab git SVG icon.
+**Koi persona in main chat + composer upgrades + School nav** — talk as a Koi directly; multi-attach/skills; sidebar School merges Fish & Koi.
 
-### 🤖 RobotZ
-- **`robotz-automation` / `robotz-browser`** compiled into the desktop binary as builtin tools — not shown on the MCP tab.
-- Legacy `robotz` MCP config entries are stripped on startup.
+### 🐟 Main Chat
+- **Koi persona mode**: pick a Koi in the composer to speak as that persona (dedicated prompt, tool subset, per-Koi memory, optional LLM override).
+- **Composer upgrades**: pending attachment chips, Ctrl+V image paste, explicit skill dropdown.
+
+### 🏫 School
+- Sidebar **School** merges the Fish library and Koi manager (小鱼 | 锦鲤 tabs); Pond Collab links to the Koi tab instead of an inline modal.
 
 ### 🎨 UI
-- MCP server editor transport dropdown uses unified `select-control` styling.
-- Pond Collab git icon matches IDE (SVG source-control icon).
+- Unified `<select>` styling across the app (fixes Koi editor model dropdown white-on-white on Linux GTK).
+
+## 🕘 v0.8.46 — RobotZ & MCP UI
+
+RobotZ builtin-tool clarity; MCP transport dropdown and Collab git SVG icon.
 
 ## 🕘 v0.8.45 — UI polish & WeChat IM
 

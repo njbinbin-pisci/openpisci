@@ -371,7 +371,7 @@ function CreateTaskDialog({
             <div className="board-empty-hint">{t("pool.noMembersHint")}</div>
           ) : (
             <select
-              className="board-select"
+              className="input"
               value={form.owner_id}
               onChange={(e) => set("owner_id", e.target.value)}
             >
@@ -568,7 +568,7 @@ export default function Board() {
       <div className="board-toolbar">
         <div className="board-filters">
           <select
-            className="board-filter-select"
+            className="select-control"
             value={filterOwnerId ?? ""}
             onChange={(e) =>
               dispatch(boardActions.setFilterOwnerId(e.target.value || null))
@@ -583,7 +583,7 @@ export default function Board() {
           </select>
 
           <select
-            className="board-filter-select"
+            className="select-control"
             value={filterPriority ?? ""}
             onChange={(e) =>
               dispatch(boardActions.setFilterPriority(e.target.value || null))

@@ -50,6 +50,7 @@ const en = {
     memory: "Memory",
     tools: "Tools",
     fish: "Fish",
+    school: "School",
     pond: "Pond",
     skills: "Skills",
     scheduler: "Scheduler",
@@ -365,6 +366,11 @@ const en = {
     empty: "No fish yet",
   },
 
+  school: {
+    tabFish: "Fish",
+    tabKoi: "Koi",
+  },
+
   // Tools (builtin + user-defined)
   tools: {
     title: "Tools",
@@ -550,6 +556,12 @@ const en = {
     welcomeDesc: "Start a new chat to begin working with your AI assistant",
     newChatBtn: "New Chat",
     inputPlaceholder: "Message Piscis... (Enter to send, Shift+Enter for new line)",
+    installSkill: "Install skill…",
+    manageKois: "Manage Koi…",
+    skillSelectPlaceholder: "Skill",
+    koiSelectPlaceholder: "Koi",
+    selectedSkill: "Selected skill",
+    personaKoi: "Acting as Koi",
     attachFile: "Add attachment",
     dropFiles: "Drop files here",
     attachment: "Attachment",

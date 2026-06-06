@@ -43,6 +43,17 @@
   box-shadow: none;
 }
 
+/* Light mode: darker chevron on custom selects */
+:root[data-color-mode="light"] .select-control,
+:root[data-color-mode="light"] select.input,
+:root[data-color-mode="light"] select.koi-input,
+:root[data-color-mode="light"] select.board-select,
+:root[data-color-mode="light"] select.chatpool-input,
+:root[data-color-mode="light"] select.form-select,
+:root[data-color-mode="light"] .ic-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235c5c72' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+}
+
 :root[data-color-mode="light"][data-theme="gold"] .card {
   box-shadow: none;
 }

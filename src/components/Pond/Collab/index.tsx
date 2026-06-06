@@ -14,7 +14,6 @@ import GitPanel from "../IDE/GitPanel";
 import SearchPanel from "../IDE/SearchPanel";
 import Board from "../Board";
 import PiscisInbox from "../PiscisInbox";
-import KoiManager from "../KoiManager";
 import PoolMemberPicker from "../PoolMemberPicker";
 import { ideApi, onFileChanged } from "../../../services/tauri/ide";
 import { openPath } from "../../../services/tauri";
@@ -164,7 +163,11 @@ function MessageBubble({ msg, kois }: { msg: PoolMessage; kois: KoiWithStats[] }
 const INITIAL_LOAD_SIZE = 100;
 const LAZY_LOAD_STEP = 10;
 
-export default function Collab() {
+interface CollabProps {
+  onNavigateToSchoolKoi?: () => void;
+}
+
+export default function Collab({ onNavigateToSchoolKoi }: CollabProps) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
 
@@ -280,7 +283,6 @@ export default function Collab() {
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [leftWidth, setLeftWidth] = useState(280);
   const [participantsOpen, setParticipantsOpen] = useState(false);
-  const [koiDialogOpen, setKoiDialogOpen] = useState(false);
   const [memberPickerOpen, setMemberPickerOpen] = useState(false);
   const [memberError, setMemberError] = useState("");
 
@@ -1286,18 +1288,13 @@ export default function Collab() {
           poolId={activeSessionId}
           memberKoiIds={activeSession?.member_koi_ids ?? []}
           onClose={() => setMemberPickerOpen(false)}
-          onManageKois={() => { setMemberPickerOpen(false); setKoiDialogOpen(true); }}
+          onManageKois={() => {
+            setMemberPickerOpen(false);
+            onNavigateToSchoolKoi?.();
+          }}
         />
       )}
 
-      {/* Koi Manager dialog */}
-      {koiDialogOpen && (
-        <div className="koi-modal-overlay" onClick={() => setKoiDialogOpen(false)}>
-          <div className="koi-modal koi-modal--wide" onClick={(e) => e.stopPropagation()}>
-            <KoiManager />
-          </div>
-        </div>
-      )}
     </div>
   );
 }

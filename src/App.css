@@ -527,7 +527,12 @@ textarea.input {
   min-height: 80px;
 }
 
-select.input {
+/* Form <select> — unified theme (fixes GTK/WebKit white-on-white native styling) */
+select.input,
+select.koi-input,
+select.board-select,
+select.chatpool-input,
+select.form-select {
   appearance: none;
   -webkit-appearance: none;
   background-color: var(--bg-tertiary);
@@ -539,12 +544,20 @@ select.input {
   cursor: pointer;
 }
 
-select.input option {
+select.input option,
+select.koi-input option,
+select.board-select option,
+select.chatpool-input option,
+select.form-select option {
   background-color: var(--bg-secondary);
   color: var(--text-primary);
 }
 
-select.input:focus {
+select.input:focus,
+select.koi-input:focus,
+select.board-select:focus,
+select.chatpool-input:focus,
+select.form-select:focus {
   border-color: var(--accent);
 }
 

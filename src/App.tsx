@@ -13,7 +13,7 @@ import "./App.css";
 
 const Memory = lazy(() => import("./components/Memory"));
 const Tools = lazy(() => import("./components/Tools"));
-const FishPage = lazy(() => import("./components/Fish"));
+const SchoolPage = lazy(() => import("./components/School"));
 const Pond = lazy(() => import("./components/Pond"));
 const Skills = lazy(() => import("./components/Skills"));
 const Scheduler = lazy(() => import("./components/Scheduler"));
@@ -24,7 +24,8 @@ const Onboarding = lazy(() => import("./components/Onboarding"));
 const OverlayApp = lazy(() => import("./components/Overlay"));
 const DebugPanel = lazy(() => import("./components/Debug"));
 
-type Tab = "chat" | "memory" | "tools" | "fish" | "pond" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
+type Tab = "chat" | "memory" | "tools" | "school" | "pond" | "skills" | "scheduler" | "audit" | "settings" | "about" | "debug";
+type SchoolSubTab = "fish" | "koi";
 
 // Detect if we are running in the overlay window
 const IS_OVERLAY = new URLSearchParams(window.location.search).get("overlay") === "1";
@@ -35,6 +36,7 @@ function AppContent() {
   const { showOnboarding, settings } = useSelector((s: RootState) => s.settings);
   const pendingMainChatNav = useSelector((s: RootState) => s.sessions.pendingMainChatNav);
   const [activeTab, setActiveTab] = useState<Tab>("chat");
+  const [schoolSubTab, setSchoolSubTab] = useState<SchoolSubTab>("fish");
   /** Tabs that have been opened at least once — stay mounted to preserve state. */
   const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(() => new Set(["chat"]));
   const [initialized, setInitialized] = useState(false);
@@ -218,12 +220,17 @@ function AppContent() {
     );
   }
 
+  const navigateTab = (tab: Tab, opts?: { schoolSubTab?: SchoolSubTab }) => {
+    if (opts?.schoolSubTab) setSchoolSubTab(opts.schoolSubTab);
+    setActiveTab(tab);
+  };
+
   const tabs: { id: Tab; label: string; icon: string }[] = [
     { id: "chat", label: t("nav.chat"), icon: "💬" },
     { id: "pond", label: t("nav.pond"), icon: "🏊" },
+    { id: "school", label: t("nav.school"), icon: "🐟" },
     { id: "tools", label: t("nav.tools"), icon: "🔧" },
     { id: "skills", label: t("nav.skills"), icon: "⚡" },
-    { id: "fish", label: t("nav.fish"), icon: "🐠" },
     { id: "scheduler", label: t("nav.scheduler"), icon: "⏰" },
     { id: "memory", label: t("nav.memory"), icon: "💡" },
     { id: "audit", label: t("nav.audit"), icon: "🔍" },
@@ -285,7 +292,12 @@ function AppContent() {
         <Suspense fallback={<div className="loading-screen"><div className="loading-spinner" /><p>Loading OpenPiscis...</p></div>}>
           {mountedTabs.has("chat") && (
             <div className="tab-panel" hidden={activeTab !== "chat"}>
-              <Chat />
+              <Chat
+                onNavigateTab={(tab, opts) => {
+                  if (tab === "skills") navigateTab("skills");
+                  if (tab === "school") navigateTab("school", { schoolSubTab: opts?.schoolSubTab ?? "koi" });
+                }}
+              />
             </div>
           )}
           {mountedTabs.has("memory") && (
@@ -295,10 +307,14 @@ function AppContent() {
             <div className="tab-panel" hidden={activeTab !== "tools"}><Tools /></div>
           )}
           {mountedTabs.has("pond") && (
-            <div className="tab-panel" hidden={activeTab !== "pond"}><Pond /></div>
+            <div className="tab-panel" hidden={activeTab !== "pond"}>
+              <Pond onNavigateToSchoolKoi={() => navigateTab("school", { schoolSubTab: "koi" })} />
+            </div>
           )}
-          {mountedTabs.has("fish") && (
-            <div className="tab-panel" hidden={activeTab !== "fish"}><FishPage /></div>
+          {mountedTabs.has("school") && (
+            <div className="tab-panel" hidden={activeTab !== "school"}>
+              <SchoolPage initialSubTab={schoolSubTab} />
+            </div>
           )}
           {mountedTabs.has("skills") && (
             <div className="tab-panel" hidden={activeTab !== "skills"}><Skills /></div>

@@ -61,6 +61,112 @@ struct ChatPromptArtifacts {
     tool_defs: Vec<ToolDef>,
     /// When the session workspace matches a pool's `project_dir`.
     bound_pool_id: Option<String>,
+    memory_owner_id: String,
+}
+
+fn merge_frontend_attachments(
+    attachment: Option<FrontendAttachment>,
+    attachments: Option<Vec<FrontendAttachment>>,
+) -> Vec<FrontendAttachment> {
+    if let Some(list) = attachments.filter(|items| !items.is_empty()) {
+        return list;
+    }
+    attachment.into_iter().collect()
+}
+
+fn resolve_attachments_for_send(
+    content: &str,
+    attachments: &[FrontendAttachment],
+    vision_capable: bool,
+) -> (String, Vec<crate::gateway::MediaAttachment>) {
+    use base64::Engine;
+    let mut effective = content.to_string();
+    let mut media_list: Vec<crate::gateway::MediaAttachment> = Vec::new();
+
+    for att in attachments {
+        if att.media_type.starts_with("image/") {
+            if vision_capable {
+                let data = att.data.as_deref().and_then(|b64| {
+                    base64::engine::general_purpose::STANDARD.decode(b64).ok()
+                });
+                media_list.push(crate::gateway::MediaAttachment {
+                    media_type: att.media_type.clone(),
+                    url: None,
+                    data,
+                    filename: att.filename.clone(),
+                });
+            } else {
+                let path_str = if let Some(p) = &att.path {
+                    p.clone()
+                } else if let Some(b64) = &att.data {
+                    let ext = match att.media_type.as_str() {
+                        "image/png" => "png",
+                        "image/gif" => "gif",
+                        "image/webp" => "webp",
+                        _ => "jpg",
+                    };
+                    let default_fname = format!("attachment.{}", ext);
+                    let fname = att.filename.as_deref().unwrap_or(&default_fname);
+                    let tmp = std::env::temp_dir().join(fname);
+                    if let Ok(bytes) =
+                        base64::engine::general_purpose::STANDARD.decode(b64)
+                    {
+                        let _ = std::fs::write(&tmp, &bytes);
+                    }
+                    tmp.to_string_lossy().to_string()
+                } else {
+                    String::new()
+                };
+                if !path_str.is_empty() {
+                    if effective.trim().is_empty() {
+                        effective = format!("[图片已保存到: {}]", path_str);
+                    } else {
+                        effective.push_str(&format!("\n[附带图片已保存到: {}]", path_str));
+                    }
+                }
+            }
+        } else {
+            let path_str = att.path.clone().unwrap_or_default();
+            if !path_str.is_empty() {
+                if effective.trim().is_empty() {
+                    effective = format!("[附件: {}]", path_str);
+                } else {
+                    effective.push_str(&format!("\n[附件: {}]", path_str));
+                }
+            }
+        }
+    }
+
+    (effective, media_list)
+}
+
+async fn inject_explicit_skills_prefix(
+    app: &AppHandle,
+    content: String,
+    explicit_skills: Option<Vec<String>>,
+) -> String {
+    let Some(skill_ids) = explicit_skills.filter(|items| !items.is_empty()) else {
+        return content;
+    };
+    let Some(loader_arc) = load_skill_loader(app) else {
+        return content;
+    };
+    let loader = loader_arc.lock().await;
+    let directory = loader.generate_skill_directory(&skill_ids);
+    if directory.trim().is_empty() {
+        return content;
+    }
+    let prefix = format!(
+        "## 用户指定技能（本回合必须执行）\n\
+         请立即对每个技能使用 `file_read` 读取其 SKILL.md 并严格遵循，再处理用户正文：\n\
+         {}\n\n",
+        directory
+    );
+    if content.trim().is_empty() {
+        prefix
+    } else {
+        format!("{prefix}{content}")
+    }
 }
 
 fn normalize_workspace_path_for_match(path: &str) -> String {
@@ -550,14 +656,37 @@ async fn build_chat_prompt_artifacts(
     builtin_tool_enabled: &std::collections::HashMap<String, bool>,
     project_instruction_budget_chars: u32,
     enable_project_instructions: bool,
+    persona_koi_id: Option<&str>,
 ) -> Result<ChatPromptArtifacts, String> {
-    let scene_policy = ScenePolicy::for_kind(SceneKind::MainChat);
+    let persona_koi = if let Some(koi_id) = persona_koi_id.filter(|id| !id.trim().is_empty()) {
+        let db = state.db.lock().await;
+        db.get_koi(koi_id)
+            .map_err(|e| e.to_string())?
+            .or_else(|| {
+                db.list_kois()
+                    .ok()
+                    .and_then(|kois| kois.into_iter().find(|k| k.id == koi_id || k.name == koi_id))
+            })
+    } else {
+        None
+    };
+    let scene_kind = if persona_koi.is_some() {
+        SceneKind::KoiPersona
+    } else {
+        SceneKind::MainChat
+    };
+    let memory_owner_id = persona_koi
+        .as_ref()
+        .map(|k| k.id.clone())
+        .unwrap_or_else(|| "piscis".to_string());
+
+    let scene_policy = ScenePolicy::for_kind(scene_kind);
     let user_tools_dir = app.path().app_data_dir().map(|d| d.join("user-tools")).ok();
     let app_data_dir = app.path().app_data_dir().ok();
 
     let skill_loader_arc = load_skill_loader(app);
     let registry = build_registry_for_scene(
-        SceneKind::MainChat,
+        scene_kind,
         state.browser.clone(),
         user_tools_dir.as_deref(),
         Some(state.db.clone()),
@@ -573,7 +702,9 @@ async fn build_chat_prompt_artifacts(
     // harness will actually send, so the token accounting stays honest.
     let tool_defs = registry.to_tool_defs(piscis_kernel::agent::tool::ToolDefMode::Minimal);
 
-    let (bound_pool_id, pool_context, bound_pool_name) = {
+    let (bound_pool_id, pool_context, bound_pool_name) = if persona_koi.is_some() {
+        (None, String::new(), None)
+    } else {
         let db = state.db.lock().await;
         let pools = db.list_pool_sessions().map_err(|e| e.to_string())?;
         match resolve_pool_session_for_workspace(&pools, workspace_root) {
@@ -606,7 +737,9 @@ async fn build_chat_prompt_artifacts(
     };
     let bound_pool_scope = bound_pool_id.as_deref();
 
-    let memory_context = {
+    let memory_context = if persona_koi.is_some() {
+        String::new()
+    } else {
         let db = state.db.lock().await;
         let keywords: Vec<&str> = query_text.split_whitespace().take(10).collect();
         let query = keywords.join(" ");
@@ -622,7 +755,9 @@ async fn build_chat_prompt_artifacts(
         }
     };
 
-    let active_task_state = {
+    let active_task_state = if persona_koi.is_some() {
+        None
+    } else {
         let db = state.db.lock().await;
         match db.load_task_state("session", session_id) {
             Ok(Some(ts))
@@ -659,22 +794,28 @@ async fn build_chat_prompt_artifacts(
             String::new()
         };
 
-    let mut system_prompt = build_main_chat_system_prompt(
-        &full_memory_context,
-        workspace_root,
-        allow_outside_workspace,
-    );
+    let mut system_prompt = if let Some(ref koi) = persona_koi {
+        crate::runtime::koi_prompt::assemble_koi_persona_system_prompt(state, koi, query_text)
+            .await
+    } else {
+        let mut prompt = build_main_chat_system_prompt(
+            &full_memory_context,
+            workspace_root,
+            allow_outside_workspace,
+        );
+        if !pool_context.is_empty() {
+            prompt.push_str(&pool_context);
+            prompt.push_str(pool_coordinator_scene_guidance());
+            if let (Some(pool_id), Some(pool_name)) =
+                (bound_pool_id.as_deref(), bound_pool_name.as_deref())
+            {
+                prompt.push_str(&bound_pool_session_guidance(pool_id, pool_name));
+            }
+        }
+        prompt
+    };
     if !project_instruction_context.is_empty() {
         system_prompt.push_str(&project_instruction_context);
-    }
-    if !pool_context.is_empty() {
-        system_prompt.push_str(&pool_context);
-        system_prompt.push_str(pool_coordinator_scene_guidance());
-        if let (Some(pool_id), Some(pool_name)) =
-            (bound_pool_id.as_deref(), bound_pool_name.as_deref())
-        {
-            system_prompt.push_str(&bound_pool_session_guidance(pool_id, pool_name));
-        }
     }
     tracing::info!(
         "main_chat_context_slices session={} bound_pool={:?} memory_mode={:?} pool_snapshot_mode={:?} memory_chars={} task_state_chars={} pool_context_chars={} injected_chars={} project_instruction_chars={} system_prompt_chars={}",
@@ -694,6 +835,7 @@ async fn build_chat_prompt_artifacts(
         registry,
         tool_defs,
         bound_pool_id,
+        memory_owner_id,
     })
 }
 
@@ -815,25 +957,31 @@ pub async fn chat_send(
     session_id: String,
     content: String,
     attachment: Option<FrontendAttachment>,
+    attachments: Option<Vec<FrontendAttachment>>,
+    explicit_skills: Option<Vec<String>>,
+    persona_koi_id: Option<String>,
     // If false, preserve the existing plan (continue previous tasks).
     // If true or None (default), clear the plan before starting a new turn.
     clear_plan: Option<bool>,
 ) -> Result<(), String> {
+    let merged_attachments = merge_frontend_attachments(attachment, attachments);
     tracing::info!(
-        "chat_send called: session={} content_len={} has_attachment={}",
+        "chat_send called: session={} content_len={} attachments={} explicit_skills={:?} persona_koi={:?}",
         session_id,
         content.len(),
-        attachment.is_some()
+        merged_attachments.len(),
+        explicit_skills,
+        persona_koi_id,
     );
 
     // Load settings
     let (
-        provider,
-        model,
-        api_key,
-        base_url,
+        mut provider,
+        mut model,
+        mut api_key,
+        mut base_url,
         workspace_root,
-        max_tokens,
+        mut max_tokens,
         context_window,
         confirm_shell,
         confirm_file_write,
@@ -887,6 +1035,41 @@ pub async fn chat_send(
     };
     let workspace_root =
         resolve_session_workspace_root(&state, &session_id, workspace_root).await?;
+
+    if let Some(koi_id) = persona_koi_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .map(|id| id.to_string())
+    {
+        let koi_id = koi_id.as_str();
+        let koi_def = {
+            let db = state.db.lock().await;
+            db.get_koi(koi_id)
+                .map_err(|e| e.to_string())?
+                .or_else(|| {
+                    db.list_kois()
+                        .ok()
+                        .and_then(|kois| {
+                            kois.into_iter()
+                                .find(|k| k.id == koi_id || k.name == koi_id)
+                        })
+                })
+        };
+        if let Some(koi) = koi_def {
+            if let Some(ref pid) = koi.llm_provider_id {
+                let settings = state.settings.lock().await;
+                if let Some(p) = settings.find_llm_provider(pid) {
+                    provider = p.provider.clone();
+                    model = p.model.clone();
+                    api_key = p.effective_api_key().to_string();
+                    base_url = p.base_url.clone();
+                    if p.max_tokens > 0 {
+                        max_tokens = p.max_tokens;
+                    }
+                }
+            }
+        }
+    }
 
     tracing::info!(
         "chat_send: provider={} model={} api_key_empty={}",
@@ -960,68 +1143,10 @@ pub async fn chat_send(
             vision_enabled
         }
     };
-    let (effective_content, media_attachment): (String, Option<crate::gateway::MediaAttachment>) =
-        if let Some(att) = attachment {
-            if att.media_type.starts_with("image/") {
-                if vision_capable {
-                    // Vision model: pass raw bytes for inline base64 injection
-                    let data = att.data.as_deref().and_then(|b64| {
-                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).ok()
-                    });
-                    let media = crate::gateway::MediaAttachment {
-                        media_type: att.media_type.clone(),
-                        url: None,
-                        data,
-                        filename: att.filename.clone(),
-                    };
-                    (content.clone(), Some(media))
-                } else {
-                    // Non-vision model: use file path directly or save base64 to temp
-                    let path_str = if let Some(p) = &att.path {
-                        p.clone()
-                    } else if let Some(b64) = &att.data {
-                        let ext = match att.media_type.as_str() {
-                            "image/png" => "png",
-                            "image/gif" => "gif",
-                            "image/webp" => "webp",
-                            _ => "jpg",
-                        };
-                        let default_fname = format!("attachment.{}", ext);
-                        let fname = att.filename.as_deref().unwrap_or(&default_fname);
-                        let tmp = std::env::temp_dir().join(fname);
-                        if let Ok(bytes) =
-                            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
-                        {
-                            let _ = std::fs::write(&tmp, &bytes);
-                        }
-                        tmp.to_string_lossy().to_string()
-                    } else {
-                        String::new()
-                    };
-                    let msg = if path_str.is_empty() {
-                        content.clone()
-                    } else if content.trim().is_empty() {
-                        format!("[图片已保存到: {}]", path_str)
-                    } else {
-                        format!("{}\n[附带图片已保存到: {}]", content, path_str)
-                    };
-                    (msg, None)
-                }
-            } else {
-                // Non-image file: always pass as path reference in message text
-                let path_str = att.path.clone().unwrap_or_default();
-                let msg = if path_str.is_empty() {
-                    content.clone()
-                } else if content.trim().is_empty() {
-                    format!("[附件: {}]", path_str)
-                } else {
-                    format!("{}\n[附件: {}]", content, path_str)
-                };
-                (msg, None)
-            }
-        } else {
-            (content.clone(), None)
-        };
+    let (mut effective_content, media_attachments) =
+        resolve_attachments_for_send(&content, &merged_attachments, vision_capable);
+    effective_content =
+        inject_explicit_skills_prefix(&app, effective_content, explicit_skills).await;
 
     // Save user message to DB (use effective_content which may include file path annotation)
     // clear_plan defaults to true; pass false to preserve an existing plan (continue previous tasks).
@@ -1053,26 +1178,32 @@ pub async fn chat_send(
         .await?
         .llm_messages;
 
-    // For vision-capable models: inject the attachment image into the last user message
-    if let Some(ref media) = media_attachment {
-        if let Some(ref data) = media.data {
-            if media.media_type.starts_with("image/") {
-                use base64::Engine;
-                let b64 = base64::engine::general_purpose::STANDARD.encode(data);
-                let image_block = ContentBlock::Image {
-                    source: piscis_kernel::llm::ImageSource {
-                        source_type: "base64".to_string(),
-                        media_type: media.media_type.clone(),
-                        data: b64,
-                    },
-                };
-                if let Some(last) = llm_messages.last_mut() {
-                    if last.role == "user" {
-                        let text = last.content.as_text();
-                        let mut blocks = vec![ContentBlock::Text { text }];
-                        blocks.push(image_block);
-                        last.content = MessageContent::Blocks(blocks);
+    // For vision-capable models: inject attachment images into the last user message
+    if vision_capable && !media_attachments.is_empty() {
+        let image_blocks: Vec<ContentBlock> = media_attachments
+            .iter()
+            .filter(|m| m.media_type.starts_with("image/"))
+            .filter_map(|media| {
+                media.data.as_ref().map(|data| {
+                    use base64::Engine;
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+                    ContentBlock::Image {
+                        source: piscis_kernel::llm::ImageSource {
+                            source_type: "base64".to_string(),
+                            media_type: media.media_type.clone(),
+                            data: b64,
+                        },
                     }
+                })
+            })
+            .collect();
+        if !image_blocks.is_empty() {
+            if let Some(last) = llm_messages.last_mut() {
+                if last.role == "user" {
+                    let text = last.content.as_text();
+                    let mut blocks = vec![ContentBlock::Text { text }];
+                    blocks.extend(image_blocks);
+                    last.content = MessageContent::Blocks(blocks);
                 }
             }
         }
@@ -1109,6 +1240,7 @@ pub async fn chat_send(
         &builtin_tool_enabled,
         project_instruction_budget_chars,
         enable_project_instructions,
+        persona_koi_id.as_deref(),
     )
     .await?;
     let bound_pool_id = prompt_artifacts.bound_pool_id.clone();
@@ -1196,7 +1328,7 @@ pub async fn chat_send(
         bypass_permissions: false,
         settings: tool_settings,
         max_iterations: Some(max_iterations),
-        memory_owner_id: "piscis".to_string(),
+        memory_owner_id: prompt_artifacts.memory_owner_id.clone(),
         pool_session_id: bound_pool_id,
         tool_use_id: None,
         cancel: cancel.clone(),
@@ -4297,6 +4429,7 @@ pub async fn get_context_preview(
         &builtin_tool_enabled,
         project_instruction_budget_chars,
         enable_project_instructions,
+        None,
     )
     .await?;
     let base_llm_messages = session_context.llm_messages;

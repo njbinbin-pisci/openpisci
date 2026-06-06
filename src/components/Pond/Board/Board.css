@@ -18,35 +18,14 @@
 .board-filters {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
-.board-filter-select {
-  padding: 6px 10px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text-primary);
-  font-size: 12px;
-  cursor: pointer;
-  transition: border-color 0.2s;
-  /* Override native appearance so Linux GTK does not force a light bg */
-  appearance: none;
-  -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%239090a8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
-  padding-right: 28px;
+.board-filters .select-control {
+  min-width: 140px;
 }
 
-.board-filter-select option {
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-}
-
-.board-filter-select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
+/* Board toolbar filters use global .select-control */
 
 /* ── Columns grid ── */
 
@@ -419,23 +398,7 @@
   border-color: var(--accent);
 }
 
-.board-select {
-  width: 100%;
-  padding: 8px 12px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text-primary);
-  font-size: 13px;
-  box-sizing: border-box;
-  cursor: pointer;
-  transition: border-color 0.2s;
-}
-
-.board-select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
+/* Board form selects use global select.input */
 
 /* ── Priority radio group ── */
 

@@ -40,7 +40,11 @@ function FishCard({ fish }: { fish: FishDefinition }) {
   );
 }
 
-export default function FishPage() {
+interface FishPageProps {
+  embedded?: boolean;
+}
+
+export default function FishPage({ embedded }: FishPageProps = {}) {
   const { t } = useTranslation();
   const [fishList, setFishList] = useState<FishDefinition[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,15 +82,17 @@ export default function FishPage() {
   );
 
   return (
-    <div className="page fish-page">
-      <div className="page-header">
-        <h1 className="page-title">🐠 {t("fish.title")}</h1>
-        <div className="page-header-actions">
-          <button type="button" className="btn-header" onClick={loadFish}>
-            ↻ {t("fish.refresh")}
-          </button>
+    <div className={`page fish-page${embedded ? " fish-page--embedded" : ""}`}>
+      {!embedded && (
+        <div className="page-header">
+          <h1 className="page-title">🐠 {t("fish.title")}</h1>
+          <div className="page-header-actions">
+            <button type="button" className="btn-header" onClick={loadFish}>
+              ↻ {t("fish.refresh")}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="page-body fish-page-body">
       {error && (

@@ -6,6 +6,21 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.47] - 2026-06-07
+
+### Added
+- **Main Chat Koi persona**: composer Koi picker switches to persona mode — Koi system prompt, tool subset, per-Koi memory, and optional LLM override via `chat_send`.
+- **Composer enhancements**: multi-attachment chips with preview, Ctrl+V image paste, and explicit skill selection dropdown.
+- **School page**: sidebar **鱼群** merges Fish library and Koi manager (小鱼 | 锦鲤 tabs); Pond Collab links to Koi tab instead of inline modal.
+
+### Fixed
+- **Select styling**: unified form (`select.input`) and toolbar (`select-control`) dropdown theming — fixes Koi editor model dropdown white-on-white on Linux GTK/WebKit.
+
+### Changed
+- **Engine pin**: `piscis-core` / `piscis-kernel` pinned to **`v0.8.47`** (KoiPersona scene, per-image vision delegation).
+
+---
+
 ## [0.8.46] - 2026-06-07
 
 ### Changed

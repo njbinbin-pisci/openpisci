@@ -5,10 +5,10 @@ import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { readFile } from "@tauri-apps/plugin-fs";
 import { RootState, chatActions, sessionsActions, ToolStep, StreamingState, PlanTodoItem, ContextUsageSnapshot } from "../../store";
-import { artifactsApi, chatApi, journalApi, sessionsApi, gatewayApi, AgentEventType, ChannelInfo, ChatAttachment, type ChatMessage, type SessionArtifact, type JournalChange } from "../../services/tauri";
-import { settingsApi } from "../../services/tauri";
+import { artifactsApi, chatApi, journalApi, sessionsApi, gatewayApi, koiApi, AgentEventType, ChannelInfo, type ChatMessage, type SessionArtifact, type JournalChange, type KoiWithStats } from "../../services/tauri";
+import { settingsApi, skillsApi, type Skill } from "../../services/tauri";
+import { buildAttachmentFromBlob, buildAttachmentFromPath, isImageFilename, type PendingAttachmentItem } from "./composerUtils";
 import type { Settings } from "../../services/tauri";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -352,7 +352,16 @@ function ContextUsageRing({
   );
 }
 
-export default function Chat() {
+export type ChatNavigateTab = (
+  tab: "skills" | "school",
+  opts?: { schoolSubTab?: "fish" | "koi" },
+) => void;
+
+interface ChatProps {
+  onNavigateTab?: ChatNavigateTab;
+}
+
+export default function Chat({ onNavigateTab }: ChatProps = {}) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
   const { sessions, activeSessionId, pendingMainChatNav } = useSelector((s: RootState) => s.sessions);
@@ -395,10 +404,12 @@ export default function Chat() {
   const [historyIndex, setHistoryIndex] = useState(-1); // -1 = not navigating, 0 = oldest, N-1 = newest
   const historyDraftRef = useRef<string>(""); // preserved draft before navigating history
 
-  // Attachment state
-  const [attachment, setAttachment] = useState<ChatAttachment | null>(null);
-  // Preview URL for image attachments (object URL or base64 data URL)
-  const [attachmentPreview, setAttachmentPreview] = useState<string | null>(null);
+  // Pending composer: attachments, skills, optional Koi persona
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachmentItem[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<Skill[]>([]);
+  const [selectedKoi, setSelectedKoi] = useState<KoiWithStats | null>(null);
+  const [installedSkills, setInstalledSkills] = useState<Skill[]>([]);
+  const [koiList, setKoiList] = useState<KoiWithStats[]>([]);
   const [gatewayChannels, setGatewayChannels] = useState<ChannelInfo[]>([]);
   const [gatewayConnecting, setGatewayConnecting] = useState(false);
   const [gatewayDisconnecting, setGatewayDisconnecting] = useState(false);
@@ -729,7 +740,9 @@ export default function Chat() {
   // Plan resume dialog: shown when user sends a message while unfinished todos exist
   const [planResumeDialog, setPlanResumeDialog] = useState<{
     pendingContent: string;
-    pendingAttachment: import("../../services/tauri").ChatAttachment | null;
+    pendingAttachments: PendingAttachmentItem[];
+    pendingSkills: Skill[];
+    pendingKoi: KoiWithStats | null;
   } | null>(null);
   const prevRunningRef = useRef(false);
   useEffect(() => {
@@ -1290,6 +1303,13 @@ export default function Chat() {
   }, [sessionFilter]);
 
   useEffect(() => {
+    skillsApi.list()
+      .then((r) => setInstalledSkills(r.skills.filter((s) => s.enabled)))
+      .catch(() => setInstalledSkills([]));
+    koiApi.list().then(setKoiList).catch(() => setKoiList([]));
+  }, []);
+
+  useEffect(() => {
     const unlisten = listen<{ channels: ChannelInfo[] }>("gateway_channels_updated", (event) => {
       setGatewayChannels(event.payload.channels ?? []);
     });
@@ -1358,10 +1378,14 @@ export default function Chat() {
     }
   }, [deleteTarget, handleDeleteSession]);
 
+  const appendAttachment = useCallback((item: PendingAttachmentItem) => {
+    setPendingAttachments((prev) => [...prev, item]);
+  }, []);
+
   const handleAttach = useCallback(async () => {
     try {
       const selected = await openFileDialog({
-        multiple: false,
+        multiple: true,
         filters: [
           { name: t("chat.attachImages"), extensions: ["png", "jpg", "jpeg", "gif", "webp"] },
           { name: t("chat.attachFiles"), extensions: ["pdf", "txt", "md", "csv", "json", "ts", "tsx", "js", "jsx", "py", "rs", "go", "java", "c", "cpp", "h", "yaml", "toml", "xml", "html", "css"] },
@@ -1370,43 +1394,78 @@ export default function Chat() {
       });
       if (!selected) return;
 
-      const filePath = selected as string;
-      const filename = filePath.split(/[\\/]/).pop() ?? filePath;
-      const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-      const imageExts = ["png", "jpg", "jpeg", "gif", "webp"];
-      const isImage = imageExts.includes(ext);
-
-      if (isImage) {
-        // Read file bytes and convert to base64 for vision model support
-        const bytes = await readFile(filePath);
-        const mimeMap: Record<string, string> = {
-          png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-          gif: "image/gif", webp: "image/webp",
-        };
-        const mediaType = mimeMap[ext] ?? "image/jpeg";
-        // Build base64 string
-        let binary = "";
-        const chunk = 8192;
-        for (let i = 0; i < bytes.length; i += chunk) {
-          binary += String.fromCharCode(...bytes.slice(i, i + chunk));
-        }
-        const b64 = btoa(binary);
-        setAttachment({ media_type: mediaType, path: filePath, data: b64, filename });
-        setAttachmentPreview(`data:${mediaType};base64,${b64}`);
-      } else {
-        // Non-image: just pass path
-        setAttachment({ media_type: "application/octet-stream", path: filePath, filename });
-        setAttachmentPreview(null);
+      const paths = Array.isArray(selected) ? selected : [selected];
+      for (const filePath of paths) {
+        const item = await buildAttachmentFromPath(filePath as string);
+        appendAttachment(item);
       }
     } catch (e) {
       console.error("attach error:", e);
     }
-  }, [t]);
+  }, [t, appendAttachment]);
 
-  const clearAttachment = useCallback(() => {
-    setAttachment(null);
-    setAttachmentPreview(null);
+  const removeAttachment = useCallback((id: string) => {
+    setPendingAttachments((prev) => prev.filter((a) => a.id !== id));
   }, []);
+
+  const clearPendingComposer = useCallback(() => {
+    setPendingAttachments([]);
+    setSelectedSkills([]);
+    setSelectedKoi(null);
+  }, []);
+
+  const addSkill = useCallback((skillId: string) => {
+    if (skillId === "__install__") {
+      onNavigateTab?.("skills");
+      return;
+    }
+    const skill = installedSkills.find((s) => s.id === skillId);
+    if (!skill) return;
+    setSelectedSkills((prev) =>
+      prev.some((s) => s.id === skill.id) ? prev : [...prev, skill],
+    );
+  }, [installedSkills, onNavigateTab]);
+
+  const removeSkill = useCallback((skillId: string) => {
+    setSelectedSkills((prev) => prev.filter((s) => s.id !== skillId));
+  }, []);
+
+  const selectKoi = useCallback((koiId: string) => {
+    if (koiId === "__manage__") {
+      onNavigateTab?.("school", { schoolSubTab: "koi" });
+      return;
+    }
+    if (!koiId) {
+      setSelectedKoi(null);
+      return;
+    }
+    const koi = koiList.find((k) => k.id === koiId) ?? null;
+    setSelectedKoi(koi);
+  }, [koiList, onNavigateTab]);
+
+  const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imageItems: DataTransferItem[] = [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith("image/")) {
+        imageItems.push(items[i]);
+      }
+    }
+    if (imageItems.length === 0) return;
+    e.preventDefault();
+    try {
+      for (const item of imageItems) {
+        const blob = item.getAsFile();
+        if (!blob) continue;
+        const ext = blob.type.split("/")[1]?.split("+")[0] || "png";
+        const pending = await buildAttachmentFromBlob(blob, `paste-${Date.now()}.${ext}`);
+        appendAttachment(pending);
+      }
+    } catch (err) {
+      console.error("paste image error:", err);
+    }
+  }, [appendAttachment]);
 
   // ── Workspace selector ──────────────────────────────────────────────────
   // The effective workspace for the active session:
@@ -1476,39 +1535,29 @@ export default function Chat() {
 
   const processDroppedFile = useCallback(async (filePath: string) => {
     const filename = filePath.split(/[\\/]/).pop() ?? filePath;
-    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-    const imageExts = ["png", "jpg", "jpeg", "gif", "webp"];
-    const isImage = imageExts.includes(ext);
-
-    if (isImage) {
+    if (isImageFilename(filename)) {
       try {
-        const bytes = await readFile(filePath);
-        const mimeMap: Record<string, string> = {
-          png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-          gif: "image/gif", webp: "image/webp",
-        };
-        const mediaType = mimeMap[ext] ?? "image/jpeg";
-        let binary = "";
-        const chunk = 8192;
-        for (let i = 0; i < bytes.length; i += chunk) {
-          binary += String.fromCharCode(...bytes.slice(i, i + chunk));
-        }
-        const b64 = btoa(binary);
-        setAttachment({ media_type: mediaType, path: filePath, data: b64, filename });
-        setAttachmentPreview(`data:${mediaType};base64,${b64}`);
+        const item = await buildAttachmentFromPath(filePath);
+        appendAttachment(item);
       } catch (e) {
         console.error("drop image read error:", e);
-        // Fallback: just use path
-        setAttachment({ media_type: "application/octet-stream", path: filePath, filename });
+        appendAttachment({
+          id: `att_${Date.now()}`,
+          attachment: { media_type: "application/octet-stream", path: filePath, filename },
+        });
       }
     } else {
-      // Non-image: append path to input text
-      setInput((prev) => {
-        const sep = prev.trim() ? "\n" : "";
-        return prev + sep + filePath;
-      });
+      try {
+        const item = await buildAttachmentFromPath(filePath);
+        appendAttachment(item);
+      } catch {
+        setInput((prev) => {
+          const sep = prev.trim() ? "\n" : "";
+          return prev + sep + filePath;
+        });
+      }
     }
-  }, []);
+  }, [appendAttachment]);
 
   // Refs to access latest state inside Tauri event listeners without re-registering
   const activeSessionIdRef2 = useRef(displaySessionId);
@@ -1561,7 +1610,9 @@ export default function Chat() {
   // clearPlan=false: keep existing plan (user chose to continue previous tasks)
   const doSend = useCallback(async (
     content: string,
-    pendingAttachment: import("../../services/tauri").ChatAttachment | null,
+    attachments: PendingAttachmentItem[],
+    skills: Skill[],
+    koi: KoiWithStats | null,
     clearPlan: boolean,
   ) => {
     if (!displaySessionId) return;
@@ -1569,20 +1620,23 @@ export default function Chat() {
     dispatch(chatActions.clearToolSteps(displaySessionId));
     if (clearPlan) dispatch(chatActions.clearPlan(displaySessionId));
     dispatch(chatActions.clearStreaming(displaySessionId));
-    // A new turn supersedes the previous turn's review bar.
     setReviewBySession((all) => {
       if (!all[displaySessionId]) return all;
       const next = { ...all };
       delete next[displaySessionId];
       return next;
     });
-    // Clear frozen bubble so the next turn starts fresh from DB messages
     dispatch(chatActions.clearFrozenBubble(displaySessionId));
 
-    // Auto-title: if this is the first message in the session, derive a title from it
     const currentMessages = messagesBySession[displaySessionId] ?? [];
     if (currentMessages.length === 0) {
-      const raw = (content || pendingAttachment?.filename || "").replace(/\s+/g, " ").trim();
+      const raw = (
+        content ||
+        attachments[0]?.attachment.filename ||
+        skills[0]?.name ||
+        koi?.name ||
+        ""
+      ).replace(/\s+/g, " ").trim();
       const title = raw.length > 30 ? raw.slice(0, 30) + "…" : raw;
       if (title) {
         sessionsApi.rename(displaySessionId, title).catch(() => {});
@@ -1590,11 +1644,16 @@ export default function Chat() {
       }
     }
 
-    // Build display content for optimistic message (include attachment hint)
-    const displayContent = pendingAttachment
+    const hints: string[] = [];
+    if (koi) hints.push(`${koi.icon} ${koi.name}`);
+    for (const s of skills) hints.push(`${s.icon || "⚡"} ${s.name}`);
+    for (const a of attachments) {
+      hints.push(`📎 ${a.attachment.filename ?? a.attachment.path ?? t("chat.attachment")}`);
+    }
+    const displayContent = hints.length
       ? content
-        ? `${content}\n📎 ${pendingAttachment.filename ?? pendingAttachment.path ?? t("chat.attachment")}`
-        : `📎 ${pendingAttachment.filename ?? pendingAttachment.path ?? t("chat.attachment")}`
+        ? `${content}\n${hints.join("\n")}`
+        : hints.join("\n")
       : content;
 
     dispatch(chatActions.appendMessage({
@@ -1611,7 +1670,12 @@ export default function Chat() {
     dispatch(chatActions.setRunning({ sessionId: displaySessionId, running: true }));
 
     try {
-      await chatApi.send(displaySessionId, content, pendingAttachment ?? undefined, clearPlan);
+      await chatApi.send(displaySessionId, content, {
+        attachments: attachments.map((a) => a.attachment),
+        explicitSkills: skills.map((s) => s.id),
+        personaKoiId: koi?.id,
+        clearPlan,
+      });
     } catch (e) {
       console.error('[Chat] send error:', e);
       dispatch(chatActions.setRunning({ sessionId: displaySessionId, running: false }));
@@ -1620,26 +1684,39 @@ export default function Chat() {
     }
   }, [displaySessionId, messagesBySession, dispatch, t]);
 
+  const canSend = Boolean(
+    input.trim() ||
+    pendingAttachments.length ||
+    selectedSkills.length ||
+    selectedKoi,
+  );
+
   const handleSend = useCallback(async () => {
-    if ((!input.trim() && !attachment) || !displaySessionId || running) return;
+    if (!canSend || !displaySessionId || running) return;
 
     const content = input.trim();
     setInput("");
     setSendError(null);
-    const pendingAttachment = attachment;
-    clearAttachment();
+    const pending = pendingAttachments;
+    const skills = selectedSkills;
+    const koi = selectedKoi;
+    clearPendingComposer();
 
-    // Check if there are unfinished todos — if so, ask the user what to do
     const unfinished = activePlan.filter(
       (item) => item.status === "pending" || item.status === "in_progress"
     );
     if (unfinished.length > 0) {
-      setPlanResumeDialog({ pendingContent: content, pendingAttachment });
+      setPlanResumeDialog({
+        pendingContent: content,
+        pendingAttachments: pending,
+        pendingSkills: skills,
+        pendingKoi: koi,
+      });
       return;
     }
 
-    await doSend(content, pendingAttachment, true);
-  }, [input, attachment, displaySessionId, running, activePlan, doSend, clearAttachment]);
+    await doSend(content, pending, skills, koi, true);
+  }, [canSend, input, pendingAttachments, selectedSkills, selectedKoi, displaySessionId, running, activePlan, doSend, clearPendingComposer]);
 
   const handleCancel = useCallback(() => {
     if (displaySessionId) {
@@ -2167,18 +2244,35 @@ export default function Chat() {
             {!isImSession && <div
               className={`input-area${isDragging ? " drag-over" : ""}`}
             >
-              {/* Attachment preview strip */}
-              {attachment && (
-                <div className="attachment-preview">
-                  {attachmentPreview ? (
-                    <img src={attachmentPreview} className="attachment-thumb" alt={attachment.filename} />
-                  ) : (
-                    <span className="attachment-file-icon">📎</span>
+              {(selectedKoi || selectedSkills.length > 0 || pendingAttachments.length > 0) && (
+                <div className="pending-composer-strip">
+                  {selectedKoi && (
+                    <div className="pending-chip pending-chip-koi" title={t("chat.personaKoi")}>
+                      <span className="pending-chip-icon">{selectedKoi.icon}</span>
+                      <span className="pending-chip-name">{selectedKoi.name}</span>
+                      <button type="button" className="pending-chip-remove" onClick={() => setSelectedKoi(null)} title={t("common.clear")}>✕</button>
+                    </div>
                   )}
-                  <span className="attachment-name" title={attachment.path}>
-                    {attachment.filename ?? attachment.path}
-                  </span>
-                  <button className="attachment-remove" onClick={clearAttachment} title={t("chat.removeAttachment")}>✕</button>
+                  {selectedSkills.map((skill) => (
+                    <div key={skill.id} className="pending-chip pending-chip-skill" title={t("chat.selectedSkill")}>
+                      <span className="pending-chip-icon">{skill.icon || "⚡"}</span>
+                      <span className="pending-chip-name">{skill.name}</span>
+                      <button type="button" className="pending-chip-remove" onClick={() => removeSkill(skill.id)} title={t("common.clear")}>✕</button>
+                    </div>
+                  ))}
+                  {pendingAttachments.map((item) => (
+                    <div key={item.id} className="pending-chip pending-chip-attach">
+                      {item.preview ? (
+                        <img src={item.preview} className="pending-chip-thumb" alt={item.attachment.filename} />
+                      ) : (
+                        <span className="pending-chip-icon">📎</span>
+                      )}
+                      <span className="pending-chip-name" title={item.attachment.path}>
+                        {item.attachment.filename ?? item.attachment.path}
+                      </span>
+                      <button type="button" className="pending-chip-remove" onClick={() => removeAttachment(item.id)} title={t("chat.removeAttachment")}>✕</button>
+                    </div>
+                  ))}
                 </div>
               )}
               <textarea
@@ -2187,38 +2281,76 @@ export default function Chat() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
                 placeholder={t("chat.inputPlaceholder")}
                 rows={3}
                 disabled={running}
               />
               <div className="input-actions">
-                <div className="workspace-selector">
-                  <span className="workspace-label">📁</span>
-                  <select
-                    className="select-control"
-                    value={hasSessionWorkspace ? "__current__" : "__default__"}
-                    onChange={async (e) => {
-                      const val = e.target.value;
-                      if (val === "__browse__") {
-                        await handleWorkspaceBrowse();
-                      } else if (val === "__reset__") {
-                        await handleWorkspaceReset();
-                      }
-                    }}
-                  >
-                    {hasSessionWorkspace && (
-                      <option value="__current__" title={displayedWorkspace}>
-                        {displayedWorkspace}
+                <div className="composer-selectors">
+                  <div className="composer-selector workspace-selector">
+                    <span className="workspace-label">📁</span>
+                    <select
+                      className="select-control"
+                      value={hasSessionWorkspace ? "__current__" : "__default__"}
+                      onChange={async (e) => {
+                        const val = e.target.value;
+                        if (val === "__browse__") {
+                          await handleWorkspaceBrowse();
+                        } else if (val === "__reset__") {
+                          await handleWorkspaceReset();
+                        }
+                      }}
+                    >
+                      {hasSessionWorkspace && (
+                        <option value="__current__" title={displayedWorkspace}>
+                          {displayedWorkspace}
+                        </option>
+                      )}
+                      <option value="__default__" title={displayedWorkspace}>
+                        {displayedWorkspace || t("chat.workspaceLabel")}
                       </option>
-                    )}
-                    <option value="__default__" title={displayedWorkspace}>
-                      {displayedWorkspace || t("chat.workspaceLabel")}
-                    </option>
-                    {hasSessionWorkspace && (
-                      <option value="__reset__">{t("chat.workspaceReset")}</option>
-                    )}
-                    <option value="__browse__">{t("chat.workspaceBrowse")}</option>
-                  </select>
+                      {hasSessionWorkspace && (
+                        <option value="__reset__">{t("chat.workspaceReset")}</option>
+                      )}
+                      <option value="__browse__">{t("chat.workspaceBrowse")}</option>
+                    </select>
+                  </div>
+                  <div className="composer-selector koi-selector">
+                    <span className="workspace-label">🐟</span>
+                    <select
+                      className="select-control"
+                      value={selectedKoi?.id ?? ""}
+                      onChange={(e) => selectKoi(e.target.value)}
+                    >
+                      <option value="">{t("chat.koiSelectPlaceholder")}</option>
+                      <option value="__manage__">{t("chat.manageKois")}</option>
+                      {koiList.map((k) => (
+                        <option key={k.id} value={k.id}>
+                          {k.icon} {k.name} ({k.role})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="composer-selector skill-selector">
+                    <span className="workspace-label">⚡</span>
+                    <select
+                      className="select-control"
+                      value=""
+                      onChange={(e) => {
+                        addSkill(e.target.value);
+                        e.target.value = "";
+                      }}
+                    >
+                      <option value="">{t("chat.skillSelectPlaceholder")}</option>
+                      <option value="__install__">{t("chat.installSkill")}</option>
+                      {installedSkills.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.icon || "⚡"} {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
                 <ContextUsageRing
                   usage={displaySessionId ? contextUsage[displaySessionId] : undefined}
@@ -2252,7 +2384,7 @@ export default function Chat() {
                   <button
                     className="btn btn-primary"
                     onClick={handleSend}
-                    disabled={!input.trim() && !attachment}
+                    disabled={!canSend}
                   >
                     {t("common.send")} ↵
                   </button>
@@ -2525,9 +2657,9 @@ export default function Chat() {
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <button
                 onClick={async () => {
-                  const { pendingContent, pendingAttachment } = planResumeDialog;
+                  const { pendingContent, pendingAttachments, pendingSkills, pendingKoi } = planResumeDialog;
                   setPlanResumeDialog(null);
-                  await doSend(pendingContent, pendingAttachment, false);
+                  await doSend(pendingContent, pendingAttachments, pendingSkills, pendingKoi, false);
                 }}
                 style={{
                   padding: "8px 16px", fontSize: 13, fontWeight: 600,
@@ -2539,9 +2671,9 @@ export default function Chat() {
               </button>
               <button
                 onClick={async () => {
-                  const { pendingContent, pendingAttachment } = planResumeDialog;
+                  const { pendingContent, pendingAttachments, pendingSkills, pendingKoi } = planResumeDialog;
                   setPlanResumeDialog(null);
-                  await doSend(pendingContent, pendingAttachment, true);
+                  await doSend(pendingContent, pendingAttachments, pendingSkills, pendingKoi, true);
                 }}
                 style={{
                   padding: "8px 16px", fontSize: 13, fontWeight: 600,

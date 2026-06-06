@@ -2,7 +2,11 @@ import { useTranslation } from "react-i18next";
 import Collab from "./Collab";
 import "./Pond.css";
 
-export default function Pond() {
+interface PondProps {
+  onNavigateToSchoolKoi?: () => void;
+}
+
+export default function Pond({ onNavigateToSchoolKoi }: PondProps) {
   const { t } = useTranslation();
 
   return (
@@ -14,7 +18,7 @@ export default function Pond() {
         </h1>
       </div>
       <div className="feature-topbar-body">
-        <Collab />
+        <Collab onNavigateToSchoolKoi={onNavigateToSchoolKoi} />
       </div>
     </div>
   );

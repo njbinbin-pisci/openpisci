@@ -165,12 +165,17 @@ pub async fn build_registry_for_scene(
     match policy.registry_profile {
         RegistryProfile::MainChat
         | RegistryProfile::PoolCoordinator
+        | RegistryProfile::KoiPersona
         | RegistryProfile::IMHeadless
         | RegistryProfile::HeartbeatSupervisor => {
             registry.unregister("call_koi");
             registry.unregister("pool_chat");
         }
         RegistryProfile::KoiTask => {}
+    }
+
+    if policy.registry_profile == RegistryProfile::KoiPersona {
+        registry.unregister("pool_org");
     }
 
     if let Some(allowlist) = policy.tool_allowlist() {

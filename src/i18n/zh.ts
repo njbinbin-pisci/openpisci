@@ -50,6 +50,7 @@ const zh = {
     memory: "记忆",
     tools: "工具",
     fish: "小鱼",
+    school: "鱼群",
     pond: "鱼池",
     skills: "技能",
     scheduler: "定时任务",
@@ -365,6 +366,11 @@ const zh = {
     empty: "暂无小鱼",
   },
 
+  school: {
+    tabFish: "小鱼",
+    tabKoi: "锦鲤",
+  },
+
   // 工具（系统内置 + 用户自定义）
   tools: {
     title: "工具",
@@ -550,6 +556,12 @@ const zh = {
     welcomeDesc: "开始新对话，让 AI 助手帮助你完成任务",
     newChatBtn: "新建对话",
     inputPlaceholder: "输入消息... (Enter 发送，Shift+Enter 换行)",
+    installSkill: "安装技能…",
+    manageKois: "管理锦鲤…",
+    skillSelectPlaceholder: "技能",
+    koiSelectPlaceholder: "锦鲤",
+    selectedSkill: "已选技能",
+    personaKoi: "扮演锦鲤",
     attachFile: "添加附件",
     dropFiles: "拖放文件到此处",
     attachment: "附件",

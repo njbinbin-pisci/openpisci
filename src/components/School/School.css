@@ -1,0 +1,24 @@
+.school-page-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.school-tab-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.school-tab-panel[hidden] {
+  display: none;
+}
+
+.school-page .fish-page .page-header {
+  display: none;
+}
+
+.school-page .fish-page {
+  min-height: 0;
+}

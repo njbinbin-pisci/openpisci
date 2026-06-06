@@ -287,19 +287,37 @@
 
 .ic-input,
 .ic-select {
-  background: var(--bg-input, #161622);
-  border: 1px solid var(--border, #333);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 7px 10px;
   font-size: 13px;
-  color: var(--text-primary, #e0e0e0);
+  color: var(--text-primary);
   outline: none;
   transition: border-color 0.15s;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.ic-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--bg-tertiary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239090a8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 32px;
+  cursor: pointer;
+}
+
+.ic-select option {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
 }
 
 .ic-input:focus,
 .ic-select:focus {
-  border-color: var(--accent, #7c6af7);
+  border-color: var(--accent);
 }
 
 .ic-input:disabled,

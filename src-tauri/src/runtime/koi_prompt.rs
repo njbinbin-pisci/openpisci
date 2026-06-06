@@ -4,7 +4,7 @@
 use crate::commands::config::scene::{MemorySliceMode, SceneKind, ScenePolicy};
 use crate::store::db::TaskState;
 use crate::store::AppState;
-use piscis_core::koi_prompt::build_koi_task_system_prompt;
+use piscis_core::koi_prompt::{build_koi_persona_system_prompt, build_koi_task_system_prompt};
 use piscis_core::models::KoiDefinition;
 use piscis_core::project_state::build_coordination_event_digest;
 
@@ -252,5 +252,64 @@ pub async fn assemble_koi_task_system_prompt(
         &org_spec_ctx,
         &combined_env_ctx,
         &assignment_ctx,
+    )
+}
+
+/// Build the Koi persona system prompt for main-chat direct conversation.
+pub async fn assemble_koi_persona_system_prompt(
+    state: &AppState,
+    koi_def: &KoiDefinition,
+    query_text: &str,
+) -> String {
+    let koi_id = koi_def.id.clone();
+    let scene_policy = ScenePolicy::for_kind(SceneKind::KoiPersona);
+
+    let memory_context = {
+        let task = query_text.trim();
+        let db = state.db.lock().await;
+        let mut sections = Vec::new();
+        let koi_memories = db
+            .search_memories_scoped(task, &koi_id, None, 5)
+            .unwrap_or_default();
+        if !koi_memories.is_empty() {
+            let items: Vec<String> = koi_memories
+                .iter()
+                .map(|m| {
+                    let scope_tag = if m.scope_type != "private" {
+                        format!(" [{}]", m.scope_type)
+                    } else {
+                        String::new()
+                    };
+                    format!("- [{}]{} {}", m.category, scope_tag, m.content)
+                })
+                .collect();
+            sections.push(format!("\n\n## Your Memories\n{}", items.join("\n")));
+        }
+        if matches!(
+            scene_policy.memory_slice_mode(),
+            MemorySliceMode::ScopedPlusRecent
+        ) {
+            let recent_items = db
+                .list_memories_for_owner(&koi_id)
+                .unwrap_or_default()
+                .into_iter()
+                .take(3)
+                .map(|m| format!("- [{}] {}", m.category, truncate_chars(&m.content, 180)))
+                .collect::<Vec<_>>();
+            if !recent_items.is_empty() {
+                sections.push(format!(
+                    "\n\n## Recently Saved Memory\n{}",
+                    recent_items.join("\n")
+                ));
+            }
+        }
+        sections.join("")
+    };
+
+    build_koi_persona_system_prompt(
+        &koi_def.system_prompt,
+        &koi_def.name,
+        &koi_def.icon,
+        &memory_context,
     )
 }
