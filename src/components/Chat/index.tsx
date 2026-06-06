@@ -313,7 +313,7 @@ function ContextUsageRing({
   const label = `${Math.round(pct)}%`;
   return (
     <div className="context-usage-ring" title={tooltip} aria-label={tooltip}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -335,8 +335,19 @@ function ContextUsageRing({
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
           style={{ transition: "stroke-dashoffset 0.3s ease, stroke 0.3s ease" }}
         />
+        <text
+          x={size / 2}
+          y={size / 2}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fill={color}
+          fontSize="6.5"
+          fontWeight="600"
+          style={{ fontVariantNumeric: "tabular-nums" }}
+        >
+          {label}
+        </text>
       </svg>
-      <span className="context-usage-label" style={{ color }}>{label}</span>
     </div>
   );
 }
@@ -2184,7 +2195,7 @@ export default function Chat() {
                 <div className="workspace-selector">
                   <span className="workspace-label">📁</span>
                   <select
-                    className="workspace-select"
+                    className="select-control"
                     value={hasSessionWorkspace ? "__current__" : "__default__"}
                     onChange={async (e) => {
                       const val = e.target.value;
@@ -2214,7 +2225,8 @@ export default function Chat() {
                   t={t}
                 />
                 <button
-                  className="btn btn-attach"
+                  type="button"
+                  className="btn-icon"
                   onClick={handleAttach}
                   disabled={running}
                   title={t("chat.attachFile")}
@@ -2224,11 +2236,11 @@ export default function Chat() {
                   </svg>
                 </button>
                 <button
-                  className="btn btn-attach"
+                  type="button"
+                  className="btn-icon"
                   onClick={handleShowContextPreview}
                   disabled={contextPreviewLoading || !displaySessionId}
                   title={t("chat.debugContextTitle")}
-                  style={{ opacity: 0.6, fontSize: 14 }}
                 >
                   {contextPreviewLoading ? "…" : "🔍"}
                 </button>

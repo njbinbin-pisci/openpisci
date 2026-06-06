@@ -1032,8 +1032,8 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
 
         DebugScenario {
             id: "im_send_file".into(),
-            name: "IM 发送文件".into(),
-            name_en: "IM Send File".into(),
+            name: "IM 发送文件（飞书）".into(),
+            name_en: "IM Send File (Feishu)".into(),
             description: "创建文件后通过 IM 发送，验证文件发送链路（SEND_FILE 指令）".into(),
             description_en: "Create a file and send it via IM to verify file sending chain (SEND_FILE instruction)".into(),
             prompt: "请完成以下 IM 文件发送测试:\
@@ -1047,6 +1047,33 @@ pub fn builtin_scenarios() -> Vec<DebugScenario> {
             expected_tools: vec!["powershell_query".into()],
             requires_config: None,
             platforms: Some(vec!["windows".into()]),
+        },
+
+        DebugScenario {
+            id: "im_wechat_send_file".into(),
+            name: "IM 发送文件（微信）".into(),
+            name_en: "IM Send File (WeChat)".into(),
+            description: "创建文件后通过微信 iLink 发送，验证 SEND_FILE / im_send_message 文件链路".into(),
+            description_en: "Create a file and send via WeChat iLink to verify SEND_FILE / im_send_message file chain".into(),
+            prompt: "请完成以下微信 IM 文件发送测试:\
+                     1. 用 app_control(action=settings_get) 检查 wechat_enabled 是否为 true 且 wechat_bot_token 非空.\
+                     2. 若未配置，回复：SKIP - 微信 iLink 未绑定.\
+                     3. 若已配置，用 shell 创建目录 /tmp/piscis（若不存在）并写入测试文件 /tmp/piscis/debug_wechat_file.txt ，内容为「Piscis WeChat file test».\
+                     4. 在最终回复中单独一行写：SEND_FILE:/tmp/piscis/debug_wechat_file.txt\
+                     5. 说明文件是否创建成功以及是否已尝试发送。".into(),
+            expected_keywords: vec![
+                "SKIP".into(),
+                "debug_wechat_file.txt".into(),
+                "微信".into(),
+                "WeChat".into(),
+                "wechat".into(),
+                "未配置".into(),
+                "未绑定".into(),
+                "SEND_FILE".into(),
+            ],
+            expected_tools: vec!["app_control".into()],
+            requires_config: None,
+            platforms: Some(vec!["linux".into(), "macos".into()]),
         },
 
         DebugScenario {

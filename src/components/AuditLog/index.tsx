@@ -88,28 +88,30 @@ export default function AuditLog() {
     <div className="page">
       <div className="page-header">
         <h1 className="page-title">🔍 {t("audit.title")}</h1>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button className="btn" onClick={() => load(true)} disabled={loading}
-            style={{ background: "var(--bg-secondary)", border: "1px solid var(--border)", color: "var(--text-secondary)", fontSize: 13 }}>
-            {loading ? t("common.loading") : t("common.refresh")}
+        <div className="page-header-actions">
+          <button type="button" className="btn-header" onClick={() => load(true)} disabled={loading}>
+            ↻ {loading ? t("common.loading") : t("common.refresh")}
           </button>
-          <button className="btn" onClick={() => setConfirmClearOpen(true)} disabled={clearing}
-            style={{ background: "rgba(220,53,69,0.12)", border: "1px solid rgba(220,53,69,0.3)", color: "#ff6b6b", fontSize: 13 }}>
+          <button type="button" className="btn-header btn-header-danger" onClick={() => setConfirmClearOpen(true)} disabled={clearing}>
             {clearing ? t("audit.clearing") : t("audit.clearLog")}
           </button>
         </div>
       </div>
 
       {error && (
-        <div style={{ margin: "0 0 12px", padding: "8px 14px", background: "rgba(220,53,69,0.12)", borderLeft: "3px solid #dc3545", color: "#ff6b6b", fontSize: 13, display: "flex", justifyContent: "space-between" }}>
+        <div className="page-banner page-banner--error">
           <span>{error}</span>
-          <button onClick={() => setError(null)} style={{ background: "none", border: "none", color: "#ff6b6b", cursor: "pointer" }}>✕</button>
+          <button type="button" className="page-banner-dismiss" onClick={() => setError(null)}>✕</button>
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-        <select className="input" value={filterTool} onChange={(e) => setFilterTool(e.target.value)}
-          style={{ width: "auto", minWidth: 140, fontSize: 13 }}>
+      <div className="page-toolbar">
+        <select
+          className="select-control"
+          value={filterTool}
+          onChange={(e) => setFilterTool(e.target.value)}
+          style={{ width: "auto", minWidth: 140 }}
+        >
           <option value="">{t("audit.allTools")}</option>
           {allTools.map((tool) => <option key={tool} value={tool}>{tool}</option>)}
         </select>
@@ -117,12 +119,12 @@ export default function AuditLog() {
           <input type="checkbox" checked={showErrors} onChange={(e) => setShowErrors(e.target.checked)} />
           {t("audit.errorsOnly")}
         </label>
-        <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: "auto" }}>
+        <span className="page-toolbar-meta">
           {t("audit.totalRecords", { count: displayed.length })}
         </span>
       </div>
 
-      <div className="page-body" style={{ padding: 0 }}>
+      <div className="page-body" style={{ padding: "16px 24px 0" }}>
         {displayed.length === 0 && !loading && (
           <div style={{ textAlign: "center", padding: "60px 0", color: "var(--text-muted)" }}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>

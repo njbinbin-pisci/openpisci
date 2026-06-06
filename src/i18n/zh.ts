@@ -58,6 +58,8 @@ const zh = {
     about: "关于",
     debug: "调试",
     minimalMode: "极简模式",
+    colorModeLight: "切换为浅色模式",
+    colorModeDark: "切换为深色模式",
   },
 
   // 鱼池
@@ -291,7 +293,11 @@ const zh = {
     selectProjectDirBrowse: "浏览...",
     projectDirRequired: "请选择项目工作目录",
     bindProjectDir: "关联/创建项目目录",
-    messageInputPlaceholder: "@!Koi名 委派任务，或说明协调意图…",
+    messageInputPlaceholder: "以 Piscis 身份协调鱼池：输入 @!Koi名 委派任务（@ 可唤起补全）。Ctrl+Enter 发送，Enter 换行。",
+    actAsPiscisRole: "鱼池聊天中你的消息以 Piscis 身份发出，用于协调与 @!委派 Koi，而非以普通用户参与 Koi 讨论。",
+    sendAsPiscisHint: "以 Piscis 身份协调鱼池：输入 @!Koi名 委派任务（@ 可唤起补全）。Ctrl+Enter 发送，Enter 换行。",
+    sendShortcut: "Ctrl+Enter 发送",
+    noDelegateSelfPiscis: "不能以 @!Piscis 委派自己。请 @!Koi 名称委派任务；与 Piscis 深聊请用 IDE「Piscis CLI」。",
     mustMention: "请以 Piscis 身份发送，并包含 @!Koi名（或 @!all）以指定接收者",
     mentionAll: "所有人",
   },
@@ -338,6 +344,25 @@ const zh = {
     blockedReason: "阻塞原因",
     resumeHint: "该任务已停止，但仍可在审查后继续恢复执行。",
     supersededHint: "该任务已被替代，原任务恢复入口已关闭以避免冲突。",
+  },
+
+  // 小鱼
+  fish: {
+    title: "小鱼",
+    subtitle: "小鱼是主 Agent 的内部专家工具。主 Agent 通过 call_fish 自动调用，无需手动激活。",
+    badgeBuiltin: "内置",
+    badgeSkill: "技能",
+    badgeUser: "自定义",
+    refresh: "刷新",
+    loading: "加载小鱼中...",
+    sectionBuiltin: "内置小鱼",
+    sectionBuiltinDesc: "OpenPiscis 内置的专属 Agent，主 Agent 可自动调用",
+    sectionSkill: "技能小鱼",
+    sectionSkillDesc: "从已安装技能自动生成，每条小鱼专注于对应技能领域",
+    sectionUser: "自定义小鱼",
+    sectionUserDesc: "放置 FISH.toml 文件到目录即可加载",
+    sectionGuide: "创建自定义小鱼",
+    empty: "暂无小鱼",
   },
 
   // 工具（系统内置 + 用户自定义）

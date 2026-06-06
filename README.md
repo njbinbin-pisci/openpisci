@@ -18,13 +18,21 @@ OpenPiscis is a local-first AI Agent desktop application built with Tauri 2 + Ru
 
 ---
 
-## 🆕 What's New in v0.8.44
+## 🆕 What's New in v0.8.45
+
+**UI polish & WeChat IM file send** — global light/dark theme, unified compact controls, and clearer WeChat file-delivery prompts.
+
+### 🎨 UI
+- **Light/dark toggle** beside the OpenPiscis title; consistent top bars across Chat / Tools / Fish / Pond.
+- **Compact controls** — 32px `select-control` / `btn-icon` in audit filters and chat input; context ring without extra wrapper.
+- **Pool chat** — placeholder carries coordination hint; fixed missing i18n keys.
+
+### 📎 WeChat IM
+- **`im_send_message(file_path=…)`** guidance and cross-platform `SEND_FILE:` / `SEND_IMAGE:` examples in system prompts.
+
+## 🕘 v0.8.44 — Pond CLI IDE-only
 
 **鱼池 CLI sessions are IDE-only** — CLI chats are created from the Pond IDE, not from the main Chat picker.
-
-### 🐟 Pond CLI session flow
-- **No + in 鱼池CLI picker** — the main Chat dropdown for CLI no longer offers “new session”; empty state explains sessions appear when you message in the Pond IDE.
-- **主会话 jump from IDE** — the Pond IDE assistant panel adds a **主会话** button to open the matching CLI tab in main Chat.
 
 ## 🕘 v0.8.43 — Top-bar session picker
 

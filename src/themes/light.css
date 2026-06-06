@@ -1,0 +1,81 @@
+/* ============================================================
+   OpenPiscis — Light color mode overrides
+   Works with accent themes violet / gold via data-theme
+   ============================================================ */
+
+:root[data-color-mode="light"][data-theme="violet"] {
+  --bg-primary:    #f4f4f8;
+  --bg-secondary:  #ffffff;
+  --bg-tertiary:   #ececf4;
+  --bg-hover:      #e4e4ee;
+
+  --border:        #d8d8e4;
+
+  --accent-dim:    rgba(124, 106, 247, 0.12);
+  --accent-muted:  rgba(124, 106, 247, 0.10);
+  --accent-glow:   0 0 16px rgba(124, 106, 247, 0.15);
+
+  --text-primary:   #1a1a24;
+  --text-secondary: #5c5c72;
+  --text-muted:     #9090a8;
+
+  --msg-user-bg:      rgba(124, 106, 247, 0.10);
+  --msg-user-border:  rgba(124, 106, 247, 0.22);
+  --msg-ai-bg:        #ffffff;
+  --msg-ai-border:    #d8d8e4;
+
+  --sidebar-bg:     #eeeef6;
+  --sidebar-border: #d0d0dc;
+
+  --topbar-bg:         #ececf4;
+  --panel-sidebar-bg:  #eeeef6;
+
+  --scrollbar-thumb: #c0c0d0;
+
+  --shadow:    0 2px 12px rgba(30, 30, 50, 0.08);
+  --shadow-lg: 0 8px 32px rgba(30, 30, 50, 0.12);
+}
+
+:root[data-color-mode="light"] .card,
+:root[data-color-mode="light"] .memory-item {
+  background: var(--bg-secondary);
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+:root[data-color-mode="light"][data-theme="gold"] .card {
+  box-shadow: none;
+}
+
+:root[data-color-mode="light"][data-theme="gold"] {
+  --bg-primary:    #f8f6f0;
+  --bg-secondary:  #ffffff;
+  --bg-tertiary:   #f0ece4;
+  --bg-hover:      #e8e2d6;
+
+  --border:        #ddd6c8;
+
+  --accent-dim:    rgba(201, 168, 76, 0.12);
+  --accent-muted:  rgba(201, 168, 76, 0.10);
+  --accent-glow:   0 0 16px rgba(201, 168, 76, 0.12);
+
+  --text-primary:   #1c1a14;
+  --text-secondary: #6a6050;
+  --text-muted:     #9a9080;
+
+  --msg-user-bg:      rgba(201, 168, 76, 0.10);
+  --msg-user-border:  rgba(201, 168, 76, 0.22);
+  --msg-ai-bg:        #ffffff;
+  --msg-ai-border:    #ddd6c8;
+
+  --sidebar-bg:     #f2efe8;
+  --sidebar-border: #ddd6c8;
+
+  --topbar-bg:         #f0ece4;
+  --panel-sidebar-bg:  #f2efe8;
+
+  --scrollbar-thumb: #ccc4b4;
+
+  --shadow:    0 2px 12px rgba(40, 35, 20, 0.08);
+  --shadow-lg: 0 8px 32px rgba(40, 35, 20, 0.12);
+}

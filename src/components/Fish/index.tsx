@@ -1,34 +1,36 @@
 import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { FishDefinition, FishSource } from "../../services/tauri";
 import "./Fish.css";
 
-function sourceBadge(source: FishSource) {
+function sourceBadge(source: FishSource, t: (k: string) => string) {
   switch (source) {
     case "skill":
-      return <span className="fish-card-badge badge-skill">技能</span>;
+      return <span className="fish-card-badge badge-skill">{t("fish.badgeSkill")}</span>;
     case "user":
-      return <span className="fish-card-badge badge-user">自定义</span>;
+      return <span className="fish-card-badge badge-user">{t("fish.badgeUser")}</span>;
     case "builtin":
     default:
-      return <span className="fish-card-badge badge-builtin">内置</span>;
+      return <span className="fish-card-badge badge-builtin">{t("fish.badgeBuiltin")}</span>;
   }
 }
 
 function FishCard({ fish }: { fish: FishDefinition }) {
+  const { t } = useTranslation();
   return (
     <div className="fish-card">
       <div className="fish-card-header">
         <span className="fish-card-icon">{fish.icon}</span>
         <div className="fish-card-meta">
           <span className="fish-card-name">{fish.name}</span>
-          {sourceBadge(fish.source ?? (fish.builtin ? "builtin" : "user"))}
+          {sourceBadge(fish.source ?? (fish.builtin ? "builtin" : "user"), t)}
         </div>
       </div>
       <p className="fish-card-desc">{fish.description}</p>
       <div className="fish-card-tools">
-        {fish.tools.slice(0, 4).map((t) => (
-          <span key={t} className="fish-tool-tag">{t}</span>
+        {fish.tools.slice(0, 4).map((tool) => (
+          <span key={tool} className="fish-tool-tag">{tool}</span>
         ))}
         {fish.tools.length > 4 && (
           <span className="fish-tool-tag">+{fish.tools.length - 4}</span>
@@ -39,6 +41,7 @@ function FishCard({ fish }: { fish: FishDefinition }) {
 }
 
 export default function FishPage() {
+  const { t } = useTranslation();
   const [fishList, setFishList] = useState<FishDefinition[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -75,17 +78,17 @@ export default function FishPage() {
   );
 
   return (
-    <div className="fish-page">
-      <div className="fish-page-header">
-        <h2 className="fish-page-title">🐠 小鱼（Fish）</h2>
-        <p className="fish-page-subtitle">
-          小鱼是主 Agent 的内部专家工具。主 Agent 通过 call_fish 自动调用，无需手动激活。
-        </p>
-        <button className="fish-btn fish-btn-secondary fish-refresh-btn" onClick={loadFish}>
-          刷新
-        </button>
+    <div className="page fish-page">
+      <div className="page-header">
+        <h1 className="page-title">🐠 {t("fish.title")}</h1>
+        <div className="page-header-actions">
+          <button type="button" className="btn-header" onClick={loadFish}>
+            ↻ {t("fish.refresh")}
+          </button>
+        </div>
       </div>
 
+      <div className="page-body fish-page-body">
       {error && (
         <div className="fish-error">
           <span>⚠️ {error}</span>
@@ -94,32 +97,30 @@ export default function FishPage() {
       )}
 
       {loading ? (
-        <div className="fish-loading">加载小鱼中...</div>
+        <div className="fish-loading">{t("fish.loading")}</div>
       ) : (
         <>
           {builtinFish.length > 0 && (
             <section className="fish-section">
-              <h3 className="fish-section-title">内置小鱼</h3>
-              <p className="fish-section-desc">OpenPiscis 内置的专属 Agent，主 Agent 可自动调用</p>
+              <h3 className="fish-section-title">{t("fish.sectionBuiltin")}</h3>
+              <p className="fish-section-desc">{t("fish.sectionBuiltinDesc")}</p>
               {renderFishGrid(builtinFish)}
             </section>
           )}
 
           {skillFish.length > 0 && (
             <section className="fish-section">
-              <h3 className="fish-section-title">技能小鱼</h3>
-              <p className="fish-section-desc">
-                从已安装技能自动生成，每条小鱼专注于对应技能领域
-              </p>
+              <h3 className="fish-section-title">{t("fish.sectionSkill")}</h3>
+              <p className="fish-section-desc">{t("fish.sectionSkillDesc")}</p>
               {renderFishGrid(skillFish)}
             </section>
           )}
 
           {userFish.length > 0 && (
             <section className="fish-section">
-              <h3 className="fish-section-title">自定义小鱼</h3>
+              <h3 className="fish-section-title">{t("fish.sectionUser")}</h3>
               <p className="fish-section-desc">
-                放置 FISH.toml 文件到 <code>{fishDir || "..."}</code> 目录即可加载
+                {t("fish.sectionUserDesc")} <code>{fishDir || "..."}</code>
               </p>
               {renderFishGrid(userFish)}
             </section>
@@ -128,13 +129,13 @@ export default function FishPage() {
           {fishList.length === 0 && (
             <div className="fish-empty">
               <span className="fish-empty-icon">🐠</span>
-              <p>暂无小鱼</p>
+              <p>{t("fish.empty")}</p>
             </div>
           )}
 
           <section className="fish-section fish-guide-section">
-            <h3 className="fish-section-title">创建自定义小鱼</h3>
-            <p className="fish-section-desc">在 <code>{fishDir ? `${fishDir}\\my-fish\\FISH.toml` : ".../fish/my-fish/FISH.toml"}</code> 创建文件：</p>
+            <h3 className="fish-section-title">{t("fish.sectionGuide")}</h3>
+            <p className="fish-section-desc">在 <code>{fishDir ? `${fishDir}/my-fish/FISH.toml` : ".../fish/my-fish/FISH.toml"}</code> 创建文件：</p>
             <pre className="fish-code-example">{`id = "my-fish"
 name = "我的小鱼"
 description = "专注于某类任务的助手"
@@ -148,6 +149,7 @@ model = "default"`}</pre>
           </section>
         </>
       )}
+      </div>
     </div>
   );
 }

@@ -1,12 +1,14 @@
 .tools-page {
   height: 100%;
-  overflow-y: auto;
-  padding: 24px;
-  max-width: 1100px;
-  margin: 0 auto;
+}
+
+.tools-page-body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  max-width: 1100px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 /* ── Tab Bar ─────────────────────────── */
@@ -140,6 +142,7 @@
   justify-content: flex-end;
 }
 
+.tools-page .page-header h2,
 .page-header h2 {
   font-size: 1.4rem;
   font-weight: 700;

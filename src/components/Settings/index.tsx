@@ -604,9 +604,11 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
     <div className="page">
       <div className="page-header">
         <h1 className="page-title">⚙️ {t("settings.title")}</h1>
-        <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-          {saved ? t("settings.saved") : saving ? t("settings.saving") : t("settings.saveChanges")}
-        </button>
+        <div className="page-header-actions">
+          <button type="button" className="btn-header btn-header-primary" onClick={handleSave} disabled={saving}>
+            {saved ? t("settings.saved") : saving ? t("settings.saving") : t("settings.saveChanges")}
+          </button>
+        </div>
       </div>
       {saveError && (
         <div style={{ margin: "0 0 12px 0", padding: "8px 14px", background: "rgba(220,53,69,0.15)", borderLeft: "3px solid #dc3545", color: "#ff6b6b", fontSize: "0.85rem", display: "flex", justifyContent: "space-between" }}>

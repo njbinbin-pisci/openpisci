@@ -5,6 +5,7 @@
 
 @import "./themes/violet.css";
 @import "./themes/gold.css";
+@import "./themes/light.css";
 
 /* 默认主题 = violet（在 :root 上直接应用，无需 data-theme） */
 :root {
@@ -45,6 +46,17 @@
   /* 侧边栏 */
   --sidebar-bg:     #13131a;
   --sidebar-border: #2a2a38;
+
+  /* 顶栏 / 侧列面板（比 bg-secondary 更柔和，避免刺眼） */
+  --topbar-bg:         #13131a;
+  --panel-sidebar-bg:  #13131a;
+
+  /* 左侧品牌栏主导高度；右侧各页顶栏与之对齐（不压缩品牌区） */
+  --chrome-header-height: 56px;
+
+  /* 工具栏/输入行控件 — 与 btn-header、btn-icon 同高 */
+  --control-height:     32px;
+  --control-font-size:  12px;
 
   /* 滚动条 */
   --scrollbar-thumb: #3a3a50;

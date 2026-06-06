@@ -16,7 +16,7 @@
   flex-direction: column;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
-  background: var(--bg-secondary);
+  background: var(--panel-sidebar-bg, var(--bg-primary));
   overflow: hidden;
 }
 
@@ -36,7 +36,7 @@
   justify-content: space-between;
   padding: 6px 10px 4px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg-secondary);
+  background: var(--panel-sidebar-bg, var(--bg-primary));
   position: sticky;
   top: 0;
   z-index: 2;
@@ -81,7 +81,7 @@
   flex-direction: column;
   align-items: center;
   padding-top: 8px;
-  background: var(--bg-secondary);
+  background: var(--panel-sidebar-bg, var(--bg-primary));
   border-right: 1px solid var(--border);
 }
 
@@ -281,13 +281,6 @@
 
 /* ─── User input area ──────────────────────────────────────────────── */
 
-.collab-send-hint {
-  margin: 0 0 6px;
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  line-height: 1.4;
-}
-
 .collab-input-area {
   flex-shrink: 0;
   border-top: 1px solid var(--border);
@@ -395,6 +388,10 @@
 
 .collab-input:focus {
   border-color: var(--accent);
+}
+
+.collab-input::placeholder {
+  color: var(--text-muted);
 }
 
 .collab-input:disabled {

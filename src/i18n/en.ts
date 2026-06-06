@@ -58,6 +58,8 @@ const en = {
     about: "About",
     debug: "Debug",
     minimalMode: "Minimal Mode",
+    colorModeLight: "Switch to light mode",
+    colorModeDark: "Switch to dark mode",
   },
 
   // Pond
@@ -291,7 +293,11 @@ const en = {
     selectProjectDirBrowse: "Browse...",
     projectDirRequired: "Please select a working directory for this project",
     bindProjectDir: "Associate / Create Project Directory",
-    messageInputPlaceholder: "@!KoiName to delegate, or describe coordination…",
+    messageInputPlaceholder: "Speak as Piscis: type @!KoiName to delegate (@ opens autocomplete). Ctrl+Enter to send, Enter for a new line.",
+    actAsPiscisRole: "Your pool messages are sent as Piscis to coordinate and @!delegate Koi—not as a regular user in Koi threads.",
+    sendAsPiscisHint: "Speak as Piscis: type @!KoiName to delegate (@ opens autocomplete). Ctrl+Enter to send, Enter for a new line.",
+    sendShortcut: "Ctrl+Enter to send",
+    noDelegateSelfPiscis: "You cannot @!Piscis to delegate to yourself. Use @!KoiName, or Piscis CLI in the IDE for a direct chat.",
     mustMention: "Send as Piscis and include @!KoiName (or @!all) to name a recipient.",
     mentionAll: "Everyone",
   },
@@ -338,6 +344,25 @@ const en = {
     blockedReason: "Blocked Reason",
     resumeHint: "This task stopped, but it can still be resumed after review.",
     supersededHint: "This task has been replaced, so its original resume path is locked to avoid conflicts.",
+  },
+
+  // Fish
+  fish: {
+    title: "Fish",
+    subtitle: "Fish are internal specialist agents. The main agent invokes them via call_fish automatically.",
+    badgeBuiltin: "Built-in",
+    badgeSkill: "Skill",
+    badgeUser: "Custom",
+    refresh: "Refresh",
+    loading: "Loading fish...",
+    sectionBuiltin: "Built-in Fish",
+    sectionBuiltinDesc: "Built-in specialist agents the main agent can call automatically",
+    sectionSkill: "Skill Fish",
+    sectionSkillDesc: "Auto-generated from installed skills, one fish per skill domain",
+    sectionUser: "Custom Fish",
+    sectionUserDesc: "Drop a FISH.toml file in the fish directory to load",
+    sectionGuide: "Create a custom Fish",
+    empty: "No fish yet",
   },
 
   // Tools (builtin + user-defined)

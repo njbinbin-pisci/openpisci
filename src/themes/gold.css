@@ -44,6 +44,9 @@
   --sidebar-bg:     #080807;
   --sidebar-border: #201e18;
 
+  --topbar-bg:         #080807;
+  --panel-sidebar-bg:  #080807;
+
   /* 滚动条 — 细金线 */
   --scrollbar-thumb: #3a3420;
 
@@ -91,8 +94,8 @@
 }
 
 :root[data-theme="gold"] .card {
-  border-color: #2a2820;
-  background: #111110;
+  border-color: var(--border);
+  background: var(--bg-secondary);
   box-shadow: inset 0 1px 0 rgba(201, 168, 76, 0.06);
 }
 
@@ -101,18 +104,9 @@
   box-shadow: 0 0 0 2px rgba(201, 168, 76, 0.12);
 }
 
-:root[data-theme="gold"] .page-header {
-  border-bottom-color: #2a2820;
-  background: linear-gradient(180deg, #0e0d0b 0%, transparent 100%);
-}
-
 :root[data-theme="gold"] .sidebar {
   background: var(--sidebar-bg);
   border-right-color: var(--sidebar-border);
-}
-
-:root[data-theme="gold"] .sidebar-header {
-  border-bottom: 1px solid #201e18;
 }
 
 :root[data-theme="gold"] ::-webkit-scrollbar-thumb {

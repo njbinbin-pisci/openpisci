@@ -218,16 +218,16 @@ export default function Skills() {
     <div className="page">
       <div className="page-header">
         <h1 className="page-title">⚡ {t("skills.title")}</h1>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="page-header-actions">
           <span className="badge badge-info">
             {t("skills.enabledCount", { enabled: visibleSkills.filter((s) => s.enabled).length, total: visibleSkills.length })}
           </span>
           <button
-            className="btn btn-secondary"
+            type="button"
+            className="btn-header"
             onClick={handleSyncFromDisk}
             disabled={syncing}
             title={t("skills.syncBtn")}
-            style={{ fontSize: 12, padding: "3px 10px" }}
           >
             {syncing ? t("skills.syncing") : `↻ ${t("skills.syncBtn")}`}
           </button>

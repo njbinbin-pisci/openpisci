@@ -1,7 +1,7 @@
 //! File-journal commands (Undo / replay).
 //!
 //! The journal implementation is the shared kernel one
-//! ([`piscis_kernel::agent::file_journal`]) — the same component CodeZ uses — so
+//! ([`piscis_kernel::agent::file_journal`]) — the same component AgentZ uses — so
 //! both hosts stay in lockstep. openpiscis stores snapshots per workspace at
 //! `{workspace_root}/.piscis/journal.db`.
 //!

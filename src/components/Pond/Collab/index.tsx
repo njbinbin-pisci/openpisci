@@ -1061,7 +1061,6 @@ export default function Collab() {
                       <div className="collab-mention-hint">↑↓ {t("common.navigate") || "navigate"} &nbsp; Enter {t("common.select") || "select"} &nbsp; Esc {t("common.dismiss") || "dismiss"}</div>
                     </div>
                   )}
-                  <p className="collab-send-hint">{t("pool.sendAsPiscisHint")}</p>
                   <div className="collab-input-row">
                     <textarea className="collab-input" ref={inputRef} value={userInput} onChange={handleInputChange} onKeyDown={handleInputKeyDown} placeholder={t("pool.messageInputPlaceholder")} rows={3} disabled={!activeSessionId || sending} />
                     <button className="chatpool-btn chatpool-btn-primary" onClick={handleSendMessage} disabled={sending || !userInput.trim() || !activeSessionId} title={t("pool.sendShortcut")}>{sending ? "..." : t("common.send")}</button>

@@ -2964,6 +2964,13 @@ pub fn build_im_system_prompt(channel: &str, vision_capable: bool) -> String {
 - 支持发送图片和文件（见下方「发送 Office 文件 / 图片给用户」说明）\n\
 - 纯文本回复即可，无需 Markdown 格式",
 
+        "wechat" => "\
+## 微信（iLink Bot）频道能力\n\
+- 消息长度建议不超过 4000 字符\n\
+- **支持发送图片和文件**（见下方「发送 Office 文件 / 图片给用户」说明）\n\
+- 纯文本回复即可；IM 平台无法渲染 Markdown / Mermaid，避免复杂格式\n\
+- 回复必须带有效的 `context_token`（当前 IM 会话会自动注入，无需手动填写）",
+
         "dingtalk" => "\
 ## 钉钉频道能力\n\
 - 消息长度建议不超过 500 字符，超出会被截断\n\
@@ -3032,32 +3039,37 @@ pub fn build_im_system_prompt(channel: &str, vision_capable: bool) -> String {
 
     let file_send_hint = if can_send_file {
         "### 发送 Office 文件 / 图片给用户\n\
-当你用 `office` 工具创建或编辑了文件（Excel、Word、PowerPoint），\
-或用工具生成了图片，需要将文件发送给用户时：\n\
-- **必须**在回复文本中单独一行写 `SEND_FILE:<文件绝对路径>` 来发送文件（该行不能有其他内容）\n\
-- **必须**在回复文本中单独一行写 `SEND_IMAGE:<图片绝对路径>` 来发送图片（该行不能有其他内容）\n\
-- 建议将文件保存到 `C:\\Users\\Public\\` 目录，路径中**不要包含中文或空格**\n\
-- 正确示例（注意 SEND_FILE: 单独占一行）：\n\
-  ```\n\
-  已为您创建回归分析表格，请查收！\n\
-  SEND_FILE:C:\\Users\\Public\\regression.xlsx\n\
-  ```\n\
-- 错误示例（不要把 SEND_FILE: 和其他文字混在同一行）：\n\
-  ```\n\
-  已完成！SEND_FILE:C:\\Users\\Public\\regression.xlsx 请查收\n\
-  ```"
+当你用 `office` 工具创建或编辑了文件，或用工具生成了图片，**必须真正把文件发到 IM**，不要只告诉用户本地路径。\n\
+**方式一（推荐，当前 IM 会话内）**：调用 `im_send_message`，带上 `file_path`（文件**绝对路径**）：\n\
+```\n\
+im_send_message(text=\"请查收附件\", file_path=\"/tmp/piscis/report.xlsx\")\n\
+```\n\
+当前会话是 IM 驱动时，可省略 `binding_key` / `channel` / `recipient`，工具会自动解析路由。\n\
+**方式二（回复标记）**：在最终回复文本中**单独一行**写（该行不能有其他文字）：\n\
+- `SEND_FILE:<文件绝对路径>` —— 发送任意文件\n\
+- `SEND_IMAGE:<图片绝对路径>` —— 发送图片\n\
+正确示例：\n\
+```\n\
+已为您创建回归分析表格，请查收！\n\
+SEND_FILE:/tmp/piscis/regression.xlsx\n\
+```\n\
+错误示例（同一行混写标记会被忽略）：\n\
+```\n\
+已完成！SEND_FILE:/tmp/piscis/regression.xlsx 请查收\n\
+```\n\
+路径规则：使用**绝对路径**；优先 `/tmp/piscis/`（Linux/macOS）或 `C:\\Users\\Public\\`（Windows）；避免中文与空格。"
     } else {
         "### 发送 Office 文件给用户\n\
 当前 IM 频道不支持直接发送文件。\
 如果你用 `office` 工具创建了文件，请告知用户文件已保存的本地路径，\
-让用户自行打开。建议将文件保存到桌面或 `C:\\Users\\Public\\` 等易找到的位置。"
+让用户自行打开。建议保存到 `/tmp/piscis/` 或桌面等易找到的位置。"
     };
 
     let routing_hint = "### IM 路由规则\n\
-若你需要主动给用户或项目来源会话发送 IM：\n\
+若你需要主动给用户或项目来源会话发送 IM 文字/文件：\n\
 - 不要猜测 `binding_key`。\n\
 - 先用 `im_channel_list` 查看通道状态；若目标通道未连上，可用 `im_channel_connect` 启动已在 Settings 中启用的通道。\n\
-- 再用 `im_channel_binding_lookup(session_id=...|pool_id=...|task_id=...)` 解析目标，再调用 `im_send_message`。\n\
+- 再用 `im_channel_binding_lookup(session_id=...|pool_id=...|task_id=...)` 解析目标，再调用 `im_send_message`（发文件时带上 `file_path`）。\n\
 - 只有当你已经处在当前 IM 驱动会话本身时，才依赖 `im_send_message` 的 session 自动解析。";
 
     format!(
@@ -4602,8 +4614,8 @@ mod tests {
     #[test]
     fn paths_match_for_pool_binding_normalizes_slashes() {
         assert!(paths_match_for_pool_binding(
-            "/home/agent/Projects/piscis/CodeZ",
-            "/home/agent/Projects/piscis/CodeZ/"
+            "/home/agent/Projects/piscis/AgentZ",
+            "/home/agent/Projects/piscis/AgentZ/"
         ));
         assert!(paths_match_for_pool_binding("C:\\repo\\app", "C:/repo/app"));
         assert!(!paths_match_for_pool_binding("/repo/a", "/repo/b"));

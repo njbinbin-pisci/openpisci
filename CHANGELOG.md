@@ -6,6 +6,21 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.45] - 2026-06-06
+
+### Fixed
+- **WeChat IM file send**: added `wechat` platform caps and clarified `im_send_message(file_path=…)` plus `SEND_FILE:` / `SEND_IMAGE:` markers with cross-platform path examples.
+- **Pool i18n**: fixed raw keys (`pool.sendAsPiscisHint`, etc.) showing in the Collab chat UI.
+- **Pool chat input**: removed the redundant hint line above the textarea; placeholder now carries the full coordination text with unified `--text-muted` color.
+
+### Changed
+- **Global light/dark theme**: sun/moon toggle beside the OpenPiscis title; new `light.css` theme.
+- **Unified chrome**: consistent top bars across Tools / Fish / Pond / Chat; shared `--chrome-header-height` and `--topbar-bg`.
+- **Compact controls**: global `select-control` (32px), `btn-icon`, and `page-toolbar` for audit filters and chat input actions.
+- **Chat input row**: send/stop button height aligned with attach/preview; context-usage ring scaled to 2/3 without an extra rounded-rect wrapper.
+
+---
+
 ## [0.8.44] - 2026-06-06
 
 ### Changed

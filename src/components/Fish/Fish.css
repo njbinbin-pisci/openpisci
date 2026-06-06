@@ -1,37 +1,11 @@
 .fish-page {
-  padding: 24px;
+  height: 100%;
+}
+
+.fish-page-body {
   max-width: 900px;
   margin: 0 auto;
-  height: 100%;
-  overflow-y: auto;
-}
-
-.fish-page-header {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 28px;
-  position: relative;
-}
-
-.fish-page-title {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0;
-}
-
-.fish-page-subtitle {
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin: 0;
-  line-height: 1.5;
-}
-
-.fish-refresh-btn {
-  position: absolute;
-  top: 0;
-  right: 0;
+  width: 100%;
 }
 
 .fish-error {

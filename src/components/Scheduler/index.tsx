@@ -114,9 +114,11 @@ export default function Scheduler() {
     <div className="page">
       <div className="page-header">
         <h1 className="page-title">⏰ {t("scheduler.title")}</h1>
-        <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
-          {t("scheduler.newTask")}
-        </button>
+        <div className="page-header-actions">
+          <button type="button" className="btn-header btn-header-primary" onClick={() => setShowForm(!showForm)}>
+            + {t("scheduler.newTask")}
+          </button>
+        </div>
       </div>
 
       <div className="page-body">

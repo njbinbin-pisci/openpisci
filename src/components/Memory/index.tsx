@@ -65,14 +65,14 @@ export default function Memory() {
     <div className="page">
       <div className="page-header">
         <h1 className="page-title">💡 {t("memory.title")}</h1>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="page-header-actions">
           {memories.length > 0 && (
-            <button className="btn btn-danger" onClick={() => setConfirmClearOpen(true)}>
+            <button type="button" className="btn-header btn-header-danger" onClick={() => setConfirmClearOpen(true)}>
               {t("memory.clearAll")}
             </button>
           )}
-          <button className="btn btn-primary" onClick={() => setShowAdd(!showAdd)}>
-            {t("memory.addMemory")}
+          <button type="button" className="btn-header btn-header-primary" onClick={() => setShowAdd(!showAdd)}>
+            + {t("memory.addMemory")}
           </button>
         </div>
       </div>
@@ -140,8 +140,8 @@ export default function Memory() {
                     </div>
                   </div>
                   <button
-                    className="btn btn-danger"
-                    style={{ padding: "4px 10px", fontSize: 12 }}
+                    type="button"
+                    className="btn-header btn-header-danger"
                     onClick={() => handleDelete(m.id)}
                   >
                     {t("common.delete")}

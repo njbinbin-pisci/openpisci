@@ -643,11 +643,12 @@ export default function Tools() {
   };
 
   return (
-    <div className="tools-page">
+    <div className="page tools-page">
       <div className="page-header">
-        <h2>🔧 {t("tools.title")}</h2>
+        <h1 className="page-title">🔧 {t("tools.title")}</h1>
       </div>
 
+      <div className="page-body tools-page-body">
       {/* ── Tab Bar ── */}
       <div className="tools-tabs">
         <button
@@ -796,6 +797,8 @@ export default function Tools() {
           }}
         />
       )}
+
+      </div>
 
       {/* MCP server add/edit modal */}
       {(addingServer || editingServer) && (

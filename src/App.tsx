@@ -41,6 +41,9 @@ function AppContent() {
   const [theme, setTheme] = useState<'violet' | 'gold'>(() => {
     return (localStorage.getItem('piscis-theme') as 'violet' | 'gold') || 'violet';
   });
+  const [colorMode, setColorMode] = useState<'light' | 'dark'>(() => {
+    return (localStorage.getItem('piscis-color-mode') as 'light' | 'dark') || 'dark';
+  });
 
   useEffect(() => {
     setMountedTabs((prev) => {
@@ -58,8 +61,9 @@ function AppContent() {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.setAttribute('data-color-mode', colorMode);
     localStorage.setItem('piscis-theme', theme);
-    console.log('[Theme] data-theme set to:', theme, '| html attr:', document.documentElement.getAttribute('data-theme'));
+    localStorage.setItem('piscis-color-mode', colorMode);
     // Sync window border/title bar color with theme (Windows 11+)
     if (!IS_OVERLAY) {
       const apply = () => windowApi.setThemeBorder(theme).catch(() => {});
@@ -67,7 +71,7 @@ function AppContent() {
       const tid = setTimeout(apply, 800); // Retry after window ready
       return () => clearTimeout(tid);
     }
-  }, [theme]);
+  }, [theme, colorMode]);
 
   useEffect(() => {
     const unlisten = listen<string>("app_theme_changed", (event) => {
@@ -231,8 +235,19 @@ function AppContent() {
     <div className="app">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <img src="/piscis.png" className="logo" alt="OpenPiscis" />
-          <span className="app-name">OpenPiscis</span>
+          <div className="sidebar-brand">
+            <img src="/piscis.png" className="logo" alt="OpenPiscis" />
+            <span className="app-name">OpenPiscis</span>
+          </div>
+          <button
+            type="button"
+            className="color-mode-toggle"
+            title={colorMode === "dark" ? t("nav.colorModeLight") : t("nav.colorModeDark")}
+            aria-label={colorMode === "dark" ? t("nav.colorModeLight") : t("nav.colorModeDark")}
+            onClick={() => setColorMode((m) => (m === "dark" ? "light" : "dark"))}
+          >
+            {colorMode === "dark" ? "☀️" : "🌙"}
+          </button>
         </div>
         <nav className="sidebar-nav">
           {tabs.map((tab) => (

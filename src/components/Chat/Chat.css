@@ -6,14 +6,9 @@
 
 /* ── Top bar: session-kind dropdown buttons + task tabs ─────────────────── */
 .chat-topbar {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-  background: var(--bg-secondary);
+  padding: 0 16px;
 }
 
 .chat-topbar-sessions {
@@ -29,8 +24,11 @@
 .chat-session-trigger {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 5px 10px;
+  height: 32px;
+  padding: 0 12px;
+  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: transparent;
@@ -38,6 +36,7 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
@@ -55,9 +54,11 @@
 .chat-session-trigger-count {
   font-size: 11px;
   color: var(--text-muted);
-  background: var(--bg-primary);
+  background: var(--bg-tertiary);
   border-radius: 999px;
   padding: 0 6px;
+  min-height: 18px;
+  line-height: 18px;
   min-width: 18px;
   text-align: center;
 }
@@ -84,8 +85,11 @@
 .chat-topbar-task-tab {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 5px 10px;
+  height: 32px;
+  padding: 0 12px;
+  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: transparent;
@@ -93,6 +97,7 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
@@ -358,24 +363,15 @@
   flex-shrink: 0;
 }
 
-.btn-icon {
-  width: 24px;
-  height: 24px;
-  border: none;
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s;
+.chat-topbar-new.btn-icon {
+  border-radius: 999px;
+  font-size: 16px;
 }
 
-.btn-icon:hover {
-  background: var(--accent);
+.chat-topbar-new.btn-icon:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .session-item {
@@ -970,6 +966,16 @@
   gap: 6px;
 }
 
+/* 发送/停止与左侧 select-control、btn-icon 同高 */
+.input-actions .btn {
+  height: var(--control-height);
+  padding: 0 12px;
+  font-size: var(--control-font-size);
+  line-height: 1;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
 /* Workspace selector — sits on the left of the input-actions row */
 .workspace-selector {
   display: flex;
@@ -986,43 +992,10 @@
   flex-shrink: 0;
 }
 
-.workspace-select {
+.workspace-selector .select-control {
   max-width: 280px;
-  padding: 0 6px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 4px);
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-family: var(--font);
-  outline: none;
-  cursor: pointer;
   min-width: 0;
-  transition: border-color 0.15s;
-  height: 22px;
-  line-height: 22px;
-  vertical-align: middle;
-  -webkit-appearance: none;
-  appearance: none;
-  /* Custom dropdown arrow */
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 6px center;
-  padding-right: 18px;
-}
-
-.workspace-select:hover {
-  border-color: var(--accent);
-}
-
-.workspace-select:focus {
-  border-color: var(--accent);
-}
-
-/* Dark-theme-friendly option styling */
-.workspace-select option {
-  background: var(--bg-secondary);
-  color: var(--text-primary);
+  color: var(--text-secondary);
 }
 
 /* Info notification banner (non-error) */
@@ -1054,33 +1027,23 @@
   opacity: 1;
 }
 
-/* Context-usage ring indicator shown alongside action buttons.
- * Shows current request-input token estimate as a percentage of the
- * proactive compaction trigger line (60% of the input budget). */
+/* Context-usage ring — 占位与控件行同高，圆环视觉为 2/3 */
 .context-usage-ring {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md, 6px);
-  background: var(--bg-tertiary, var(--bg-secondary));
+  justify-content: center;
+  width: var(--control-height);
+  height: var(--control-height);
+  flex-shrink: 0;
   cursor: help;
   user-select: none;
-  white-space: pre-line; /* render \n in tooltip */
-  flex-shrink: 0;
 }
 
 .context-usage-ring svg {
   flex-shrink: 0;
   display: block;
-}
-
-.context-usage-label {
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  font-weight: 500;
+  width: calc(var(--control-height) * 2 / 3);
+  height: calc(var(--control-height) * 2 / 3);
 }
 
 /* Attachment preview strip above the textarea */
@@ -1134,32 +1097,6 @@
 .attachment-remove:hover {
   color: var(--text-primary);
   background: var(--hover);
-}
-
-/* Attach file button */
-.btn-attach {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md, 6px);
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 6px 10px;
-  line-height: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
-}
-
-.btn-attach:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--hover);
-}
-
-.btn-attach:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 /* Error banner */
