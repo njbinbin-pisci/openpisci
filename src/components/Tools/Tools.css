@@ -643,6 +643,13 @@
   border-color: var(--accent);
 }
 
+/* Modal selects — same compact control as toolbars (not raw browser styling) */
+.config-form .config-select,
+.config-form .select-control {
+  width: 100%;
+  max-width: 100%;
+}
+
 .config-hint {
   font-size: 0.75rem;
   color: var(--text-muted, #888);

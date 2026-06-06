@@ -405,7 +405,7 @@ const zh = {
     tabMcp: "MCP 工具",
     // MCP
     mcpSection: "MCP 工具服务器",
-    mcpDesc: "通过 Model Context Protocol 连接外部工具服务器（stdio 本地进程 / SSE HTTP 服务）",
+    mcpDesc: "通过 Model Context Protocol 连接外部工具服务器（stdio 本地进程 / SSE HTTP 服务）。桌面自动化能力见「内置工具」页签。",
     mcpNoServers: "尚未配置任何 MCP 服务器",
     mcpAddServer: "添加服务器",
     mcpEditServer: "编辑服务器",

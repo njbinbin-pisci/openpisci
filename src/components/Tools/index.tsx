@@ -326,7 +326,7 @@ function McpServerForm({ initial, onSave, onCancel }: McpServerFormProps) {
           <div className="config-field">
             <label className="config-label">{t("tools.mcpTransport")}</label>
             <select
-              className="config-input"
+              className="select-control config-select"
               value={cfg.transport}
               onChange={e => setCfg({ ...cfg, transport: e.target.value as "stdio" | "sse" })}
             >

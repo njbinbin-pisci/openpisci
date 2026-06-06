@@ -6,6 +6,15 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.46] - 2026-06-07
+
+### Changed
+- **RobotZ integration**: desktop automation stays as in-process builtin tools (`robotz-automation` / `robotz-browser`); legacy `robotz` MCP sidecar entries are removed on startup so the MCP tools tab lists only user-configured external servers.
+- **MCP editor UI**: transport dropdown uses global `select-control` styling (readable in dark/light themes).
+- **Pond Collab**: git activity icon uses the shared VS Code–style SVG (aligned with Pond IDE), replacing the `⑂` character.
+
+---
+
 ## [0.8.45] - 2026-06-06
 
 ### Fixed

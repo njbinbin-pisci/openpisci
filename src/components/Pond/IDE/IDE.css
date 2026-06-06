@@ -51,40 +51,49 @@
   line-height: 1;
 }
 
-.ide-activity-bar .activity-icon--git {
+/* Git SCM icon — IDE activity bar + Collab right strip */
+.ide-activity-bar .activity-icon--git,
+.collab-right-icon .activity-icon--git {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   line-height: 0;
 }
 
-.ide-activity-bar .activity-icon--git svg {
+.ide-activity-bar .activity-icon--git svg,
+.collab-right-icon .activity-icon--git svg {
   display: block;
 }
 
-/* Git SCM icon — subtle multi-color nodes to match emoji activity icons (📁 🔍). */
-.ide-activity-bar .activity-icon--git .git-node {
+.ide-activity-bar .activity-icon--git .git-node,
+.collab-right-icon .activity-icon--git .git-node {
   stroke: none;
 }
 
-.ide-activity-bar .activity-icon--git .git-node-top {
+.ide-activity-bar .activity-icon--git .git-node-top,
+.collab-right-icon .activity-icon--git .git-node-top {
   fill: var(--accent);
 }
 
-.ide-activity-bar .activity-icon--git .git-node-bottom {
+.ide-activity-bar .activity-icon--git .git-node-bottom,
+.collab-right-icon .activity-icon--git .git-node-bottom {
   fill: var(--success);
 }
 
-.ide-activity-bar .activity-icon--git .git-node-merge {
+.ide-activity-bar .activity-icon--git .git-node-merge,
+.collab-right-icon .activity-icon--git .git-node-merge {
   fill: var(--warning);
 }
 
-.ide-activity-bar .activity-icon--git .git-branch {
+.ide-activity-bar .activity-icon--git .git-branch,
+.collab-right-icon .activity-icon--git .git-branch {
   stroke: var(--accent-hover);
 }
 
 .ide-activity-bar button:hover .activity-icon--git .git-branch,
-.ide-activity-bar button.active .activity-icon--git .git-branch {
+.ide-activity-bar button.active .activity-icon--git .git-branch,
+.collab-right-icon:hover .activity-icon--git .git-branch,
+.collab-right-icon.active .activity-icon--git .git-branch {
   stroke: var(--accent);
 }
 

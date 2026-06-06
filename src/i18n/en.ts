@@ -405,7 +405,7 @@ const en = {
     tabMcp: "MCP",
     // MCP
     mcpSection: "MCP Tool Servers",
-    mcpDesc: "Connect to external tool servers via Model Context Protocol (stdio local process / SSE HTTP service)",
+    mcpDesc: "Connect to external tool servers via Model Context Protocol (stdio local process / SSE HTTP service). Desktop automation lives under Builtin Tools.",
     mcpNoServers: "No MCP servers configured",
     mcpAddServer: "Add Server",
     mcpEditServer: "Edit Server",

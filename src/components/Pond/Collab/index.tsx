@@ -25,15 +25,25 @@ import { containsDelegatedPiscisMention } from "../../../utils/poolMention";
 import ConfirmDialog from "../../ConfirmDialog";
 import { linkifyPaths, isLocalPath, uriToNativePath } from "../../../utils/linkify";
 import type { FileNode, OpenTab, GitFileStatus } from "../IDE/types";
+import GitSourceControlIcon from "../IDE/GitSourceControlIcon";
 import "../IDE/IDE.css";
 import "../ChatPool/ChatPool.css";
 import "./Collab.css";
 
 type ContentView = "chat" | "explorer" | "search" | "git" | "board" | "inbox" | "koiObserver";
 
-const VIEW_ICONS: Record<ContentView, string> = {
-  chat: "💬", explorer: "📁", search: "🔍", git: "⑂", board: "📋", inbox: "📬", koiObserver: "🔎",
+const VIEW_ORDER: ContentView[] = [
+  "chat", "explorer", "search", "git", "board", "inbox", "koiObserver",
+];
+
+const VIEW_ICONS: Record<Exclude<ContentView, "git">, string> = {
+  chat: "💬", explorer: "📁", search: "🔍", board: "📋", inbox: "📬", koiObserver: "🔎",
 };
+
+function CollabViewIcon({ view }: { view: ContentView }) {
+  if (view === "git") return <GitSourceControlIcon />;
+  return <span className="activity-icon">{VIEW_ICONS[view]}</span>;
+}
 
 // ─── Message rendering (borrowed from ChatPool) ──────────────────────
 
@@ -1079,7 +1089,7 @@ export default function Collab() {
                   </>
                 ) : (
                   <div className="collab-empty">
-                    <span className="collab-empty-icon">{contentView === "explorer" ? "📁" : contentView === "search" ? "🔍" : "⑂"}</span>
+                    <span className="collab-empty-icon">{contentView === "explorer" ? "📁" : contentView === "search" ? "🔍" : <GitSourceControlIcon size={32} />}</span>
                     <p>{contentView === "explorer" ? (t("ide.openFileHint") || "Select a file from the explorer") : contentView === "search" ? (t("ide.searchHint") || "Search for files in the project") : (t("ide.gitHint") || "View source control changes")}</p>
                   </div>
                 )}
@@ -1169,7 +1179,7 @@ export default function Collab() {
       {/* RIGHT: Icon tab strip (always visible, no collapse) */}
       <div className="collab-right">
         <div className="collab-right-icons">
-          {Object.entries(VIEW_ICONS).map(([view, icon]) => {
+          {VIEW_ORDER.map((view) => {
             const isIdeView = view === "explorer" || view === "search" || view === "git";
             const isActiveView = contentView === view;
             // Active highlight on the icon: an IDE view counts as
@@ -1194,7 +1204,7 @@ export default function Collab() {
                 }}
                 title={t(`pond.tab${view.charAt(0).toUpperCase() + view.slice(1)}`) || view}
               >
-                <span className="activity-icon">{icon}</span>
+                <CollabViewIcon view={view} />
                 {view === "git" && (gitModified.size + gitAdded.size) > 0 && <span className="activity-badge">{gitModified.size + gitAdded.size}</span>}
               </button>
             );

@@ -18,17 +18,21 @@ OpenPiscis is a local-first AI Agent desktop application built with Tauri 2 + Ru
 
 ---
 
-## 🆕 What's New in v0.8.45
+## 🆕 What's New in v0.8.46
 
-**UI polish & WeChat IM file send** — global light/dark theme, unified compact controls, and clearer WeChat file-delivery prompts.
+**RobotZ clarity & UI polish** — builtin desktop automation only; MCP tab for external servers; Collab git SVG icon.
+
+### 🤖 RobotZ
+- **`robotz-automation` / `robotz-browser`** compiled into the desktop binary as builtin tools — not shown on the MCP tab.
+- Legacy `robotz` MCP config entries are stripped on startup.
 
 ### 🎨 UI
-- **Light/dark toggle** beside the OpenPiscis title; consistent top bars across Chat / Tools / Fish / Pond.
-- **Compact controls** — 32px `select-control` / `btn-icon` in audit filters and chat input; context ring without extra wrapper.
-- **Pool chat** — placeholder carries coordination hint; fixed missing i18n keys.
+- MCP server editor transport dropdown uses unified `select-control` styling.
+- Pond Collab git icon matches IDE (SVG source-control icon).
 
-### 📎 WeChat IM
-- **`im_send_message(file_path=…)`** guidance and cross-platform `SEND_FILE:` / `SEND_IMAGE:` examples in system prompts.
+## 🕘 v0.8.45 — UI polish & WeChat IM
+
+Global light/dark theme, compact controls, WeChat file-send prompts, pool i18n fixes.
 
 ## 🕘 v0.8.44 — Pond CLI IDE-only
 

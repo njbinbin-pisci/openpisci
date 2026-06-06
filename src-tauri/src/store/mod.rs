@@ -76,7 +76,10 @@ impl AppState {
         let db = Database::open(&db_path)?;
 
         let config_path = app_dir.join("config.json");
-        let settings = Settings::load(&config_path)?;
+        let mut settings = Settings::load(&config_path)?;
+        if crate::commands::config::bundled_mcp::strip_legacy_robotz_mcp_server(&mut settings) {
+            settings.save().map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
 
         let browser_options = robotz_browser::BrowserOptions {
             chrome_dir: app_dir.join("chrome"),

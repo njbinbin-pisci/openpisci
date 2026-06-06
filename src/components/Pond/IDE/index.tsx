@@ -5,6 +5,7 @@ import EditorTabs from "./EditorTabs";
 import CodeEditor from "./CodeEditor";
 import TerminalPanel from "./Terminal";
 import GitPanel from "./GitPanel";
+import GitSourceControlIcon from "./GitSourceControlIcon";
 import SearchPanel from "./SearchPanel";
 import { ideApi, onFileChanged } from "../../../services/tauri/ide";
 import { openPath } from "../../../services/tauri";
@@ -598,14 +599,7 @@ export default function IDE({ projectDir, poolSessionId: _poolSessionId }: IDEPr
           onClick={() => { if (sidebarCollapsed) { setSidebarCollapsed(false); setSidebarTab("git"); } else if (sidebarTab === "git") setSidebarCollapsed(true); else setSidebarTab("git"); }}
           title={t("ide.sourceControl") || "Source Control"}
         >
-          <span className="activity-icon activity-icon--git" aria-hidden>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" strokeWidth="1.75">
-              <circle className="git-node git-node-top" cx="6" cy="6" r="2.25" />
-              <circle className="git-node git-node-bottom" cx="6" cy="18" r="2.25" />
-              <circle className="git-node git-node-merge" cx="18" cy="12" r="2.25" />
-              <path className="git-branch" d="M6 8.25v7.5M8.25 6h5.5a2.25 2.25 0 0 1 2.25 2.25v3.5" strokeLinecap="round" />
-            </svg>
-          </span>
+          <GitSourceControlIcon />
           {(gitModified.size + gitAdded.size) > 0 && (
             <span className="activity-badge">{gitModified.size + gitAdded.size}</span>
           )}
