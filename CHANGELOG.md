@@ -6,6 +6,13 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.39] - 2026-06-06
+
+### Fixed
+- **Main Chat / heartbeat leak**: Piscis heartbeat and pool coordination sessions (`piscis_heartbeat_global`, `piscis_pool_*`, etc.) no longer load or render in the main Chat area when the sidebar has no user-visible sessions. They remain visible only in the Pond **Piscis coordination** inbox.
+
+---
+
 ## [0.8.38] - 2026-06-05
 
 ### Changed
