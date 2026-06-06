@@ -18,9 +18,19 @@ OpenPiscis is a local-first AI Agent desktop application built with Tauri 2 + Ru
 
 ---
 
-## 🆕 What's New in v0.8.42
+## 🆕 What's New in v0.8.44
 
-**MCP authentication & streamable HTTP** — connect to remote MCP servers that require auth headers or the streamable HTTP transport.
+**鱼池 CLI sessions are IDE-only** — CLI chats are created from the Pond IDE, not from the main Chat picker.
+
+### 🐟 Pond CLI session flow
+- **No + in 鱼池CLI picker** — the main Chat dropdown for CLI no longer offers “new session”; empty state explains sessions appear when you message in the Pond IDE.
+- **主会话 jump from IDE** — the Pond IDE assistant panel adds a **主会话** button to open the matching CLI tab in main Chat.
+
+## 🕘 v0.8.43 — Top-bar session picker
+
+**Main Chat session picker** — 主会话 / IM / 鱼池CLI are top-bar dropdowns with search and date grouping; Todo / Tools / Artifacts share the same row.
+
+## 🕘 v0.8.42 — MCP authentication & streamable HTTP
 
 ### 🔌 MCP transport upgrades (piscis-engine v0.8.42)
 - **`headers` on MCP server config** — send `Authorization: Bearer <token>` (and other headers) on SSE/HTTP MCP connections for authenticated remote servers and one-click connectors.

@@ -194,6 +194,16 @@ export default function AssistantPanel({
     try { await chatApi.cancel(sid); } catch { /* ignore */ }
   }, []);
 
+  /** Open this project's CLI session in the main Chat → 鱼池CLI tab. */
+  const openInMainChat = useCallback(() => {
+    dispatch(
+      sessionsActions.openMainChatView({
+        filter: "cli",
+        sessionId: sessionIdRef.current,
+      }),
+    );
+  }, [dispatch]);
+
   const clearLog = useCallback(() => {
     setLines([]);
   }, []);
@@ -228,6 +238,13 @@ export default function AssistantPanel({
       <div className="ide-terminal-header">
         <span className="term-title">{t("ide.assistantTitle") || "Piscis Assistant"}</span>
         <div style={{ flex: 1 }} />
+        <button
+          className="ide-assistant-open-main"
+          onClick={openInMainChat}
+          title={t("ide.assistantOpenMainChat")}
+        >
+          {t("ide.assistantOpenMainChat")}
+        </button>
         <button onClick={clearLog} title={t("ide.assistantClear") || "Clear"}>⌫</button>
         {busy && (
           <button onClick={cancelCurrent} title="Cancel">⏹</button>

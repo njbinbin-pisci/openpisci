@@ -18,9 +18,19 @@ OpenPiscis 是一款本地优先的跨平台 AI Agent 桌面应用，基于 Taur
 
 ---
 
-## 🆕 v0.8.42 更新摘要
+## 🆕 v0.8.44 更新摘要
 
-**MCP 鉴权与 Streamable HTTP** —— 支持带认证头的远程 MCP 服务器与 streamable HTTP 传输。
+**鱼池 CLI 会话仅在 IDE 创建** —— CLI 聊天从鱼池 IDE 发起，主会话选择器不再提供新建入口。
+
+### 🐟 鱼池 CLI 会话流程
+- **鱼池CLI 选择器无 +** —— 主会话顶部下拉不再显示「新建」；空态提示在鱼池 IDE 发消息后会自动创建会话。
+- **IDE 跳转主会话** —— 鱼池 IDE 助手面板新增 **主会话** 按钮，一键打开主聊天中对应的鱼池CLI 标签。
+
+## 🕘 v0.8.43 — 顶部会话选择器
+
+**主会话选择器重构** —— 主会话 / IM / 鱼池CLI 改为顶部下拉，支持搜索与日期分组；Todo / Tools / Artifacts 与选择器同一行。
+
+## 🕘 v0.8.42 — MCP 鉴权与 Streamable HTTP
 
 ### 🔌 MCP 传输升级（piscis-engine v0.8.42）
 - **MCP 服务器配置新增 `headers`** —— 在 SSE/HTTP MCP 连接上发送 `Authorization: Bearer <token>` 等请求头，对接需鉴权的远程 MCP 服务与一键授权连接器。

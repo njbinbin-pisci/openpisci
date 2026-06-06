@@ -344,7 +344,7 @@ function ContextUsageRing({
 export default function Chat() {
   const { t } = useTranslation();
   const dispatch = useDispatch();
-  const { sessions, activeSessionId } = useSelector((s: RootState) => s.sessions);
+  const { sessions, activeSessionId, pendingMainChatNav } = useSelector((s: RootState) => s.sessions);
   const { messagesBySession, streaming, toolSteps, planBySession, isRunning, contextUsage } = useSelector(
     (s: RootState) => s.chat
   );
@@ -359,6 +359,17 @@ export default function Chat() {
   const [sessionFilter, setSessionFilter] = useState<SessionKind>("chat");
   // Which session-kind dropdown picker is currently open in the top bar.
   const [openPicker, setOpenPicker] = useState<SessionKind | null>(null);
+
+  // Pond IDE → main Chat: switch filter (and optional session) when requested.
+  useEffect(() => {
+    if (!pendingMainChatNav) return;
+    setSessionFilter(pendingMainChatNav.filter);
+    if (pendingMainChatNav.sessionId) {
+      dispatch(sessionsActions.setActiveSession(pendingMainChatNav.sessionId));
+    }
+    setOpenPicker(null);
+    dispatch(sessionsActions.clearPendingMainChatNav());
+  }, [pendingMainChatNav, dispatch]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
   const displaySessionId =
@@ -1847,10 +1858,16 @@ export default function Chat() {
                         setOpenPicker(null);
                       }}
                       onDelete={requestDeleteSession}
-                      onNew={() => {
-                        handleNewSession();
-                        setOpenPicker(null);
-                      }}
+                      onNew={
+                        kind === "cli"
+                          ? undefined
+                          : () => {
+                              handleNewSession();
+                              setOpenPicker(null);
+                            }
+                      }
+                      allowCreate={kind !== "cli"}
+                      emptyHint={kind === "cli" ? t("chat.cliNoSessionsHint") : undefined}
                       onClose={() => setOpenPicker(null)}
                       t={t}
                       footer={kind === "im" ? imConnectFooter : undefined}
@@ -1859,13 +1876,15 @@ export default function Chat() {
                 </div>
               );
             })}
-            <button
-              className="btn-icon chat-topbar-new"
-              onClick={handleNewSession}
-              title={t("chat.newChat")}
-            >
-              +
-            </button>
+            {sessionFilter !== "cli" && (
+              <button
+                className="btn-icon chat-topbar-new"
+                onClick={handleNewSession}
+                title={t("chat.newChat")}
+              >
+                +
+              </button>
+            )}
           </div>
 
           {hasTaskPanel && (
@@ -2229,6 +2248,14 @@ export default function Chat() {
               </div>
             </div>}
           </>
+        ) : sessionFilter === "cli" ? (
+          <div className="empty-state">
+            <div className="empty-state-icon" aria-hidden="true" style={{ fontSize: 48 }}>
+              🐟
+            </div>
+            <div className="empty-state-title">{t("chat.cliEmptyTitle")}</div>
+            <div className="empty-state-desc">{t("chat.cliEmptyDesc")}</div>
+          </div>
         ) : (
           <div className="empty-state">
             {sendError && (

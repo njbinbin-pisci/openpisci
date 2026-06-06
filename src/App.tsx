@@ -33,6 +33,7 @@ function AppContent() {
   const dispatch = useDispatch();
   const { t } = useTranslation();
   const { showOnboarding, settings } = useSelector((s: RootState) => s.settings);
+  const pendingMainChatNav = useSelector((s: RootState) => s.sessions.pendingMainChatNav);
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   /** Tabs that have been opened at least once — stay mounted to preserve state. */
   const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(() => new Set(["chat"]));
@@ -49,6 +50,11 @@ function AppContent() {
       return next;
     });
   }, [activeTab]);
+
+  // Pond IDE assistant → jump to main Chat (鱼池CLI tab).
+  useEffect(() => {
+    if (pendingMainChatNav) setActiveTab("chat");
+  }, [pendingMainChatNav]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);

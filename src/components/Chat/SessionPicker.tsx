@@ -38,10 +38,13 @@ export interface SessionPickerProps {
   activeSessionId: string | null;
   onSelect: (id: string) => void;
   onDelete: (e: React.MouseEvent, id: string, title: string) => void;
-  onNew: () => void;
+  onNew?: () => void;
   onClose: () => void;
   t: (key: string, options?: Record<string, unknown>) => string;
   footer?: ReactNode;
+  /** When false, hide the + button (e.g. Pond CLI sessions are project-bound). */
+  allowCreate?: boolean;
+  emptyHint?: string;
 }
 
 export default function SessionPicker({
@@ -53,6 +56,8 @@ export default function SessionPicker({
   onClose,
   t,
   footer,
+  allowCreate = true,
+  emptyHint,
 }: SessionPickerProps) {
   const [query, setQuery] = useState("");
   const [moreVisible, setMoreVisible] = useState(MORE_PAGE);
@@ -169,15 +174,19 @@ export default function SessionPicker({
             setMoreVisible(MORE_PAGE);
           }}
         />
-        <button className="session-picker-new" onClick={onNew} title={t("chat.newChat")}>
-          +
-        </button>
+        {allowCreate && onNew && (
+          <button className="session-picker-new" onClick={onNew} title={t("chat.newChat")}>
+            +
+          </button>
+        )}
       </div>
 
       <div className="session-picker-list">
         {isEmpty ? (
           <div className="session-picker-empty">
-            {query.trim() ? t("chat.noSearchResults") : t("chat.noChats")}
+            {query.trim()
+              ? t("chat.noSearchResults")
+              : emptyHint ?? t("chat.noChats")}
           </div>
         ) : (
           <>

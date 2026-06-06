@@ -14,7 +14,7 @@
  */
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import type { Session, ChatMessage, ScheduledTask } from "../../services/tauri";
-import { isInternalSession } from "../../utils/session";
+import { isInternalSession, type MainChatSessionKind } from "../../utils/session";
 
 // ---------------------------------------------------------------------------
 // Sessions slice
@@ -25,11 +25,19 @@ interface SessionsState {
   activeSessionId: string | null;
   loading: boolean;
   error: string | null;
+  /** One-shot navigation request from Pond IDE → main Chat tab. */
+  pendingMainChatNav: { filter: MainChatSessionKind; sessionId?: string | null } | null;
 }
 
 export const sessionsSlice = createSlice({
   name: "sessions",
-  initialState: { sessions: [], activeSessionId: null, loading: false, error: null } as SessionsState,
+  initialState: {
+    sessions: [],
+    activeSessionId: null,
+    loading: false,
+    error: null,
+    pendingMainChatNav: null,
+  } as SessionsState,
   reducers: {
     setSessions: (state, action: PayloadAction<Session[]>) => {
       state.sessions = action.payload;
@@ -69,6 +77,21 @@ export const sessionsSlice = createSlice({
       } else {
         state.sessions.unshift(action.payload);
       }
+    },
+    openMainChatView: (
+      state,
+      action: PayloadAction<{ filter: MainChatSessionKind; sessionId?: string | null }>,
+    ) => {
+      state.pendingMainChatNav = {
+        filter: action.payload.filter,
+        sessionId: action.payload.sessionId ?? null,
+      };
+      if (action.payload.sessionId) {
+        state.activeSessionId = action.payload.sessionId;
+      }
+    },
+    clearPendingMainChatNav: (state) => {
+      state.pendingMainChatNav = null;
     },
   },
 });

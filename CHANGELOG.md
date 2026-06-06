@@ -6,6 +6,13 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.44] - 2026-06-06
+
+### Changed
+- **鱼池 CLI sessions are IDE-only**: the main Chat picker no longer shows **+** for 鱼池CLI; the CLI empty state explains that sessions are created when you send a message in the Pond IDE. The Pond IDE assistant panel adds a **主会话** button to jump to the matching CLI tab in main Chat.
+
+---
+
 ## [0.8.43] - 2026-06-06
 
 ### Changed
