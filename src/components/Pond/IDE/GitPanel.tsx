@@ -6,7 +6,10 @@ import type { GitFileStatus, BranchInfo } from "./types";
 interface GitPanelProps {
   projectDir: string;
   onDiffClick: (path: string) => void;
-  onRefresh: () => Promise<void>;
+  onRefresh: () => void;
+  /** Version counter — incremented by the parent whenever git status
+   *  should be re-fetched (e.g. after file watcher detects changes). */
+  gitPanelVersion?: number;
 }
 
 function formatInvokeError(e: unknown): string {
@@ -26,7 +29,7 @@ function formatInvokeError(e: unknown): string {
   return String(e);
 }
 
-export default function GitPanel({ projectDir, onDiffClick, onRefresh }: GitPanelProps) {
+export default function GitPanel({ projectDir, onDiffClick, onRefresh, gitPanelVersion }: GitPanelProps) {
   const { t } = useTranslation();
   const [statuses, setStatuses] = useState<GitFileStatus[]>([]);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
@@ -55,6 +58,20 @@ export default function GitPanel({ projectDir, onDiffClick, onRefresh }: GitPane
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // When the parent signals that git status should be re-fetched
+  // (e.g. after file watcher detects external changes), refresh
+  // this panel's internal state so the staged/unstaged lists
+  // stay in sync.
+  useEffect(() => {
+    if (gitPanelVersion !== undefined && gitPanelVersion > 0) {
+      refresh();
+    }
+    // Only depend on gitPanelVersion — not on `refresh` — so that
+    // stale-closure issues are avoided and every version bump
+    // triggers a refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gitPanelVersion]);
 
   const handleStage = useCallback(async (path: string) => {
     if (!projectDir) return;

@@ -8,6 +8,7 @@ import GitPanel from "./GitPanel";
 import GitSourceControlIcon from "./GitSourceControlIcon";
 import SearchPanel from "./SearchPanel";
 import { ideApi, onFileChanged } from "../../../services/tauri/ide";
+import { sameProjectPath } from "../../../utils/projectPath";
 import { openPath } from "../../../services/tauri";
 import type { FileNode, OpenTab, GitFileStatus } from "./types";
 import "./IDE.css";
@@ -47,6 +48,7 @@ export default function IDE({ projectDir, poolSessionId: _poolSessionId }: IDEPr
   // Git status
   const [gitModified, setGitModified] = useState<Set<string>>(new Set());
   const [gitAdded, setGitAdded] = useState<Set<string>>(new Set());
+  const [gitPanelVersion, setGitPanelVersion] = useState(0);
 
   // UI state
   const [showTerminal, setShowTerminal] = useState(false);
@@ -101,6 +103,7 @@ export default function IDE({ projectDir, poolSessionId: _poolSessionId }: IDEPr
       });
       setGitModified(modified);
       setGitAdded(added);
+      setGitPanelVersion(v => v + 1);
     } catch {
       // No git repo or error — ignore
     }
@@ -186,7 +189,7 @@ export default function IDE({ projectDir, poolSessionId: _poolSessionId }: IDEPr
       // `openFile` stores them). On Windows, older backend versions emit
       // backslash paths, which silently failed the `===` check and made
       // externally-modified files never reload in the IDE.
-      if (evt.project_dir !== projectDir) return;
+      if (!sameProjectPath(evt.project_dir, projectDir)) return;
       const evtPath = evt.path.replace(/\\/g, "/");
       scheduleRefresh();
 
@@ -646,6 +649,7 @@ export default function IDE({ projectDir, poolSessionId: _poolSessionId }: IDEPr
               projectDir={projectDir}
               onDiffClick={(path) => openDiff(path)}
               onRefresh={loadGitStatus}
+              gitPanelVersion={gitPanelVersion}
             />
           )}
         </div>

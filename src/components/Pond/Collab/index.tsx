@@ -16,6 +16,7 @@ import Board from "../Board";
 import PiscisInbox from "../PiscisInbox";
 import PoolMemberPicker from "../PoolMemberPicker";
 import { ideApi, onFileChanged } from "../../../services/tauri/ide";
+import { sameProjectPath } from "../../../utils/projectPath";
 import { openPath } from "../../../services/tauri";
 import { poolApi, koiApi, PoolMessage, KoiWithStats, poolSessionFromWire, type PoolSessionSnapshot } from "../../../services/tauri";
 import { RootState, poolActions, koiActions, boardActions, POOL_DEFAULT_CAPACITY, parseMentions, hasMentions } from "../../../store";
@@ -310,6 +311,7 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
   const [activeTabPath, setActiveTabPath] = useState<string | null>(null);
   const [gitModified, setGitModified] = useState<Set<string>>(new Set());
   const [gitAdded, setGitAdded] = useState<Set<string>>(new Set());
+  const [gitPanelVersion, setGitPanelVersion] = useState(0);
   const [showTerminal, setShowTerminal] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
   // File tree multi-select + context menu
@@ -601,6 +603,7 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
       });
       setGitModified(modified);
       setGitAdded(added);
+      setGitPanelVersion(v => v + 1);
     } catch {
       // ignore
     }
@@ -630,7 +633,7 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
     loadGitStatus();
     ideApi.startWatcher(projectDir).catch(() => {});
     const unlistenPromise = onFileChanged((evt) => {
-      if (evt.project_dir !== projectDir) return;
+      if (!sameProjectPath(evt.project_dir, projectDir)) return;
       // Normalize to `/` so `tab.path` (always stored with `/`) compares
       // equal even when the watcher emits OS-native separators.
       const evtPath = evt.path.replace(/\\/g, "/");
@@ -1209,7 +1212,7 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
                     <SearchPanel projectDir={projectDir} onResultClick={(path, _line) => openFile(path)} />
                   )}
                   {contentView === "git" && (
-                    <GitPanel projectDir={projectDir} onDiffClick={(path) => openDiff(path)} onRefresh={loadGitStatus} />
+                    <GitPanel projectDir={projectDir} onDiffClick={(path) => openDiff(path)} onRefresh={loadGitStatus} gitPanelVersion={gitPanelVersion} />
                   )}
                 </>
               ) : (
@@ -1233,7 +1236,13 @@ export default function Collab({ onNavigateToSchoolKoi, visible = true }: Collab
         {showAssistant && (
           <>
             <div className="ide-resize-handle-v" onMouseDown={startTerminalResize} />
-            <AssistantPanel projectDir={projectDir} visible={showAssistant} onClose={() => setShowAssistant(false)} height={terminalHeight} />
+            <AssistantPanel
+              projectDir={projectDir}
+              visible={showAssistant}
+              onClose={() => setShowAssistant(false)}
+              height={terminalHeight}
+              onWorkspaceFilesChanged={scheduleRefresh}
+            />
           </>
         )}
       </div>

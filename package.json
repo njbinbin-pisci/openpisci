@@ -1,6 +1,6 @@
 {
   "name": "piscis-desktop",
-  "version": "0.8.53",
+  "version": "0.8.55",
   "private": true,
   "type": "module",
   "scripts": {

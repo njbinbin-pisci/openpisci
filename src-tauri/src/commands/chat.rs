@@ -1286,6 +1286,10 @@ pub async fn chat_send(
         .map_err(|e| e.to_string())?,
     );
     journal.begin_turn(&session_id);
+    let hooks = std::sync::Arc::new(crate::runtime::ide_notify_hooks::JournalWithIdeNotify::new(
+        journal.clone(),
+        app.clone(),
+    ));
 
     let agent = piscis_kernel::agent::harness::HarnessConfig::for_main_chat(
         model.clone(),
@@ -1305,7 +1309,7 @@ pub async fn chat_send(
         state.plan_state.clone(),
     )
     .with_streaming(enable_streaming)
-    .with_hooks(journal.clone())
+    .with_hooks(hooks)
     .into_agent_loop(client, None, Some(state.confirmation_responses.clone()));
 
     let ctx = ToolContext {

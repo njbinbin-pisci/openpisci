@@ -18,9 +18,17 @@ OpenPiscis is a local-first AI Agent desktop application built with Tauri 2 + Ru
 
 ---
 
-## 🆕 What's New in v0.8.53
+## 🆕 What's New in v0.8.55
 
-**Live permission settings** — disabling shell/file-write confirmation in Settings takes effect immediately for running sessions. Plus i18n fixes (overlay, settings, debug) and Windows PPTX read improvements.
+**Pond CLI fixes** — `chat_ui` forms and permission prompts work inside the IDE assistant panel (no more infinite wait). Agent file edits now refresh the explorer and Git panel reliably.
+
+## 🕘 v0.8.54 — Explorer
+
+Collapse/expand all, sticky header, tighter tree rows.
+
+## 🕘 v0.8.53 — Live permissions & i18n
+
+Disabling shell/file-write confirmation applies immediately to running sessions; i18n and Windows PPTX improvements.
 
 ## 🕘 v0.8.52 — Pool project sync
 

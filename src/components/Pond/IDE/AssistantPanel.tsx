@@ -12,11 +12,14 @@
  * - Plain-text rendering (monospace) — this is a CLI, not a chat bubble.
  * - Tool calls / errors are surfaced as muted lines so the user can see
  *   what Piscis is actually doing under the hood.
+ * - `chat_ui` / permission prompts render inline (not the main Chat tab)
+ *   so blocking tools do not hang waiting for a UI that never appears.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDispatch, useSelector } from "react-redux";
 import { sessionsApi, chatApi, type AgentEventType } from "../../../services/tauri/chat";
+import { permissionApi } from "../../../services/tauri/platform";
 import { RootState, sessionsActions } from "../../../store";
 import { isPondCliSession } from "../../../utils/session";
 import {
@@ -24,12 +27,17 @@ import {
   pushInputHistory,
   resetInputHistoryNav,
 } from "../../../utils/inputHistory";
+import InteractiveCard from "../../Chat/InteractiveCard";
+import { applyUiPatch } from "../../Chat/interactiveUi/patch";
+import type { UiDefinition, UiPatch } from "../../Chat/interactiveUi/protocol";
 
 interface AssistantPanelProps {
   projectDir: string | null;
   visible: boolean;
   onClose: () => void;
   height?: number;
+  /** Refresh explorer / git when agent mutates workspace files. */
+  onWorkspaceFilesChanged?: () => void;
 }
 
 interface CliLine {
@@ -38,11 +46,28 @@ interface CliLine {
   text: string;
 }
 
+interface CliInteractiveCard {
+  requestId: string;
+  uiDefinition: UiDefinition;
+  listenOpen: boolean;
+  wizardStepHint?: number;
+}
+
+interface PermissionRequest {
+  requestId: string;
+  toolName: string;
+  toolInput: unknown;
+  description: string;
+}
+
+const FILE_MUTATION_TOOLS = new Set(["file_write", "file_edit"]);
+
 export default function AssistantPanel({
   projectDir,
   visible,
   onClose,
   height,
+  onWorkspaceFilesChanged,
 }: AssistantPanelProps) {
   const { t } = useTranslation();
   const dispatch = useDispatch();
@@ -50,9 +75,11 @@ export default function AssistantPanel({
   const [lines, setLines] = useState<CliLine[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [interactiveCards, setInteractiveCards] = useState<Record<string, CliInteractiveCard>>({});
+  const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const unlistenRef = useRef<(() => void) | null>(null);
-  const streamingTextRef = useRef<string>(""); // buffer text deltas for current turn
+  const streamingTextRef = useRef<string>("");
   const bodyRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -68,7 +95,6 @@ export default function AssistantPanel({
     scrollToBottom();
   }, [scrollToBottom]);
 
-  /** Update the last assistant line in place (used while streaming). */
   const updateLastAssistant = useCallback((delta: string) => {
     setLines((prev) => {
       const next = [...prev];
@@ -83,9 +109,10 @@ export default function AssistantPanel({
     scrollToBottom();
   }, [scrollToBottom]);
 
-  /** Lazily ensure a chat session exists. Bound to project dir so per-
-   *  project history doesn't bleed between projects. Reuses an existing
-   *  Pond CLI session when one is already registered for this project. */
+  const clearInteractiveCards = useCallback(() => {
+    setInteractiveCards({});
+  }, []);
+
   const ensureSession = useCallback(async (): Promise<string> => {
     if (sessionIdRef.current) return sessionIdRef.current;
 
@@ -125,8 +152,6 @@ export default function AssistantPanel({
     return session.id;
   }, [projectDir, storeSessions, dispatch]);
 
-  /** Subscribe to agent events for the current session. Tears down any
-   *  previous subscription. */
   const subscribe = useCallback(async (sessionId: string) => {
     if (unlistenRef.current) { unlistenRef.current(); unlistenRef.current = null; }
     const unlisten = await chatApi.onEvent(sessionId, (evt: AgentEventType) => {
@@ -146,33 +171,113 @@ export default function AssistantPanel({
             kind: evt.is_error ? "error" : "tool",
             text: `[${evt.name}] ${evt.is_error ? "error" : "ok"}: ${trimmed}`,
           });
+          if (!evt.is_error && FILE_MUTATION_TOOLS.has(evt.name)) {
+            onWorkspaceFilesChanged?.();
+          }
           break;
         }
         case "error":
           append({ kind: "error", text: `error: ${evt.message}` });
           setBusy(false);
           break;
+        case "permission_request":
+          setPermissionRequest({
+            requestId: evt.request_id,
+            toolName: evt.tool_name,
+            toolInput: evt.tool_input,
+            description: evt.description,
+          });
+          append({ kind: "info", text: t("ide.assistantPermissionWaiting", { tool: evt.tool_name }) });
+          scrollToBottom();
+          break;
+        case "interactive_ui":
+          setInteractiveCards((prev) => ({
+            ...prev,
+            [evt.request_id]: {
+              requestId: evt.request_id,
+              uiDefinition: evt.ui_definition as UiDefinition,
+              listenOpen: false,
+            },
+          }));
+          append({ kind: "info", text: t("ide.assistantInteractiveWaiting") });
+          scrollToBottom();
+          break;
+        case "interactive_ui_patch": {
+          const patch = evt.patch as UiPatch;
+          setInteractiveCards((prev) => {
+            const card = prev[evt.request_id];
+            if (!card) return prev;
+            return {
+              ...prev,
+              [evt.request_id]: {
+                ...card,
+                uiDefinition: applyUiPatch(card.uiDefinition, patch),
+                listenOpen: patch.reopen_submit === true ? true : card.listenOpen,
+                wizardStepHint: patch.wizard_step ?? card.wizardStepHint,
+              },
+            };
+          });
+          break;
+        }
+        case "interactive_ui_listen":
+          setInteractiveCards((prev) => {
+            const card = prev[evt.request_id];
+            if (!card) return prev;
+            return {
+              ...prev,
+              [evt.request_id]: { ...card, listenOpen: true },
+            };
+          });
+          break;
         case "done":
           streamingTextRef.current = "";
           setBusy(false);
+          setPermissionRequest(null);
+          clearInteractiveCards();
           sessionsApi.list(200, 0).then(({ sessions }) => {
             const fresh = sessions.find((s) => s.id === sessionId);
             if (fresh) dispatch(sessionsActions.upsertSession(fresh));
           }).catch(() => {});
+          onWorkspaceFilesChanged?.();
           break;
         case "cancelled":
           append({ kind: "info", text: "(cancelled)" });
           streamingTextRef.current = "";
           setBusy(false);
+          setPermissionRequest(null);
+          clearInteractiveCards();
           break;
         default:
-          // text_start / message_commit / context_usage / fish_progress / etc.
-          // — silent on the CLI surface.
           break;
       }
     });
     unlistenRef.current = unlisten;
-  }, [append, updateLastAssistant]);
+  }, [
+    append,
+    updateLastAssistant,
+    clearInteractiveCards,
+    dispatch,
+    onWorkspaceFilesChanged,
+    scrollToBottom,
+    t,
+  ]);
+
+  const handlePermissionResponse = useCallback(async (approved: boolean) => {
+    if (!permissionRequest) return;
+    const { requestId } = permissionRequest;
+    setPermissionRequest(null);
+    try {
+      await permissionApi.respond(requestId, approved);
+      append({
+        kind: "info",
+        text: approved
+          ? t("ide.assistantPermissionAllowed")
+          : t("ide.assistantPermissionDenied"),
+      });
+    } catch (err) {
+      append({ kind: "error", text: `permission response failed: ${String(err)}` });
+    }
+  }, [permissionRequest, append, t]);
 
   const cliInputHistoryScope = `cli:${projectDir ?? "global"}`;
 
@@ -186,8 +291,6 @@ export default function AssistantPanel({
     setBusy(true);
     try {
       const sid = await ensureSession();
-      // Subscribe lazily on first send (avoids attaching listeners for
-      // sessions the user never actually uses).
       if (!unlistenRef.current) await subscribe(sid);
       streamingTextRef.current = "";
       await chatApi.send(sid, text);
@@ -203,7 +306,6 @@ export default function AssistantPanel({
     try { await chatApi.cancel(sid); } catch { /* ignore */ }
   }, []);
 
-  /** Open this project's CLI session in the main Chat → 鱼池CLI tab. */
   const openInMainChat = useCallback(() => {
     dispatch(
       sessionsActions.openMainChatView({
@@ -215,25 +317,26 @@ export default function AssistantPanel({
 
   const clearLog = useCallback(() => {
     setLines([]);
-  }, []);
+    clearInteractiveCards();
+    setPermissionRequest(null);
+  }, [clearInteractiveCards]);
 
-  // Auto-focus when shown.
   useEffect(() => {
     if (visible) {
-      const t = setTimeout(() => inputRef.current?.focus(), 60);
-      return () => clearTimeout(t);
+      const timer = setTimeout(() => inputRef.current?.focus(), 60);
+      return () => clearTimeout(timer);
     }
   }, [visible]);
 
-  // Reset when project changes — don't carry conversation across projects.
   useEffect(() => {
     if (unlistenRef.current) { unlistenRef.current(); unlistenRef.current = null; }
     sessionIdRef.current = null;
     setLines([]);
     setBusy(false);
-  }, [projectDir]);
+    clearInteractiveCards();
+    setPermissionRequest(null);
+  }, [projectDir, clearInteractiveCards]);
 
-  // Cleanup on unmount.
   useEffect(() => {
     return () => {
       if (unlistenRef.current) unlistenRef.current();
@@ -241,6 +344,8 @@ export default function AssistantPanel({
   }, []);
 
   if (!visible) return null;
+
+  const pendingCards = Object.values(interactiveCards);
 
   return (
     <div className="ide-terminal-panel ide-assistant-panel" style={height ? { height } : undefined}>
@@ -261,10 +366,9 @@ export default function AssistantPanel({
         <button onClick={onClose} title={t("ide.closePanel")}>✕</button>
       </div>
       <div className="ide-assistant-body" ref={bodyRef}>
-        {lines.length === 0 && (
+        {lines.length === 0 && pendingCards.length === 0 && !permissionRequest && (
           <div className="ide-assistant-empty">
-            {t("ide.assistantHint") ||
-              "Ask Piscis in plain language."}
+            {t("ide.assistantHint") || "Ask Piscis in plain language."}
           </div>
         )}
         {lines.map((line, i) => (
@@ -272,6 +376,48 @@ export default function AssistantPanel({
             {line.kind === "user"
               ? <><span className="ide-assistant-prompt">&gt;</span> {line.text}</>
               : line.text}
+          </div>
+        ))}
+        {permissionRequest && (
+          <div className="ide-assistant-permission">
+            <div className="ide-assistant-permission-title">{t("chat.permissionTitle")}</div>
+            <div className="ide-assistant-permission-desc">{permissionRequest.description}</div>
+            <div className="ide-assistant-permission-actions">
+              <button type="button" className="btn-deny" onClick={() => handlePermissionResponse(false)}>
+                {t("chat.permissionDeny")}
+              </button>
+              <button type="button" className="btn-allow" onClick={() => handlePermissionResponse(true)}>
+                {t("chat.permissionAllow")}
+              </button>
+            </div>
+          </div>
+        )}
+        {pendingCards.map((card) => (
+          <div key={card.requestId} className="ide-assistant-interactive">
+            <InteractiveCard
+              requestId={card.requestId}
+              uiDefinition={card.uiDefinition}
+              listenOpen={card.listenOpen}
+              wizardStepHint={card.wizardStepHint}
+              onSubmitted={() => {
+                setInteractiveCards((prev) => {
+                  const next = { ...prev };
+                  delete next[card.requestId];
+                  return next;
+                });
+                append({ kind: "info", text: t("ide.assistantInteractiveSubmitted") });
+              }}
+              onActionSent={() => {
+                setInteractiveCards((prev) => {
+                  const c = prev[card.requestId];
+                  if (!c) return prev;
+                  return {
+                    ...prev,
+                    [card.requestId]: { ...c, listenOpen: false },
+                  };
+                });
+              }}
+            />
           </div>
         ))}
         {busy && <div className="ide-assistant-line ide-assistant-line--info">▍</div>}

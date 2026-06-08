@@ -6,6 +6,21 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.55] - 2026-06-08
+
+### Fixed
+- **Pond CLI `chat_ui`**: the IDE assistant panel now renders interactive forms and permission prompts inline — `chat_ui` / `chat_ui_patch` / `chat_ui_listen` and shell/file confirmations no longer hang forever waiting for the main Chat tab.
+- **IDE file/git refresh after agent edits**: successful `file_write` / `file_edit` emits `ide-file-changed` (same-process writes bypass `notify` on some platforms); Git panel reacts to `gitPanelVersion` bumps; project paths are normalized before comparing watcher events (Windows `\` vs `/`).
+
+---
+
+## [0.8.54] - 2026-06-08
+
+### Changed
+- **Explorer**: collapse all / expand all buttons, sticky title bar while scrolling, tighter tree row spacing.
+
+---
+
 ## [0.8.53] - 2026-06-07
 
 ### Fixed
