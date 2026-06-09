@@ -3626,16 +3626,16 @@ pub fn build_context_messages(
         result.insert(0, rolling_summary_message(summary));
     }
 
-    // Post-process: remove trailing orphaned tool_call messages (interrupted mid-turn).
-    result = sanitize_tool_call_pairs(result);
-
-    // Strip orphaned ToolUse blocks inside assistant messages that lack a matching
-    // tool_result in the next message. Previously only applied in the headless path.
-    result = sanitize_tool_use_result_pairing(result);
-
     // If a later retry of the same tool call succeeded, remove the earlier failed
     // ToolUse/ToolResult pair from context so the agent sees the corrected state.
+    // Must run before pairing fixup — collapse can leave partially satisfied pairs.
     result = collapse_superseded_tool_failures(result);
+
+    // Strip ToolUse blocks that lack a matching ToolResult (per tool_use_id).
+    result = sanitize_tool_use_result_pairing(result);
+
+    // Remove trailing orphaned tool_call messages (interrupted mid-turn).
+    result = sanitize_tool_call_pairs(result);
 
     tracing::debug!(
         "build_context_messages: {} turns → {} LlmMessages, ~{} tokens (budget={})",
@@ -4132,75 +4132,7 @@ pub(crate) fn collapse_superseded_tool_failures(mut msgs: Vec<LlmMessage>) -> Ve
     msgs
 }
 
-/// Remove orphaned tool_use blocks from LLM messages.
-///
-/// An orphaned tool_use occurs when a previous agent run was cancelled mid-turn:
-/// the assistant message has ToolUse blocks but there is no following user message
-/// with matching ToolResult blocks. Sending orphaned tool_use to the API causes errors
-/// and makes the LLM think it needs to continue the old task.
-///
-/// Strategy (mirrors openclaw's sanitizeToolUseResultPairing):
-/// Walk the message list; if an assistant message ends with ToolUse blocks but the
-/// next message is not a tool-result carrier (or there is no next message), strip
-/// the ToolUse blocks from that assistant message. If stripping leaves the message
-/// empty, remove it entirely.
-pub(crate) fn sanitize_tool_use_result_pairing(mut msgs: Vec<LlmMessage>) -> Vec<LlmMessage> {
-    let mut i = 0;
-    while i < msgs.len() {
-        let has_tool_use = if msgs[i].role == "assistant" {
-            match &msgs[i].content {
-                piscis_kernel::llm::MessageContent::Blocks(blocks) => blocks
-                    .iter()
-                    .any(|b| matches!(b, ContentBlock::ToolUse { .. })),
-                _ => false,
-            }
-        } else {
-            i += 1;
-            continue;
-        };
-
-        if !has_tool_use {
-            i += 1;
-            continue;
-        }
-
-        // Check if the next message is a tool-result carrier
-        let next_is_tool_result = msgs
-            .get(i + 1)
-            .map(|next| {
-                next.role == "user"
-                    && match &next.content {
-                        piscis_kernel::llm::MessageContent::Blocks(blocks) => blocks
-                            .iter()
-                            .any(|b| matches!(b, ContentBlock::ToolResult { .. })),
-                        _ => false,
-                    }
-            })
-            .unwrap_or(false);
-
-        if !next_is_tool_result {
-            // Strip ToolUse blocks from this assistant message
-            tracing::warn!(
-                "sanitize_tool_use_result_pairing: stripping orphaned ToolUse at index {}",
-                i
-            );
-            if let piscis_kernel::llm::MessageContent::Blocks(ref mut blocks) = msgs[i].content {
-                blocks.retain(|b| !matches!(b, ContentBlock::ToolUse { .. }));
-            }
-            // If the message is now empty, remove it
-            let is_empty = match &msgs[i].content {
-                piscis_kernel::llm::MessageContent::Blocks(blocks) => blocks.is_empty(),
-                piscis_kernel::llm::MessageContent::Text(t) => t.trim().is_empty(),
-            };
-            if is_empty {
-                msgs.remove(i);
-                continue; // don't increment, re-check same index
-            }
-        }
-        i += 1;
-    }
-    msgs
-}
+pub(crate) use piscis_kernel::agent::message_utils::sanitize_tool_use_result_pairing;
 
 /// After an agent run, use LLM to extract 1-3 key memories from the conversation.
 /// Only triggers when the conversation has substantive content.

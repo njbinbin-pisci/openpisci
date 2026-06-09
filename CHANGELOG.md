@@ -6,6 +6,13 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.56] - 2026-06-06
+
+### Fixed
+- **OpenAI 400 `tool_call_id` orphan**: context build now collapses superseded failures before per-id tool pairing sanitize; cancelled or partially completed parallel tool rounds no longer leave assistant `tool_calls` without matching tool responses (kernel `v0.8.55`).
+
+---
+
 ## [0.8.55] - 2026-06-08
 
 ### Fixed
