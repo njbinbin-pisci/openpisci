@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { RootState, chatActions, sessionsActions, ToolStep, StreamingState, PlanTodoItem, ContextUsageSnapshot } from "../../store";
+import { RootState, chatActions, sessionsActions, skillsActions, ToolStep, StreamingState, PlanTodoItem, ContextUsageSnapshot } from "../../store";
 import { artifactsApi, chatApi, journalApi, sessionsApi, gatewayApi, koiApi, AgentEventType, ChannelInfo, type ChatMessage, type SessionArtifact, type JournalChange, type KoiWithStats } from "../../services/tauri";
 import { settingsApi, skillsApi, type Skill } from "../../services/tauri";
 import { buildAttachmentFromBlob, buildAttachmentFromPath, isImageFilename, type PendingAttachmentItem } from "./composerUtils";
@@ -415,7 +415,11 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
   const [selectedSkills, setSelectedSkills] = useState<Skill[]>([]);
   const [selectedKoi, setSelectedKoi] = useState<KoiWithStats | null>(null);
   const [composerMenuOpen, setComposerMenuOpen] = useState<null | "workspace" | "koi" | "skill">(null);
-  const [installedSkills, setInstalledSkills] = useState<Skill[]>([]);
+  const reduxSkills = useSelector((state: RootState) => state.skills.skills);
+  const installedSkills = useMemo(
+    () => composerSelectableSkills(reduxSkills),
+    [reduxSkills],
+  );
   const [koiList, setKoiList] = useState<KoiWithStats[]>([]);
   const [gatewayChannels, setGatewayChannels] = useState<ChannelInfo[]>([]);
   const [gatewayConnecting, setGatewayConnecting] = useState(false);
@@ -1317,10 +1321,10 @@ export default function Chat({ onNavigateTab }: ChatProps = {}) {
 
   useEffect(() => {
     skillsApi.list()
-      .then((r) => setInstalledSkills(composerSelectableSkills(r.skills)))
-      .catch(() => setInstalledSkills([]));
+      .then((r) => dispatch(skillsActions.setSkills(r.skills)))
+      .catch(() => dispatch(skillsActions.setSkills([])));
     koiApi.list().then(setKoiList).catch(() => setKoiList([]));
-  }, []);
+  }, [dispatch]);
 
   useEffect(() => {
     const unlisten = listen<{ channels: ChannelInfo[] }>("gateway_channels_updated", (event) => {
