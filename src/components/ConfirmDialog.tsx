@@ -9,6 +9,8 @@ interface ConfirmDialogProps {
   cancelLabel?: string;
   /** "danger" (red) or "primary" (accent) — defaults to "danger" */
   variant?: "danger" | "primary";
+  /** Alert mode: single OK button, no cancel */
+  alert?: boolean;
   loading?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -21,6 +23,7 @@ export default function ConfirmDialog({
   confirmLabel,
   cancelLabel,
   variant = "danger",
+  alert = false,
   loading = false,
   onConfirm,
   onCancel,
@@ -91,21 +94,23 @@ export default function ConfirmDialog({
           {message}
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button
-            onClick={onCancel}
-            disabled={loading}
-            style={{
-              padding: "6px 16px",
-              fontSize: 13,
-              background: "var(--bg-secondary)",
-              border: "1px solid var(--border)",
-              borderRadius: 6,
-              color: "var(--text-secondary)",
-              cursor: loading ? "default" : "pointer",
-            }}
-          >
-            {resolvedCancel}
-          </button>
+          {!alert && (
+            <button
+              onClick={onCancel}
+              disabled={loading}
+              style={{
+                padding: "6px 16px",
+                fontSize: 13,
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                color: "var(--text-secondary)",
+                cursor: loading ? "default" : "pointer",
+              }}
+            >
+              {resolvedCancel}
+            </button>
+          )}
           <button
             onClick={onConfirm}
             disabled={loading}

@@ -45,6 +45,7 @@ const TOOL_ICONS: Record<string, string> = {
   shell:      "💻",
   powershell: "🖥️",
   web_search: "🔍",
+  web_fetch: "📰",
   uia:        "🖱️",
   screen:     "📸",
   com_tool:   "🔗",

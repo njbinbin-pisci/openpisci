@@ -2842,6 +2842,7 @@ const TOOL_ICONS: Record<string, string> = {
   shell: "💻", powershell: "💻", powershell_query: "💻",
   file_read: "📄", file_write: "📝",
   web_search: "🔍",
+  web_fetch: "📰",
   browser: "🌐",
   screen_capture: "📸",
   uia: "🖱️",
@@ -2868,6 +2869,7 @@ function toolSummary(name: string, input: unknown): string {
   if (name === "shell" || name === "powershell") return String(i["command"] ?? "").slice(0, 80);
   if (name === "file_read" || name === "file_write") return String(i["path"] ?? "").slice(0, 80);
   if (name === "web_search") return String(i["query"] ?? "").slice(0, 80);
+  if (name === "web_fetch") return String(i["url"] ?? "").slice(0, 80);
   if (name === "screen_capture") return String(i["mode"] ?? "fullscreen");
   return Object.entries(i).slice(0, 2).map(([k, v]) => `${k}=${String(v).slice(0, 30)}`).join(" ");
 }
