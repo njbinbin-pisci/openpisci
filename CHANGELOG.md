@@ -6,6 +6,17 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.63] - 2026-06-12
+
+### Added
+- **Pond IDE source control**: create branch, checkout branch (dirty-worktree confirmation), themed `PromptDialog` and `ConfirmDialog` alert mode.
+- **Chat / Overlay**: `web_fetch` tool icon and URL summary in tool-call cards.
+
+### Fixed
+- **Git panel**: stage-all / unstage-all / unstage errors now use themed alerts (same as single-file stage).
+
+---
+
 ## [0.8.62] - 2026-06-12
 
 ### Added
