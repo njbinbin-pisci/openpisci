@@ -73,6 +73,9 @@
   --font:      -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Emoji", system-ui, sans-serif;
   --font-mono: "Cascadia Code", "Fira Code", "Consolas", monospace;
 
+  /* 界面字体缩放倍率（设置页可调，默认 1） */
+  --font-scale: 1;
+
   /* accent-muted: 用于微弱高亮，各主题可覆盖 */
   --accent-muted: rgba(124, 106, 247, 0.15);
 }

@@ -45,7 +45,7 @@ piscis-kernel = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", 
 
 [package]
 name = "piscis-desktop"
-version = "0.8.60"
+version = "0.8.61"
 autobins = false
 default-run = "piscis-desktop"
 description = "OpenPiscis - Open-source cross-platform AI Agent Desktop"

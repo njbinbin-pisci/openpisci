@@ -23,6 +23,7 @@ import {
 } from "../../services/tauri";
 import { setLanguage } from "../../i18n";
 import { localizedDependencyRemediation, localizedPrivilegeElevationRemediation } from "../../utils/systemDependencies";
+import { FONT_SCALE_OPTIONS, getFontScale, setFontScale, type FontScale } from "../../utils/fontScale";
 
 type EnterprisePlatformId = "feishu" | "wecom" | "dingtalk";
 
@@ -156,6 +157,7 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
   const [capabilityTesting, setCapabilityTesting] = useState<Partial<Record<EnterprisePlatformId, boolean>>>({});
   const [capabilityTest, setCapabilityTest] = useState<Partial<Record<EnterprisePlatformId, EnterpriseCapabilityTestResult | null>>>({});
   const [capabilityMsg, setCapabilityMsg] = useState<Partial<Record<EnterprisePlatformId, string | null>>>({});
+  const [fontScale, setFontScaleState] = useState<FontScale>(() => getFontScale());
 
   // WeChat binding flow
   const [wechatQr, setWechatQr] = useState<string | null>(null);
@@ -1331,6 +1333,28 @@ export default function Settings({ theme, setTheme, onOpenTools }: SettingsProps
               <option value="zh">中文</option>
               <option value="en">English</option>
             </select>
+          </div>
+
+          <div className="form-group">
+            <label className="label">{t("settings.fontScale")}</label>
+            <select
+              className="input"
+              value={fontScale}
+              onChange={(e) => {
+                const next = Number(e.target.value) as FontScale;
+                setFontScaleState(next);
+                setFontScale(next);
+              }}
+            >
+              {FONT_SCALE_OPTIONS.map((scale) => (
+                <option key={scale} value={scale}>
+                  {t(`settings.fontScale${String(scale).replace(".", "")}`)}
+                </option>
+              ))}
+            </select>
+            <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
+              {t("settings.fontScaleHint")}
+            </p>
           </div>
 
           <div className="form-group">

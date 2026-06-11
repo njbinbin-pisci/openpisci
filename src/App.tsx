@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { store, RootState, settingsActions, sessionsActions, chatActions } from "./store";
 import { settingsApi, sessionsApi, windowApi } from "./services/tauri";
 import { isInternalSession } from "./utils/session";
+import { applyFontScale, getFontScale } from "./utils/fontScale";
 import i18n, { setLanguage } from "./i18n";
 import Chat from "./components/Chat";
 import Toaster from "./components/Toaster";
@@ -46,6 +47,10 @@ function AppContent() {
   const [colorMode, setColorMode] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('piscis-color-mode') as 'light' | 'dark') || 'dark';
   });
+
+  useEffect(() => {
+    applyFontScale(getFontScale());
+  }, []);
 
   useEffect(() => {
     setMountedTabs((prev) => {
