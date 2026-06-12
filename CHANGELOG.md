@@ -6,6 +6,15 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.64] - 2026-06-12
+
+### Changed
+
+- **RobotZ `v0.1.2`**: pin `robotz-automation` / `robotz-browser` by tag (was `master` branch).
+- **Browser tool**: snapshot/ref E2E actions, assert/wait DSL, session lock — shared with AgentZ via RobotZ crate.
+
+---
+
 ## [0.8.63] - 2026-06-12
 
 ### Added

@@ -1398,7 +1398,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.8.9",
+ "libloading 0.7.4",
 ]
 
 [[package]]
@@ -2709,7 +2709,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -3891,7 +3891,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 3.5.0",
+ "proc-macro-crate 1.3.1",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -4291,7 +4291,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -4620,7 +4620,7 @@ dependencies = [
 
 [[package]]
 name = "piscis-desktop"
-version = "0.8.62"
+version = "0.8.64"
 dependencies = [
  "aes",
  "anyhow",
@@ -5463,8 +5463,8 @@ dependencies = [
 
 [[package]]
 name = "robotz-automation"
-version = "0.1.1"
-source = "git+https://github.com/njbinbin-piscis/RobotZ.git?branch=master#1bc502c5ac85d6304c279ca8490b96fe065b7724"
+version = "0.1.2"
+source = "git+https://github.com/njbinbin-piscis/RobotZ.git?rev=v0.1.2#2f8fe10d92f349cb2e4c50f4faba76948e4a5f7d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5485,8 +5485,8 @@ dependencies = [
 
 [[package]]
 name = "robotz-browser"
-version = "0.1.1"
-source = "git+https://github.com/njbinbin-piscis/RobotZ.git?branch=master#1bc502c5ac85d6304c279ca8490b96fe065b7724"
+version = "0.1.2"
+source = "git+https://github.com/njbinbin-piscis/RobotZ.git?rev=v0.1.2#2f8fe10d92f349cb2e4c50f4faba76948e4a5f7d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5496,6 +5496,7 @@ dependencies = [
  "futures",
  "once_cell",
  "piscis-kernel",
+ "regex",
  "reqwest 0.12.28",
  "robotz-core",
  "serde",
@@ -5508,8 +5509,8 @@ dependencies = [
 
 [[package]]
 name = "robotz-core"
-version = "0.1.1"
-source = "git+https://github.com/njbinbin-piscis/RobotZ.git?branch=master#1bc502c5ac85d6304c279ca8490b96fe065b7724"
+version = "0.1.2"
+source = "git+https://github.com/njbinbin-piscis/RobotZ.git?rev=v0.1.2#2f8fe10d92f349cb2e4c50f4faba76948e4a5f7d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7038,7 +7039,7 @@ dependencies = [
  "serde_with",
  "swift-rs",
  "thiserror 2.0.18",
- "toml 1.1.2+spec-1.1.0",
+ "toml 0.9.12+spec-1.1.0",
  "url",
  "urlpattern",
  "uuid",
