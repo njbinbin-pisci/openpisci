@@ -6,6 +6,14 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.66] - 2026-06-13
+
+### Changed
+
+- **Kernel `v0.8.60`**: plan path validation fix for Windows/macOS.
+
+---
+
 ## [0.8.65] - 2026-06-12
 
 ### Changed
