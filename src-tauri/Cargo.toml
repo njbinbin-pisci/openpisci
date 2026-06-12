@@ -39,14 +39,14 @@ anyhow = "1"
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-# Shared agent runtime — pin rev across openpiscis, AgentZ, agent-workbench (v0.8.58).
-piscis-core = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "piscis-core", rev = "v0.8.58" }
-piscis-kernel = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "piscis-kernel", rev = "v0.8.58" }
-piscis-ide-tools = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "piscis-ide-tools", rev = "v0.8.58" }
+# Shared agent runtime — pin rev across openpiscis, AgentZ, agent-workbench (v0.8.59).
+piscis-core = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "piscis-core", rev = "v0.8.59" }
+piscis-kernel = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "piscis-kernel", rev = "v0.8.59" }
+piscis-ide-tools = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "piscis-ide-tools", rev = "v0.8.59" }
 
 [package]
 name = "piscis-desktop"
-version = "0.8.64"
+version = "0.8.65"
 autobins = false
 default-run = "piscis-desktop"
 description = "OpenPiscis - Open-source cross-platform AI Agent Desktop"
@@ -83,8 +83,8 @@ piscis-ide-tools = { workspace = true }
 # Desktop-automation + browser capabilities, extracted into the standalone
 # RobotZ toolkit. The `piscis-kernel` feature makes the RobotZ tools implement
 # `piscis_kernel::Tool`, so the desktop host registers them like any other tool.
-robotz-automation = { git = "https://github.com/njbinbin-piscis/RobotZ.git", rev = "v0.1.2", features = ["piscis-kernel"] }
-robotz-browser = { git = "https://github.com/njbinbin-piscis/RobotZ.git", rev = "v0.1.2", features = ["piscis-kernel"] }
+robotz-automation = { git = "https://github.com/njbinbin-piscis/RobotZ.git", rev = "v0.1.3", features = ["piscis-kernel"] }
+robotz-browser = { git = "https://github.com/njbinbin-piscis/RobotZ.git", rev = "v0.1.3", features = ["piscis-kernel"] }
 
 # Tauri
 tauri = { version = "2", features = ["tray-icon"] }

@@ -6,6 +6,15 @@ This project follows [Semantic Versioning](https://semver.org/) and
 
 ---
 
+## [0.8.65] - 2026-06-12
+
+### Changed
+
+- **Kernel `v0.8.59`**: pool sessions scoped by `team_id` / `workflow_run_id`; `assign_koi` dependency-wait events; `pool_org` workflow hints.
+- **RobotZ `v0.1.3`**: browser/automation crates aligned with engine v0.8.59.
+
+---
+
 ## [0.8.64] - 2026-06-12
 
 ### Changed
