@@ -4866,6 +4866,8 @@ mod tests {
             task_timeout_secs: 600,
             origin_im_binding_key: None,
             member_koi_ids: Vec::new(),
+            team_id: None,
+            workflow_run_id: None,
             last_active_at: Some(now),
             created_at: now,
             updated_at: now,
